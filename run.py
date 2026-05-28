@@ -111,6 +111,12 @@ async def main():
     client = AsyncIOMotorClient(settings.mongodb_url)
     db = client[settings.db_name]
     
+    # Apply MongoDB indexes automatically on startup
+    from src.models.indexes import apply_indexes
+    print("Applying MongoDB indexes...")
+    await apply_indexes(db)
+    print("Indexes verified/applied successfully.")
+    
     partner = "MOMO"
     start_row = 8
     sheet_name = "data"

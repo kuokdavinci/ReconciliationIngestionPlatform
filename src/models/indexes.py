@@ -15,7 +15,7 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_file_hash_unique",
         ),
         IndexModel(
-            [("partner", ASCENDING), ("reconciliation_date", ASCENDING)],
+            [("partner", ASCENDING), ("reconciliationDate", ASCENDING)],
             name="idx_partner_date",
         ),
     ],
@@ -23,8 +23,8 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel(
             [
                 ("partner", ASCENDING),
-                ("workflow_type", ASCENDING),
-                ("file_type", ASCENDING),
+                ("workflowType", ASCENDING),
+                ("fileType", ASCENDING),
             ],
             name="idx_partner_workflow_type",
         ),

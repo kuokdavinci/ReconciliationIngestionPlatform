@@ -171,9 +171,9 @@ from src.normalizer.normalizer import TransactionNormalizer
 from src.core.types import FieldMapping, FieldMappingType
 
 normalizer = TransactionNormalizer([
-    FieldMapping(path="id", column="A", type=FieldMappingType.STRING),
+    FieldMapping(path="id", column=1, type=FieldMappingType.STRING),
 ])
-result = normalizer.normalize({"A": "123"}, row_number=1)
+result = normalizer.normalize(("123",), row_number=1)
 print(result.data)    # {"id": "123"}
 print(result.errors)  # []
 ```

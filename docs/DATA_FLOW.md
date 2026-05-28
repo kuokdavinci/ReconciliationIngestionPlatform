@@ -62,13 +62,13 @@ _config_loader.load_by_partner_type("MOMO", "UPC", FileType.SETTLEMENT)
   "sheetName": "Sheet1",
   "startRow": 2,
   "fieldMappings": [
-    { "path": "id", "column": "A", "type": "STRING", "required": true },
-    { "path": "trace", "column": "J", "type": "STRING" },
-    { "path": "amount", "column": "D", "type": "DECIMAL" },
+    { "path": "id", "column": 1, "type": "STRING", "required": true },
+    { "path": "trace", "column": 10, "type": "STRING" },
+    { "path": "amount", "column": 4, "type": "DECIMAL" },
     { "path": "currency", "constant": "VND", "type": "CONSTANT" },
-    { "path": "status", "column": "Q", "type": "MAPPING",
+    { "path": "status", "column": 17, "type": "MAPPING",
       "mapping": { "Thành công": "SUCCESS", "others": "FAILED" } },
-    { "path": "transDate", "column": "B", "type": "DATE" }
+    { "path": "transDate", "column": 7, "type": "DATE" }
   ]
 }
 ```
@@ -87,34 +87,28 @@ ExcelStreamReader.from_mapping_config(file_path, config)
 
 **Example Excel row (row 2, after header):**
 
-| A | B | C | D | ... | J | ... | Q |
-|---|---|---|---|-----|---|-----|---|
+| Col 1 | Col 2 | Col 3 | Col 4 | ... | Col 10 | ... | Col 17 |
+|-------|-------|-------|-------|-----|--------|-----|--------|
 | 61838642196 | 2024-07-05 | | 259200 | ... | 2407055711887385978413624 | ... | Thành công |
 
-#### 5a: Convert tuple to dict
+#### 5a: Normalize (row tuple passed directly)
 
 ```python
 row_tuple = ("61838642196", "2024-07-05", None, 259200, ..., "2407055711887385978413624", ..., "Thành công")
-row_dict = {"A": "61838642196", "B": "2024-07-05", "C": None, "D": 259200, "J": "2407055711887385978413624", "Q": "Thành công"}
-```
-
-#### 5b: Normalize
-
-```python
 normalizer = TransactionNormalizer(config.field_mappings)
-norm_result = normalizer.normalize(row_dict, row_number=2)
+norm_result = normalizer.normalize(row_tuple, row_number=2)
 ```
 
-**Processing each FieldMapping:**
+**Processing each FieldMapping (column numbers are 1-based, converted to 0-based index):**
 
-| Mapping | Source | Conversion | Result |
-|---------|--------|------------|--------|
-| `id` (STRING, col A) | `"61838642196"` | str() | `"61838642196"` |
-| `trace` (STRING, col J) | `"2407055711887385978413624"` | str() | `"2407055711887385978413624"` |
-| `amount` (DECIMAL, col D) | `259200` | Decimal(259200) | `Decimal('259200')` |
+| Mapping | Source (col#) | Conversion | Result |
+|---------|---------------|------------|--------|
+| `id` (STRING, col 1) | `row_tuple[0]` = `"61838642196"` | str() | `"61838642196"` |
+| `trace` (STRING, col 10) | `row_tuple[9]` = `"2407055711887385978413624"` | str() | `"2407055711887385978413624"` |
+| `amount` (DECIMAL, col 4) | `row_tuple[3]` = `259200` | Decimal(259200) | `Decimal('259200')` |
 | `currency` (CONSTANT) | — | constant value | `"VND"` |
-| `status` (MAPPING, col Q) | `"Thành công"` | mapping lookup | `"SUCCESS"` |
-| `transDate` (DATE, col B) | `"2024-07-05"` | strptime("%Y-%m-%d") | `datetime(2024, 7, 5)` |
+| `status` (MAPPING, col 17) | `row_tuple[16]` = `"Thành công"` | mapping lookup | `"SUCCESS"` |
+| `transDate` (DATE, col 7) | `row_tuple[6]` = `"2024-07-05"` | strptime("%Y-%m-%d") | `datetime(2024, 7, 5)` |
 
 **Result:**
 ```python
@@ -150,15 +144,12 @@ CanonicalTransaction(
 )
 ```
 
-#### 5d: Validate
+#### 5d: Validate (core validation only — file duplicate already checked at pipeline level)
 
 ```python
 validator = Validator(data_container_repo=self._data_repo, reconciliation_file_repo=self._recon_repo)
-validation_result = await validator.validate_with_duplicates(
+validation_result = validator.validate(
     txn,
-    identify="MOMO",
-    reconciliation_date=datetime(2024, 7, 7),
-    file_hash="<sha256>",
     row_number=2,
     trace="2407055711887385978413624",
 )
@@ -169,8 +160,8 @@ validation_result = await validator.validate_with_duplicates(
 2. Decimal non-negative: 259200 >= 0 ✓
 3. Date type: datetime ✓
 4. Status enum: SUCCESS in TransactionStatus ✓
-5. Transaction duplicate: query `{"identify": "MOMO", "reconciliationDate": datetime(2024,7,7), "partnerData.trace": "2407055711887385978413624"}` → None ✓
-6. File duplicate: query `{"fileHash": "<sha256>"}` → None ✓
+
+**Note:** File duplicate check is skipped here — already done at Step 1 of pipeline. Transaction duplicate check is also skipped in `validate()` (requires `validate_with_duplicates()` for that).
 
 **Result:** `ValidationResult(is_valid=True, errors=[])`
 
@@ -207,10 +198,14 @@ if len(batch_buffer) >= 100:  # batch_size
     batch_buffer = []
 ```
 
-**MongoDB operation:**
+**MongoDB operation (via `_to_mongo()` for type conversion):**
 ```python
+# Each DataContainer is converted:
+# - UUID → string
+# - Decimal → Decimal128
+# - Nested partnerData preserved as object
 collection.insert_many([
-    doc.model_dump(by_alias=True, exclude_none=False)
+    doc._to_mongo()  # via DataContainerRepository.insert_many()
     for doc in batch_buffer
 ])
 ```

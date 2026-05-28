@@ -23,8 +23,8 @@ class FieldMappingType(StrEnum):
 
 class FieldMapping(BaseModel):
     path: str                          # Canonical field name
-    column: Optional[str]              # Excel column letter (e.g., "A")
-    sourceField: Optional[str]         # Alternative source field name
+    column: Optional[Union[int, str]]  # 1-based column number (int preferred) or Excel letter
+    sourceField: Optional[str]         # Alternative source field name for documentation
     type: FieldMappingType             # Conversion type
     required: bool                     # Whether this field is mandatory
     constant: Optional[str]            # Value for CONSTANT type
@@ -122,7 +122,7 @@ class ConfigValidator:
 3. CONSTANT type without `constant` value
 4. MAPPING type without `mapping` dict
 5. Required field without `column` or `constant`
-6. Invalid column format (must be uppercase letters only)
+6. Invalid column format (only validated when column is string — must be uppercase letters; int columns skip this check)
 
 ### loader.py
 
@@ -179,22 +179,21 @@ class TransactionNormalizer:
     _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S")
 
     def __init__(self, field_mappings: list[FieldMapping]) -> None
-    def normalize(self, row: dict[str, Any], row_number=None) -> NormalizationResult
+    def normalize(self, row: tuple, row_number=None) -> NormalizationResult
     @staticmethod
     def build_canonical(data: dict, errors: list, row_number=None) -> tuple[CanonicalTransaction | None, list[ValidationError]]
 ```
 
-**Conversion methods (all static, never raise):**
-
-| Method | Input | Output | Error conditions |
-|--------|-------|--------|-----------------|
-| `_convert_string` | Any | str | None, empty string |
-| `_convert_decimal` | Any | Decimal | float type, invalid string |
-| `_convert_date` | str/datetime | datetime | Not matching 4 formats |
-| `_convert_mapping` | Any | str (mapped) | Not in dict, no "others" |
-| `_convert_constant` | — | str | No constant configured |
-
-**Source resolution priority:** `column` > `sourceField` > error
+**Key behaviors:**
+- `normalize()` accepts row tuples directly (not dicts) — uses `FieldMapping.column` (1-based int) to index into tuple
+- `_resolve_source()` handles both int column numbers and string column letters with automatic conversion:
+  - int column → direct tuple index (col - 1)
+  - string digit → converted to int, then indexed
+  - string letter → converted via `column_index_from_string()`, then indexed
+  - dict rows → supports both int and string keys with fallback conversion
+- `build_canonical()` handles dot-separated paths: `"extra.service"` → `extra["service"] = value`
+- Required fields validated: id, amount, currency, status
+- Extra fields (keys not in canonical schema) collected into `extra` dict
 
 ---
 
@@ -223,6 +222,8 @@ class Validator:
 | Transaction duplicate | identify + reconciliationDate + trace exists | "transaction already exists" |
 | File duplicate | fileHash exists | "file already processed" |
 
+**Note:** Pipeline uses `validate()` (core validation only) since file duplicate is checked at pipeline level before row processing. `validate_with_duplicates()` is available for standalone use.
+
 ---
 
 ## src/models/
@@ -237,7 +238,16 @@ class BaseRepository(Generic[T]):
     async def find_many(self, query: dict) -> list[T]
     async def update_one(self, query: dict, update: dict) -> bool
     async def delete_one(self, query: dict) -> bool
+
+    def _to_mongo(self, doc: T) -> dict       # Converts UUIDs→str, Decimals→Decimal128
+    @staticmethod
+    def _convert_special_types(obj: Any) -> Any  # Recursive type conversion
 ```
+
+**Key behaviors:**
+- `_to_mongo()` calls `model_dump(by_alias=True, exclude_none=False)` then `_convert_special_types()`
+- `_convert_special_types()` recursively handles: UUID→str, Decimal→Decimal128, nested dicts/lists
+- `_from_mongo()` converts raw MongoDB docs to pydantic models, converts `_id` ObjectId to string
 
 ### reconciliation_file.py
 
@@ -306,14 +316,15 @@ class IngestionPipeline:
                            reconciliation_date, config_version=None) -> IngestionResult
 ```
 
-**IngestionResult:**
-```python
-@dataclass
-class IngestionResult:
-    file_record: ReconciliationFile
-    stats: ProcessingStats
-    errors: list[dict]
-```
+**Key behaviors:**
+- `_compute_file_hash()` — SHA256 hash via thread pool executor
+- File duplicate checked once at pipeline level (not per-row)
+- Row tuples passed directly to normalizer (no tuple→dict conversion)
+- Uses `validator.validate()` (core validation only) — file duplicate already checked
+- `_flush_batch()` — calls `DataContainerRepository.insert_many()`
+- `_to_mongo()` used in `insert_many()` for UUID/Decimal conversion
+- Per-row errors never stop the pipeline
+- Exception at any level → status FAILED, partial stats returned
 
 ---
 

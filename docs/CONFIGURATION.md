@@ -44,13 +44,13 @@ MappingConfig documents define how partner Excel files are parsed. Stored in `re
 #### STRING — Direct string copy
 
 ```json
-{ "path": "id", "column": "A", "type": "STRING", "required": true }
+{ "path": "id", "column": 1, "type": "STRING", "required": true }
 ```
 
 #### DECIMAL — Convert to Decimal (float rejected)
 
 ```json
-{ "path": "amount", "column": "D", "type": "DECIMAL" }
+{ "path": "amount", "column": 4, "type": "DECIMAL" }
 ```
 
 #### DATE — Parse against whitelisted formats
@@ -58,7 +58,7 @@ MappingConfig documents define how partner Excel files are parsed. Stored in `re
 Supported formats: `%Y-%m-%d`, `%d/%m/%Y`, `%Y-%m-%d %H:%M:%S`, `%d/%m/%Y %H:%M:%S`
 
 ```json
-{ "path": "transDate", "column": "B", "type": "DATE" }
+{ "path": "transDate", "column": 7, "type": "DATE" }
 ```
 
 #### CONSTANT — Use literal value
@@ -72,7 +72,7 @@ Supported formats: `%Y-%m-%d`, `%d/%m/%Y`, `%Y-%m-%d %H:%M:%S`, `%d/%m/%Y %H:%M:
 ```json
 {
   "path": "status",
-  "column": "Q",
+  "column": 17,
   "type": "MAPPING",
   "mapping": {
     "Thành công": "SUCCESS",
@@ -104,16 +104,16 @@ config = MappingConfig(
     sheet_name="Data",
     start_row=3,
     field_mappings=[
-        FieldMapping(path="id", column="A", type=FieldMappingType.STRING, required=True),
-        FieldMapping(path="amount", column="E", type=FieldMappingType.DECIMAL),
+        FieldMapping(path="id", column=1, type=FieldMappingType.STRING, required=True),
+        FieldMapping(path="amount", column=5, type=FieldMappingType.DECIMAL),
         FieldMapping(path="currency", constant="VND", type=FieldMappingType.CONSTANT),
         FieldMapping(
             path="status",
-            column="G",
+            column=7,
             type=FieldMappingType.MAPPING,
             mapping={"Giao dịch thành công": "SUCCESS", "others": "FAILED"},
         ),
-        FieldMapping(path="transDate", column="B", type=FieldMappingType.DATE),
+        FieldMapping(path="transDate", column=2, type=FieldMappingType.DATE),
     ],
 )
 

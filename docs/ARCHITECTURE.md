@@ -36,7 +36,7 @@ Defines the shared type system that all modules depend on. No external dependenc
 
 **Key types:**
 - `CanonicalTransaction` — normalized output model (id, trace, amount:Decimal, currency, status, transDate, extra)
-- `FieldMapping` — configuration for mapping source columns to canonical fields
+- `FieldMapping` — configuration for mapping source columns to canonical fields (`column: int` 1-based)
 - `PartnerData` — original partner transaction as nested object
 - `ValidationError` — structured error with field, reason, row, trace
 - `ProcessingStats` — total/success/failed row counts
@@ -45,6 +45,7 @@ Defines the shared type system that all modules depend on. No external dependenc
 - All monetary amounts use `Decimal` — floats are rejected at the pydantic level
 - Status values are `StrEnum` for JSON serialization compatibility
 - Models use `populate_by_name=True` with camelCase aliases for MongoDB
+- `column` field uses 1-based column numbers (not Excel letters) to match template format directly
 
 ### 2. `src/config/` — Configuration Engine
 
@@ -71,7 +72,7 @@ ConfigLoader (orchestrates cache → DB → validate → return)
 - CONSTANT type requires non-empty value
 - MAPPING type requires non-empty dict
 - Required fields must have column or constant
-- Column format must be uppercase letters (A-Z, AA-ZZ)
+- Column format validation skipped when column is int (1-based number); only validates string columns (must be uppercase letters A-Z, AA-ZZ)
 
 **ConfigLoader:**
 - `load_by_partner_type()` — latest config for partner/workflow/file_type
@@ -98,7 +99,9 @@ ConfigLoader (orchestrates cache → DB → validate → return)
 
 ### 4. `src/normalizer/` — Data Transformation
 
-`TransactionNormalizer` applies `FieldMapping` rules to raw row dictionaries.
+`TransactionNormalizer` applies `FieldMapping` rules to raw row tuples.
+
+**Input:** Row tuples from `ExcelStreamReader` (0-indexed). Column numbers in `FieldMapping.column` are 1-based and converted to 0-based index internally.
 
 **Conversion types:**
 
@@ -112,9 +115,11 @@ ConfigLoader (orchestrates cache → DB → validate → return)
 
 **Error handling:**
 - Never raises exceptions — all errors collected as `ValidationError`
-- Source resolution by column letter (precedence) or sourceField name
+- Source resolution by column number (precedence) or sourceField name
+- `_resolve_source()` handles both int column numbers and string column letters, with fallback conversion between formats
 - `build_canonical()` constructs `CanonicalTransaction` from normalized dict
 - Extra fields not in canonical schema collected into `extra` dict
+- Dot-separated paths like `"extra.service"` are nested: `extra["service"] = value`
 
 ### 5. `src/validators/` — Validation Layer
 
@@ -146,14 +151,16 @@ Two-tier validation:
 
 **Key design:**
 - All models use `populate_by_name=True` with camelCase aliases
-- UUIDs stored as strings in MongoDB
+- UUIDs stored as strings in MongoDB via `_to_mongo()` converter
+- Decimals converted to `Decimal128` for MongoDB storage
 - `partnerData` is nested `PartnerData` object (not JSON string)
 - `DataContainerRepository.insert_many()` for batch insertion
+- `_convert_special_types()` recursively handles nested UUIDs and Decimals
 
 **Indexes (7 total):**
-- `reconciliation_file`: `fileHash` (unique), `partner + reconciliationDate`
-- `reconciliation_mapping_config`: `partner + workflowType + fileType`
-- `data_container`: `partnerData.trace`, `identify + reconciliationDate`, `operationStatus`, `partnerData.status`, `sourceFileId`
+- `reconciliation_file`: `fileHash` (unique), `partner + reconciliation_date`
+- `reconciliation_mapping_config`: `partner + workflow_type + file_type`
+- `data_container`: `partnerData.trace`, `identify + reconciliation_date`, `operation_status`, `partnerData.status`, `source_file_id`
 
 ### 7. `src/pipeline/` — Orchestration
 
@@ -166,12 +173,11 @@ Two-tier validation:
 4. Load MappingConfig (cached or from DB)
 5. Create ExcelStreamReader (from_mapping_config)
 6. For each row:
-   a. Convert tuple → dict (column letters as keys)
-   b. Normalize via TransactionNormalizer
-   c. Build CanonicalTransaction
-   d. Validate with duplicate detection
-   e. If valid → batch buffer; if invalid → collect error
-   f. Flush batch when size reached
+   a. Normalize via TransactionNormalizer (passes row tuple directly — uses column numbers)
+   b. Build CanonicalTransaction
+   c. Validate (core validation only — file duplicate already checked at step 2)
+   d. If valid → batch buffer; if invalid → collect error
+   e. Flush batch when size reached
 7. Flush remaining batch
 8. Update ReconciliationFile stats + status (COMPLETED)
 9. Emit log events

@@ -14,6 +14,9 @@ dependencies = [
     "motor>=3.0",
     "python-decouple>=3.8",
     "paramiko>=5.0.0",
+    "apscheduler>=3.11.2",
+    "httpx>=0.28.1",
+    "cryptography>=48.0.0",
 ]
 
 [project.optional-dependencies]

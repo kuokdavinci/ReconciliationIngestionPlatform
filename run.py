@@ -16,6 +16,8 @@ from src.core.enums import FileType
 from src.core.types import FieldMapping, FieldMappingType
 from src.models.mapping_config import MappingConfig, MappingConfigRepository
 from src.pipeline.ingestion_pipeline import IngestionPipeline
+from src.scheduler import PartnerDataScheduler, SchedulerConfig, daily_partner_fetch_job
+from src.logging import get_structured_logger
 
 def parse_excel_template(template_path: str) -> dict:
     """Parses a MappingConfig dynamically from an Excel template file (e.g. RequestTemplate.xlsx).
@@ -101,9 +103,111 @@ def parse_excel_template(template_path: str) -> dict:
         "filename": filename
     }
 
+async def _handle_scheduler_mode(
+    db,
+    start_scheduler: bool,
+    run_job_now: bool,
+    list_jobs: bool,
+) -> None:
+    """Handle scheduler-related CLI commands.
+
+    Args:
+        db: AsyncIOMotorDatabase instance.
+        start_scheduler: Whether to start the scheduler daemon.
+        run_job_now: Whether to manually trigger the job now.
+        list_jobs: Whether to list scheduled jobs.
+    """
+    structured_logger = get_structured_logger()
+    config_loader = _create_config_loader(db)
+
+    scheduler_config = SchedulerConfig(
+        job_store_type="mongodb",
+        mongodb_url=settings.mongodb_url,
+        db_name=settings.db_name,
+    )
+
+    def on_job_executed(event):
+        print(f"[SCHEDULER] Job executed: {event.job_id}")
+
+    def on_job_error(event):
+        print(f"[SCHEDULER] Job failed: {event.job_id} - {event.exception}")
+
+    scheduler = PartnerDataScheduler(
+        config=scheduler_config,
+        on_job_executed=on_job_executed,
+        on_job_error=on_job_error,
+    )
+
+    # Add daily job
+    scheduler.add_daily_job(
+        job_func=daily_partner_fetch_job,
+        job_id="daily_partner_fetch",
+        db=db,
+        config_loader=config_loader,
+        structured_logger=structured_logger,
+    )
+
+    if list_jobs:
+        jobs = scheduler.list_jobs()
+        if not jobs:
+            print("No scheduled jobs.")
+        else:
+            print("\n=== Scheduled Jobs ===")
+            for job in jobs:
+                print(f"  ID: {job['id']}")
+                print(f"  Name: {job['name']}")
+                print(f"  Next Run: {job['next_run_time']}")
+                print(f"  Trigger: {job['trigger']}")
+                print()
+        return
+
+    if run_job_now:
+        print("Triggering daily fetch job now...")
+        scheduler.run_job_now("daily_partner_fetch")
+        # Wait a bit for job to complete
+        await asyncio.sleep(5)
+        print("Job triggered. Check logs for results.")
+        return
+
+    if start_scheduler:
+        print("Starting scheduler daemon...")
+        print(f"  Job Store: {scheduler_config.job_store_type}")
+        print(f"  Default Schedule: {scheduler_config.default_schedule}")
+        print("\nPress Ctrl+C to stop.\n")
+
+        scheduler.start()
+
+        try:
+            # Keep the event loop running
+            while True:
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            print("\nStopping scheduler...")
+            scheduler.stop()
+            print("Scheduler stopped.")
+
+
+def _create_config_loader(db):
+    """Create a ConfigLoader instance.
+
+    Args:
+        db: AsyncIOMotorDatabase instance.
+
+    Returns:
+        ConfigLoader instance.
+    """
+    config_repo = MappingConfigRepository(db)
+    config_cache = ConfigCache()
+    config_validator = ConfigValidator()
+    return ConfigLoader(config_repo, config_cache, config_validator)
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Reconciliation Ingestion Pipeline CLI")
     parser.add_argument("--config", type=str, help="Path to Excel template config (e.g. RequestTemplate.xlsx) to dynamically upload")
+    parser.add_argument("--start-scheduler", action="store_true", help="Start the scheduler for automated partner data fetching")
+    parser.add_argument("--run-job-now", action="store_true", help="Manually trigger the daily fetch job now")
+    parser.add_argument("--list-jobs", action="store_true", help="List all scheduled jobs")
     args = parser.parse_args()
 
     # 1. Database Connection
@@ -116,12 +220,18 @@ async def main():
     print("Applying MongoDB indexes...")
     await apply_indexes(db)
     print("Indexes verified/applied successfully.")
-    
-    partner = "MOMO"
-    start_row = 8
-    sheet_name = "data"
-    field_mappings = []
-    remote_filename = "m4becomvsp_07072024_combine.xlsx"
+
+    # Scheduler mode
+    if args.start_scheduler or args.run_job_now or args.list_jobs:
+        await _handle_scheduler_mode(
+            db=db,
+            start_scheduler=args.start_scheduler,
+            run_job_now=args.run_job_now,
+            list_jobs=args.list_jobs,
+        )
+        return
+
+    # ... rest of existing code for manual ingestion
 
     # 2. Upload Config Dynamically if --config is passed
     if args.config:

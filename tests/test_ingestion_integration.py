@@ -127,6 +127,77 @@ class TestStandardFile:
         assert mock_data_container_repo.insert_many.call_count >= 1
 
 
+class TestCSVFile:
+    """Test ingestion with CSV input selected by reader factory."""
+
+    @pytest.mark.asyncio
+    async def test_csv_file_mixed_rows(
+        self,
+        mock_db: MagicMock,
+        mock_reconciliation_file_repo: MagicMock,
+        mock_data_container_repo: MagicMock,
+        mock_config_loader: MagicMock,
+    ):
+        """CSV file is processed through the same pipeline as Excel files."""
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
+            csv_path = Path(f.name)
+        csv_path.write_text(
+            "id,trace,amount,status\n"
+            "CSV_TXN_001,CSV_TRACE_001,150000,Thành công\n"
+            "CSV_TXN_002,CSV_TRACE_002,250000,Thành công\n"
+            "CSV_TXN_003,CSV_TRACE_003,-50000,Thành công\n",
+            encoding="utf-8",
+        )
+        field_mappings = [
+            FieldMapping(path="id", column="A", type=FieldMappingType.STRING, required=True),
+            FieldMapping(path="trace", column="B", type=FieldMappingType.STRING),
+            FieldMapping(path="amount", column="C", type=FieldMappingType.DECIMAL, required=True),
+            FieldMapping(
+                path="status",
+                column="D",
+                type=FieldMappingType.MAPPING,
+                mapping={"Thành công": "SUCCESS"},
+            ),
+            FieldMapping(path="currency", constant="VND", type=FieldMappingType.CONSTANT),
+        ]
+        mock_config = MappingConfig(
+            partner="MOMO",
+            workflow_type="UPC",
+            file_type=FileType.SETTLEMENT,
+            sheet_name="IgnoredForCsv",
+            start_row=2,
+            field_mappings=field_mappings,
+        )
+        mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
+
+        pipeline = _build_pipeline(
+            mock_db, mock_reconciliation_file_repo, mock_data_container_repo, mock_config_loader
+        )
+
+        try:
+            result = await pipeline.process_file(
+                file_path=str(csv_path),
+                partner="MOMO",
+                workflow_type="UPC",
+                file_type=FileType.SETTLEMENT,
+                reconciliation_date=_rec_date(),
+            )
+
+            assert result.stats.total_rows == 3
+            assert result.stats.success_rows == 2
+            assert result.stats.failed_rows == 1
+            assert result.file_record.processing_status == ProcessingStatus.COMPLETED
+
+            mock_data_container_repo.insert_many.assert_called_once()
+            batch = mock_data_container_repo.insert_many.call_args[0][0]
+            assert len(batch) == 2
+            assert batch[0].partner_data.trace == "CSV_TRACE_001"
+            assert batch[0].partner_data.amount == Decimal("150000")
+            assert batch[0].partner_data.status == "SUCCESS"
+        finally:
+            csv_path.unlink(missing_ok=True)
+
+
 class TestMixedRows:
     """Test 2: Mixed valid/invalid rows."""
 

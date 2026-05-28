@@ -13,6 +13,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "motor>=3.0",
     "python-decouple>=3.8",
+    "paramiko>=5.0.0",
 ]
 
 [project.optional-dependencies]

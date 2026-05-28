@@ -21,7 +21,7 @@ from src.models.data_container import DataContainer, DataContainerRepository, Pa
 from src.models.mapping_config import MappingConfig
 from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
 from src.normalizer.normalizer import TransactionNormalizer
-from src.readers.excel_reader import ExcelStreamReader
+from src.readers import create_reader
 from src.validators.validator import Validator
 
 
@@ -135,14 +135,14 @@ class IngestionPipeline:
         reconciliation_date: Any,  # datetime
         config_version: Optional[str] = None,
     ) -> IngestionResult:
-        """Process an entire Excel file end-to-end.
+        """Process an entire reconciliation file end-to-end.
 
         Flow:
         1. Compute SHA256 hash of file_path
         2. Check file duplicate — if found, return early with error
         3. Create ReconciliationFile record with PROCESSING status
         4. Load MappingConfig via config_loader
-        5. Create ExcelStreamReader via from_mapping_config
+        5. Create stream reader via create_reader
         6. Create TransactionNormalizer with config.field_mappings
         7. Create Validator with data_container_repo and reconciliation_file_repo
         8. For each row: normalize → validate → batch buffer → flush
@@ -153,7 +153,7 @@ class IngestionPipeline:
         On any exception: update status to FAILED, return partial stats.
 
         Args:
-            file_path: Path to the Excel file.
+            file_path: Path to the input file.
             partner: Partner identifier.
             workflow_type: Workflow type string.
             file_type: FileType enum value.
@@ -225,7 +225,7 @@ class IngestionPipeline:
                 )
 
             # Step 5-7: Create reader, normalizer, validator
-            with ExcelStreamReader.from_mapping_config(file_path, config) as reader:
+            with create_reader(file_path, config) as reader:
                 normalizer = TransactionNormalizer(config.field_mappings)
                 validator = Validator(
                     data_container_repo=self._data_repo,

@@ -22,6 +22,8 @@ class ReconciliationResult(BaseModel):
     )
 
     id: str = Field(alias="_id")  # unique ID, e.g. partnerTxnId or UUID
+    partner: str = Field(alias="partner")
+    date: str = Field(alias="date")
     partner_txn_id: str = Field(alias="partnerTxnId")
     internal_txn_id: Optional[str] = Field(default=None, alias="internalTxnId")
 

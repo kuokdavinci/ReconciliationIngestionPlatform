@@ -29,3 +29,11 @@ htmlcov/
 
 # SFTP data (uploaded files)
 sftp_data/
+
+# Downloaded data & temp files
+downloads/
+tmp_downloads/
+scratch/
+
+# Generated reports
+report.md

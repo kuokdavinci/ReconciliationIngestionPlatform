@@ -70,11 +70,54 @@ uv run python run.py reconcile --date 2024-07-07 --partner MOMO
 
 Results are stored in the `reconciliation_result` collection with statuses: `MATCHED`, `AMOUNT_MISMATCH`, `STATUS_MISMATCH`, `MULTIPLE_MISMATCH`, `MISSING_INTERNAL`, `MISSING_PARTNER`.
 
-### 5. Running Tests
+### 5. AI Analysis Layer
+
+Run the AI-powered analysis engine to generate actionable insights from reconciliation results. The layer uses OpenAI-compatible LLMs (GPT-4o default) to analyze mismatch patterns, detect operational issues, and produce daily reports — **without exposing raw transaction data** to the LLM.
+
+```bash
+# Start the FastAPI API server (default port 8000)
+uv run python run.py serve
+
+# Query AI insights via API
+curl "http://localhost:8000/api/v1/insights/summary?partner=MOMO&date=2024-07-07"
+curl "http://localhost:8000/api/v1/insights/discrepancies?partner=MOMO&date=2024-07-07&focus=operational"
+curl "http://localhost:8000/api/v1/reports/daily?date=2024-07-07"
+```
+
+**Analysis Focus Types:**
+
+| Focus | Use Case | Detects |
+|-------|----------|---------|
+| `operational` | Pipeline health | Missing internal/partner records, ingestion delays |
+| `partner` | Partner behavior | Mismatch rate trends, volume anomalies, stability |
+| `inconsistency` | Data quality | Amount mismatch clusters, status mismatch patterns |
+
+**Design Principles:**
+- **No raw data to LLM** — only aggregated metrics, grouped stats, and pre-processed anomalies
+- **LLM fallback** — if LLM fails, returns rule-based insights only
+- **Provider abstraction** — OpenAI-compatible (GPT-4o) default, Ollama deferred
+
+### 6. Running Tests
 To run unit and integration tests:
 ```bash
 uv run python -m pytest -v
 ```
+
+To run end-to-end tests with real MongoDB and OpenAI API:
+```bash
+# Set environment variables (fish shell)
+set -x E2E_MONGODB_URL "mongodb://admin:admin123@localhost:27017/reconciliation?authSource=admin"
+set -x E2E_AI_API_KEY "sk-xxx"
+set -x E2E_AI_MODEL "gpt-4o-mini"
+set -x E2E_AI_ENDPOINT "https://api.openai.com/v1"
+set -x E2E_DB_NAME "reconciliation"
+uv run python -m pytest tests/test_analysis_e2e.py -v --e2e
+
+# Or via bash
+bash -c 'source .env && export E2E_MONGODB_URL="$APP_MONGODB_URL" E2E_AI_API_KEY="$AI_API_KEY" E2E_AI_MODEL="$AI_MODEL" E2E_AI_ENDPOINT="$AI_ENDPOINT" E2E_DB_NAME="$APP_DB_NAME" && uv run python -m pytest tests/test_analysis_e2e.py -v --e2e'
+```
+
+E2E tests verify: AI actually analyzes real data, detects operational issues, identifies amount mismatch patterns, handles clean data, follows JSON schema, differentiates focus types, respects privacy contract, and handles 1000+ transactions.
 
 ---
 
@@ -148,7 +191,31 @@ Partner Excel File
      │ mapping_config│          └─────────────────────────┘
      │ reconciliation│
      │  _file       │
-     └──────────────┘
+     └──────┬───────┘
+            │
+            ↓
+┌───────────────────────────────────────────────────────────┐
+│  AI Analysis Layer (src/analysis/)                        │
+│                                                           │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────┐  │
+│  │ MetricsSvc  │  │ GroupingEng  │  │ LLMProvider     │  │
+│  │ (stats)     │  │ (buckets)    │  │ (GPT-4o/Ollama) │  │
+│  └──────┬──────┘  └──────┬───────┘  └────────┬────────┘  │
+│         │                │                    │           │
+│         └────────┬───────┘                    │           │
+│                  ↓                            │           │
+│  ┌────────────────────────────────────────┐   │           │
+│  │  insights.py (orchestration)           │   │           │
+│  │  query → metrics → grouping → LLM      │   │           │
+│  └──────────────────┬─────────────────────┘   │           │
+│                     │                         │           │
+│  ┌──────────────────┴─────────────────────┐   │           │
+│  │  FastAPI Server (src/api/)             │   │           │
+│  │  GET /api/v1/insights/summary          │   │           │
+│  │  GET /api/v1/insights/discrepancies    │   │           │
+│  │  GET /api/v1/reports/daily             │   │           │
+│  └────────────────────────────────────────┘               │
+└───────────────────────────────────────────────────────────┘
 ```
 
 ## Tech Stack
@@ -163,6 +230,9 @@ Partner Excel File
 | Decimal | `Decimal` (never float for money) |
 | Logging | Python stdlib `logging` with JSON formatter |
 | Testing | pytest + pytest-asyncio |
+| AI/LLM | httpx (OpenAI-compatible API), GPT-4o default |
+| API | FastAPI + uvicorn |
+| Scheduler | APScheduler (persistent, MongoDB-backed) |
 
 ## Key Features
 
@@ -175,6 +245,9 @@ Partner Excel File
 - **Status normalization** — Vietnamese status strings (Thành công, Thất bại, Hoàn tiền) normalized to standard enums
 - **Duplicate resolution** — latest `updatedAt` wins for multiple internal records with same `partnerTxnId`
 - **Audit trail** — every record includes createdBy, createdDate, lastModifiedBy, lastModifiedDate
+- **AI-powered analysis** — LLM generates actionable insights from reconciliation results (mismatch patterns, operational issues, daily reports) with privacy-by-design (no raw data sent to LLM)
+- **Automated scheduling** — APScheduler daemon fetches partner files via SFTP on cron schedules, with persistent job state in MongoDB
+- **FastAPI REST API** — serves AI insights endpoints (`/api/v1/insights/summary`, `/api/v1/insights/discrepancies`, `/api/v1/reports/daily`)
 
 ## Project Structure
 
@@ -187,9 +260,25 @@ src/
 ├── validators/     # Validator (business rules + duplicate detection)
 ├── pipeline/       # IngestionPipeline (full orchestration)
 ├── reconciliation/ # ReconciliationEngine (match + classify, status normalization)
+├── analysis/       # AI Analysis Layer (metrics, grouping, LLM prompts, insights)
+│   ├── config.py       # AnalysisConfig (AI_ env prefix)
+│   ├── provider.py     # LLMProvider Protocol + factory
+│   ├── providers/      # OpenAICompatProvider, OllamaProvider (deferred)
+│   ├── schemas.py      # Pydantic contracts (AnalysisInput, AnalysisResult, etc.)
+│   ├── metrics.py      # MetricsService (single source of truth)
+│   ├── grouping.py     # GroupingEngine (status, amount range, partner)
+│   ├── prompts.py      # System + analysis prompt builders
+│   ├── services.py     # Helpers (build_analysis_input, parse_llm_insights)
+│   ├── insights.py     # Orchestration (get_summary, get_discrepancies)
+│   ├── reporter.py     # DailyReporter (format only)
+│   └── alerter.py      # ThresholdAlerter (check only)
+├── api/            # FastAPI server (insights endpoints)
+│   ├── __init__.py     # App factory + lifespan
+│   └── insights.py     # Route handlers
+├── scheduler/      # APScheduler daemon (SFTP fetch, cron jobs)
 ├── logging/        # StructuredLogger (JSON/text formatters)
-└── models/         # MongoDB models, repositories, indexes (incl. InternalTransaction, ReconciliationResult)
-tests/              # 398 tests across all modules
+└── models/         # MongoDB models, repositories, indexes
+tests/              # 230+ unit/integration tests + 8 E2E tests
 ```
 
 ## MongoDB Collections
@@ -200,7 +289,7 @@ tests/              # 398 tests across all modules
 | `reconciliation_mapping_config` | Dynamic parsing configuration per partner | `partner + workflowType + fileType` |
 | `data_container` | Canonical normalized transactions | `partnerData.trace`, `identify + reconciliationDate`, `operationStatus` |
 | `internal_transaction` | Internal system records (Source of Truth) for reconciliation matching | `partnerTxnId`, `partner + transactionTime` |
-| `reconciliation_result` | Reconciliation matching output with discrepancy reports | `partnerTxnId`, `reconciliationStatus` |
+| `reconciliation_result` | Reconciliation matching output with discrepancy reports | `partnerTxnId`, `reconciliationStatus`, `partner + date` (for AI queries) |
 | `apscheduler_jobs` | Persistent job scheduler state | `_id` |
 
 ## Configuration
@@ -215,6 +304,21 @@ All settings use `APP_` prefix environment variables:
 | `APP_LOG_FORMAT` | `json` | Log format (json/text) |
 | `APP_APP_NAME` | `reconciliation-ingestion` | Application name |
 | `ENCRYPTION_KEY` | None | Encryption/decryption key for sensitive partner credentials |
+
+### AI Analysis Layer Configuration
+
+All settings use `AI_` prefix environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_PROVIDER` | `openai` | LLM provider type: `openai` \| `ollama` |
+| `AI_MODEL` | `gpt-4o-mini` | Model name for the selected provider |
+| `AI_ENDPOINT` | `https://api.openai.com/v1` | API endpoint URL (OpenAI-compatible) |
+| `AI_API_KEY` | — | API key for the LLM provider |
+| `AI_TIMEOUT` | `30` | HTTP timeout in seconds for LLM calls |
+| `AI_MAX_RETRIES` | `2` | Maximum retry attempts on failure |
+| `AI_ALERT_MISMATCH_RATE_THRESHOLD` | `5.0` | Mismatch rate % threshold for alerts |
+| `AI_ALERT_MISSING_COUNT_THRESHOLD` | `10` | Missing transaction count threshold for alerts |
 
 ## Onboarding a New Partner
 
@@ -250,6 +354,9 @@ Example MappingConfig:
 | Reconciliation: deterministic by partnerTxnId | Same input always produces same classification output |
 | Reconciliation: delete+re-insert pattern | Idempotent — safe to re-run without accumulating duplicates |
 | Status normalization for Vietnamese | Matches Thành công / Thất bại / Hoàn tiền to standard TransactionStatus |
+| AI: no raw data to LLM | Privacy-by-design — only aggregated metrics, grouped stats, pre-processed anomalies |
+| AI: LLM fallback to rule-based | Graceful degradation — insights still available when LLM is unavailable |
+| AI: provider abstraction | Swappable LLM backends (OpenAI-compatible, Ollama deferred) |
 
 ## License
 

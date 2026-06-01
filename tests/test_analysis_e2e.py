@@ -171,6 +171,7 @@ async def test_ai_analyzes_mixed_status_data():
     assert metrics["by_status"]["STATUS_MISMATCH"] == 2
 
     # Verify AI actually analyzed the data
+    print(f"\n  LLM Status: {result['llm_status']}")
     if result["llm_status"] == "success":
         assert len(result["key_findings"]) > 0, "AI should return at least one finding"
         # Findings should be meaningful strings
@@ -235,6 +236,7 @@ async def test_ai_detects_operational_issues():
     assert result["summary_metrics"]["mismatch_rate"] == pytest.approx(80.0, rel=1e-2)
 
     # Verify AI detected operational issues
+    print(f"\n  LLM Status: {result['llm_status']}")
     if result["llm_status"] == "success":
         findings_text = " ".join(result["key_findings"]).lower()
         # Should mention missing/internal/partner in findings
@@ -297,6 +299,7 @@ async def test_ai_analyzes_amount_mismatch_patterns():
     results = await get_discrepancies("ZALOPAY", "2024-07-07", "inconsistency", collection, llm_provider, config)
 
     assert isinstance(results, list)
+    print(f"\n  LLM Status: success (direct LLM call for discrepancies)")
     if results:
         # Each result should be a valid AnalysisResult
         for r in results:
@@ -355,6 +358,7 @@ async def test_ai_handles_clean_data():
     assert result["summary_metrics"]["matched"] == 100
     assert result["summary_metrics"]["mismatch_rate"] == 0.0
 
+    print(f"\n  LLM Status: {result['llm_status']}")
     if result["llm_status"] == "success":
         findings_text = " ".join(result["key_findings"]).lower()
         # Should indicate healthy/normal/matched status
@@ -439,6 +443,8 @@ async def test_ai_response_follows_json_schema():
 
     llm_response = await llm_provider.generate(user_prompt, system_prompt)
 
+    print(f"\n  Direct LLM call: {len(llm_response)} chars received")
+
     # Parse response
     parsed = parse_llm_insights(llm_response)
 
@@ -503,7 +509,7 @@ async def test_ai_differentiates_focus_types():
     for focus in ("operational", "partner", "inconsistency"):
         results = await get_discrepancies("MOMO", "2024-07-10", focus, collection, llm_provider, config)
         focus_results[focus] = results
-        print(f"\n  Focus: {focus}")
+        print(f"\n  Focus: {focus} ({len(results)} insights from LLM)")
         for r in results:
             print(f"    [{r.severity}] {r.title}")
 
@@ -636,6 +642,7 @@ async def test_ai_handles_large_volume():
     assert result["summary_metrics"]["total_transactions"] == 1000
     assert result["summary_metrics"]["matched"] == 900
 
+    print(f"\n  LLM Status: {result['llm_status']}")
     if result["llm_status"] == "success":
         assert len(result["key_findings"]) > 0
         print(f"  AI analyzed 1000 transactions, returned {len(result['key_findings'])} findings")

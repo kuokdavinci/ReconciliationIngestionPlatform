@@ -20,8 +20,8 @@ logger = logging.getLogger("reconciliation.jobs")
 
 
 async def daily_partner_fetch_job(
-    db: Any,
-    config_loader: ConfigLoader,
+    db: Any = None,
+    config_loader: Any = None,
     batch_size: int = 100,
     structured_logger: Optional[StructuredLogger] = None,
 ) -> dict:
@@ -45,6 +45,26 @@ async def daily_partner_fetch_job(
     Returns:
         Dict with aggregate results (total, success, failed).
     """
+    if db is None:
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from src.config.settings import settings
+        client = AsyncIOMotorClient(settings.mongodb_url)
+        db = client[settings.db_name]
+
+    if config_loader is None:
+        from src.config.loader import ConfigLoader
+        from src.config.cache import ConfigCache
+        from src.config.validator import ConfigValidator
+        from src.models.mapping_config import MappingConfigRepository
+        config_repo = MappingConfigRepository(db)
+        config_cache = ConfigCache()
+        config_validator = ConfigValidator()
+        config_loader = ConfigLoader(config_repo, config_cache, config_validator)
+
+    if structured_logger is None:
+        from src.logging.logger import StructuredLogger
+        structured_logger = StructuredLogger()
+
     fetch_repo = FetchConfigRepository(db)
     enabled_configs = await fetch_repo.find_enabled()
 

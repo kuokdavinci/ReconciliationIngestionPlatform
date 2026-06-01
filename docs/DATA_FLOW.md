@@ -2,6 +2,15 @@
 
 ## End-to-End Flow
 
+Two main data flows exist in the system:
+
+1. **Ingestion Flow** — Partner Excel files are parsed, normalized, validated, and persisted to `data_container`.
+2. **Reconciliation Flow** — Ingestion output (`data_container`) is matched against internal system records (`internal_transaction`) to produce reconciliation reports (`reconciliation_result`).
+
+---
+
+## Ingestion Flow
+
 ```
 User calls: pipeline.process_file(
     file_path="m4becomvsp_07072024_combine.xlsx",
@@ -283,6 +292,161 @@ _compute_file_hash() → SHA256 matches existing record
   → emit_file_failed("duplicate", "File already processed")
   → return IngestionResult(file_record=existing, errors=[{"field": "file_duplicate", ...}])
 ```
+
+---
+
+## Reconciliation Flow
+
+Reconciliation is triggered via CLI:
+
+```
+uv run python run.py --reconcile 2024-07-07 --partner MOMO
+```
+
+### Step 1: Date Boundaries
+
+```
+reconciliation_date = datetime(2024, 7, 7, tzinfo=UTC)
+start_of_day = datetime(2024, 7, 7, 0, 0, 0, tzinfo=UTC)
+end_of_day   = datetime(2024, 7, 7, 23, 59, 59, 999999, tzinfo=UTC)
+```
+
+### Step 2: Fetch Partner Records (from Ingestion output)
+
+```
+DataContainerRepository.find_many({
+    "identify": "MOMO",
+    "reconciliationDate": {"$gte": start_of_day, "$lte": end_of_day}
+})
+```
+
+**Query:** `data_container` collection with `idx_identify_date` index.
+
+### Step 3: Fetch Internal Records (Mock DB)
+
+```
+InternalTransactionRepository.find_many({
+    "partner": "MOMO",
+    "transactionTime": {"$gte": start_of_day, "$lte": end_of_day}
+})
+```
+
+**Query:** `internal_transaction` collection with `idx_internal_partner_txn_time` index.
+
+### Step 4: Resolve Duplicate Internal Records
+
+```python
+internal_by_key: dict[str, InternalTransaction] = {}
+for record in internal_records:
+    key = record.partner_txn_id.strip()
+    if key not in internal_by_key or record.updated_at > existing.updated_at:
+        internal_by_key[key] = record
+```
+
+**Rule:** If multiple internal records share the same `partnerTxnId`, the one with the latest `updatedAt` wins. This handles correction scenarios where a previous record was updated/fixed.
+
+### Step 5: Process Partner Records
+
+For each `DataContainer` record:
+
+**5a. Resolve partnerTxnId:**
+
+```
+_resolve_partner_txn_id(partner_record):
+  1. Try partnerData.trace
+  2. Try partnerData.extra.vspTransId
+  3. Try partnerData.id
+  4. If none → skip (log warning)
+```
+
+**5b. Look up by partnerTxnId:**
+
+```python
+internal_record = internal_by_key.get(partner_txn_id)
+```
+
+**5c. If found — compare and classify:**
+
+```
+Amounts: partner_amount == internal_amount?  (tolerance = 0)
+Statuses: _normalize_status(partner_status) == _normalize_status(internal_status)?
+
+Classification matrix:
+  amounts_match && statuses_match   → MATCHED
+  !amounts_match && !statuses_match → MULTIPLE_MISMATCH
+  !amounts_match                    → AMOUNT_MISMATCH
+  else                              → STATUS_MISMATCH
+```
+
+**Status normalization (`_normalize_status()`):**
+
+| Input (case-insensitive) | Normalized |
+|--------------------------|------------|
+| `success`, `thành công`, `matched` | `SUCCESS` |
+| `fail`, `failed`, `thất bại` | `FAILED` |
+| `reversed`, `hoàn tiền` | `REVERSED` |
+| anything else | `PENDING` |
+
+**5d. If not found — MISSING_INTERNAL:**
+
+```python
+ReconciliationResult(
+    partnerTxnId=partner_txn_id,
+    partnerAmount=partner_amount,
+    partnerStatus=partner_status,
+    reconciliationStatus=MISSING_INTERNAL,
+    partnerRecordId=str(partner_record.id),
+)
+```
+
+### Step 6: Process Missing Partner Records
+
+For each internal record whose `partnerTxnId` was NOT matched by any partner record:
+
+```python
+ReconciliationResult(
+    partnerTxnId=partner_txn_id,
+    internalTxnId=internal_record.id,
+    internalAmount=internal_record.amount,
+    internalStatus=internal_record.status,
+    reconciliationStatus=MISSING_PARTNER,
+    internalRecordId=str(internal_record.id),
+)
+```
+
+### Step 7: Idempotent Write
+
+```python
+# Delete any existing results for the same keys
+target_ids = [r.id for r in results]
+await result_repo.collection.delete_many({"_id": {"$in": target_ids}})
+
+# Insert new results
+await result_repo.insert_many(results)
+```
+
+**Why delete+insert instead of upsert?** `insert_many` is more performant for batch writes. Keys are deterministic (`partnerTxnId`), so delete+insert is safe and ensures consistency if classification logic changed.
+
+### Step 8: Return Results
+
+Each result contains:
+```
+partnerTxnId, reconciliationStatus,
+partnerAmount vs internalAmount,
+partnerStatus vs internalStatus,
+partnerRecordId, internalRecordId (if applicable)
+```
+
+### Example: Log Output
+
+```
+RECONCILIATION COMPLETED — partner=MOMO, 2024-07-07
+  - Key: 2407055711887385978413624 → MATCHED (Amt: 259200, Int: 259200)
+  - Key: 2407055711887385978413625 → AMOUNT_MISMATCH (Amt: 259200, Int: 100000)
+  - Key: internal_only_txn_999 → MISSING_PARTNER (Amt: None, Int: 15000)
+```
+
+---
 
 ### Scenario 4: Exception During Processing
 

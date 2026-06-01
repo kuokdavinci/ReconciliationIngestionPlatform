@@ -168,6 +168,20 @@ Indexes are defined in `src/models/indexes.py` and applied via `apply_indexes()`
 | `idx_partner_status` | `partnerData.status` | Single | Filter by transaction status |
 | `idx_source_file` | `sourceFileId` | Single | Find transactions by source file |
 
+### internal_transaction
+
+| Index | Fields | Type | Purpose |
+|-------|--------|------|---------|
+| `idx_internal_partner_txn_id` | `partnerTxnId` | Single | Fast lookup by reconciliation key |
+| `idx_internal_partner_txn_time` | `partner`, `transactionTime` | Compound | Query internal records by partner and date range |
+
+### reconciliation_result
+
+| Index | Fields | Type | Purpose |
+|-------|--------|------|---------|
+| `idx_recon_partner_txn_id` | `partnerTxnId` | Single | Fast lookup by reconciliation key (for idempotent writes) |
+| `idx_recon_status` | `reconciliationStatus` | Single | Filter reconciliation results by status (MATCHED, MISSING, etc.) |
+
 ### Applying Indexes
 
 ```python

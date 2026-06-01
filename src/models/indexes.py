@@ -51,6 +51,26 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_source_file",
         ),
     ],
+    "internal_transaction": [
+        IndexModel(
+            "partnerTxnId",
+            name="idx_internal_partner_txn_id",
+        ),
+        IndexModel(
+            [("partner", ASCENDING), ("transactionTime", ASCENDING)],
+            name="idx_internal_partner_txn_time",
+        ),
+    ],
+    "reconciliation_result": [
+        IndexModel(
+            "partnerTxnId",
+            name="idx_recon_partner_txn_id",
+        ),
+        IndexModel(
+            "reconciliationStatus",
+            name="idx_recon_status",
+        ),
+    ],
 }
 
 

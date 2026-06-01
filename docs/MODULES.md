@@ -13,6 +13,10 @@ class TransactionStatus(StrEnum):
 
 class FileType(StrEnum):
     SETTLEMENT | RECONCILIATION
+
+class ReconciliationStatus(StrEnum):
+    MATCHED | AMOUNT_MISMATCH | STATUS_MISMATCH |
+    MULTIPLE_MISMATCH | MISSING_INTERNAL | MISSING_PARTNER
 ```
 
 ### types.py
@@ -278,16 +282,55 @@ class DataContainerRepository(BaseRepository[DataContainer]):
     async def find_by_duplicate_key(self, identify, reconciliation_date, trace) -> Optional[DataContainer]
 ```
 
+### internal_transaction.py
+
+```python
+class InternalTransaction(BaseModel):
+    id: str = Field(alias="_id")              # internalTxnId
+    partner: str                              # MOMO, ZALOPAY, etc.
+    partner_txn_id: str = Field(alias="partnerTxnId")  # reconciliation key
+    amount: Decimal                           # float rejected at pydantic level
+    currency: str = "VND"
+    status: TransactionStatus
+    transaction_time: datetime = Field(alias="transactionTime")
+    created_at: datetime = Field(alias="createdAt")
+    updated_at: datetime = Field(alias="updatedAt")
+
+class InternalTransactionRepository(BaseRepository[InternalTransaction]):
+    async def insert_many(self, docs: list[InternalTransaction]) -> int
+    async def find_by_partner_and_date_range(self, partner, start, end) -> list[InternalTransaction]
+```
+
+### reconciliation_result.py
+
+```python
+class ReconciliationResult(BaseModel):
+    id: str = Field(alias="_id")                           # partnerTxnId
+    partner_txn_id: str = Field(alias="partnerTxnId")
+    internal_txn_id: Optional[str] = Field(alias="internalTxnId")
+    partner_amount: Optional[Decimal] = Field(alias="partnerAmount")
+    internal_amount: Optional[Decimal] = Field(alias="internalAmount")
+    partner_status: Optional[str] = Field(alias="partnerStatus")
+    internal_status: Optional[str] = Field(alias="internalStatus")
+    reconciliation_status: ReconciliationStatus = Field(alias="reconciliationStatus")
+    partner_record_id: Optional[str] = Field(alias="partnerRecordId")
+    internal_record_id: Optional[str] = Field(alias="internalRecordId")
+    created_at: datetime = Field(alias="createdAt")
+
+class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
+    async def insert_many(self, docs: list[ReconciliationResult]) -> int
+```
+
 ### indexes.py
 
 ```python
 INDEXES: dict[str, list[IndexModel]] = {
     "reconciliation_file": [
         IndexModel("fileHash", unique=True),
-        IndexModel([("partner", ASCENDING), ("reconciliation_date", ASCENDING)]),
+        IndexModel([("partner", ASCENDING), ("reconciliationDate", ASCENDING)]),
     ],
     "reconciliation_mapping_config": [
-        IndexModel([("partner", ASCENDING), ("workflow_type", ASCENDING), ("file_type", ASCENDING)]),
+        IndexModel([("partner", ASCENDING), ("workflowType", ASCENDING), ("fileType", ASCENDING)]),
     ],
     "data_container": [
         IndexModel("partnerData.trace"),
@@ -296,10 +339,46 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel("partnerData.status"),
         IndexModel("sourceFileId"),
     ],
+    "internal_transaction": [
+        IndexModel("partnerTxnId"),
+        IndexModel([("partner", ASCENDING), ("transactionTime", ASCENDING)]),
+    ],
+    "reconciliation_result": [
+        IndexModel("partnerTxnId"),
+        IndexModel("reconciliationStatus"),
+    ],
 }
 
 async def apply_indexes(db: AsyncIOMotorDatabase) -> None
 ```
+
+---
+
+## src/reconciliation/
+
+### engine.py
+
+```python
+class ReconciliationEngine:
+    def __init__(self, db: AsyncIOMotorDatabase) -> None
+        # Initializes DataContainerRepo, InternalTransactionRepo, ReconciliationResultRepo
+
+    def _normalize_status(self, status_str: str) -> TransactionStatus
+        # Maps Vietnamese/English status strings to standard TransactionStatus
+
+    def _resolve_partner_txn_id(self, partner_record: DataContainer) -> Optional[str]
+        # Extracts reconciliation key: trace → vspTransId → id
+
+    async def reconcile(self, partner: str, reconciliation_date: datetime) -> list[ReconciliationResult]
+        # Full reconciliation: fetch → match → classify → store → return
+```
+
+**Key design:**
+- Deterministic — same input always produces same output
+- Idempotent write — delete-many + insert-many for matching keys
+- Duplicate handling — latest `updatedAt` wins for same `partnerTxnId`
+- Status normalization supports Vietnamese (Thành công, Thất bại, Hoàn tiền)
+- Reconciliation key resolution follows priority chain: `trace` → `vspTransId` → `id`
 
 ---
 

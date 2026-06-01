@@ -61,7 +61,7 @@ class PartnerDataScheduler:
             job_stores["default"] = MongoDBJobStore(
                 host=self._config.mongodb_url or "mongodb://localhost:27017",
                 database=self._config.db_name,
-                collection_name="apscheduler_jobs",
+                collection="apscheduler_jobs",
             )
         else:
             from apscheduler.jobstores.memory import MemoryJobStore

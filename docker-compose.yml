@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   mongodb:
     image: mongo:7
@@ -45,6 +43,23 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reconciliation-scheduler
+    command: python run.py --start-scheduler
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./downloads:/app/downloads
+      - ./sftp_data:/app/sftp_data
+
 
 volumes:
   mongo_data:

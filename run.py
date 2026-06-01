@@ -138,13 +138,13 @@ async def _handle_scheduler_mode(
         on_job_error=on_job_error,
     )
 
-    # Add daily job
+    # Start the scheduler first so jobs can be added to it
+    scheduler.start()
+
+    # Add daily job (connections are resolved dynamically inside the job to allow pickling)
     scheduler.add_daily_job(
         job_func=daily_partner_fetch_job,
         job_id="daily_partner_fetch",
-        db=db,
-        config_loader=config_loader,
-        structured_logger=structured_logger,
     )
 
     if list_jobs:
@@ -159,6 +159,7 @@ async def _handle_scheduler_mode(
                 print(f"  Next Run: {job['next_run_time']}")
                 print(f"  Trigger: {job['trigger']}")
                 print()
+        scheduler.stop()
         return
 
     if run_job_now:
@@ -167,6 +168,7 @@ async def _handle_scheduler_mode(
         # Wait a bit for job to complete
         await asyncio.sleep(5)
         print("Job triggered. Check logs for results.")
+        scheduler.stop()
         return
 
     if start_scheduler:
@@ -174,8 +176,6 @@ async def _handle_scheduler_mode(
         print(f"  Job Store: {scheduler_config.job_store_type}")
         print(f"  Default Schedule: {scheduler_config.default_schedule}")
         print("\nPress Ctrl+C to stop.\n")
-
-        scheduler.start()
 
         try:
             # Keep the event loop running
@@ -185,6 +185,7 @@ async def _handle_scheduler_mode(
             print("\nStopping scheduler...")
             scheduler.stop()
             print("Scheduler stopped.")
+
 
 
 def _create_config_loader(db):
@@ -208,6 +209,11 @@ async def main():
     parser.add_argument("--start-scheduler", action="store_true", help="Start the scheduler for automated partner data fetching")
     parser.add_argument("--run-job-now", action="store_true", help="Manually trigger the daily fetch job now")
     parser.add_argument("--list-jobs", action="store_true", help="List all scheduled jobs")
+    parser.add_argument("action", nargs="?", choices=["reconcile"], help="Action to perform (e.g. reconcile)")
+    parser.add_argument("--date", type=str, help="Date for reconciliation (YYYY-MM-DD)")
+    parser.add_argument("--reconcile", type=str, help="Run reconciliation for date (YYYY-MM-DD)")
+    parser.add_argument("--partner", type=str, default="MOMO", help="Partner identifier for reconciliation")
+    parser.add_argument("--seed-mock", action="store_true", help="Seed mock internal transactions for testing reconciliation")
     args = parser.parse_args()
 
     # 1. Database Connection
@@ -220,6 +226,65 @@ async def main():
     print("Applying MongoDB indexes...")
     await apply_indexes(db)
     print("Indexes verified/applied successfully.")
+
+    # Reconciliation mode
+    is_reconcile = args.action == "reconcile" or args.reconcile is not None
+    if is_reconcile:
+        date_str = args.date or args.reconcile
+        if not date_str:
+            print("Error: Please provide a date using --date or --reconcile (YYYY-MM-DD)")
+            return
+        recon_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        
+        if args.seed_mock:
+            print("Seeding mock internal transactions...")
+            from src.models.internal_transaction import InternalTransactionRepository, InternalTransaction
+            from src.core.enums import TransactionStatus
+            from decimal import Decimal
+            
+            repo = InternalTransactionRepository(db)
+            # Clear old mock data for clean run
+            await repo.collection.delete_many({"partner": args.partner})
+            
+            # Seed MATCHED case: (Matches standard MOMO record in combine xlsx)
+            await repo.create(InternalTransaction(
+                id="internal_matched_01",
+                partner=args.partner,
+                partnerTxnId="2407055711887385978413624",
+                amount=Decimal("259200"),
+                status=TransactionStatus.SUCCESS,
+                transactionTime=recon_date,
+            ))
+            
+            # Seed AMOUNT_MISMATCH case
+            await repo.create(InternalTransaction(
+                id="internal_amt_mismatch_01",
+                partner=args.partner,
+                partnerTxnId="2407055711887385978413625",
+                amount=Decimal("100000"),  # Expected: file might have another amount
+                status=TransactionStatus.SUCCESS,
+                transactionTime=recon_date,
+            ))
+
+            # Seed MISSING_PARTNER case
+            await repo.create(InternalTransaction(
+                id="internal_missing_partner_01",
+                partner=args.partner,
+                partnerTxnId="internal_only_txn_999",
+                amount=Decimal("15000"),
+                status=TransactionStatus.SUCCESS,
+                transactionTime=recon_date,
+            ))
+            print("Mock internal transactions seeded successfully.")
+
+        print(f"Executing reconciliation for partner {args.partner} on {args.reconcile}...")
+        from src.reconciliation.engine import ReconciliationEngine
+        engine = ReconciliationEngine(db)
+        results = await engine.reconcile(args.partner, recon_date)
+        print(f"Reconciliation finished. Total results generated/updated: {len(results)}")
+        for r in results:
+            print(f"  - Key: {r.partner_txn_id} -> Status: {r.reconciliation_status} (Partner Amt: {r.partner_amount}, Internal Amt: {r.internal_amount})")
+        return
 
     # Scheduler mode
     if args.start_scheduler or args.run_job_now or args.list_jobs:

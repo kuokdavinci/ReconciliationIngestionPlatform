@@ -12,6 +12,21 @@ All settings use the `APP_` prefix and are loaded via pydantic-settings.
 | `APP_LOG_FORMAT` | string | `json` | Log format: `json` or `text` |
 | `APP_APP_NAME` | string | `reconciliation-ingestion` | Application name |
 
+### AI Analysis Layer
+
+All settings use the `AI_` prefix and are loaded via pydantic-settings with `AnalysisConfig`.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `AI_PROVIDER` | string | `openai` | LLM provider type: `openai` \| `ollama` |
+| `AI_MODEL` | string | `gpt-4o` | Model name for the selected provider |
+| `AI_ENDPOINT` | string | `https://api.openai.com/v1` | API endpoint URL (OpenAI-compatible format) |
+| `AI_API_KEY` | string | — | API key for the LLM provider |
+| `AI_TIMEOUT` | int | `30` | HTTP timeout in seconds for LLM calls |
+| `AI_MAX_RETRIES` | int | `2` | Maximum retry attempts on failure |
+| `AI_ALERT_MISMATCH_RATE_THRESHOLD` | float | `5.0` | Mismatch rate percentage threshold for alerts |
+| `AI_ALERT_MISSING_COUNT_THRESHOLD` | int | `10` | Missing transaction count threshold for alerts |
+
 ### Setup
 
 ```bash

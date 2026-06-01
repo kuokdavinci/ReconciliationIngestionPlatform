@@ -354,6 +354,235 @@ async def apply_indexes(db: AsyncIOMotorDatabase) -> None
 
 ---
 
+## src/analysis/
+
+### config.py
+
+```python
+class AnalysisConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="AI_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    provider: str = "openai"              # LLM provider type: openai | ollama
+    model: str = "gpt-4o"                 # Model name
+    endpoint: str = "https://api.openai.com/v1"
+    api_key: Optional[str] = None
+    timeout: int = 30                     # HTTP timeout in seconds
+    max_retries: int = 2                  # Maximum retry attempts
+    alert_mismatch_rate_threshold: float = 5.0
+    alert_missing_count_threshold: int = 10
+
+    @property
+    def provider_type(self) -> str:
+        return self.provider.lower()
+```
+
+### provider.py
+
+```python
+class LLMProvider(Protocol):
+    async def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str: ...
+
+def create_provider(config: AnalysisConfig) -> LLMProvider:
+    # Routes to OpenAICompatProvider or OllamaProvider based on config.provider_type
+```
+
+### providers/openai_compat.py
+
+```python
+class OpenAICompatProvider:
+    def __init__(self, config: AnalysisConfig) -> None
+        # Uses httpx.AsyncClient, retry logic, low temperature (0.1)
+
+    async def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        # POST {endpoint}/v1/chat/completions with OpenAI-compatible body
+        # Parse response.choices[0].message.content
+```
+
+### schemas.py
+
+```python
+class GroupCriteria(BaseModel):
+    status: Optional[str] = None
+    partner: Optional[str] = None
+    amount_range_min: Optional[Decimal] = None
+    amount_range_max: Optional[Decimal] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+
+class GroupResult(BaseModel):
+    key: str
+    count: int
+    percentage: float
+    total_amount: Decimal
+    details: dict[str, Any] = {}
+
+class SummaryResult(BaseModel):
+    partner: str
+    date: str
+    total_transactions: int
+    matched: int
+    mismatch_rate: float
+    total_amount_mismatch: Decimal
+    by_status: dict[str, int]
+    total_volume: Decimal
+    avg_mismatch_amount: Decimal
+
+class AnalysisResult(BaseModel):
+    type: str
+    severity: str          # low, medium, high, critical
+    title: str
+    description: str
+    affected_count: int
+    recommendation: str
+
+class TopAnomaly(BaseModel):
+    type: str
+    count: int
+    partners_affected: list[str]
+    amount_range: str
+
+class AnalysisInput(BaseModel):
+    """Privacy-by-design: no raw transaction data, only aggregated metrics."""
+    partner: str
+    date: str
+    focus: str             # operational | partner | inconsistency
+    summary_metrics: dict[str, Any]
+    grouped_stats: list[GroupResult]
+    top_anomalies: list[TopAnomaly]
+```
+
+### grouping.py
+
+```python
+class GroupingEngine:
+    def group(self, results: list, criteria: GroupCriteria) -> list[GroupResult]:
+        # Pure function: group by reconciliationStatus, amount_range, partner
+        # Amount ranges: 0-100k, 100k-1M, 1M+
+        # Deterministic, no IO
+```
+
+### metrics.py
+
+```python
+class MetricsService:
+    @staticmethod
+    def compute_summary(results: list, partner: str, date: str) -> SummaryResult:
+        # Single source of truth for all stats
+        # mismatch_rate %, total_volume, avg_mismatch_amount, count_by_status
+
+    @staticmethod
+    def summary_from_groups(groups: list[GroupResult], results: list) -> dict:
+        # Cross-group stats
+```
+
+### prompts.py
+
+```python
+def build_system_prompt() -> str:
+    # Defines AI analysis assistant role, constraints, JSON output format
+
+def build_analysis_prompt(analysis_input: AnalysisInput) -> str:
+    # Receives AnalysisInput, generates findings by focus type
+    # Severity guidelines: critical (>10% or >50 txns), high (5-10% or 20-50), medium (1-5% or 5-20), low (<1% or <5)
+```
+
+### insights.py
+
+```python
+async def get_summary(partner: str, date: str, llm_provider: LLMProvider) -> dict:
+    # Query MongoDB → MetricsService → GroupingEngine → build AnalysisInput → LLM → return
+
+async def get_discrepancies(partner: str, date: str, focus: str, llm_provider: LLMProvider) -> list[AnalysisResult]:
+    # Query → MetricsService → GroupingEngine → generate_insights()
+
+async def generate_insights(analysis_input: AnalysisInput, llm_provider: LLMProvider) -> list[AnalysisResult]:
+    # Rule-based pre-process by focus + LLM enrich
+    # Fallback: rule-based only if LLM fails
+```
+
+### services.py
+
+```python
+def build_analysis_input(partner, date, focus, metrics_result, grouped_results) -> AnalysisInput:
+    # Build standardized input contract for LLM
+
+def parse_llm_insights(llm_response: str) -> list[AnalysisResult]:
+    # Parse JSON response from LLM, handle parse error → fallback
+
+def format_findings(analysis_results: list[AnalysisResult]) -> list[str]:
+    # Format AnalysisResult list to short string findings
+```
+
+### reporter.py
+
+```python
+class DailyReporter:
+    def __init__(self, collection, llm_provider: LLMProvider, config: AnalysisConfig = None) -> None
+
+    async def generate_report(self, date: str) -> dict:
+        # Query partners active → call insights.get_summary() for each → aggregate
+
+    def save_report(self, date: str) -> str:
+        # Save JSON to ./reports/daily/{date}.json
+```
+
+### alerter.py
+
+```python
+class ThresholdAlerter:
+    def __init__(self, config: AnalysisConfig = None) -> None
+
+    def check_thresholds(self, summary_result: SummaryResult) -> list[Alert]:
+        # Check mismatch rate and missing count thresholds from config
+        # Severity scaling based on how far over threshold
+
+    def alerts_for_report(self, report: dict) -> list[Alert]:
+        # Run check for all partners in report
+```
+
+---
+
+## src/api/
+
+### __init__.py
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # MongoDB connection lifecycle management
+    yield
+
+def create_app() -> FastAPI:
+    # Initialize FastAPI app with lifespan, include routers
+```
+
+### insights.py
+
+```python
+router = APIRouter(prefix="/api/v1")
+
+@router.get("/insights/summary")
+async def insights_summary(partner: str, date: str):
+    # Validation: partner required, date format YYYY-MM-DD
+    # Calls insights.get_summary()
+
+@router.get("/insights/discrepancies")
+async def insights_discrepancies(partner: str, date: str, focus: str = "operational"):
+    # Validation: focus must be operational|partner|inconsistency
+    # Calls insights.get_discrepancies()
+
+@router.get("/reports/daily")
+async def reports_daily(date: str):
+    # Calls DailyReporter.generate_report()
+```
+
+---
+
 ## src/reconciliation/
 
 ### engine.py

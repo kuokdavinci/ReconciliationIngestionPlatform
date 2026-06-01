@@ -275,9 +275,89 @@ Two-tier validation:
 
 **Idempotency:** Before inserting new results, existing `reconciliation_result` documents with the same `_id` (partnerTxnId) are deleted, making repeated runs safe.
 
+### 10. `src/analysis/` — AI Analysis Layer
+
+`ReconciliationEngine` output (`reconciliation_result`) is consumed by the AI Analysis Layer to generate actionable insights for operators.
+
+**Architecture:**
+```
+┌───────────────────────────────────────────────────────────────┐
+│                   AI Analysis Layer                            │
+│                                                               │
+│  ┌──────────────────────────────────────────────┐             │
+│  │         insights.py (orchestration)           │             │
+│  │  query → metrics → grouping → LLM enrich     │             │
+│  └────────────────────┬─────────────────────────┘             │
+│                       │                                       │
+│            ┌──────────┴──────────┐                            │
+│            ▼                     ▼                             │
+│  ┌─────────────────┐  ┌──────────────────────┐                │
+│  │  services.py    │  │  LLMProvider         │                │
+│  │  (helpers only) │  │  (Protocol)          │                │
+│  │  • AnalysisInput│  │  generate(prompt)    │                │
+│  │    builder      │  │       → str          │                │
+│  │  • LLM response │  └──────────┬───────────┘                │
+│  │    parser       │             │                            │
+│  └─────────────────┘             ▼                            │
+│                    ┌──────────────────────────┐               │
+│                    │  OpenAICompatProvider    │               │
+│                    │  (GPT-4o, default)       │               │
+│                    └──────────────────────────┘               │
+│                                                               │
+│  ┌──────────────┐  ┌───────────────────┐  ┌──────────────┐   │
+│  │ FastAPI:     │  │ DailyReporter     │  │ Alerter      │   │
+│  │ /insights/   │  │ (scheduled)       │  │ (threshold)  │   │
+│  │  summary     │  │ format only       │  │ check only   │   │
+│  │ /insights/   │  │                   │  │              │   │
+│  │  discrepan-  │  │                   │  │              │   │
+│  │  cies        │  │                   │  │              │   │
+│  │ /reports/    │  │                   │  │              │   │
+│  │  daily       │  │                   │  │              │   │
+│  └──────────────┘  └───────────────────┘  └──────────────┘   │
+└───────────────────────────────────────────────────────────────┘
+```
+
+**Key components:**
+
+| Component | Role | Description |
+|-----------|------|-------------|
+| `LLMProvider` (Protocol) | Abstract contract | `generate(prompt, system_prompt?) → str` — swappable providers |
+| `OpenAICompatProvider` | GPT-4o implementation | `httpx.AsyncClient` with retry, timeout, low temperature (0.1) |
+| `AnalysisConfig` | Settings | `AI_` env prefix: provider, model, endpoint, timeout, retries, alert thresholds |
+| `AnalysisInput` | Data contract | Privacy-by-design: no raw transaction data, only aggregated metrics |
+| `GroupingEngine` | Pure function | Group by status, amount range (0-100k, 100k-1M, 1M+), partner |
+| `MetricsService` | Single source of truth | mismatch_rate, total_volume, avg_mismatch_amount, count_by_status |
+| `insights.py` | Orchestration | `get_summary()`, `get_discrepancies()`, `generate_insights()` |
+| `services.py` | Helpers | `build_analysis_input()`, `parse_llm_insights()`, `format_findings()` |
+| `DailyReporter` | Format only | Generates daily batch reports using `insights.get_summary()` |
+| `ThresholdAlerter` | Check only | Detects threshold breaches from config, severity scaling |
+
+**Design principles:**
+- **No raw data to LLM** — only aggregated metrics, grouped stats, and pre-processed anomalies
+- **MetricsService is single source of truth** — reporter and alerter never duplicate computation
+- **LLM fallback** — if LLM fails, returns rule-based insights only
+- **Provider abstraction** — OpenAI-compatible (GPT-4o) default, OllamaProvider deferred
+- **Deterministic output** — same input → same output (low temperature, structured JSON)
+
+### 11. `src/api/` — FastAPI Server
+
+FastAPI application serving the AI Analysis Layer endpoints.
+
+**Endpoints:**
+
+| Method | Path | Description | Parameters |
+|--------|------|-------------|------------|
+| `GET` | `/api/v1/insights/summary` | Insight summary with groups and key findings | `partner`, `date` |
+| `GET` | `/api/v1/insights/discrepancies` | LLM-powered deep analysis by focus type | `partner`, `date`, `focus` |
+| `GET` | `/api/v1/reports/daily` | Daily batch report | `date` |
+
+**Startup:** `python run.py serve` (uvicorn on port 8000, configurable via `--port`)
+
+**Lifespan:** MongoDB connection managed via FastAPI lifespan context manager.
+
 ## Data Flow
 
-See [DATA_FLOW.md](DATA_FLOW.md) for detailed end-to-end flow.
+See [DATA_FLOW.md](DATA_FLOW.md) for detailed end-to-end flow including AI Analysis Layer.
 
 ## Threat Model
 

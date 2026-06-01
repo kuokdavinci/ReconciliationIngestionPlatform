@@ -9,6 +9,25 @@ Provides:
 - mock_data_container_repo: Tracks insert_many calls
 """
 
+import pytest
+
+
+def pytest_addoption(parser):
+    parser.addoption("--e2e", action="store_true", default=False, help="Run E2E tests")
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "e2e: mark test as end-to-end (requires real services)")
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--e2e"):
+        return
+    skip_e2e = pytest.mark.skip(reason="need --e2e option to run")
+    for item in items:
+        if "e2e" in item.keywords:
+            item.add_marker(skip_e2e)
+
 import tempfile
 from datetime import datetime, timezone
 from decimal import Decimal

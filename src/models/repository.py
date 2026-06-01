@@ -93,6 +93,20 @@ class BaseRepository(Generic[T]):
         result = await self.collection.delete_one(query)
         return result.deleted_count > 0
 
+    @staticmethod
+    def _convert_from_mongo_types(obj: Any) -> Any:
+        """Recursively convert MongoDB types (like Decimal128) back to Python/Pydantic types."""
+        from bson.decimal128 import Decimal128
+        from decimal import Decimal
+
+        if isinstance(obj, Decimal128):
+            return obj.to_decimal()
+        if isinstance(obj, dict):
+            return {k: BaseRepository._convert_from_mongo_types(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [BaseRepository._convert_from_mongo_types(item) for item in obj]
+        return obj
+
     def _from_mongo(self, raw: dict) -> T:
         """Convert a raw MongoDB document to a pydantic model instance."""
         if self._model_class is None:
@@ -103,4 +117,9 @@ class BaseRepository(Generic[T]):
         # Convert _id from ObjectId to string if needed
         if "_id" in raw and hasattr(raw["_id"], "__str__"):
             raw["_id"] = str(raw["_id"])
+        
+        # Convert Decimal128 back to Python Decimal
+        raw = self._convert_from_mongo_types(raw)
+        
         return self._model_class.model_validate(raw)
+

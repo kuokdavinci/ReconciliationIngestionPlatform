@@ -11,7 +11,7 @@ The Reconciliation Ingestion Platform is a data pipeline that transforms heterog
 │                        IngestionPipeline                            │
 │                                                                     │
 │  ┌──────────────┐    ┌──────────────┐    ┌───────────────────────┐  │
-│  │ ExcelStream  │───▶│ Transaction  │───▶│      Validator        │  │
+│  │ ExcelStream  │───▶│ Transaction │───▶│      Validator        │  │
 │  │   Reader     │    │  Normalizer  │    │  (duplicate detect)   │  │
 │  └──────────────┘    └──────────────┘    └───────────┬───────────┘  │
 │         ▲                    ▲                       │              │
@@ -26,6 +26,28 @@ The Reconciliation Ingestion Platform is a data pipeline that transforms heterog
 │  │  FILE_STARTED → ROW_SUCCESS/ROW_FAILED → FILE_COMPLETED     │    │
 │  └─────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────┘
+
+                            ▼
+              ┌─────────────────────────────────┐
+              │      ReconciliationEngine        │
+              │                                  │
+              │  1. Fetch partner records         │
+              │     (DataContainer by partner+date)│
+              │  2. Fetch internal records        │
+              │     (InternalTransaction by       │
+              │      partner+date)                │
+              │  3. Resolve duplicates            │
+              │     (latest updatedAt wins)       │
+              │  4. Match by partnerTxnId         │
+              │  5. Classify: MATCHED /           │
+              │     AMOUNT_MISMATCH /             │
+              │     STATUS_MISMATCH /             │
+              │     MULTIPLE_MISMATCH /           │
+              │     MISSING_INTERNAL /            │
+              │     MISSING_PARTNER               │
+              │  6. Store in                      │
+              │     reconciliation_result         │
+              └─────────────────────────────────┘
 ```
 
 ## Module Responsibilities
@@ -141,13 +163,15 @@ Two-tier validation:
 
 **BaseRepository:** Generic async CRUD with pydantic model conversion.
 
-**Three domain models:**
+**Five domain models:**
 
 | Model | Collection | Purpose |
 |-------|------------|---------|
 | `ReconciliationFile` | `reconciliation_file` | Track file processing lifecycle |
 | `MappingConfig` | `reconciliation_mapping_config` | Dynamic parsing configuration |
 | `DataContainer` | `data_container` | Canonical normalized transactions |
+| `InternalTransaction` | `internal_transaction` | Internal system records (Source of Truth) for reconciliation |
+| `ReconciliationResult` | `reconciliation_result` | Output of reconciliation matching & classification |
 
 **Key design:**
 - All models use `populate_by_name=True` with camelCase aliases
@@ -157,10 +181,12 @@ Two-tier validation:
 - `DataContainerRepository.insert_many()` for batch insertion
 - `_convert_special_types()` recursively handles nested UUIDs and Decimals
 
-**Indexes (7 total):**
+**Indexes (11 total):**
 - `reconciliation_file`: `fileHash` (unique), `partner + reconciliation_date`
 - `reconciliation_mapping_config`: `partner + workflow_type + file_type`
 - `data_container`: `partnerData.trace`, `identify + reconciliation_date`, `operation_status`, `partnerData.status`, `source_file_id`
+- `internal_transaction`: `partnerTxnId`, `partner + transactionTime`
+- `reconciliation_result`: `partnerTxnId`, `reconciliationStatus`
 
 ### 7. `src/pipeline/` — Orchestration
 
@@ -209,6 +235,46 @@ Two-tier validation:
 - Field sanitization: max 256 chars per value
 - Thread-safe singleton via double-checked locking
 
+### 9. `src/reconciliation/` — Reconciliation Engine
+
+`ReconciliationEngine` implements deterministic transaction matching between ingested partner data (DataContainer) and internal system records (InternalTransaction).
+
+**Core logic (in `reconcile()`):**
+
+```
+1. Calculate day boundaries (start_of_day / end_of_day)
+2. Fetch partner records: DataContainerRepository.find_many({identify, reconciliationDate})
+3. Fetch internal records: InternalTransactionRepository.find_many({partner, transactionTime})
+4. Resolve duplicates: latest updatedAt wins for same partnerTxnId
+5. For each partner record:
+   a. Resolve partnerTxnId from (trace → vspTransId → id)
+   b. Look up matching internal record
+   c. If found: compare amount + normalized status → classify
+   d. If not found: MISSING_INTERNAL
+6. For each unmatched internal record: MISSING_PARTNER
+7. Idempotent write: delete existing results for matching keys, then insert new
+```
+
+**Status normalization (`_normalize_status()`):**
+- Vietnamese status strings (Thành công, Thất bại, Hoàn tiền) mapped to standard `TransactionStatus`
+- Case-insensitive matching with fallback to PENDING
+
+**Duplicate resolution:**
+- Multiple internal records for same `partnerTxnId` → keep the one with latest `updatedAt`
+
+**Classification matrix:**
+
+| Condition | Result |
+|-----------|--------|
+| Key matches, amount matches, status matches | `MATCHED` |
+| Key matches, amount differs (status ignored) | `AMOUNT_MISMATCH` |
+| Key matches, amount matches, status differs | `STATUS_MISMATCH` |
+| Key matches, amount differs, status differs | `MULTIPLE_MISMATCH` |
+| Partner record exists, no internal record | `MISSING_INTERNAL` |
+| Internal record exists, no partner record | `MISSING_PARTNER` |
+
+**Idempotency:** Before inserting new results, existing `reconciliation_result` documents with the same `_id` (partnerTxnId) are deleted, making repeated runs safe.
+
 ## Data Flow
 
 See [DATA_FLOW.md](DATA_FLOW.md) for detailed end-to-end flow.
@@ -223,4 +289,7 @@ See [DATA_FLOW.md](DATA_FLOW.md) for detailed end-to-end flow.
 | Memory exhaustion from large files | openpyxl read-only mode, streaming |
 | Config injection via MappingConfig | ConfigValidator structural checks |
 | Log field overflow | Sanitize to 256 chars max |
-| Unindexed queries | 7 indexes defined, applied on startup |
+| Unindexed queries | 11 indexes defined, applied on startup |
+| Reconciliation: duplicate internal records for same partnerTxnId | Latest updatedAt wins (deterministic tie-break) |
+| Reconciliation: non-idempotent results | Delete-many + insert-many pattern for matching keys |
+| Reconciliation: Vietnamese/non-standard status strings | Normalized via _normalize_status() before comparison |

@@ -41,20 +41,24 @@ uv run python -m pytest -x -q
 
 | File | Tests | Coverage |
 |------|-------|----------|
-| `test_core_types.py` | 49 | Enums, types, constants, float rejection |
-| `test_settings.py` | 8 | Settings defaults, env overrides |
+| `test_core_types.py` | 42 | Enums, types, constants, float rejection |
+| `test_settings.py` | 7 | Settings defaults, env overrides |
 | `test_config_cache.py` | 13 | TTL cache, expiration, thread safety |
 | `test_config_validator.py` | 23 | Config validation, required coverage |
 | `test_config_loader.py` | 17 | Cache integration, version resolution |
 | `test_excel_reader.py` | 37 | Sheet selection, row filtering, patterns |
+| `test_csv_reader.py` | 22 | CSV parsing, separation, quoting |
 | `test_normalizer.py` | 57 | All conversion types, build_canonical |
 | `test_validator.py` | 42 | Core validation, duplicate detection |
-| `test_models.py` | 16 | Model creation, serialization |
+| `test_models.py` | 21 | Model creation, serialization |
 | `test_indexes.py` | 11 | Index definitions, apply_indexes |
 | `test_ingestion_pipeline.py` | 16 | Full pipeline, batch insertion, logging |
+| `test_ingestion_integration.py` | 11 | End-to-end ingestion with real flows |
 | `test_logger.py` | 22 | JSON/text formatting, event emission |
+| `test_phase8.py` | 51 | Pre-reconciliation phase extensions |
+| `test_reconciliation.py` | 6 | Matching, classification, duplicate handling |
 
-**Total: 318 tests**
+**Total: 398 tests**
 
 ## Coding Conventions
 
@@ -115,14 +119,18 @@ AdapterService/
 ├── src/
 │   ├── core/              # Canonical types, enums, constants
 │   ├── config/            # Settings, cache, validator, loader
-│   ├── readers/           # ExcelStreamReader
+│   ├── readers/           # ExcelStreamReader, CSV reader
 │   ├── normalizer/        # TransactionNormalizer
 │   ├── validators/        # Validator
 │   ├── pipeline/          # IngestionPipeline
+│   ├── reconciliation/    # ReconciliationEngine (match + classify)
+│   ├── scheduler/         # APScheduler daemon for automated fetching
+│   ├── fetchers/          # SFTP, filedrop, API fetchers
 │   ├── logging/           # StructuredLogger
 │   └── models/            # MongoDB models, repositories, indexes
-├── tests/                 # Test suite (318 tests)
+├── tests/                 # Test suite (398 tests)
 ├── docs/                  # Documentation
+├── docker/                # Docker Compose services
 ├── pyproject.toml         # Project metadata, dependencies
 ├── requirements.txt       # Pip-installable dependencies
 ├── .env.example           # Environment variable template

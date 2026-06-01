@@ -214,6 +214,8 @@ async def main():
     parser.add_argument("--reconcile", type=str, help="Run reconciliation for date (YYYY-MM-DD)")
     parser.add_argument("--partner", type=str, default="MOMO", help="Partner identifier for reconciliation")
     parser.add_argument("--seed-mock", action="store_true", help="Seed mock internal transactions for testing reconciliation")
+    parser.add_argument("--port", type=int, default=8000, help="Port for FastAPI server (default: 8000)")
+    parser.add_argument("action", nargs="?", choices=["reconcile", "serve"], help="Action to perform (e.g. reconcile, serve)")
     args = parser.parse_args()
 
     # 1. Database Connection
@@ -293,6 +295,27 @@ async def main():
             start_scheduler=args.start_scheduler,
             run_job_now=args.run_job_now,
             list_jobs=args.list_jobs,
+        )
+        return
+
+    # Serve mode — start FastAPI server with uvicorn
+    if args.action == "serve":
+        import uvicorn
+
+        print(f"Starting FastAPI server on port {args.port}...")
+        print(f"  API Docs: http://localhost:{args.port}/docs")
+        print(f"  OpenAPI JSON: http://localhost:{args.port}/openapi.json")
+        print("\nPress Ctrl+C to stop.\n")
+
+        # Close the MongoDB client before uvicorn takes over
+        # (lifespan will create its own connection)
+        client.close()
+
+        uvicorn.run(
+            "src.api:create_app",
+            host="0.0.0.0",
+            port=args.port,
+            factory=True,
         )
         return
 

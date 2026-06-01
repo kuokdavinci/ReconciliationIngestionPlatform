@@ -73,7 +73,7 @@ class ThresholdAlerter:
 
         # Check mismatch rate threshold
         mismatch_rate = summary_result.mismatch_rate
-        rate_threshold = self.config.ai_alert_mismatch_rate_threshold
+        rate_threshold = self.config.alert_mismatch_rate_threshold
 
         if mismatch_rate > rate_threshold:
             severity = self._rate_severity(mismatch_rate, rate_threshold)
@@ -96,7 +96,7 @@ class ThresholdAlerter:
         # Check missing internal count threshold
         by_status = summary_result.by_status
         missing_internal = by_status.get("MISSING_INTERNAL", 0)
-        missing_threshold = self.config.ai_alert_missing_count_threshold
+        missing_threshold = self.config.alert_missing_count_threshold
 
         if missing_internal > missing_threshold:
             alerts.append(

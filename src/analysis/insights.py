@@ -66,11 +66,13 @@ async def _query_reconciliation_results(
         result = SimpleNamespace()
         result.partner = doc.get("partner", partner)
         result.date = doc.get("date", date)
-        result.partner_amount = doc.get("partner_amount")
-        result.internal_amount = doc.get("internal_amount")
+        
+        # Support both camelCase (db native) and snake_case (class attribute)
+        result.partner_amount = doc.get("partnerAmount") if "partnerAmount" in doc else doc.get("partner_amount")
+        result.internal_amount = doc.get("internalAmount") if "internalAmount" in doc else doc.get("internal_amount")
 
         # Convert status string to ReconciliationStatus enum
-        status_str = doc.get("reconciliation_status", "MATCHED")
+        status_str = doc.get("reconciliationStatus") if "reconciliationStatus" in doc else doc.get("reconciliation_status", "MATCHED")
         try:
             result.reconciliation_status = ReconciliationStatus(status_str)
         except ValueError:

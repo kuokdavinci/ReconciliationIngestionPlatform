@@ -31,7 +31,11 @@ Analyze aggregated reconciliation metrics and provide actionable insights for op
 2. Do NOT perform fraud detection — that is out of scope.
 3. Output MUST be valid JSON — no markdown, no prose outside JSON.
 4. Each insight must include: type, severity, title, description, affected_count, recommendation.
-5. Severity must be one of: low, medium, high, critical.
+5. Severity must be determined based on the following guidelines:
+   - critical: Mismatch rate > 10% OR affected transactions > 50.
+   - high: Mismatch rate 5% - 10% OR affected transactions 20 - 50.
+   - medium: Mismatch rate 1% - 5% OR affected transactions 5 - 20.
+   - low: Mismatch rate < 1% OR affected transactions < 5.
 6. Base all findings on the aggregated metrics, grouped stats, and anomalies provided.
 7. Do NOT reference specific transaction IDs or individual amounts — only use ranges and totals.
 

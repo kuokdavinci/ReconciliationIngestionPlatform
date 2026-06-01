@@ -37,17 +37,17 @@ class TestThresholdAlerterInit:
 
     def test_initializes_with_defaults(self) -> None:
         alerter = ThresholdAlerter()
-        assert alerter.config.ai_alert_mismatch_rate_threshold == 5.0
-        assert alerter.config.ai_alert_missing_count_threshold == 10
+        assert alerter.config.alert_mismatch_rate_threshold == 5.0
+        assert alerter.config.alert_missing_count_threshold == 10
 
     def test_initializes_with_custom_config(self) -> None:
         config = AnalysisConfig(
-            ai_alert_mismatch_rate_threshold=10.0,
-            ai_alert_missing_count_threshold=20,
+            alert_mismatch_rate_threshold=10.0,
+            alert_missing_count_threshold=20,
         )
         alerter = ThresholdAlerter(config)
-        assert alerter.config.ai_alert_mismatch_rate_threshold == 10.0
-        assert alerter.config.ai_alert_missing_count_threshold == 20
+        assert alerter.config.alert_mismatch_rate_threshold == 10.0
+        assert alerter.config.alert_missing_count_threshold == 20
 
 
 class TestCheckThresholds:

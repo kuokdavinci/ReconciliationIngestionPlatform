@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Adapter Service Operations</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Primary">
+        <div class="brand">
+          <div class="brand-mark">AS</div>
+          <div>
+            <strong>Adapter Service</strong>
+            <span>Operations Console</span>
+          </div>
+        </div>
+        <nav id="nav" class="nav-list"></nav>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div>
+            <p id="source-status" class="eyebrow">Mock First / Full Ops</p>
+            <h1 id="page-title">Overview</h1>
+          </div>
+          <div class="filters" aria-label="Global filters">
+            <label>
+              Data Source
+              <select id="source-filter">
+                <option value="mock">Mock</option>
+                <option value="live">Live API</option>
+              </select>
+            </label>
+            <label>
+              API Base
+              <input id="api-base" value="http://localhost:8000" aria-label="API base URL">
+            </label>
+            <label>
+              Partner
+              <select id="partner-filter"></select>
+            </label>
+            <label>
+              Date
+              <input id="date-filter" type="date" value="2024-07-07">
+            </label>
+            <label>
+              Environment
+              <select id="env-filter">
+                <option value="local">Local</option>
+                <option value="staging">Staging</option>
+                <option value="production">Production</option>
+              </select>
+            </label>
+          </div>
+        </header>
+
+        <main id="view" class="view" tabindex="-1"></main>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="mock-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

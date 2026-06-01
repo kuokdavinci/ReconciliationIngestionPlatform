@@ -459,3 +459,144 @@ process_file() → ConfigLoader.load_by_partner_type() → Exception
     → update_status(FAILED)  # best effort
     → return IngestionResult(file_record=file_record, stats=partial_stats, errors=[{"field": "pipeline", ...}])
 ```
+
+---
+
+## AI Analysis Flow
+
+The AI Analysis Layer consumes `reconciliation_result` documents to generate actionable insights for operators.
+
+### Trigger
+
+```
+GET /api/v1/insights/summary?partner=MOMO&date=2024-07-07
+GET /api/v1/insights/discrepancies?partner=MOMO&date=2024-07-07&focus=operational
+GET /api/v1/reports/daily?date=2024-07-07
+```
+
+Or via CLI: `python run.py serve` then curl the endpoints.
+
+### Step 1: Query Reconciliation Results
+
+```python
+# insights.py queries MongoDB for reconciliation_result documents
+# Support both camelCase (db native) and snake_case (class attribute)
+doc.get("partnerAmount") if "partnerAmount" in doc else doc.get("partner_amount")
+doc.get("reconciliationStatus") if "reconciliationStatus" in doc else doc.get("reconciliation_status")
+```
+
+**Query:** `reconciliation_result` collection filtered by `partner` and `date` fields.
+
+### Step 2: Compute Metrics (Single Source of Truth)
+
+```python
+summary_result = MetricsService.compute_summary(results, partner, date)
+# Returns: total_transactions, matched, mismatch_rate, total_amount_mismatch, by_status
+```
+
+### Step 3: Group Results
+
+```python
+groups = GroupingEngine().group(results, criteria)
+# Groups by: reconciliationStatus, amount_range (0-100k, 100k-1M, 1M+), partner
+```
+
+### Step 4: Build AnalysisInput (Privacy-by-Design)
+
+```python
+analysis_input = build_analysis_input(
+    partner="MOMO",
+    date="2024-07-07",
+    focus="operational",
+    metrics_result=summary_result,
+    grouped_results=groups,
+)
+# NO raw transaction data — only aggregated metrics, grouped stats, pre-processed anomalies
+```
+
+### Step 5: LLM Insight Generation
+
+```python
+# Build prompts
+system_prompt = build_system_prompt()
+user_prompt = build_analysis_prompt(analysis_input)
+
+# Call LLM with retry and timeout
+llm_response = await llm_provider.generate(user_prompt, system_prompt)
+
+# Parse response
+insights = parse_llm_insights(llm_response)
+# If parse fails → fallback to rule-based insights only
+```
+
+**Focus types:**
+
+| Focus | Pre-processing | LLM Task |
+|-------|---------------|----------|
+| `operational` | Filter MISSING_INTERNAL + MISSING_PARTNER, group by partner | Identify operational delays, ingestion lag, scheduler failures |
+| `partner` | Calculate mismatch rate %, trend, volume | Analyze partner behavior patterns, stability over time |
+| `inconsistency` | Filter AMOUNT_MISMATCH + STATUS_MISMATCH, cluster amount differences | Detect data inconsistency patterns, recurring errors |
+
+### Step 6: Return Response
+
+**Summary endpoint:**
+```json
+{
+  "partner": "MOMO",
+  "date": "2024-07-07",
+  "summary": { "total_transactions": 1500, "matched": 1450, "mismatch_rate": 3.33, ... },
+  "groups": [ { "key": "MATCHED", "count": 1450, "percentage": 96.67, ... } ],
+  "key_findings": [ "Tỷ lệ mismatch 3.33% — trong ngưỡng bình thường", ... ],
+  "generated_at": "2024-07-08T01:00:00Z"
+}
+```
+
+**Discrepancies endpoint:**
+```json
+{
+  "partner": "MOMO",
+  "date": "2024-07-07",
+  "focus": "operational",
+  "insights": [
+    {
+      "type": "operational_delay",
+      "severity": "medium",
+      "title": "Phát hiện chậm đối soát",
+      "description": "5 giao dịch MISSING_INTERNAL...",
+      "affected_count": 5,
+      "recommendation": "Kiểm tra pipeline ingestion cho MOMO ngày 2024-07-07"
+    }
+  ]
+}
+```
+
+### Daily Batch Report Flow
+
+```
+1. DailyReporter.generate_report(date)
+2. For each active partner:
+   a. Call insights.get_summary(partner, date)
+   b. Aggregate into report structure
+3. ThresholdAlerter.check_thresholds(summary_result) for each partner
+4. Save report to ./reports/daily/{date}.json
+5. Log alerts if thresholds breached
+```
+
+**Key design:** Reporter only formats — never duplicates MetricsService computation. Alerter only checks — never computes metrics.
+
+### Error Scenarios
+
+**LLM timeout/failure:**
+```
+generate_insights() → LLM call fails → fallback to rule-based insights
+# Returns insights from rule-based pre-processing only, no natural language
+```
+
+**Invalid parameters:**
+```
+GET /api/v1/insights/summary?date=invalid
+→ 400 Bad Request: "Invalid date format. Expected YYYY-MM-DD"
+
+GET /api/v1/insights/discrepancies?partner=MOMO&date=2024-07-07&focus=unknown
+→ 400 Bad Request: "Invalid focus. Must be operational, partner, or inconsistency"
+```

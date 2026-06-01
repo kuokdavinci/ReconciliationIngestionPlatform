@@ -68,6 +68,7 @@ class ReconciliationEngine:
         # 1. Calculate boundaries of target date
         start_of_day = reconciliation_date.replace(hour=0, minute=0, second=0, microsecond=0)
         end_of_day = reconciliation_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        date_str = reconciliation_date.strftime("%Y-%m-%d")
 
         # 2. Fetch partner transactions
         partner_records = await self._data_repo.find_many({
@@ -138,6 +139,8 @@ class ReconciliationEngine:
 
                 result = ReconciliationResult(
                     id=partner_txn_id,
+                    partner=partner,
+                    date=date_str,
                     partnerTxnId=partner_txn_id,
                     internalTxnId=internal_record.id,
                     partnerAmount=partner_amount,
@@ -153,6 +156,8 @@ class ReconciliationEngine:
                 # Missing Internal record
                 result = ReconciliationResult(
                     id=partner_txn_id,
+                    partner=partner,
+                    date=date_str,
                     partnerTxnId=partner_txn_id,
                     partnerAmount=partner_amount,
                     partnerStatus=partner_status,
@@ -166,6 +171,8 @@ class ReconciliationEngine:
             if partner_txn_id not in matched_internal_keys:
                 result = ReconciliationResult(
                     id=partner_txn_id,
+                    partner=partner,
+                    date=date_str,
                     partnerTxnId=partner_txn_id,
                     internalTxnId=internal_record.id,
                     internalAmount=internal_record.amount,

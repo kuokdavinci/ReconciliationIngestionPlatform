@@ -209,7 +209,6 @@ async def main():
     parser.add_argument("--start-scheduler", action="store_true", help="Start the scheduler for automated partner data fetching")
     parser.add_argument("--run-job-now", action="store_true", help="Manually trigger the daily fetch job now")
     parser.add_argument("--list-jobs", action="store_true", help="List all scheduled jobs")
-    parser.add_argument("action", nargs="?", choices=["reconcile"], help="Action to perform (e.g. reconcile)")
     parser.add_argument("--date", type=str, help="Date for reconciliation (YYYY-MM-DD)")
     parser.add_argument("--reconcile", type=str, help="Run reconciliation for date (YYYY-MM-DD)")
     parser.add_argument("--partner", type=str, default="MOMO", help="Partner identifier for reconciliation")
@@ -311,12 +310,14 @@ async def main():
         # (lifespan will create its own connection)
         client.close()
 
-        uvicorn.run(
+        config = uvicorn.Config(
             "src.api:create_app",
             host="0.0.0.0",
             port=args.port,
             factory=True,
         )
+        server = uvicorn.Server(config)
+        await server.serve()
         return
 
     # ... rest of existing code for manual ingestion

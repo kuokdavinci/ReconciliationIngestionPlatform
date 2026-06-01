@@ -56,11 +56,11 @@ class TestDailyReporterInit:
 
         mock_collection = MagicMock()
         mock_provider = MockLLMProvider()
-        config = AnalysisConfig(ai_alert_mismatch_rate_threshold=10.0)
+        config = AnalysisConfig(alert_mismatch_rate_threshold=10.0)
 
         reporter = DailyReporter(mock_collection, mock_provider, config)
 
-        assert reporter.config.ai_alert_mismatch_rate_threshold == 10.0
+        assert reporter.config.alert_mismatch_rate_threshold == 10.0
 
 
 class TestDailyReporterGenerateReport:

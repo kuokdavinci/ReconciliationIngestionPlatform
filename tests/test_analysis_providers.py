@@ -13,12 +13,12 @@ from src.analysis.providers.openai_compat import OpenAICompatProvider
 def config() -> AnalysisConfig:
     """Create a default AnalysisConfig for testing."""
     return AnalysisConfig(
-        ai_provider="openai",
-        ai_model="gpt-4o",
-        ai_endpoint="https://api.openai.com/v1",
-        ai_api_key="test-key",
-        ai_timeout=30,
-        ai_max_retries=2,
+        provider="openai",
+        model="gpt-4o",
+        endpoint="https://api.openai.com/v1",
+        api_key="test-key",
+        timeout=30,
+        max_retries=2,
     )
 
 
@@ -39,7 +39,7 @@ class TestOpenAICompatProviderInit:
         assert provider._max_retries == 2
 
     def test_init_strips_trailing_slash(self, config: AnalysisConfig) -> None:
-        config.ai_endpoint = "https://api.openai.com/v1/"
+        config.endpoint = "https://api.openai.com/v1/"
         p = OpenAICompatProvider(config)
         assert p._endpoint == "https://api.openai.com/v1"
 
@@ -82,7 +82,7 @@ class TestBuildHeaders:
         assert headers["Content-Type"] == "application/json"
 
     def test_build_headers_without_api_key(self, config: AnalysisConfig) -> None:
-        config.ai_api_key = None
+        config.api_key = None
         p = OpenAICompatProvider(config)
         headers = p._build_headers()
         assert "Authorization" not in headers

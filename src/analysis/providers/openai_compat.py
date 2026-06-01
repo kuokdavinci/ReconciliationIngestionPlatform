@@ -25,11 +25,11 @@ class OpenAICompatProvider:
 
     def __init__(self, config: AnalysisConfig) -> None:
         self._config = config
-        self._endpoint = config.ai_endpoint.rstrip("/")
-        self._model = config.ai_model
-        self._timeout = config.ai_timeout
-        self._max_retries = config.ai_max_retries
-        self._api_key = config.ai_api_key
+        self._endpoint = config.endpoint.rstrip("/")
+        self._model = config.model
+        self._timeout = config.timeout
+        self._max_retries = config.max_retries
+        self._api_key = config.api_key
 
     async def generate(
         self,

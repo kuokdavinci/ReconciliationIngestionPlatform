@@ -107,6 +107,118 @@ def _get_llm_provider() -> object:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/insights/sample — UI demo data (no DB required)
+# ---------------------------------------------------------------------------
+
+@router.get("/insights/sample")
+async def insights_sample():
+    """Return sample AI observation data for UI testing.
+
+    Returns hardcoded but realistic data so the front-end can be
+    verified without MongoDB or a real LLM provider.
+    """
+    sample_observation = {
+        "partner": "MOMO",
+        "date": "2024-07-07",
+        "focus": "operational",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "latency_ms": 2347.89,
+        "prompt_tokens": 856,
+        "completion_tokens": 312,
+        "total_tokens": 1168,
+        "estimated_cost_usd": 0.000294,
+        "cache_hit": False,
+        "cache_key": "momo:2024-07-07:operational:gpt-4o-mini",
+        "schema_valid": True,
+        "resolution": "llm",
+        "guardrail_result": {
+            "is_valid": False,
+            "risk_level": "high",
+            "unsupported_count": 1,
+            "warning_count": 2,
+            "findings": [
+                {
+                    "risk": "high",
+                    "insight_index": 0,
+                    "field": "affected_count",
+                    "message": "LLM says 50 records affected — only 12 actual anomalies in data",
+                    "detail": "Insight overstates affected_count by 38 records (316%). Likely cause: LLM extrapolated from mismatch rate instead of reading the actual anomaly count.",
+                },
+                {
+                    "risk": "medium",
+                    "insight_index": 1,
+                    "field": "severity",
+                    "message": "LLM assigned 'critical' severity to 0.5% mismatch rate",
+                    "detail": "0.5% mismatch rate should be at most 'low' severity. False alarm risk: operators may waste time investigating a non-critical issue.",
+                },
+                {
+                    "risk": "low",
+                    "insight_index": 0,
+                    "field": "type",
+                    "message": "LLM used 'partner_pattern' under 'operational' analysis focus",
+                    "detail": "Insight type mismatches the requested focus. The observation may still be useful but is flagged for scope alignment.",
+                },
+            ],
+        },
+    }
+    return {
+        "partner": "MOMO",
+        "date": "2024-07-07",
+        "summary_metrics": {
+            "total_transactions": 1250,
+            "matched": 1187,
+            "mismatch_rate": 5.04,
+            "total_amount_mismatch": 24500000.0,
+            "by_status": {
+                "MATCHED": 1187,
+                "AMOUNT_MISMATCH": 32,
+                "MISSING_INTERNAL": 18,
+                "MISSING_PARTNER": 13,
+            },
+        },
+        "grouped_stats": [
+            {"key": "MATCHED", "count": 1187, "percentage": 94.96, "total_amount": 2450000000.0, "details": {}},
+            {"key": "AMOUNT_MISMATCH", "count": 32, "percentage": 2.56, "total_amount": 24500000.0, "details": {"avg_difference": 765625.0}},
+            {"key": "MISSING_INTERNAL", "count": 18, "percentage": 1.44, "total_amount": 0.0, "details": {}},
+            {"key": "MISSING_PARTNER", "count": 13, "percentage": 1.04, "total_amount": 0.0, "details": {}},
+        ],
+        "key_findings": [
+            "[CRITICAL] Ingestion gap at 14:20-14:30 — 18 records missing internally (24.5M VND)",
+            "[HIGH] 32 amount mismatches, 3 outliers drive 60% of 24.5M VND impact",
+            "[MEDIUM] MOMO mismatch rate 5.04% — second consecutive day above threshold",
+        ],
+        "guardrail_result": sample_observation["guardrail_result"],
+        "generated_at": "2024-07-07T12:00:00+00:00",
+        "llm_status": "success",
+        "ai_observation": sample_observation,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/insights/sample-stats — UI demo data (no DB required)
+# ---------------------------------------------------------------------------
+
+@router.get("/insights/sample-stats")
+async def insights_sample_stats():
+    """Return sample reconciliation stats for UI testing."""
+    return {
+        "total": 1250,
+        "matched": 1187,
+        "mismatch_rate": 5.04,
+        "by_status": {
+            "MATCHED": 1187,
+            "AMOUNT_MISMATCH": 32,
+            "STATUS_MISMATCH": 0,
+            "MULTIPLE_MISMATCH": 0,
+            "MISSING_INTERNAL": 18,
+            "MISSING_PARTNER": 13,
+            "UNMAPPED_SKIPPED": 0,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/insights/summary
 # ---------------------------------------------------------------------------
 
@@ -164,6 +276,41 @@ async def insights_summary(
             status_code=500,
             detail=f"Failed to generate summary insights: {str(exc)}",
         )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/insights/sample-discrepancies — UI demo data (no DB required)
+# ---------------------------------------------------------------------------
+
+@router.get("/insights/sample-discrepancies")
+async def insights_sample_discrepancies():
+    """Return sample discrepancy data for UI testing."""
+    return [
+        {
+            "type": "missing_internal",
+            "severity": "critical",
+            "title": "18 records missing internally — gap in batch #B-042 at 14:20-14:30",
+            "description": "18 transactions (1.4% of total, 24.5M VND) confirmed by MOMO but absent internally. Pattern: concentrated — all 18 share a 10-minute ingestion window (14:20-14:30), consistent with a batch scheduler failure rather than random data loss. If this gap repeats daily, ~540 records/month would be affected.",
+            "affected_count": 18,
+            "recommendation": "Compare MOMO settlement file #B-042 against internal ingestion manifest for 2024-07-07 14:00-15:00. Re-trigger ingestion for that window if missing files are found, then verify all 18 records appear.",
+        },
+        {
+            "type": "amount_mismatch",
+            "severity": "high",
+            "title": "32 amount mismatches — avg delta 765K VND, 3 transactions drive 60% of impact",
+            "description": "Amount mismatch across 32 transactions (2.6% of volume) totaling 24.5M VND. Pattern: concentrated — 3 large-value transactions (>5M VND each) account for 60% of total mismatch amount, suggesting a rate/fee application issue rather than random rounding errors. Average delta per outlier: 4.9M VND vs 82K VND for remaining 29.",
+            "affected_count": 32,
+            "recommendation": "Audit fee/commission configuration for MOMO transactions >5M VND. Compare partner-reported amounts against internal fee schedule for the 3 outlier transactions. Verify if a recent rate change was applied inconsistently.",
+        },
+        {
+            "type": "partner_pattern",
+            "severity": "medium",
+            "title": "MOMO mismatch rate at 5.04% — second consecutive day above 5% threshold",
+            "description": "Overall mismatch rate of 5.04% exceeds the 5% operational threshold. At this rate, ~63 transactions are affected daily, equivalent to ~1,890 records/month. This is the second consecutive day above threshold, suggesting a chronic issue rather than a one-day spike.",
+            "affected_count": 63,
+            "recommendation": "Escalate to MOMO partner operations team with the 3-day trend data. Schedule a root cause analysis call focused on the amount_mismatch cluster. Prepare daily monitoring dashboard for the next 5 business days.",
+        },
+    ]
 
 
 # ---------------------------------------------------------------------------

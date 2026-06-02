@@ -68,7 +68,7 @@ uv run python run.py --reconcile 2024-07-07 --partner MOMO
 uv run python run.py reconcile --date 2024-07-07 --partner MOMO
 ```
 
-Results are stored in the `reconciliation_result` collection with statuses: `MATCHED`, `AMOUNT_MISMATCH`, `STATUS_MISMATCH`, `MULTIPLE_MISMATCH`, `MISSING_INTERNAL`, `MISSING_PARTNER`.
+Results are stored in the `reconciliation_result` collection with statuses: `MATCHED`, `AMOUNT_MISMATCH`, `STATUS_MISMATCH`, `MULTIPLE_MISMATCH`, `MISSING_INTERNAL`, `MISSING_PARTNER`, `UNMAPPED_SKIPPED` (records skipped due to invalid normalized data).
 
 ### 5. AI Analysis Layer
 
@@ -97,7 +97,56 @@ curl "http://localhost:8000/api/v1/reports/daily?date=2024-07-07"
 - **LLM fallback** — if LLM fails, returns rule-based insights only
 - **Provider abstraction** — OpenAI-compatible (GPT-4o) default, Ollama deferred
 
-### 6. Running Tests
+### 6. Reconciliation & Data Explorer API
+
+Read-only FastAPI endpoints for querying reconciliation results and browsing raw transaction data:
+
+```bash
+# Start the FastAPI server
+uv run python run.py serve
+```
+
+**Reconciliation API** (`/api/v1/reconciliation`):
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /results?partner=X&date=Y&status=Z&limit=N&offset=M` | Query reconciliation results with optional status filter and pagination |
+| `GET /results/{id}` | Get single reconciliation result by partner transaction ID |
+| `GET /stats?partner=X&date=Y` | Aggregated counts by status + total amounts |
+
+**Data Explorer API** (`/api/v1/data`):
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /transactions?partner=X&date=Y&trace=Z&status=W` | Browse DataContainer records with optional filters and pagination |
+| `GET /transactions/{id}` | Get single transaction by UUID |
+| `GET /files?partner=X&date=Y&status=Z` | List reconciliation files with optional filters |
+| `GET /files/{id}` | Get file detail with associated transaction count |
+| `GET /stats?partner=X&date=Y` | Aggregate data volume statistics |
+
+### 7. Operations Dashboard (Web UI)
+
+A browser-based dashboard for monitoring and managing the platform:
+
+```bash
+# Terminal 1 — Start the FastAPI backend
+uv run python run.py serve --port 8000
+
+# Terminal 2 — Start the dashboard proxy server
+python web/server.py --port 5173 --api http://localhost:8000
+```
+
+Then open `http://localhost:5173` and switch `Data Source` to `Live API`.
+
+**Dashboard Features:**
+- **Overview** — Key metrics (files processed, success rates, anomaly counts) with a **Reconciliation Health** widget showing healthy/warning/anomaly status per partner
+- **Scheduler** — View and manage automated ingestion jobs
+- **Reconciliation** — Browse reconciliation results by partner and date
+- **Mapping Configs** — View active mapping configurations per partner with field mapping details (column, type, required flag, mapping rules)
+- **AI Insights** — LLM-generated insights, discrepancy analysis, daily reports
+- **Settings** — Configure partner mappings and system settings
+
+### 8. Running Tests
 To run unit and integration tests:
 ```bash
 uv run python -m pytest -v
@@ -214,7 +263,21 @@ Partner Excel File
 │  │  GET /api/v1/insights/summary          │   │           │
 │  │  GET /api/v1/insights/discrepancies    │   │           │
 │  │  GET /api/v1/reports/daily             │   │           │
-│  └────────────────────────────────────────┘               │
+│  │  GET /api/v1/reconciliation/results    │   │           │
+│  │  GET /api/v1/reconciliation/stats      │   │           │
+│  │  GET /api/v1/data/transactions         │   │           │
+│  │  GET /api/v1/data/files                │   │           │
+│  │  GET /api/v1/data/stats                │   │           │
+│  │  GET /api/v1/mappings                  │   │           │
+│  └──────────────┬─────────────────────────┘               │
+│                 │                                          │
+│                 ▼                                          │
+│  ┌─────────────────────────────┐                          │
+│  │  Web Dashboard (web/)       │                          │
+│  │  Overview · Scheduler       │                          │
+│  │  Reconciliation · Mapping   │                          │
+│  │  Configs · AI Insights      │                          │
+│  └─────────────────────────────┘                          │
 └───────────────────────────────────────────────────────────┘
 ```
 
@@ -247,7 +310,9 @@ Partner Excel File
 - **Audit trail** — every record includes createdBy, createdDate, lastModifiedBy, lastModifiedDate
 - **AI-powered analysis** — LLM generates actionable insights from reconciliation results (mismatch patterns, operational issues, daily reports) with privacy-by-design (no raw data sent to LLM)
 - **Automated scheduling** — APScheduler daemon fetches partner files via SFTP on cron schedules, with persistent job state in MongoDB
-- **FastAPI REST API** — serves AI insights endpoints (`/api/v1/insights/summary`, `/api/v1/insights/discrepancies`, `/api/v1/reports/daily`)
+- **FastAPI REST API** — serves AI insights, reconciliation results, data explorer, and mapping config endpoints
+- **Operations Dashboard** — browser-based UI with Overview, Reconciliation, Mapping Configs, AI Insights tabs
+- **Data flow guard** — ReconciliationEngine pre-checks each partner record for valid normalized data before processing; invalid records are skipped with structured warning logs and tracked in stats
 
 ## Project Structure
 
@@ -272,13 +337,22 @@ src/
 │   ├── insights.py     # Orchestration (get_summary, get_discrepancies)
 │   ├── reporter.py     # DailyReporter (format only)
 │   └── alerter.py      # ThresholdAlerter (check only)
-├── api/            # FastAPI server (insights endpoints)
+├── api/            # FastAPI server (all endpoints)
 │   ├── __init__.py     # App factory + lifespan
-│   └── insights.py     # Route handlers
+│   ├── insights.py     # AI insights endpoints (summary, discrepancies, reports)
+│   ├── reconciliation.py  # Reconciliation results API (results, stats)
+│   ├── data_explorer.py   # Data Explorer API (transactions, files, stats)
+│   └── mappings.py        # Mapping config API (GET /api/v1/mappings)
 ├── scheduler/      # APScheduler daemon (SFTP fetch, cron jobs)
 ├── logging/        # StructuredLogger (JSON/text formatters)
 └── models/         # MongoDB models, repositories, indexes
-tests/              # 230+ unit/integration tests + 8 E2E tests
+web/                # Operations Dashboard (vanilla JS SPA)
+├── index.html      # App shell
+├── app.js          # Routing, rendering, filters
+├── styles.css      # Responsive admin UI styles
+├── server.py       # Static server with /api proxy to FastAPI
+└── README.md       # Dashboard documentation
+tests/              # 600+ unit/integration tests
 ```
 
 ## MongoDB Collections
@@ -357,6 +431,8 @@ Example MappingConfig:
 | AI: no raw data to LLM | Privacy-by-design — only aggregated metrics, grouped stats, pre-processed anomalies |
 | AI: LLM fallback to rule-based | Graceful degradation — insights still available when LLM is unavailable |
 | AI: provider abstraction | Swappable LLM backends (OpenAI-compatible, Ollama deferred) |
+| Reconciliation: pre-check guard | Skip unnormalized records with warning log + `UNMAPPED_SKIPPED` status before processing — prevents silent errors and tracks in stats |
+| UI: vanilla JS SPA | No build step, no framework dependency — serve `index.html` directly or via proxy server |
 
 ## License
 

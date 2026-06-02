@@ -61,4 +61,14 @@ def create_app() -> FastAPI:
 
     app.include_router(insights_router)
 
+    # Register reconciliation router
+    from src.api.reconciliation import router as reconciliation_router
+
+    app.include_router(reconciliation_router)
+
+    # Register data explorer router
+    from src.api.data_explorer import router as data_explorer_router
+
+    app.include_router(data_explorer_router)
+
     return app

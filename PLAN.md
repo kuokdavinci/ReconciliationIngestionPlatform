@@ -1,235 +1,53 @@
-/qu# Phase 8: Partner Data Fetch Scheduler
+# UI/UX Redesign Implementation Plan: Stitch AI Fintech Reconciliation Dashboard (Dark Mode Only)
 
-## Goal
-Implement APScheduler để tự động fetch data từ partner hàng ngày vào 00:00, hỗ trợ 3 phương thức fetch (SFTP, API, FileDrop), và tự động trigger ingestion pipeline sau khi fetch thành công.
+This document details the plan to redesign the Adapter Service UI/UX into the premium, state-of-the-art **AdapterService** interface. The redesign will follow a high-contrast dark theme (Matte Black and Golden Yellow accents) to achieve an authoritative, institutional-grade, and energetic visual style (Mission Control / Tech-Brutalist).
 
-## Scope
-- ✅ APScheduler integration với MongoDB job store
-- ✅ 3 fetch methods riêng biệt: SFTP, API, FileDrop
-- ✅ FetchConfig model để cấu hình per-partner
-- ✅ Daily cron job (00:00) với configurable schedule
-- ✅ Auto-trigger IngestionPipeline sau khi fetch
-- ✅ Error handling, retry logic, logging
-- ❌ Reconciliation engine (deferred to Phase 9)
-- ❌ Compensation workflow (deferred to Phase 10)
-- ❌ Dashboard & reporting (deferred to Phase 11)
+---
 
-## Architecture
+## 🎨 Design Vision & Theme (High-Contrast Dark Mode)
 
-```
-src/
-├── scheduler/
-│   ├── __init__.py              # Exports: PartnerDataScheduler
-│   ├── scheduler.py             # APScheduler setup & lifecycle
-│   ├── jobs.py                  # Job definitions (daily fetch job)
-│   └── config.py                # Schedule configuration models
-│
-├── fetchers/
-│   ├── __init__.py              # Exports: create_fetcher
-│   ├── base.py                  # BaseFetcher abstract class
-│   ├── sftp_fetcher.py          # SFTP file fetch (refactor từ run.py)
-│   ├── api_fetcher.py           # API data fetch
-│   └── filedrop_fetcher.py      # Local file drop watcher
-│
-├── models/
-│   └── fetch_config.py          # FetchConfig model + repository
-│
-└── ... (existing modules unchanged)
-```
+*   **Aesthetic:** Modern Minimalism with a Tech-Brutalist edge.
+*   **Colors:** Deep Matte Black/Blue canvas (`#0b1326` to `#060e20`), Gold/Yellow accents (`#fbbf24`), Luminous Blues/Greys (`#dae2fd`), and highly saturated semantic indicators (Success Green `#10b981`, Error Red `#ef4444`).
+*   **Key Design Elements:** No soft shadows; instead, uses sharp 1px solid borders and tonal layering to convey hierarchy and depth. Focuses on premium, clean typography and responsive layouts.
 
-## Data Model
+---
 
-### FetchConfig Collection (`fetch_config`)
+## 🛠️ Implementation Phases
 
-```json
-{
-  "_id": "uuid",
-  "partner": "MOMO",
-  "fetchMethod": "SFTP",
-  "enabled": true,
-  "schedule": "0 0 * * *",
-  "localDownloadDir": "./downloads/MOMO",
-  
-  "sftp": {
-    "host": "sftp.partner.com",
-    "port": 22,
-    "username": "user",
-    "password": "encrypted",
-    "remotePath": "/outgoing/reconciliation/*.xlsx"
-  },
-  
-  "api": {
-    "baseUrl": "https://api.partner.com/v1/reconciliation",
-    "method": "GET",
-    "headers": {"Authorization": "Bearer <token>"},
-    "queryParams": {"date": "{reconciliation_date}"}
-  },
-  
-  "filedrop": {
-    "directory": "/data/partner-drops/MOMO",
-    "pattern": "*.xlsx"
-  },
-  
-  "createdAt": "ISODate",
-  "updatedAt": "ISODate"
-}
-```
+### Phase 1: Design Tokens & Base Styles
+**Files to modify:** `web/styles.css`, `web/index.html`
+*   Define design tokens via CSS variables for the dark theme.
+*   Import **Inter** font family and **Material Symbols Outlined** icons.
+*   Establish layout container grids and base UI elements (buttons, tables, inputs).
 
-### Indexes
-- `partner` (unique)
-- `enabled + fetchMethod` (compound)
+### Phase 2: Premium Navigation Shell & Header
+**Files to modify:** `web/index.html`, `web/app.js`
+*   Rebuild the layout shell with a persistent left sidebar containing:
+    *   Dynamic brand mark (AS -> AdapterService) with golden accents.
+    *   Active indicators for navigation links with golden left-borders.
+*   Top bar with global partner selection dropdown, date filter, and system status indicator.
 
-## Implementation Plans
+### Phase 3: Dashboard Overview & AI Insights
+**Files to modify:** `web/app.js`, `web/styles.css`
+*   **KPI Cards Grid:** High-contrast cards for metrics, with real circular SVG progress rings.
+*   **Reconciliation Status Breakdown:** Progress bars showing matched ratios, missing internal, and missing partner records.
+*   **AI Insights Panel:** A feed displaying generative insights cards (e.g., anomalies in Momo API streams) categorized by focus.
 
-### 08-01: FetchConfig Model & Repository
-**Files:** `src/models/fetch_config.py`
-- FetchConfig pydantic model với 3 fetch method configs
-- FetchConfigRepository với các methods: find_by_partner, find_enabled, create, update
-- FetchMethod enum: SFTP, API, FILEDROP
+### Phase 4: Reconciliation Results List & Ledger
+**Files to modify:** `web/app.js`
+*   **High-Density Ledger:** Table format using `font-variant-numeric: tabular-nums` for precise alignment of financial values.
+*   **Status Badges:** Low-contrast pill-shaped badges (10% background opacity + 100% text color opacity) matching semantic statuses.
+*   **Interactive Row Actions:** Add checkbox multi-selects and instant status filtering.
 
-### 08-02: BaseFetcher Abstract Class
-**Files:** `src/fetchers/base.py`
-- Abstract base class với method `async fetch(config: FetchConfig) -> FetchResult`
-- FetchResult dataclass: success, local_path, error, metadata
-- Common utilities: file validation, cleanup, logging
+### Phase 5: Data Mapping Configuration UI
+**Files to modify:** `web/app.js`
+*   Visual fields mapping layout matching the `data_mapping_configuration` layout.
 
-### 08-03: SFTPFetcher
-**Files:** `src/fetchers/sftp_fetcher.py`
-- Refactor từ `run.py` SFTP code
-- Dùng paramiko (đã có trong dependencies)
-- Async wrapper qua `loop.run_in_executor()`
-- Download file → `./downloads/{partner}/`
-- Support wildcard remote paths
-- Connection pooling, timeout handling
+### Phase 6: Scheduler & Logs Console
+**Files to modify:** `web/app.js`
+*   Consolidated scheduler panel containing partner jobs, status indicators, and live log command output container.
 
-### 08-04: APIFetcher
-**Files:** `src/fetchers/api_fetcher.py`
-- Thêm dependency: `httpx>=0.27` (async HTTP)
-- Support GET/POST với custom headers, query params
-- Response → lưu thành file Excel/CSV
-- Retry với exponential backoff
-- Rate limiting support
-
-### 08-05: FileDropFetcher
-**Files:** `src/fetchers/filedrop_fetcher.py`
-- Thêm dependency: `watchdog>=4.0` (filesystem watcher)
-- Watch local directory cho file mới
-- Match file pattern
-- Debouncing để tránh trigger nhiều lần
-- Return local file path
-
-### 08-06: Scheduler Setup
-**Files:** `src/scheduler/scheduler.py`, `src/scheduler/config.py`
-- APScheduler với AsyncIOScheduler
-- MongoDB job store (persist job state)
-- AsyncIOExecutor
-- Lifecycle management: start, stop, pause, resume
-- Config từ MongoDB hoặc defaults
-
-### 08-07: Daily Fetch Job
-**Files:** `src/scheduler/jobs.py`
-- Cron schedule: `0 0 * * *` (00:00 hàng ngày)
-- Flow:
-  1. Query `fetch_config` collection → danh sách enabled partners
-  2. Với mỗi partner:
-     - Tạo appropriate fetcher dựa trên `fetch_method`
-     - Gọi `fetcher.fetch(config)`
-     - Nếu success → trigger `IngestionPipeline.process_file()`
-     - Log kết quả (success/failed)
-  3. Aggregate results → emit log events
-- Error handling per-partner (failure không block partners khác)
-- Retry logic với configurable backoff
-
-### 08-08: Integration & CLI
-**Files:** `src/scheduler/__init__.py`, update `run.py`
-- Export `PartnerDataScheduler` class
-- CLI commands: `--start-scheduler`, `--run-job-now`, `--list-jobs`
-- Integration với existing ingestion pipeline
-- Structured logging cho scheduler events
-
-### 08-09: Tests
-**Files:** `tests/test_fetchers.py`, `tests/test_scheduler.py`
-- Unit tests cho từng fetcher (mock SFTP/API/filesystem)
-- Integration test cho scheduler job
-- Test error scenarios (network failure, invalid config, etc.)
-- Test retry logic, debouncing, rate limiting
-
-## Dependencies
-
-### New Python Packages
-```toml
-"APScheduler>=3.10",
-"httpx>=0.27",
-"watchdog>=4.0",
-```
-
-### Existing Packages (reused)
-- `paramiko` - SFTP connections
-- `motor` - MongoDB async
-- `pydantic` - Data models
-- `openpyxl` - Excel file validation
-
-## Error Handling Strategy
-
-| Scenario | Handling |
-|----------|----------|
-| SFTP connection failed | Log error, retry 3x với 5s delay, mark as failed |
-| API timeout | Log error, retry 3x với exponential backoff (1s, 2s, 4s) |
-| File drop không có file mới | Log warning, skip silently |
-| Ingestion pipeline failure | Mark file as failed, continue với partner khác |
-| Scheduler crash | Restart trên next app start (MongoDB job store persists state) |
-
-## Logging Events
-
-| Event | Fields |
-|-------|--------|
-| SCHEDULER_STARTED | version, job_count |
-| SCHEDULER_STOPPED | reason |
-| JOB_STARTED | job_id, partner, fetch_method |
-| FETCH_SUCCESS | partner, file_path, file_size, duration_ms |
-| FETCH_FAILED | partner, error, retry_count |
-| INGESTION_TRIGGERED | partner, file_path |
-| JOB_COMPLETED | partner, status, duration_ms |
-
-## Migration from run.py
-
-- SFTP code trong `run.py` sẽ được refactor vào `SFTPFetcher`
-- `run.py` vẫn giữ nguyên cho manual CLI usage
-- Scheduler sẽ dùng fetchers mới thay vì code cũ
-
-## Success Criteria
-
-- [ ] APScheduler chạy đúng với MongoDB job store
-- [ ] 3 fetch methods hoạt động độc lập
-- [ ] Daily job chạy vào 00:00 (có thể override per-partner)
-- [ ] Auto-trigger ingestion pipeline sau fetch success
-- [ ] Error handling không block partners khác
-- [ ] Structured logging cho tất cả scheduler events
-- [ ] CLI commands cho manual trigger và monitoring
-- [ ] Unit + integration tests (≥50 tests)
-- [ ] Documentation updated
-
-## Risks & Mitigations
-
-| Risk | Mitigation |
-|------|-----------|
-| APScheduler blocking event loop | Dùng AsyncIOScheduler + AsyncIOExecutor |
-| SFTP connection timeout | Configurable timeout, retry logic |
-| API rate limiting | Backoff strategy, configurable delays |
-| File drop race conditions | Debouncing, file lock checking |
-| MongoDB job store corruption | Fallback to memory store, health checks |
-
-## Estimated Effort
-
-| Plan | Complexity | Tests |
-|------|-----------|-------|
-| 08-01: FetchConfig Model | Low | ~10 |
-| 08-02: BaseFetcher | Low | ~5 |
-| 08-03: SFTPFetcher | Medium | ~15 |
-| 08-04: APIFetcher | Medium | ~15 |
-| 08-05: FileDropFetcher | Medium | ~15 |
-| 08-06: Scheduler Setup | Medium | ~10 |
-| 08-07: Daily Fetch Job | High | ~20 |
-| 08-08: Integration & CLI | Low | ~10 |
-| 08-09: Tests | Medium | ~20 |
-| **Total** | | **~120 tests** |
+### Phase 7: Polish & Transitions
+**Files to modify:** `web/styles.css`, `web/app.js`
+*   Add micro-animations (subtle hover scale, active button depression).
+*   Add clean loading skeletons and error handlers.

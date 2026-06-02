@@ -129,7 +129,14 @@ class ReconciliationEngine:
                 statuses_match = norm_partner_status == norm_internal_status
 
                 if amounts_match and statuses_match:
-                    recon_status = ReconciliationStatus.MATCHED
+                    if norm_partner_status == TransactionStatus.SUCCESS:
+                        recon_status = ReconciliationStatus.MATCHED
+                    elif norm_partner_status == TransactionStatus.FAILED:
+                        recon_status = ReconciliationStatus.MATCHED_FAILED
+                    elif norm_partner_status == TransactionStatus.REVERSED:
+                        recon_status = ReconciliationStatus.MATCHED_REVERSED
+                    else:
+                        recon_status = ReconciliationStatus.MATCHED
                 elif not amounts_match and not statuses_match:
                     recon_status = ReconciliationStatus.MULTIPLE_MISMATCH
                 elif not amounts_match:

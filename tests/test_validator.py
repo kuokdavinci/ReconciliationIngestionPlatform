@@ -117,6 +117,25 @@ class TestRequiredFieldValidation:
         assert result2.is_valid is False
         assert len(result2.errors) == 1
 
+    def test_empty_trace_does_not_fail(self):
+        """Empty trace (optional field) does NOT produce validation errors."""
+        validator = Validator()
+        txn = _make_valid_txn(trace="")
+        result = validator.validate(txn)
+        assert result.is_valid is True
+        assert result.errors == []
+
+    def test_all_fields_empty_produces_all_errors(self):
+        """CanonicalTransaction with empty required fields produces errors for each."""
+        validator = Validator()
+        txn = _make_valid_txn(id="", currency="")
+        result = validator.validate(txn)
+        assert result.is_valid is False
+        assert len(result.errors) >= 2
+        fields = {e.field for e in result.errors}
+        assert "id" in fields
+        assert "currency" in fields
+
 
 class TestDecimalValidation:
     """Test decimal (amount) business rule validation."""

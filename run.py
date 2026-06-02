@@ -422,7 +422,8 @@ async def main():
         workflow_type="UPC",
         file_type=FileType.SETTLEMENT,
         reconciliation_date=recon_date,
-        config_version="v_template"
+        config_version="v_template",
+        enable_config_health_check=True,
     )
     
     # 6. Print Results

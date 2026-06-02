@@ -60,6 +60,15 @@ class TestJSONRowIteration:
             rows = list(reader.iter_rows())
         assert rows == [("A", 1), ("B", 2)]
 
+    def test_start_row_offset(self, tmp_path: Path) -> None:
+        path = tmp_path / "data.json"
+        data = [["id", "amount"], ["TXN001", 100], ["TXN002", 200]]
+        with open(path, "w") as f:
+            json.dump(data, f)
+        with JSONStreamReader(path, start_row=2) as reader:
+            rows = list(reader.iter_rows())
+        assert rows == [("TXN001", 100), ("TXN002", 200)]
+
     def test_array_of_objects(self, tmp_path: Path) -> None:
         path = tmp_path / "data.json"
         data = [{"id": "A", "val": 1}, {"id": "B", "val": 2}]
@@ -103,6 +112,15 @@ class TestJSONMappingConfigIntegration:
             json.dump([], f)
         reader = JSONStreamReader.from_mapping_config(path, _mapping_config())
         assert isinstance(reader, JSONStreamReader)
+
+    def test_from_mapping_config_uses_start_row(self, tmp_path: Path) -> None:
+        path = tmp_path / "data.json"
+        with open(path, "w") as f:
+            json.dump([], f)
+        config = _mapping_config()
+        config.start_row = 2
+        reader = JSONStreamReader.from_mapping_config(path, config)
+        assert reader._start_row == 2
 
 
 class TestCreateReaderJSON:

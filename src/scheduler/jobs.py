@@ -226,6 +226,7 @@ async def _run_ingestion(
             workflow_type="UPC",
             file_type=FileType.SETTLEMENT,
             reconciliation_date=reconciliation_date,
+            enable_config_health_check=True,
         )
 
         logger.info(

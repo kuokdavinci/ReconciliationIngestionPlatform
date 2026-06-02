@@ -88,7 +88,7 @@ db.reconciliation_mapping_config.insertOne({
     { path: "extra.portal", constant: "VNPayPortal", type: "CONSTANT" },
     { path: "extra.provider", constant: "VNPAY", type: "CONSTANT" }
   ],
-  configVersion: "v1",
+  configVersion: "v_template",
   createdAt: new Date()
 });
 

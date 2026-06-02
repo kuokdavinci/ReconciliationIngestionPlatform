@@ -11,6 +11,7 @@
     ["overview", "Overview", "dashboard"],
     ["scheduler", "Scheduler", "calendar_today"],
     ["reconciliation", "Reconciliation", "fact_check"],
+    ["mappings", "Mapping Configs", "settings_suggest"],
     ["insights", "AI Insights", "analytics"],
     ["settings", "Mapping & Settings", "account_tree"]
   ];
@@ -128,6 +129,18 @@
         }
         const data = await fetchJson(url);
         view.innerHTML = renderReconciliation(data);
+      } catch (err) {
+        view.innerHTML = renderError(err);
+      }
+      bindViewActions();
+      return;
+    }
+
+    if (state.route === "mappings") {
+      view.innerHTML = loadingPanel("Loading mapping configurations...");
+      try {
+        const data = await fetchJson(`/api/v1/mappings?partner=${encodeURIComponent(state.partner)}`);
+        view.innerHTML = renderMappings(data);
       } catch (err) {
         view.innerHTML = renderError(err);
       }
@@ -362,6 +375,71 @@
         ${table(headers, rows)}
       </section>
     `;
+  }
+
+  function renderMappings(data) {
+    const items = data.mappings || [];
+    if (!items.length) {
+      return `
+        <section class="panel">
+          <div class="empty-state" style="text-align: center; padding: 40px 0;">
+            <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted); margin-bottom: 12px;">settings</span>
+            <h3>No Mapping Configurations</h3>
+            <p class="muted">No active mapping configs found for ${state.partner}.</p>
+          </div>
+        </section>
+      `;
+    }
+
+    const cards = items.map(config => {
+      const mappingsHtml = (config.fieldMappings || []).map(fm => `
+        <div class="mapping-grid" style="margin-bottom: 8px;">
+          <div class="mapping-card" style="padding: 10px 16px;">
+            <div><strong>${escapeHtml(fm.path)}</strong></div>
+            <div style="font-size: 11px; color: var(--text-muted);">
+              ${fm.column ? `Col: ${escapeHtml(fm.column)}` : fm.constant ? `Const: ${escapeHtml(fm.constant)}` : '-'}
+            </div>
+          </div>
+          <div class="mapping-arrow"><span class="material-symbols-outlined" style="font-size: 18px;">arrow_forward</span></div>
+          <div class="mapping-card" style="padding: 10px 16px;">
+            <code style="font-size: 11px;">${escapeHtml(fm.type)}</code>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">
+              ${fm.required ? '<span style="color: var(--status-unmatched);">Required</span>' : 'Optional'}
+              ${fm.mapping ? `<span style="color: var(--brand-accent-blue); margin-left: 4px;">• ${Object.keys(fm.mapping).length} rules</span>` : ''}
+            </div>
+          </div>
+        </div>
+      `).join("");
+
+      return `
+        <section class="panel" style="margin-bottom: 24px;">
+          <div class="grid cols-4" style="margin-bottom: 20px;">
+            <div class="metric" style="padding: 16px;">
+              <span>Partner</span>
+              <strong style="font-size: 20px;">${escapeHtml(config.partner)}</strong>
+            </div>
+            <div class="metric" style="padding: 16px;">
+              <span>Version</span>
+              <strong style="font-size: 20px;">${escapeHtml(config.configVersion || 'latest')}</strong>
+            </div>
+            <div class="metric" style="padding: 16px;">
+              <span>File Type</span>
+              <strong style="font-size: 20px;">${escapeHtml(config.fileType || 'SETTLEMENT')}</strong>
+            </div>
+            <div class="metric" style="padding: 16px;">
+              <span>Sheet / Row</span>
+              <strong style="font-size: 20px;">${escapeHtml(config.sheetName || '-')} / ${config.startRow || 2}</strong>
+            </div>
+          </div>
+          <h3 style="font-size: 13px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 16px;">
+            Field Mappings (${(config.fieldMappings || []).length})
+          </h3>
+          ${mappingsHtml}
+        </section>
+      `;
+    }).join("");
+
+    return cards;
   }
 
   function renderSettings() {

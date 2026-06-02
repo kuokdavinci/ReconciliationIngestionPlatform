@@ -95,7 +95,7 @@ async def daily_partner_fetch_job(
                 results["failed"] += 1
 
                 if structured_logger:
-                    structured_logger.logger.info(
+                    structured_logger.get_logger().info(
                         "FETCH_FAILED",
                         extra={
                             "partner": partner,
@@ -112,7 +112,7 @@ async def daily_partner_fetch_job(
             )
 
             if structured_logger:
-                structured_logger.logger.info(
+                structured_logger.get_logger().info(
                     "FETCH_SUCCESS",
                     extra={
                         "partner": partner,
@@ -169,7 +169,7 @@ async def daily_partner_fetch_job(
             results["failed"] += 1
 
             if structured_logger:
-                structured_logger.logger.info(
+                structured_logger.get_logger().info(
                     "JOB_FAILED",
                     extra={
                         "partner": partner,
@@ -239,7 +239,7 @@ async def _run_ingestion(
         )
 
         if structured_logger:
-            structured_logger.logger.info(
+            structured_logger.get_logger().info(
                 "INGESTION_TRIGGERED",
                 extra={
                     "partner": partner,

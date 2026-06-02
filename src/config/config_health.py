@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 ERROR_RATE_THRESHOLD = 0.20  # 20% failure rate triggers re-detect
 SAMPLE_SIZE = 10  # number of data rows to send to LLM
+AUTO_APPLY_CONFIDENCE_THRESHOLD = 0.85
 
 
 def _compute_error_rate(
@@ -132,6 +133,41 @@ async def check_and_refresh_config(
             f"AI config generation failed for {partner} and no fallback config exists"
         )
 
+    confidence = float(result.get("confidence") or 0.0)
+
+    # Low-confidence AI output should not be auto-applied.
+    if confidence < AUTO_APPLY_CONFIDENCE_THRESHOLD:
+        pending_config = MappingConfig(
+            partner=partner,
+            workflowType=workflow_type,
+            fileType=file_type,
+            sheetName=result.get("sheetName") or "Sheet1",
+            startRow=result.get("startRow", 1),
+            fieldMappings=result.get("fieldMappings", []),
+            configVersion=config_version,
+            structureSignature=sig.to_dict(),
+            configHealth={
+                "stale": True,
+                "status": "PENDING_REVIEW",
+                "source": "ai_generated",
+                "confidence": confidence,
+                "reasoning": result.get("reasoning"),
+                "updatedAt": datetime.now(timezone.utc),
+            },
+        )
+        await _upsert_config(
+            config_repo=config_repo,
+            config=pending_config,
+            partner=partner,
+            workflow_type=workflow_type,
+            file_type=file_type,
+            config_version=config_version,
+        )
+        logger.info(
+            f"AI config for {partner} needs review (confidence={confidence:.2f})"
+        )
+        return pending_config
+
     # Build and save new config
     new_config = MappingConfig(
         partner=partner,
@@ -144,8 +180,9 @@ async def check_and_refresh_config(
         structureSignature=sig.to_dict(),
         configHealth={
             "stale": False,
+            "status": "ACTIVE",
             "source": "ai_generated",
-            "confidence": result.get("confidence"),
+            "confidence": confidence,
             "reasoning": result.get("reasoning"),
             "updatedAt": datetime.now(timezone.utc),
         },
@@ -159,11 +196,14 @@ async def check_and_refresh_config(
             return config
         raise ValueError(f"AI-generated config failed validation: {validation_errors}")
 
-    await config_repo.collection.delete_many(
-        _config_query(partner, workflow_type, file_type, config_version)
+    await _upsert_config(
+        config_repo=config_repo,
+        config=new_config,
+        partner=partner,
+        workflow_type=workflow_type,
+        file_type=file_type,
+        config_version=config_version,
     )
-    config_repo._set_model_class(MappingConfig)
-    await config_repo.create(new_config)
 
     # Invalidate cache so next load picks up the new config
     config_loader.invalidate_cache(
@@ -251,6 +291,21 @@ async def _attach_signature(
 
 def _has_no_signature(config: MappingConfig) -> bool:
     return getattr(config, "structure_signature", None) is None
+
+
+async def _upsert_config(
+    config_repo: MappingConfigRepository,
+    config: MappingConfig,
+    partner: str,
+    workflow_type: str,
+    file_type: FileType,
+    config_version: Optional[str],
+) -> None:
+    await config_repo.collection.delete_many(
+        _config_query(partner, workflow_type, file_type, config_version)
+    )
+    config_repo._set_model_class(MappingConfig)
+    await config_repo.create(config)
 
 
 def _is_config_stale(config: MappingConfig, sig: StructureSignature) -> bool:

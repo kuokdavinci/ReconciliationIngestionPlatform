@@ -22,6 +22,8 @@ FIELD MAPPING RULES:
 - STRING: text/identifier column
 - DECIMAL: monetary amount (integer or decimal number — use type DECIMAL)
 - DATE: date/time column (format: YYYY-MM-DD or DD/MM/YYYY or with time)
+- DATE: date/time column (common forms include YYYY-MM-DD, YYYY/MM/DD, DD/MM/YYYY,
+  and variants with time)
 - CONSTANT: always the same literal value (e.g., currency = "VND")
 - MAPPING: status values needing translation (e.g., "SUCCESS" -> "SUCCESS", "FAILED" -> "FAILED")
 
@@ -32,14 +34,17 @@ CANONICAL FIELDS (must map all that are present):
 - currency (CONSTANT): always "VND" for Vietnamese partners
 - status (MAPPING): transaction status with value mapping
 - transDate (DATE): transaction date
-- extra.service (CONSTANT): set to "PAYMENT" unless evidence shows otherwise
-- extra.portal (CONSTANT): portal/platform name
-- extra.provider (CONSTANT): partner/provider name
+- extra.service (CONSTANT, optional): set to "PAYMENT" if clearly present
+- extra.portal (CONSTANT, optional): portal/platform name if clearly present
+- extra.provider (CONSTANT, optional): partner/provider name if clearly present
 
 COLUMN REFERENCE: column numbers are 1-based (column 1 = first column).
 
 MAPPING RULE: for status fields, provide a mapping dictionary that maps 
 each observed status value to SUCCESS, FAILED, PENDING, or REVERSED.
+
+If a field cannot be confidently inferred from the sample, omit it rather than inventing a mapping.
+Prefer a minimal valid MappingConfig over a speculative one.
 
 Return ONLY valid JSON (no markdown) with this structure:
 {
@@ -90,11 +95,20 @@ def _build_field_mappings(raw: list[dict]) -> list[FieldMapping]:
                 "required": fm.get("required", False),
             }
             if ftype == FieldMappingType.CONSTANT:
-                kwargs["constant"] = fm["constant"]
+                constant = fm.get("constant")
+                if not constant:
+                    continue
+                kwargs["constant"] = constant
             else:
-                kwargs["column"] = fm.get("column")
+                column = fm.get("column")
+                if column is None and ftype != FieldMappingType.MAPPING:
+                    continue
+                kwargs["column"] = column
                 if ftype == FieldMappingType.MAPPING:
-                    kwargs["mapping"] = fm.get("mapping", {})
+                    mapping = fm.get("mapping", {})
+                    if not mapping:
+                        continue
+                    kwargs["mapping"] = mapping
             result.append(FieldMapping(**kwargs))
         except (KeyError, ValueError) as e:
             logger.warning(f"Skipping invalid field mapping: {fm} — {e}")
@@ -145,6 +159,15 @@ Row 1 (headers): {headers}
 {sample_rows[:10] if len(str(sample_rows)) > 1000 else table}
 
 Analyze the column structure and generate a MappingConfig."""
+
+    user_prompt += """
+
+DATE DETECTION RULES:
+- If a date column contains slashes like 2024/07/08 or 2024/07/08 09:11:02,
+  still map it as DATE.
+- Prefer the most likely transaction date column even if it is not ISO formatted.
+- If multiple columns look date-like, choose the one that appears in every row.
+"""
 
     try:
         response = await provider.generate(

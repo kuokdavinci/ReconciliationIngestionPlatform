@@ -647,6 +647,10 @@
     }
 
     const cards = items.map(config => {
+      const health = config.configHealth || {};
+      const status = String(health.status || (health.stale ? "STALE" : "ACTIVE"));
+      const confidence = typeof health.confidence === "number" ? Math.round(health.confidence * 100) : null;
+      const statusClass = status === "ACTIVE" ? "matched" : status === "PENDING_REVIEW" ? "warning" : "critical";
       const mappingsHtml = (config.fieldMappings || []).map(fm => `
         <div class="mapping-grid" style="margin-bottom: 8px;">
           <div class="mapping-card" style="padding: 10px 16px;">
@@ -668,7 +672,7 @@
 
       return `
         <section class="panel" style="margin-bottom: 24px;">
-          <div class="grid cols-4" style="margin-bottom: 20px;">
+          <div class="grid cols-4" style="margin-bottom: 20px; align-items: stretch;">
             <div class="metric" style="padding: 16px;">
               <span>Partner</span>
               <strong style="font-size: 20px;">${escapeHtml(config.partner)}</strong>
@@ -685,6 +689,12 @@
               <span>Sheet / Row</span>
               <strong style="font-size: 20px;">${escapeHtml(config.sheetName || '-')} / ${config.startRow || 2}</strong>
             </div>
+          </div>
+          <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom: 16px;">
+            <span class="badge ${statusClass}">${escapeHtml(status)}</span>
+            ${confidence !== null ? `<span class="badge neutral">Confidence ${confidence}%</span>` : ""}
+            ${health.reasoning ? `<span class="muted" style="font-size: 12px;">${escapeHtml(String(health.reasoning))}</span>` : ""}
+            ${status === "PENDING_REVIEW" ? `<button class="button" data-action="approve-config" data-config-id="${escapeHtml(config._id || "")}">Approve</button>` : ""}
           </div>
           <h3 style="font-size: 13px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 16px;">
             Field Mappings (${(config.fieldMappings || []).length})
@@ -1016,6 +1026,23 @@
         const action = el.dataset.action;
         if (action === "run-job") {
           showToast(`Manual triggers active for partner: ${el.dataset.partner}`);
+          return;
+        }
+        if (action === "approve-config") {
+          const configId = el.dataset.configId;
+          if (!configId) return;
+          fetch(`/api/v1/mappings/${encodeURIComponent(configId)}/approve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          })
+            .then(r => r.json().then(body => ({ ok: r.ok, body })))
+            .then(({ ok, body }) => {
+              if (!ok) throw new Error(body.detail || "Approve failed");
+              showToast("Mapping config approved.");
+              render();
+            })
+            .catch(err => showToast(err.message || "Approve failed"));
         }
       });
     });

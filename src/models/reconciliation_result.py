@@ -57,3 +57,62 @@ class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
         serialized = [self._to_mongo(doc) for doc in docs]
         result = await self.collection.insert_many(serialized)
         return len(result.inserted_ids)
+
+    async def find_by_partner_and_date(
+        self, partner: str, date: str
+    ) -> list[ReconciliationResult]:
+        """Find all results for a partner on a specific date."""
+        return await self.find_many({"partner": partner, "date": date})
+
+    async def find_by_partner_date_and_status(
+        self, partner: str, date: str, status: ReconciliationStatus
+    ) -> list[ReconciliationResult]:
+        """Find results for a partner+date filtered by reconciliation status."""
+        return await self.find_many({
+            "partner": partner,
+            "date": date,
+            "reconciliationStatus": status.value,
+        })
+
+    async def count_by_status(
+        self, partner: str, date: str
+    ) -> dict[str, int]:
+        """Aggregate reconciliation results by status.
+
+        Returns dict like {"MATCHED": 1450, "AMOUNT_MISMATCH": 30, ...}
+        """
+        pipeline = [
+            {"$match": {"partner": partner, "date": date}},
+            {"$group": {"_id": "$reconciliationStatus", "count": {"$sum": 1}}},
+        ]
+        cursor = self.collection.aggregate(pipeline)
+        result: dict[str, int] = {}
+        async for doc in cursor:
+            result[str(doc["_id"])] = doc["count"]
+        return result
+
+    async def get_total_amounts(
+        self, partner: str, date: str
+    ) -> dict[str, object]:
+        """Get sum of partner_amount and internal_amount for a partner+date."""
+        pipeline = [
+            {"$match": {"partner": partner, "date": date}},
+            {
+                "$group": {
+                    "_id": None,
+                    "total_partner_amount": {"$sum": "$partnerAmount"},
+                    "total_internal_amount": {"$sum": "$internalAmount"},
+                }
+            },
+        ]
+        cursor = self.collection.aggregate(pipeline)
+        from bson.decimal128 import Decimal128
+        from decimal import Decimal
+        async for doc in cursor:
+            pa = doc.get("total_partner_amount")
+            ia = doc.get("total_internal_amount")
+            return {
+                "total_partner_amount": pa.to_decimal() if isinstance(pa, Decimal128) else (Decimal(str(pa)) if pa is not None else None),
+                "total_internal_amount": ia.to_decimal() if isinstance(ia, Decimal128) else (Decimal(str(ia)) if ia is not None else None),
+            }
+        return {"total_partner_amount": None, "total_internal_amount": None}

@@ -44,6 +44,23 @@ services:
       mongodb:
         condition: service_healthy
 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: reconciliation-api
+    ports:
+      - "8000:8000"
+    command: uvicorn src.api:create_app --factory --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - APP_MONGODB_URL=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
+
   scheduler:
     build:
       context: .
@@ -56,6 +73,9 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    environment:
+      - APP_MONGODB_URL=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
+      - SFTP_HOST=sftp
     volumes:
       - ./downloads:/app/downloads
       - ./sftp_data:/app/sftp_data

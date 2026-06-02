@@ -96,8 +96,11 @@
     if (state.route === "overview") {
       view.innerHTML = loadingPanel("Loading overview dashboard...");
       try {
-        const data = await fetchJson(`/api/v1/insights/summary?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`);
-        view.innerHTML = renderOverview(data);
+        const [insightsData, statsData] = await Promise.all([
+          fetchJson(`/api/v1/insights/summary?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`),
+          fetchJson(`/api/v1/reconciliation/stats?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`)
+        ]);
+        view.innerHTML = renderOverview(insightsData, statsData);
       } catch (err) {
         view.innerHTML = renderError(err);
       }
@@ -161,7 +164,7 @@
     }
   }
 
-  function renderOverview(data) {
+  function renderOverview(data, stats) {
     const m = data.summary_metrics || {};
     const byStatus = m.by_status || {};
     const total = m.total_transactions || 0;
@@ -179,6 +182,47 @@
       matchQualityStatus = `<span class="badge missing-internal">WARNING</span>`;
     }
 
+    // Reconciliation Health Widget from D-10
+    const statsByStatus = (stats && stats.by_status) || {};
+    const statsTotal = (stats && stats.total) || 0;
+    const anomalyCount = (statsByStatus.AMOUNT_MISMATCH || 0) + (statsByStatus.STATUS_MISMATCH || 0) + (statsByStatus.MULTIPLE_MISMATCH || 0) + (statsByStatus.MISSING_INTERNAL || 0) + (statsByStatus.MISSING_PARTNER || 0) + (statsByStatus.UNMAPPED_SKIPPED || 0);
+    const healthStatus = anomalyCount === 0
+      ? `<span class="badge matched">HEALTHY</span>`
+      : anomalyCount > 10
+        ? `<span class="badge critical">ANOMALY</span>`
+        : `<span class="badge warning">WARNING</span>`;
+
+    const healthWidgetHtml = `
+      <section class="panel" style="margin-bottom: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h2 style="margin: 0; font-size: 16px;">Reconciliation Health</h2>
+          ${healthStatus}
+        </div>
+        <div class="grid cols-4" style="margin-bottom: 0;">
+          <div class="metric" style="padding: 16px;">
+            <span>Partner</span>
+            <strong style="font-size: 22px;">${escapeHtml(state.partner)}</strong>
+            <small>Active</small>
+          </div>
+          <div class="metric" style="padding: 16px;">
+            <span>Total Records</span>
+            <strong style="font-size: 22px;">${formatNumber(statsTotal)}</strong>
+            <small>Reconciled</small>
+          </div>
+          <div class="metric" style="padding: 16px;">
+            <span>Anomalies</span>
+            <strong style="font-size: 22px; color: ${anomalyCount > 0 ? 'var(--status-unmatched)' : 'var(--status-matched)'};">${formatNumber(anomalyCount)}</strong>
+            <small>Pending items</small>
+          </div>
+          <div class="metric" style="padding: 16px;">
+            <span>Last Recon</span>
+            <strong style="font-size: 22px;">${state.date}</strong>
+            <small>Reconciliation Date</small>
+          </div>
+        </div>
+      </section>
+    `;
+
     return `
       ${metrics([
         ["Total Transactions", formatNumber(total), state.partner],
@@ -187,6 +231,8 @@
         ["Mismatch Volume", mismatchAmount, "from current stream"]
       ])}
       
+      ${healthWidgetHtml}
+
       <div class="grid cols-2">
         <section class="panel">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">

@@ -29,10 +29,14 @@ Then open `http://localhost:5173` and switch `Data Source` to `Live API`.
 
 ## Integration Notes
 
-Live API currently uses the existing insights endpoints:
+All dashboard tabs connect to live API endpoints:
 
-- `/api/v1/insights/summary`
-- `/api/v1/insights/discrepancies`
-- `/api/v1/reports/daily`
-
-Other operational modules still use mock data until matching backend endpoints are added.
+- `/api/v1/insights/summary` — Overview metrics + AI insights
+- `/api/v1/insights/discrepancies` — Discrepancy analysis
+- `/api/v1/reports/daily` — Daily reconciliation report
+- `/api/v1/reconciliation/results` — Reconciliation results browser
+- `/api/v1/reconciliation/stats` — Reconciliation health widget data
+- `/api/v1/mappings` — Mapping Configs tab (active configs per partner)
+- `/api/v1/data/transactions` — Data Explorer transaction browser
+- `/api/v1/data/files` — File listing
+- `/api/v1/data/stats` — Data volume stats

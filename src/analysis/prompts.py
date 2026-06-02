@@ -1,6 +1,6 @@
 """Prompt templates for LLM insight generation.
 
-Provides two prompt templates for MVP:
+Provides two prompt templates:
 - build_system_prompt(): defines AI analysis assistant role, constraints, JSON output
 - build_analysis_prompt(analysis_input): receives AnalysisInput, generates findings by focus type
 
@@ -9,6 +9,7 @@ Design principles:
 - Idempotent (same input → same prompt)
 - No raw data exposure (only aggregated/grouped data)
 - Focus-aware (operational / partner / inconsistency)
+- Concrete, quantified recommendations — not generic platitudes
 """
 
 import json
@@ -24,22 +25,60 @@ from src.analysis.schemas import AnalysisInput
 SYSTEM_PROMPT = """You are an AI analysis assistant for payment reconciliation operations.
 
 ## Role
-Analyze aggregated reconciliation metrics and provide actionable insights for operators.
+Analyze aggregated reconciliation metrics and provide **concrete, quantified, actionable insights** for operations teams. Your goal is to help operators understand WHAT happened, WHY it matters, and WHAT to do next.
+
+## Quality Rubric — What makes a good insight
+
+An insight is **high quality** when it:
+1. Quantifies impact — "18 records (1.4%) worth 24.5M VND"
+2. Distinguishes pattern type — "systematic" (affects >60% of batch) vs "sporadic" (random single records)
+3. Identifies concentration — are problems spread evenly or concentrated in specific partners/amount ranges?
+4. Provides forward-looking signal — "if this trend continues, it will affect X transactions tomorrow"
+5. Recommends a specific next step — not "investigate", but "compare partner settlement file against ingestion manifest for batch #1234"
+
+An insight is **poor** when it:
+- States the obvious: "There are 18 missing internal records" (data already says this)
+- Gives vague recommendations: "Investigate and resolve"
+- Parrots the input without adding analysis
+- Mentions exact transaction IDs or individual PII
 
 ## Constraints
 1. ONLY discuss the data provided in the input — do not speculate beyond it.
 2. Do NOT perform fraud detection — that is out of scope.
 3. Output MUST be valid JSON — no markdown, no prose outside JSON.
 4. Each insight must include: type, severity, title, description, affected_count, recommendation.
-5. Severity must be determined based on the following guidelines:
-   - critical: Mismatch rate > 10% OR affected transactions > 50.
-   - high: Mismatch rate 5% - 10% OR affected transactions 20 - 50.
-   - medium: Mismatch rate 1% - 5% OR affected transactions 5 - 20.
-   - low: Mismatch rate < 1% OR affected transactions < 5.
-6. Base all findings on the aggregated metrics, grouped stats, and anomalies provided.
-7. Do NOT reference specific transaction IDs or individual amounts — only use ranges and totals.
+5. Do NOT reference specific transaction IDs or individual amounts — only use ranges and totals.
+6. Generate 1-4 findings per analysis. Zero findings is acceptable when data is clean.
+7. If there are multiple findings, ORDER them by business impact (most critical first).
+8. **CRITICAL: Use the exact `mismatch_rate` value from Summary Metrics.** Do NOT recompute mismatch rate from the grouped stats or by_status counts. The `mismatch_rate` in Summary Metrics is the authoritative ground truth. If you need to reference mismatch rate in a finding, use that exact number.
+
+## Severity Guidelines
+
+Severity is NOT just a function of mismatch rate %. Consider ALL three factors:
+
+| Severity | Mismatch Rate | Affected Count | Monetary Impact |
+|----------|--------------|----------------|-----------------|
+| critical | > 10% | > 50 tx | > 500M VND |
+| high | 5-10% | 20-50 tx | 100M-500M VND |
+| medium | 1-5% | 5-20 tx | 10M-100M VND |
+| low | < 1% | < 5 tx | < 10M VND |
+
+Use the MOST SEVERE applicable column to determine final severity.
+Example: mismatch rate 2% (medium) but monetary impact 800M VND (critical) → severity = critical.
+
+## Pattern Detection Guide
+
+For each finding, classify the underlying pattern:
+
+1. **Systematic error** — affects a consistent subset (e.g., all transactions from a specific hour/partner/amount range)
+2. **Random/sporadic** — no clear pattern in affected records
+3. **Concentrated** — most impact comes from a few large-value items
+4. **Broad/even** — small impact spread across many items
+
+Include this pattern type in the description.
 
 ## Output Format
+
 Return a JSON object with a single key "findings" containing an array of insight objects:
 
 ```json
@@ -48,12 +87,38 @@ Return a JSON object with a single key "findings" containing an array of insight
     {
       "type": "<insight_type>",
       "severity": "low|medium|high|critical",
-      "title": "<short_title>",
-      "description": "<detailed_explanation>",
+      "title": "<short_action_oriented_title>",
+      "description": "<detailed_explanation_with_quantified_impact_and_pattern>",
       "affected_count": <number>,
-      "recommendation": "<suggested_action>"
+      "recommendation": "<specific_actionable_next_step>"
     }
   ]
+}
+```
+
+## Example Insights
+
+### Good (high quality)
+```json
+{
+  "type": "missing_internal",
+  "severity": "high",
+  "title": "18 internal records missing — potential ingestion gap in batch #B-042",
+  "description": "18 transactions (1.4% of total, 24.5M VND) exist on MOMO side but are missing internally. Pattern: concentrated — all 18 records share a 10-minute window (14:20-14:30), suggesting a batch ingestion failure rather than random data loss. If this gap repeats daily, it would affect ~500 records/month.",
+  "affected_count": 18,
+  "recommendation": "Compare MOMO settlement file #B-042 against internal ingestion manifest for 2024-07-07 14:00-15:00. Re-trigger ingestion for that window if missing files are found."
+}
+```
+
+### Poor (too generic)
+```json
+{
+  "type": "missing_internal",
+  "severity": "medium",
+  "title": "Missing internal records found",
+  "description": "There are 18 missing internal records.",
+  "affected_count": 18,
+  "recommendation": "Investigate missing records."
 }
 ```
 
@@ -61,89 +126,93 @@ Return a JSON object with a single key "findings" containing an array of insight
 
 ### operational
 Focus on: MISSING_INTERNAL, MISSING_PARTNER, ingestion delays, batch failures.
-Look for patterns suggesting pipeline issues, scheduler failures, or data ingestion delays.
+Look for: temporal clustering (same time window), single-partner vs multi-partner patterns, ingestion pipeline gaps.
 
 ### partner
 Focus on: mismatch rate trends, partner stability, volume patterns, partner-specific error rates.
-Look for patterns suggesting partner-side issues or integration degradation.
+Look for: degradation signals (rate increasing over time), partner-side data quality issues, integration health.
 
 ### inconsistency
 Focus on: AMOUNT_MISMATCH, STATUS_MISMATCH, recurring error patterns, amount clustering.
-Look for systematic discrepancies rather than one-off errors.
+Look for: systematic discrepancies (same amount delta across records), rounding/truncation patterns, vs one-off errors.
 """
 
 
 def build_system_prompt() -> str:
-    """Build the system prompt for the LLM analysis assistant.
-
-    Returns:
-        System prompt string defining role, constraints, and output format.
-    """
     return SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------
-# Analysis prompt — builds user prompt from AnalysisInput
+# Focus-specific instructions with concrete analytical questions
 # ---------------------------------------------------------------------------
 
 _FOCUS_INSTRUCTIONS = {
     "operational": (
-        "Analyze operational issues: focus on MISSING_INTERNAL and MISSING_PARTNER records. "
-        "Identify potential ingestion delays, batch failures, or pipeline issues. "
-        "Highlight any patterns suggesting systematic operational problems."
+        "Analyze operational issues with these specific questions in mind:\n"
+        "1. TEMPORAL CLUSTERING: Do the MISSING_INTERNAL/MISSING_PARTNER records share a common time window? "
+        "If so, it suggests a batch/scheduler failure, not random data loss.\n"
+        "2. MONETARY IMPACT: What is the total VND amount of affected transactions? "
+        "Is the impact concentrated in a few large-value items or spread across many small ones?\n"
+        "3. INGESTION HEALTH: Based on the ratio of missing internal vs partner records, "
+        "is the problem on our side (ingestion) or partner side (delivery)?\n"
+        "4. ACTION SIGNAL: If this pattern repeats daily, what would the monthly impact be?"
     ),
     "partner": (
-        "Analyze partner behavior: focus on mismatch rate trends, partner stability, "
-        "volume patterns, and partner-specific error rates. "
-        "Identify any patterns suggesting partner-side issues or integration degradation."
+        "Analyze partner behavior with these specific questions in mind:\n"
+        "1. STABILITY SIGNAL: Is the mismatch rate stable, improving, or degrading compared to expected norms? "
+        "Note whether this is a new issue or a chronic condition.\n"
+        "2. VOLUME ANALYSIS: What proportion of the partner's volume is affected? "
+        "A 5% mismatch on 10,000 transactions (500 records) is very different from 5% on 100 (5 records).\n"
+        "3. ERROR CONCENTRATION: Are the mismatches concentrated in specific transaction types, "
+        "amount ranges, or time periods?\n"
+        "4. INTEGRATION HEALTH: Based on the pattern, is this likely a configuration issue "
+        "(wrong mapping/fee schedule) or a data delivery issue (missing/incomplete files)?"
     ),
     "inconsistency": (
-        "Analyze data inconsistencies: focus on AMOUNT_MISMATCH and STATUS_MISMATCH records. "
-        "Identify recurring error patterns, amount clustering, or systematic discrepancies. "
-        "Distinguish between one-off errors and systematic issues."
+        "Analyze data inconsistencies with these specific questions in mind:\n"
+        "1. SYSTEMATIC vs RANDOM: Do amount mismatches show a consistent difference pattern "
+        "(e.g., always off by exact percentage suggesting fee/commission issue)?\n"
+        "2. ROUNDING/PRECISION: Are differences clustered around round numbers "
+        "(suggesting truncation) or varying amounts (suggesting rate/fee mismatch)?\n"
+        "3. STATUS CONCENTRATION: Are STATUS_MISMATCH records clustered under specific "
+        "status pairs that suggest a mapping gap?\n"
+        "4. MONETARY DISTRIBUTION: What is the avg/median/max difference? "
+        "Is total mismatch impact driven by a few extreme outliers?"
     ),
 }
 
 _DEFAULT_FOCUS_INSTRUCTION = (
     "Analyze the provided reconciliation data and generate actionable insights. "
-    "Focus on the most significant findings across all categories."
+    "Focus on the most significant findings across all categories. "
+    "For each finding, identify whether the pattern is systematic or sporadic, "
+    "quantify the monetary impact, and suggest a specific next action."
 )
 
 
 def _format_metrics_section(metrics: dict[str, Any]) -> str:
-    """Format summary metrics into a readable text section.
-
-    Args:
-        metrics: Dictionary of summary metrics from MetricsService.
-
-    Returns:
-        Formatted string representation of the metrics.
-    """
+    """Format summary metrics into a readable text section."""
     lines = ["## Summary Metrics", ""]
     lines.append(f"- Total Transactions: {metrics.get('total_transactions', 'N/A')}")
     lines.append(f"- Matched: {metrics.get('matched', 'N/A')}")
     lines.append(f"- Mismatch Rate: {metrics.get('mismatch_rate', 'N/A')}%")
-    lines.append(f"- Total Mismatch Amount: {metrics.get('total_amount_mismatch', 'N/A')}")
+    lines.append(f"- Total Mismatch Amount: {_fmt_amount(metrics.get('total_amount_mismatch', 0))}")
 
     by_status = metrics.get("by_status", {})
     if by_status:
         lines.append("")
         lines.append("### By Status")
         for status, count in by_status.items():
-            lines.append(f"  - {status}: {count}")
+            pct = ""
+            total = metrics.get("total_transactions", 0)
+            if total:
+                pct = f" ({count / total * 100:.1f}%)"
+            lines.append(f"  - {status}: {count}{pct}")
 
     return "\n".join(lines)
 
 
 def _format_grouped_stats_section(stats: list[dict[str, Any]]) -> str:
-    """Format grouped statistics into a readable text section.
-
-    Args:
-        stats: List of grouped stat dictionaries from GroupingEngine.
-
-    Returns:
-        Formatted string representation of the grouped stats.
-    """
+    """Format grouped statistics into a readable text section."""
     if not stats:
         return "## Grouped Stats\n\nNo grouped statistics available."
 
@@ -155,24 +224,18 @@ def _format_grouped_stats_section(stats: list[dict[str, Any]]) -> str:
             detail_parts = [f"{k}: {v}" for k, v in details.items()]
             detail_str = f" ({', '.join(detail_parts)})"
 
+        amt = group.get("total_amount", 0)
         lines.append(
             f"- **{group['key']}**: {group['count']} records "
-            f"({group['percentage']}%), "
-            f"total amount: {group.get('total_amount', 0)}{detail_str}"
+            f"({group['percentage']:.1f}%), "
+            f"amount: {_fmt_amount(amt)}{detail_str}"
         )
 
     return "\n".join(lines)
 
 
 def _format_anomalies_section(anomalies: list[dict[str, Any]]) -> str:
-    """Format top anomalies into a readable text section.
-
-    Args:
-        anomalies: List of anomaly dictionaries (pre-processed).
-
-    Returns:
-        Formatted string representation of the anomalies.
-    """
+    """Format top anomalies into a readable text section."""
     if not anomalies:
         return "## Top Anomalies\n\nNo anomalies detected."
 
@@ -185,6 +248,17 @@ def _format_anomalies_section(anomalies: list[dict[str, Any]]) -> str:
         )
 
     return "\n".join(lines)
+
+
+def _fmt_amount(amount: float | int) -> str:
+    """Format a monetary amount for display."""
+    if amount >= 1_000_000_000:
+        return f"{amount / 1_000_000_000:.2f}B VND"
+    if amount >= 1_000_000:
+        return f"{amount / 1_000_000:.1f}M VND"
+    if amount >= 1_000:
+        return f"{amount / 1_000:.0f}K VND"
+    return f"{amount:,.0f} VND"
 
 
 def build_analysis_prompt(analysis_input: AnalysisInput) -> str:
@@ -220,8 +294,12 @@ def build_analysis_prompt(analysis_input: AnalysisInput) -> str:
             [a.model_dump() for a in analysis_input.top_anomalies]
         ),
         "",
-        "Please analyze the data above and return your findings as a JSON object "
-        'with a "findings" array, following the output format specified in the system prompt.',
+        "---",
+        "",
+        "Now analyze the data above and return your findings as a JSON object "
+        'with a "findings" array. Follow the system prompt\'s quality rubric — '
+        "quantify impact, identify patterns, and give specific recommendations. "
+        "If the data is clean (no significant mismatches), return an empty findings array.",
     ]
 
     return "\n".join(sections)

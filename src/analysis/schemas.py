@@ -172,3 +172,7 @@ class AIObservation(BaseModel):
         default="llm",
         description="Resolution path: llm | llm_fallback | schema_fallback | rule_based",
     )
+    guardrail_result: dict[str, Any] | None = Field(
+        default=None,
+        description="Guardrail validation result (is_valid, risk_level, findings)",
+    )

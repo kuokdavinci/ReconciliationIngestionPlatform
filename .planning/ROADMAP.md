@@ -15,6 +15,7 @@
 **Phase 11:** AI-ANALYSIS-01, AI-ANALYSIS-02, AI-ANALYSIS-03
 **Phase 12:** DATA-API-01, DATA-API-02
 **Phase 13:** BACKEND-AUDIT-01, UI-POLISH-01, DATA-FLOW-01
+**Phase 14:** AI-DOMAIN-01, AI-DOMAIN-02, AI-DOMAIN-03
 
 ---
 
@@ -199,10 +200,10 @@ Plans:
 - DATA-API-01: Reconciliation API — query, filter, and aggregate reconciliation results by partner/date/status
 - DATA-API-02: Data Explorer API — browse DataContainer transactions and ReconciliationFile records with pagination and filtering
 
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 12-01-PLAN.md — Reconciliation API + Data Explorer API: endpoints, repository extensions, app registration, tests
+- [x] 12-01-PLAN.md — Reconciliation API + Data Explorer API: endpoints, repository extensions, app registration, tests
 
 ---
 
@@ -215,4 +216,27 @@ Plans:
 - UI-POLISH-01: UI refinement — display mapping configuration usage list and other core feature data in the dashboard
 - DATA-FLOW-01: Data flow verification — ensure unmapped partner data is properly normalized/rejected before entering reconciliation pipeline
 
-**Plans:** 0 plans
+**Plans:** 3/3 plans complete
+
+Plans:
+- [x] 13-01-PLAN.md — Backend audit edge case tests + Data flow guard in ReconciliationEngine (Wave 1)
+- [x] 13-02-PLAN.md — New GET /api/v1/mappings endpoint for mapping config data (Wave 1)
+- [x] 13-03-PLAN.md — UI: Mapping Configs sidebar tab + Reconciliation health widget on Overview (Wave 2)
+
+---
+
+## Phase 14: AI Analysis Domain Standardization
+
+**Goal:** Improve AI Analysis Layer maturity from 14/100 EVAL score to production domain standards. Fix code review critical bugs, implement output guardrails/hallucination detection, add evaluation infrastructure, and harden code quality.
+
+**Requirements:**
+- AI-DOMAIN-01: AI output guardrails — cross-reference LLM insight claims against input data, detect hallucinations, downgrade unsupported severity
+- AI-DOMAIN-02: Code quality hardening — fix critical bugs, redundant code, unused parameters, per-request provider, test standardization
+- AI-DOMAIN-03: Eval infrastructure — reference dataset (JSONL), evaluator test, Makefile targets, CI/CD eval pipeline
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] 14-01-PLAN.md — AI output guardrails + hallucination detection (Wave 1)
+- [ ] 14-02-PLAN.md — Code quality fixes from code review (Wave 1)
+- [ ] 14-03-PLAN.md — Eval infrastructure + reference dataset (Wave 1)

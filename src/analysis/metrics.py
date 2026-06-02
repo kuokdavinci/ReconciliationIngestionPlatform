@@ -64,7 +64,7 @@ class MetricsService:
             status = r.reconciliation_status.value if hasattr(r.reconciliation_status, "value") else str(r.reconciliation_status)
             by_status[status] = by_status.get(status, 0) + 1
 
-            if status == ReconciliationStatus.MATCHED:
+            if status in (ReconciliationStatus.MATCHED, ReconciliationStatus.MATCHED_FAILED, ReconciliationStatus.MATCHED_REVERSED):
                 matched += 1
 
             # Accumulate mismatch amounts for mismatch statuses
@@ -159,7 +159,7 @@ class MetricsService:
         matched = sum(
             1 for r in results
             if (r.reconciliation_status.value if hasattr(r.reconciliation_status, "value") else str(r.reconciliation_status))
-            == ReconciliationStatus.MATCHED
+            in (ReconciliationStatus.MATCHED, ReconciliationStatus.MATCHED_FAILED, ReconciliationStatus.MATCHED_REVERSED)
         )
         return _safe_divide((len(results) - matched) * 100, len(results))
 

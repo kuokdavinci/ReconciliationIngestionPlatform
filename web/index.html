@@ -1,58 +1,60 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Adapter Service Operations</title>
+    <title>AdapterService - Reconciliation Engine</title>
+    <!-- Google Fonts & Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <div class="app-shell">
-      <aside class="sidebar" aria-label="Primary">
+      <!-- Left Sidebar Navigation -->
+      <aside class="sidebar" aria-label="Primary Navigation">
         <div class="brand">
-          <div class="brand-mark">AS</div>
+          <div class="brand-mark">
+            <span class="material-symbols-outlined icon-fill">account_balance</span>
+          </div>
           <div>
-            <strong>Adapter Service</strong>
-            <span>Operations Console</span>
+            <strong>AdapterService</strong>
+            <span class="brand-subtitle">Institutional Grade</span>
           </div>
         </div>
-        <nav id="nav" class="nav-list"></nav>
+
+        <nav id="nav" class="nav-list">
+          <!-- Populated by app.js -->
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="system-status">
+            <span class="status-dot online"></span>
+            <span>SYSTEM ONLINE</span>
+          </div>
+        </div>
       </aside>
 
+      <!-- Main Workspace -->
       <div class="workspace">
         <header class="topbar">
-          <div>
-            <p id="source-status" class="eyebrow">Mock First / Full Ops</p>
+          <div class="page-info">
             <h1 id="page-title">Overview</h1>
+            <p class="subtitle" id="page-subtitle">Reconciliation Dashboard & Analytics</p>
           </div>
           <div class="filters" aria-label="Global filters">
-            <label>
-              Data Source
-              <select id="source-filter">
-                <option value="mock">Mock</option>
-                <option value="live">Live API</option>
+            <div class="filter-group">
+              <span class="filter-label">PARTNER</span>
+              <select id="partner-filter">
+                <!-- Dynamically populated -->
               </select>
-            </label>
-            <label>
-              API Base
-              <input id="api-base" value="http://localhost:8000" aria-label="API base URL">
-            </label>
-            <label>
-              Partner
-              <select id="partner-filter"></select>
-            </label>
-            <label>
-              Date
+            </div>
+            <div class="filter-group">
+              <span class="filter-label">RECONCILIATION DATE</span>
               <input id="date-filter" type="date" value="2024-07-07">
-            </label>
-            <label>
-              Environment
-              <select id="env-filter">
-                <option value="local">Local</option>
-                <option value="staging">Staging</option>
-                <option value="production">Production</option>
-              </select>
-            </label>
+            </div>
           </div>
         </header>
 
@@ -60,9 +62,9 @@
       </div>
     </div>
 
+    <!-- Notifications toast -->
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-    <script src="mock-data.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

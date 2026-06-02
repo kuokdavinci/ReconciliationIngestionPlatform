@@ -69,4 +69,27 @@ db.reconciliation_mapping_config.insertOne({
   createdAt: new Date()
 });
 
-print("MongoDB initialized successfully — collections, indexes, and default MOMO config created.");
+db.reconciliation_mapping_config.deleteMany({ partner: "VNPAY" });
+db.reconciliation_mapping_config.insertOne({
+  _id: "88888888-8888-8888-8888-888888888888",
+  partner: "VNPAY",
+  workflowType: "UPC",
+  fileType: "SETTLEMENT",
+  sheetName: "Sheet1",
+  startRow: 2,
+  fieldMappings: [
+    { path: "id", column: 1, type: "STRING", required: true },
+    { path: "trace", column: 2, type: "STRING" },
+    { path: "amount", column: 3, type: "DECIMAL" },
+    { path: "currency", constant: "VND", type: "CONSTANT" },
+    { path: "status", column: 4, type: "MAPPING", mapping: { "SUCCESS": "SUCCESS", "FAILED": "FAILED", "PENDING": "PENDING" } },
+    { path: "transDate", column: 5, type: "DATE" },
+    { path: "extra.service", constant: "PAYMENT", type: "CONSTANT" },
+    { path: "extra.portal", constant: "VNPayPortal", type: "CONSTANT" },
+    { path: "extra.provider", constant: "VNPAY", type: "CONSTANT" }
+  ],
+  configVersion: "v1",
+  createdAt: new Date()
+});
+
+print("MongoDB initialized successfully — collections, indexes, and default MOMO/VNPAY configs created.");

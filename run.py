@@ -95,12 +95,16 @@ def parse_excel_template(template_path: str) -> dict:
     if path_file_pattern and "#{" in path_file_pattern:
         # Fallback to test file name if it contains expression
         filename = "m4becomvsp_07072024_combine.xlsx"
-        
+
+    # Excel template always uses Sheet1
+    sheet_name = "Sheet1"
+
     return {
         "partner": partner,
         "start_row": start_row + 1,  # Row 7 is header, data starts at 8
         "field_mappings": field_mappings,
-        "filename": filename
+        "filename": filename,
+        "sheet_name": sheet_name,
     }
 
 async def _handle_scheduler_mode(
@@ -210,11 +214,10 @@ async def main():
     parser.add_argument("--run-job-now", action="store_true", help="Manually trigger the daily fetch job now")
     parser.add_argument("--list-jobs", action="store_true", help="List all scheduled jobs")
     parser.add_argument("--date", type=str, help="Date for reconciliation (YYYY-MM-DD)")
-    parser.add_argument("--reconcile", type=str, help="Run reconciliation for date (YYYY-MM-DD)")
     parser.add_argument("--partner", type=str, default="MOMO", help="Partner identifier for reconciliation")
     parser.add_argument("--seed-mock", action="store_true", help="Seed mock internal transactions for testing reconciliation")
     parser.add_argument("--port", type=int, default=8000, help="Port for FastAPI server (default: 8000)")
-    parser.add_argument("action", nargs="?", choices=["reconcile", "serve"], help="Action to perform (e.g. reconcile, serve)")
+    parser.add_argument("--serve", action="store_true", help="Start FastAPI server")
     args = parser.parse_args()
 
     # 1. Database Connection
@@ -229,7 +232,7 @@ async def main():
     print("Indexes verified/applied successfully.")
 
     # Reconciliation mode
-    is_reconcile = args.action == "reconcile" or args.reconcile is not None
+    is_reconcile = args.reconcile is not None
     if is_reconcile:
         date_str = args.date or args.reconcile
         if not date_str:
@@ -298,7 +301,7 @@ async def main():
         return
 
     # Serve mode — start FastAPI server with uvicorn
-    if args.action == "serve":
+    if args.serve:
         import uvicorn
 
         print(f"Starting FastAPI server on port {args.port}...")
@@ -330,12 +333,13 @@ async def main():
         field_mappings = parsed_config["field_mappings"]
         remote_filename = parsed_config["filename"]
         
+        parsed_sheet_name = parsed_config.get("sheet_name", "Sheet1")
         print(f"Uploading parsed MappingConfig for {partner} to MongoDB...")
         config_doc = MappingConfig(
             partner=partner,
             workflow_type="UPC",
             file_type=FileType.SETTLEMENT,
-            sheet_name=sheet_name,
+            sheet_name=parsed_sheet_name,
             start_row=start_row,
             field_mappings=field_mappings,
             config_version="v_template"

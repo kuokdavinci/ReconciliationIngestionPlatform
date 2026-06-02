@@ -123,3 +123,52 @@ class AnalysisInput(BaseModel):
         default_factory=list,
         description="Pre-processed anomalies (rule-based filtering)",
     )
+
+
+class AIInsight(BaseModel):
+    """Structured output contract from the LLM.
+
+    This is the validated schema for LLM JSON-mode responses.
+    Replaces fragile text parsing with pydantic validation.
+    """
+
+    type: str = Field(description="Insight type (e.g. operational_delay, partner_pattern)")
+    severity: str = Field(description="Severity level: low | medium | high | critical")
+    title: str = Field(description="Short descriptive title")
+    description: str = Field(description="Detailed explanation of the finding")
+    affected_count: int = Field(default=0, description="Number of transactions affected")
+    recommendation: str = Field(default="", description="Suggested action for operators")
+
+
+class AIInsightResponse(BaseModel):
+    """Top-level response wrapper from LLM JSON-mode output.
+
+    The LLM returns: {"findings": [AIInsight, ...]}
+    """
+
+    findings: list[AIInsight] = Field(description="List of AI-generated insights")
+
+
+class AIObservation(BaseModel):
+    """Observability data collected during AI insight generation.
+
+    Tracks latency, token usage, cost, provider info, and resolution path.
+    """
+
+    partner: str = Field(description="Partner identifier")
+    date: str = Field(description="Date string (YYYY-MM-DD)")
+    focus: str = Field(description="Analysis focus type")
+    provider: str = Field(default="", description="Provider used (primary/fallback)")
+    model: str = Field(default="", description="Model used")
+    latency_ms: float = Field(default=0.0, description="Total generation latency in ms")
+    prompt_tokens: int = Field(default=0, description="Input token count")
+    completion_tokens: int = Field(default=0, description="Output token count")
+    total_tokens: int = Field(default=0, description="Total token count")
+    estimated_cost_usd: float = Field(default=0.0, description="Estimated cost in USD")
+    cache_hit: bool = Field(default=False, description="Whether result came from cache")
+    cache_key: str = Field(default="", description="Cache key if applicable")
+    schema_valid: bool = Field(default=True, description="Whether LLM output passed schema validation")
+    resolution: str = Field(
+        default="llm",
+        description="Resolution path: llm | llm_fallback | schema_fallback | rule_based",
+    )

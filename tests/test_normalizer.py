@@ -479,6 +479,32 @@ class TestMappingConversion:
         assert error is not None
         assert error.row == 5
 
+    def test_mapping_with_status_field_None_value(self):
+        """MAPPING field with None source value produces ValidationError with 'empty' or 'null'."""
+        fm = self._make_mapping_with_dict(
+            "status",
+            mapping={"Thành công": "SUCCESS", "Thất bại": "FAILED", "others": "FAILED"},
+            column="D",
+        )
+        value, error = TransactionNormalizer._convert_mapping(None, fm)
+        assert value is None
+        assert error is not None
+        assert isinstance(error, ValidationError)
+        assert "empty" in error.reason.lower() or "null" in error.reason.lower()
+
+    def test_mapping_with_unknown_value_no_others_case_insensitive(self):
+        """Unknown status value without 'others' fallback produces ValidationError."""
+        fm = self._make_mapping_with_dict(
+            "status",
+            mapping={"Thành công": "SUCCESS", "Thất bại": "FAILED"},
+            column="D",
+        )
+        value, error = TransactionNormalizer._convert_mapping("unknown_status", fm)
+        assert value is None
+        assert error is not None
+        assert isinstance(error, ValidationError)
+        assert "unmapped value" in error.reason
+
 
 class TestBuildCanonical:
     """Test CanonicalTransaction construction from normalized data."""

@@ -6,10 +6,10 @@ Orchestration flow:
 2. Compute metrics via MetricsService
 3. Group results via GroupingEngine
 4. Build AnalysisInput via services helpers
-5. Call LLM with prompts
-6. Parse response and return results
+5. Check TTL cache → call LLM (with fallback chain) → parse structured response
+6. Return results with observability data
 
-Fallback: if LLM fails, returns rule-based only results.
+Fallback chain: primary provider → fallback provider → rule-based
 """
 
 import logging
@@ -18,16 +18,24 @@ from typing import Any, Optional
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
+from src.analysis.cache import build_cache_key, get_insight_cache
 from src.analysis.config import AnalysisConfig
 from src.analysis.grouping import GroupingEngine
 from src.analysis.metrics import MetricsService
 from src.analysis.prompts import build_analysis_prompt, build_system_prompt
-from src.analysis.provider import LLMProvider
-from src.analysis.schemas import AnalysisInput, AnalysisResult, GroupResult, SummaryResult
+from src.analysis.provider import AIProviderRouter, LLMProvider
+from src.analysis.providers.openai_compat import OpenAICompatProvider
+from src.analysis.schemas import (
+    AIObservation,
+    AnalysisInput,
+    AnalysisResult,
+    GroupResult,
+    SummaryResult,
+)
 from src.analysis.services import (
     build_analysis_input,
     format_findings,
-    parse_llm_insights,
+    parse_structured_insight,
     rule_based_pre_process,
 )
 from src.core.enums import ReconciliationStatus
@@ -61,17 +69,13 @@ async def _query_reconciliation_results(
 
     results = []
     for doc in docs:
-        # Convert MongoDB doc to object-like structure expected by
-        # MetricsService and GroupingEngine
         result = SimpleNamespace()
         result.partner = doc.get("partner", partner)
         result.date = doc.get("date", date)
-        
-        # Support both camelCase (db native) and snake_case (class attribute)
+
         result.partner_amount = doc.get("partnerAmount") if "partnerAmount" in doc else doc.get("partner_amount")
         result.internal_amount = doc.get("internalAmount") if "internalAmount" in doc else doc.get("internal_amount")
 
-        # Convert status string to ReconciliationStatus enum
         status_str = doc.get("reconciliationStatus") if "reconciliationStatus" in doc else doc.get("reconciliation_status", "MATCHED")
         try:
             result.reconciliation_status = ReconciliationStatus(status_str)
@@ -81,6 +85,95 @@ async def _query_reconciliation_results(
         results.append(result)
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Observability helper
+# ---------------------------------------------------------------------------
+
+def _build_observation(
+    partner: str,
+    date: str,
+    focus: str,
+    start_time: float,
+    provider: Optional[LLMProvider] = None,
+    cache_hit: bool = False,
+    cache_key: str = "",
+    schema_valid: bool = True,
+    resolution: str = "llm",
+) -> AIObservation:
+    """Build an AIObservation from generation context.
+
+    Args:
+        partner: Partner identifier.
+        date: Date string.
+        focus: Analysis focus.
+        start_time: Monotonic start time.
+        provider: Provider used (if any).
+        cache_hit: Whether result came from cache.
+        cache_key: Cache key used.
+        schema_valid: Whether schema validation passed.
+        resolution: Resolution path.
+
+    Returns:
+        AIObservation with populated fields.
+    """
+    latency_ms = round((time.monotonic() - start_time) * 1000, 2)
+    provider_name = getattr(provider, "provider_name", "") if provider else ""
+    model_name = getattr(provider, "model", "") if provider else ""
+    usage = getattr(provider, "last_token_usage", None) if provider else None
+
+    prompt_tokens = (usage or {}).get("prompt_tokens", 0)
+    completion_tokens = (usage or {}).get("completion_tokens", 0)
+    total_tokens = (usage or {}).get("total_tokens", 0)
+    estimated_cost = OpenAICompatProvider.estimate_cost_for_usage(
+        model_name, prompt_tokens, completion_tokens
+    ) if model_name else 0.0
+
+    return AIObservation(
+        partner=partner,
+        date=date,
+        focus=focus,
+        provider=provider_name,
+        model=model_name,
+        latency_ms=latency_ms,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        estimated_cost_usd=estimated_cost,
+        cache_hit=cache_hit,
+        cache_key=cache_key,
+        schema_valid=schema_valid,
+        resolution=resolution,
+    )
+
+
+def _log_observation(obs: AIObservation) -> None:
+    """Log an AIObservation as a structured log line.
+
+    Args:
+        obs: AIObservation to log.
+    """
+    logger.info(
+        f"AI insight generated: {obs.resolution} | "
+        f"{obs.latency_ms}ms | {obs.total_tokens}tokens | ${obs.estimated_cost_usd:.6f}",
+        extra={
+            "event": "ai_insight_observation",
+            "ai_partner": obs.partner,
+            "ai_date": obs.date,
+            "ai_focus": obs.focus,
+            "ai_provider": obs.provider,
+            "ai_model": obs.model,
+            "ai_latency_ms": obs.latency_ms,
+            "ai_prompt_tokens": obs.prompt_tokens,
+            "ai_completion_tokens": obs.completion_tokens,
+            "ai_total_tokens": obs.total_tokens,
+            "ai_estimated_cost_usd": obs.estimated_cost_usd,
+            "ai_cache_hit": obs.cache_hit,
+            "ai_schema_valid": obs.schema_valid,
+            "ai_resolution": obs.resolution,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -100,20 +193,21 @@ async def get_summary(
     1. Query MongoDB → reconciliation results
     2. MetricsService.compute_summary() → SummaryResult
     3. GroupingEngine.group() → list[GroupResult]
-    4. Build AnalysisInput → LLM for key_findings
-    5. Return {summary_metrics, grouped_stats, key_findings}
+    4. Build AnalysisInput → check cache → LLM for key_findings
+    5. Return {summary_metrics, grouped_stats, key_findings, observation}
 
     Args:
         partner: Partner identifier.
         date: Date string (YYYY-MM-DD).
         collection: Motor collection for reconciliation_result.
-        llm_provider: LLM provider instance.
+        llm_provider: LLM provider instance (AIProviderRouter).
         config: Optional AnalysisConfig (uses defaults if not provided).
 
     Returns:
         Dict with summary_metrics, grouped_stats, key_findings, and metadata.
     """
     start_time = time.monotonic()
+    cfg = config or AnalysisConfig()
 
     # Step 1: Query MongoDB
     results = await _query_reconciliation_results(collection, partner, date)
@@ -137,25 +231,35 @@ async def get_summary(
         grouped_results=groups,
     )
 
-    # Step 5: LLM enrichment for key_findings
-    key_findings: list[str] = []
-    llm_status = "fallback"
-    try:
-        system_prompt = build_system_prompt()
-        user_prompt = build_analysis_prompt(analysis_input)
+    # Step 5: Check cache if enabled
+    cache_enabled = cfg.cache_enabled
+    model_name = _get_model_name(llm_provider)
+    cache_key = build_cache_key(partner, date, "operational", model_name)
+    insight_cache = get_insight_cache() if cache_enabled and model_name else None
 
-        llm_response = await llm_provider.generate(user_prompt, system_prompt)
-        parsed_results = parse_llm_insights(llm_response)
+    cached_results = insight_cache.get(cache_key) if insight_cache else None
+    cache_hit = cached_results is not None
 
-        if parsed_results:
-            key_findings = format_findings(parsed_results)
-            llm_status = "success"
-        else:
-            logger.warning("LLM returned no parseable findings, using rule-based fallback")
-    except Exception as exc:
-        logger.warning(f"LLM call failed, using rule-based fallback: {exc}")
+    if cache_hit:
+        parsed_results, schema_valid = cached_results
+        logger.info(
+            f"Cache hit for {cache_key}",
+            extra={"event": "ai_insight_cache_hit", "cache_key": cache_key},
+        )
+    else:
+        # Step 6: LLM enrichment for key_findings (with fallback chain)
+        parsed_results, schema_valid = await _generate_insights_with_fallback(
+            analysis_input, llm_provider, start_time
+        )
 
-    # Step 6: Build response
+        # Cache result if cache is enabled and schema passed
+        if insight_cache and schema_valid and parsed_results:
+            insight_cache.set(cache_key, (parsed_results, schema_valid))
+
+    key_findings = format_findings(parsed_results) if parsed_results else []
+    resolution = _resolve_resolution(llm_provider, parsed_results, schema_valid)
+
+    # Step 7: Build response
     grouped_stats = [
         {
             "key": g.key,
@@ -168,6 +272,22 @@ async def get_summary(
     ]
 
     elapsed_ms = round((time.monotonic() - start_time) * 1000, 2)
+
+    # Build and log observation
+    provider_used = _get_last_provider(llm_provider)
+    observation = _build_observation(
+        partner=partner,
+        date=date,
+        focus="operational",
+        start_time=start_time,
+        provider=provider_used,
+        cache_hit=cache_hit,
+        cache_key=cache_key,
+        schema_valid=schema_valid,
+        resolution=resolution,
+    )
+    _log_observation(observation)
+
     logger.info(
         f"Summary generated in {elapsed_ms}ms for {partner} on {date}",
         extra={
@@ -175,7 +295,7 @@ async def get_summary(
             "partner": partner,
             "date": date,
             "latency_ms": elapsed_ms,
-            "llm_status": llm_status,
+            "llm_status": _llm_status(resolution),
         },
     )
 
@@ -191,8 +311,9 @@ async def get_summary(
         },
         "grouped_stats": grouped_stats,
         "key_findings": key_findings,
-        "generated_at": date,  # Will be replaced by actual timestamp in API layer
-        "llm_status": llm_status,
+        "generated_at": date,
+        "llm_status": _llm_status(resolution),
+        "ai_observation": observation.model_dump(),
     }
 
 
@@ -215,7 +336,7 @@ async def get_discrepancies(
     2. MetricsService.compute_summary() → SummaryResult
     3. GroupingEngine.group() → list[GroupResult]
     4. Rule-based pre-process → anomalies
-    5. Build AnalysisInput → generate_insights()
+    5. Build AnalysisInput → check cache → generate insights
     6. Return list[AnalysisResult]
 
     Args:
@@ -223,13 +344,14 @@ async def get_discrepancies(
         date: Date string (YYYY-MM-DD).
         focus: Analysis focus (operational | partner | inconsistency).
         collection: Motor collection for reconciliation_result.
-        llm_provider: LLM provider instance.
+        llm_provider: LLM provider instance (AIProviderRouter).
         config: Optional AnalysisConfig.
 
     Returns:
         List of AnalysisResult objects (LLM-enriched or rule-based fallback).
     """
     start_time = time.monotonic()
+    cfg = config or AnalysisConfig()
 
     # Step 1: Query MongoDB
     results = await _query_reconciliation_results(collection, partner, date)
@@ -265,10 +387,48 @@ async def get_discrepancies(
         anomalies=anomalies,
     )
 
-    # Step 6: Generate insights
-    insights = await generate_insights(analysis_input, llm_provider)
+    # Step 6: Check cache if enabled
+    cache_enabled = cfg.cache_enabled
+    model_name = _get_model_name(llm_provider)
+    cache_key = build_cache_key(partner, date, focus, model_name)
+    insight_cache = get_insight_cache() if cache_enabled and model_name else None
+
+    cached_results = insight_cache.get(cache_key) if insight_cache else None
+    cache_hit = cached_results is not None
+
+    if cache_hit:
+        insights, schema_valid = cached_results
+        logger.info(
+            f"Cache hit for {cache_key}",
+            extra={"event": "ai_insight_cache_hit", "cache_key": cache_key},
+        )
+    else:
+        insights, schema_valid = await _generate_insights_with_fallback(
+            analysis_input, llm_provider, start_time
+        )
+
+        if insight_cache and schema_valid and insights:
+            insight_cache.set(cache_key, (insights, schema_valid))
+
+    resolution = _resolve_resolution(llm_provider, insights, schema_valid)
 
     elapsed_ms = round((time.monotonic() - start_time) * 1000, 2)
+
+    # Build and log observation
+    provider_used = _get_last_provider(llm_provider)
+    observation = _build_observation(
+        partner=partner,
+        date=date,
+        focus=focus,
+        start_time=start_time,
+        provider=provider_used,
+        cache_hit=cache_hit,
+        cache_key=cache_key,
+        schema_valid=schema_valid,
+        resolution=resolution,
+    )
+    _log_observation(observation)
+
     logger.info(
         f"Discrepancies generated in {elapsed_ms}ms for {partner} on {date} (focus={focus})",
         extra={
@@ -278,6 +438,7 @@ async def get_discrepancies(
             "focus": focus,
             "latency_ms": elapsed_ms,
             "insight_count": len(insights),
+            "ai_resolution": resolution,
         },
     )
 
@@ -285,7 +446,7 @@ async def get_discrepancies(
 
 
 # ---------------------------------------------------------------------------
-# generate_insights — rule-based pre-process + LLM enrich
+# generate_insights — internal helper with cache bypass
 # ---------------------------------------------------------------------------
 
 async def generate_insights(
@@ -294,11 +455,8 @@ async def generate_insights(
 ) -> list[AnalysisResult]:
     """Generate insights from AnalysisInput using rule-based + LLM enrichment.
 
-    Flow:
-    1. Rule-based pre-process (already done in analysis_input.top_anomalies)
-    2. Build prompts and call LLM
-    3. Parse LLM response → AnalysisResult list
-    4. Fallback: if LLM fails, return rule-based results
+    Legacy API — prefer _generate_insights_with_fallback for new code.
+    This function exists for backward compatibility with existing callers.
 
     Args:
         analysis_input: Structured input with metrics, groups, anomalies.
@@ -307,8 +465,31 @@ async def generate_insights(
     Returns:
         List of AnalysisResult objects (LLM-enriched or rule-based fallback).
     """
-    start_time = time.monotonic()
+    results, _ = await _generate_insights_with_fallback(analysis_input, llm_provider, time.monotonic())
+    return results
 
+
+async def _generate_insights_with_fallback(
+    analysis_input: AnalysisInput,
+    llm_provider: LLMProvider,
+    start_time: float,
+) -> tuple[list[AnalysisResult], bool]:
+    """Generate insights with structured output, fallback chain, and schema validation.
+
+    Flow:
+    1. Build prompts
+    2. Call LLM via provider (AIProviderRouter handles fallback chain)
+    3. Parse with structured AIInsight schema validation
+    4. Fallback: if schema fails, return rule-based results
+
+    Args:
+        analysis_input: Structured input with metrics, groups, anomalies.
+        llm_provider: LLM provider (plain provider or AIProviderRouter).
+        start_time: Monotonic start time for latency tracking.
+
+    Returns:
+        Tuple of (list of AnalysisResult, schema_valid boolean).
+    """
     try:
         system_prompt = build_system_prompt()
         user_prompt = build_analysis_prompt(analysis_input)
@@ -323,42 +504,33 @@ async def generate_insights(
             },
         )
 
-        llm_response = await llm_provider.generate(user_prompt, system_prompt)
-        parsed_results = parse_llm_insights(llm_response)
+        # If provider is AIProviderRouter, it handles fallback internally.
+        # If it's a plain LLMProvider (backward compat), call generate directly.
+        if isinstance(llm_provider, AIProviderRouter):
+            llm_response = await llm_provider.generate(user_prompt, system_prompt)
+        else:
+            llm_response = await llm_provider.generate(user_prompt, system_prompt)
 
-        elapsed_ms = round((time.monotonic() - start_time) * 1000, 2)
-        logger.info(
-            f"LLM returned {len(parsed_results)} insights in {elapsed_ms}ms",
-            extra={
-                "event": "ai_insight_response",
-                "partner": analysis_input.partner,
-                "date": analysis_input.date,
-                "latency_ms": elapsed_ms,
-                "insight_count": len(parsed_results),
-            },
-        )
+        if not llm_response:
+            logger.warning("LLM returned no response, falling back to rule-based")
+            return _rule_based_fallback(analysis_input), False
+
+        # Parse with structured schema validation
+        parsed_results, schema_valid = parse_structured_insight(llm_response)
 
         if parsed_results:
-            return parsed_results
+            return parsed_results, schema_valid
 
-        # LLM returned empty findings — fallback to rule-based
-        logger.warning("LLM returned no findings, falling back to rule-based")
+        # LLM returned no parseable findings — fallback to rule-based
+        logger.warning("LLM returned no parseable findings, falling back to rule-based")
+        return _rule_based_fallback(analysis_input), False
 
     except Exception as exc:
-        elapsed_ms = round((time.monotonic() - start_time) * 1000, 2)
         logger.warning(
-            f"LLM call failed after {elapsed_ms}ms, falling back to rule-based: {exc}",
-            extra={
-                "event": "ai_insight_llm_error",
-                "partner": analysis_input.partner,
-                "date": analysis_input.date,
-                "latency_ms": elapsed_ms,
-                "error": str(exc),
-            },
+            f"LLM call failed, falling back to rule-based: {exc}",
+            extra={"event": "ai_insight_llm_error", "error": str(exc)},
         )
-
-    # Rule-based fallback
-    return _rule_based_fallback(analysis_input)
+        return _rule_based_fallback(analysis_input), False
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +553,6 @@ def _rule_based_fallback(analysis_input: AnalysisInput) -> list[AnalysisResult]:
     metrics = analysis_input.summary_metrics
     focus = analysis_input.focus
 
-    # Mismatch rate insight
     mismatch_rate = metrics.get("mismatch_rate", 0)
     if mismatch_rate > 0:
         severity = "critical" if mismatch_rate > 20 else "high" if mismatch_rate > 10 else "medium" if mismatch_rate > 5 else "low"
@@ -396,7 +567,6 @@ def _rule_based_fallback(analysis_input: AnalysisInput) -> list[AnalysisResult]:
             )
         )
 
-    # Anomaly-based insights from top_anomalies
     for anomaly in analysis_input.top_anomalies:
         severity = "high" if anomaly.count > 10 else "medium" if anomaly.count > 5 else "low"
         results.append(
@@ -412,7 +582,6 @@ def _rule_based_fallback(analysis_input: AnalysisInput) -> list[AnalysisResult]:
             )
         )
 
-    # Status-specific insights
     by_status = metrics.get("by_status", {})
     missing_internal = by_status.get("MISSING_INTERNAL", 0)
     if missing_internal > 0:
@@ -441,3 +610,123 @@ def _rule_based_fallback(analysis_input: AnalysisInput) -> list[AnalysisResult]:
         )
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Provider helpers
+# ---------------------------------------------------------------------------
+
+def _get_model_name(llm_provider: LLMProvider) -> str:
+    """Get model name from a provider, handling AIProviderRouter wrapper.
+
+    Args:
+        llm_provider: LLM provider or AIProviderRouter.
+
+    Returns:
+        Model name string, or empty string if unavailable.
+    """
+    if hasattr(llm_provider, "_primary"):
+        return getattr(llm_provider._primary, "model", "")
+    return getattr(llm_provider, "model", "")
+
+
+def _get_last_provider(llm_provider: LLMProvider) -> Optional[LLMProvider]:
+    """Get the last used provider from router or return provider directly.
+
+    Args:
+        llm_provider: LLM provider or AIProviderRouter.
+
+    Returns:
+        LLMProvider instance or None.
+    """
+    if isinstance(llm_provider, AIProviderRouter):
+        return llm_provider.last_provider
+    return llm_provider
+
+
+# Backward-compatible status map for the llm_status response field
+_LLM_STATUS_MAP = {
+    "llm": "success",
+    "llm_fallback": "success",
+    "schema_fallback": "fallback",
+    "rule_based": "fallback",
+}
+
+
+def _llm_status(resolution: str) -> str:
+    """Map internal resolution to backward-compatible llm_status.
+
+    Args:
+        resolution: Internal resolution string.
+
+    Returns:
+        Backward-compatible status: "success" or "fallback".
+    """
+    return _LLM_STATUS_MAP.get(resolution, "fallback")
+
+
+# ---------------------------------------------------------------------------
+# Resolution helpers
+# ---------------------------------------------------------------------------
+
+def _resolve_resolution(
+    llm_provider: LLMProvider,
+    insights: list[AnalysisResult],
+    schema_valid: bool,
+) -> str:
+    """Determine the resolution path for the insight generation.
+
+    Args:
+        llm_provider: LLM provider instance.
+        insights: Generated insights.
+        schema_valid: Whether schema validation passed.
+
+    Returns:
+        Resolution string: llm | llm_fallback | schema_fallback | rule_based.
+    """
+    if not insights:
+        return "rule_based"
+
+    if isinstance(llm_provider, AIProviderRouter):
+        resolution = llm_provider.resolution
+        if resolution in ("llm", "llm_fallback") and not schema_valid:
+            return "schema_fallback"
+        return resolution
+
+    if not schema_valid:
+        return "schema_fallback"
+
+    return "llm"
+
+
+# ---------------------------------------------------------------------------
+# Cache invalidation helper
+# ---------------------------------------------------------------------------
+
+async def invalidate_insight_cache(
+    partner: str,
+    date: str,
+    focus: Optional[str] = None,
+) -> int:
+    """Invalidate AI insight cache entries for a partner.
+
+    Called after re-reconciliation to ensure fresh analysis.
+
+    Args:
+        partner: Partner identifier.
+        date: Date string.
+        focus: Optional focus type to narrow invalidation.
+
+    Returns:
+        Number of invalidated entries.
+    """
+    cache = get_insight_cache()
+    if focus:
+        key_prefix = f"{partner}:{date}:{focus}:"
+        count = 0
+        for k in list(cache._store.keys()):
+            if k.startswith(key_prefix):
+                cache.invalidate(k)
+                count += 1
+        return count
+    return cache.invalidate_by_partner(partner)

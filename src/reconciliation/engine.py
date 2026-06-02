@@ -51,6 +51,32 @@ class ReconciliationEngine:
             return str(pd.id).strip()
         return None
 
+    def _pre_check_record(self, partner_record: DataContainer) -> tuple[bool, str]:
+        """Pre-check a partner record before reconciliation.
+
+        Verifies the record has valid normalized data. Records failing this
+        check are skipped with a warning log (not treated as errors).
+
+        Returns:
+            Tuple of (is_valid: bool, reason: str).
+            If valid, reason is empty string. If invalid, reason describes the issue.
+        """
+        # Check partnerData exists
+        if partner_record.partner_data is None:
+            return False, "empty_partner_data"
+
+        # Check amount is present and non-zero (valid Decimal)
+        amount = partner_record.partner_data.amount
+        if amount is None:
+            return False, "missing_amount"
+
+        # Check status is present and non-empty
+        status = partner_record.partner_data.status
+        if status is None or (isinstance(status, str) and status.strip() == ""):
+            return False, "missing_status"
+
+        return True, ""
+
     async def reconcile(self, partner: str, reconciliation_date: datetime) -> list[ReconciliationResult]:
         """Execute reconciliation matching for a given partner and date.
 
@@ -104,6 +130,24 @@ class ReconciliationEngine:
 
         # 5. Process partner records
         for partner_record in partner_records:
+            # Pre-check: skip records with invalid/non-normalized data (DATA-FLOW-01)
+            is_valid, reason = self._pre_check_record(partner_record)
+            if not is_valid:
+                self._logger.get_logger().warning(
+                    f"unmapped_record_skipped for record_id={str(partner_record.id)} reason={reason}"
+                )
+                # Create a SKIPPED result so it appears in stats
+                skipped_result = ReconciliationResult(
+                    id=str(partner_record.id),
+                    partner=partner,
+                    date=date_str,
+                    partnerTxnId=str(partner_record.id),
+                    partnerRecordId=str(partner_record.id),
+                    reconciliationStatus=ReconciliationStatus.UNMAPPED_SKIPPED,
+                )
+                results.append(skipped_result)
+                continue
+
             partner_txn_id = self._resolve_partner_txn_id(partner_record)
             if not partner_txn_id:
                 self._logger.get_logger().warning(

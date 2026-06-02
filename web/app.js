@@ -11,6 +11,7 @@
     ["overview", "Overview", "dashboard"],
     ["scheduler", "Scheduler", "calendar_today"],
     ["reconciliation", "Reconciliation", "fact_check"],
+    ["mappings", "Mapping Configs", "settings_suggest"],
     ["insights", "AI Insights", "analytics"],
     ["settings", "Mapping & Settings", "account_tree"]
   ];
@@ -95,8 +96,11 @@
     if (state.route === "overview") {
       view.innerHTML = loadingPanel("Loading overview dashboard...");
       try {
-        const data = await fetchJson(`/api/v1/insights/summary?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`);
-        view.innerHTML = renderOverview(data);
+        const [insightsData, statsData] = await Promise.all([
+          fetchJson(`/api/v1/insights/summary?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`),
+          fetchJson(`/api/v1/reconciliation/stats?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`)
+        ]);
+        view.innerHTML = renderOverview(insightsData, statsData);
       } catch (err) {
         view.innerHTML = renderError(err);
       }
@@ -135,6 +139,18 @@
       return;
     }
 
+    if (state.route === "mappings") {
+      view.innerHTML = loadingPanel("Loading mapping configurations...");
+      try {
+        const data = await fetchJson(`/api/v1/mappings?partner=${encodeURIComponent(state.partner)}`);
+        view.innerHTML = renderMappings(data);
+      } catch (err) {
+        view.innerHTML = renderError(err);
+      }
+      bindViewActions();
+      return;
+    }
+
     if (state.route === "scheduler") {
       view.innerHTML = renderScheduler();
       bindViewActions();
@@ -148,7 +164,7 @@
     }
   }
 
-  function renderOverview(data) {
+  function renderOverview(data, stats) {
     const m = data.summary_metrics || {};
     const byStatus = m.by_status || {};
     const total = m.total_transactions || 0;
@@ -157,6 +173,7 @@
     const mismatchRate = m.mismatch_rate || 0;
     const mismatchAmount = m.total_amount_mismatch ? formatAmount(m.total_amount_mismatch) : "-";
     const matchedPct = total ? Math.round((matched / total) * 100) : 0;
+    const obs = data.ai_observation;
     
     // Auto detect anomaly status warning
     let matchQualityStatus = `<span class="badge matched">HEALTHY</span>`;
@@ -166,6 +183,47 @@
       matchQualityStatus = `<span class="badge missing-internal">WARNING</span>`;
     }
 
+    // Reconciliation Health Widget from D-10
+    const statsByStatus = (stats && stats.by_status) || {};
+    const statsTotal = (stats && stats.total) || 0;
+    const anomalyCount = (statsByStatus.AMOUNT_MISMATCH || 0) + (statsByStatus.STATUS_MISMATCH || 0) + (statsByStatus.MULTIPLE_MISMATCH || 0) + (statsByStatus.MISSING_INTERNAL || 0) + (statsByStatus.MISSING_PARTNER || 0) + (statsByStatus.UNMAPPED_SKIPPED || 0);
+    const healthStatus = anomalyCount === 0
+      ? `<span class="badge matched">HEALTHY</span>`
+      : anomalyCount > 10
+        ? `<span class="badge critical">ANOMALY</span>`
+        : `<span class="badge warning">WARNING</span>`;
+
+    const healthWidgetHtml = `
+      <section class="panel" style="margin-bottom: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h2 style="margin: 0; font-size: 16px;">Reconciliation Health</h2>
+          ${healthStatus}
+        </div>
+        <div class="grid cols-4" style="margin-bottom: 0;">
+          <div class="metric" style="padding: 16px;">
+            <span>Partner</span>
+            <strong style="font-size: 22px;">${escapeHtml(state.partner)}</strong>
+            <small>Active</small>
+          </div>
+          <div class="metric" style="padding: 16px;">
+            <span>Total Records</span>
+            <strong style="font-size: 22px;">${formatNumber(statsTotal)}</strong>
+            <small>Reconciled</small>
+          </div>
+          <div class="metric" style="padding: 16px;">
+            <span>Anomalies</span>
+            <strong style="font-size: 22px; color: ${anomalyCount > 0 ? 'var(--status-unmatched)' : 'var(--status-matched)'};">${formatNumber(anomalyCount)}</strong>
+            <small>Pending items</small>
+          </div>
+          <div class="metric" style="padding: 16px;">
+            <span>Last Recon</span>
+            <strong style="font-size: 22px;">${state.date}</strong>
+            <small>Reconciliation Date</small>
+          </div>
+        </div>
+      </section>
+    `;
+
     return `
       ${metrics([
         ["Total Transactions", formatNumber(total), state.partner],
@@ -174,6 +232,8 @@
         ["Mismatch Volume", mismatchAmount, "from current stream"]
       ])}
       
+      ${healthWidgetHtml}
+
       <div class="grid cols-2">
         <section class="panel">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
@@ -193,6 +253,8 @@
           ${donut(Math.max(0, 100 - mismatchRate), "Total Match Quality")}
         </section>
       </div>
+
+      ${obs ? renderAiObservation(obs) : ''}
     `;
   }
 
@@ -201,6 +263,8 @@
       `<option value="${focus}" ${focus === state.focus ? "selected" : ""}>${focus}</option>`
     ).join("");
     const items = Array.isArray(discrepancies) ? discrepancies : [];
+    const obs = summary.ai_observation;
+    const llmStatus = summary.llm_status;
     
     // Render custom mapped severity logic
     const cards = items.length
@@ -213,17 +277,29 @@
         }).join("")
       : `<div class="empty-state" style="grid-column: span 3; text-align: center; padding: 40px 0;">No active anomalies found for focus: ${state.focus}.</div>`;
     
+    const statusBadge = llmStatus === "success"
+      ? `<span class="badge matched" style="font-size: 10px; padding: 2px 10px;">LLM</span>`
+      : `<span class="badge warning" style="font-size: 10px; padding: 2px 10px;">FALLBACK</span>`;
+    
     return `
       <div class="toolbar">
         <label>
           ANOMALY FILTER CATEGORY
           <select id="focus-filter">${options}</select>
         </label>
-        <button class="button primary" data-action="generate-insights">
-          <span class="material-symbols-outlined">auto_awesome</span>
-          Generate AI Insights
-        </button>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <span style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted);">
+            ${statusBadge}
+            ${obs ? `<span>${obs.total_tokens || 0} tokens</span>` : ''}
+            ${obs && obs.estimated_cost_usd ? `<span>$${obs.estimated_cost_usd.toFixed(6)}</span>` : ''}
+          </span>
+          <button class="button primary" data-action="generate-insights">
+            <span class="material-symbols-outlined">auto_awesome</span>
+            Generate AI Insights
+          </button>
+        </div>
       </div>
+      ${obs ? renderAiObservation(obs) : ''}
       <div class="grid cols-3">${cards}</div>
     `;
   }
@@ -364,6 +440,71 @@
     `;
   }
 
+  function renderMappings(data) {
+    const items = data.mappings || [];
+    if (!items.length) {
+      return `
+        <section class="panel">
+          <div class="empty-state" style="text-align: center; padding: 40px 0;">
+            <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted); margin-bottom: 12px;">settings</span>
+            <h3>No Mapping Configurations</h3>
+            <p class="muted">No active mapping configs found for ${state.partner}.</p>
+          </div>
+        </section>
+      `;
+    }
+
+    const cards = items.map(config => {
+      const mappingsHtml = (config.fieldMappings || []).map(fm => `
+        <div class="mapping-grid" style="margin-bottom: 8px;">
+          <div class="mapping-card" style="padding: 10px 16px;">
+            <div><strong>${escapeHtml(fm.path)}</strong></div>
+            <div style="font-size: 11px; color: var(--text-muted);">
+              ${fm.column ? `Col: ${escapeHtml(fm.column)}` : fm.constant ? `Const: ${escapeHtml(fm.constant)}` : '-'}
+            </div>
+          </div>
+          <div class="mapping-arrow"><span class="material-symbols-outlined" style="font-size: 18px;">arrow_forward</span></div>
+          <div class="mapping-card" style="padding: 10px 16px;">
+            <code style="font-size: 11px;">${escapeHtml(fm.type)}</code>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">
+              ${fm.required ? '<span style="color: var(--status-unmatched);">Required</span>' : 'Optional'}
+              ${fm.mapping ? `<span style="color: var(--brand-accent-blue); margin-left: 4px;">• ${Object.keys(fm.mapping).length} rules</span>` : ''}
+            </div>
+          </div>
+        </div>
+      `).join("");
+
+      return `
+        <section class="panel" style="margin-bottom: 24px;">
+          <div class="grid cols-4" style="margin-bottom: 20px;">
+            <div class="metric" style="padding: 16px;">
+              <span>Partner</span>
+              <strong style="font-size: 20px;">${escapeHtml(config.partner)}</strong>
+            </div>
+            <div class="metric" style="padding: 16px;">
+              <span>Version</span>
+              <strong style="font-size: 20px;">${escapeHtml(config.configVersion || 'latest')}</strong>
+            </div>
+            <div class="metric" style="padding: 16px;">
+              <span>File Type</span>
+              <strong style="font-size: 20px;">${escapeHtml(config.fileType || 'SETTLEMENT')}</strong>
+            </div>
+            <div class="metric" style="padding: 16px;">
+              <span>Sheet / Row</span>
+              <strong style="font-size: 20px;">${escapeHtml(config.sheetName || '-')} / ${config.startRow || 2}</strong>
+            </div>
+          </div>
+          <h3 style="font-size: 13px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 16px;">
+            Field Mappings (${(config.fieldMappings || []).length})
+          </h3>
+          ${mappingsHtml}
+        </section>
+      `;
+    }).join("");
+
+    return cards;
+  }
+
   function renderSettings() {
     const defaultJson = {
       "partner": "MOMO",
@@ -415,6 +556,54 @@
       <section class="panel" id="config-preview-panel" style="display: none;">
         <h2>Loaded Schema Config Preview</h2>
         <div id="config-preview-content"></div>
+      </section>
+    `;
+  }
+
+  function renderAiObservation(obs) {
+    const cacheBadge = obs.cache_hit
+      ? `<span class="badge matched" style="font-size: 10px; padding: 2px 10px;">CACHE HIT</span>`
+      : `<span class="badge processing" style="font-size: 10px; padding: 2px 10px;">CACHE MISS</span>`;
+    
+    const resolutionLabel = {
+      "llm": "Primary LLM",
+      "llm_fallback": "Fallback LLM",
+      "schema_fallback": "Schema Fallback",
+      "rule_based": "Rule-based",
+    }[obs.resolution] || obs.resolution;
+
+    const resolutionBadge = obs.resolution === "llm"
+      ? `<span class="badge matched" style="font-size: 10px; padding: 2px 10px;">${resolutionLabel}</span>`
+      : `<span class="badge warning" style="font-size: 10px; padding: 2px 10px;">${resolutionLabel}</span>`;
+
+    return `
+      <section class="panel" style="margin-bottom: 24px; padding: 16px 24px;">
+        <div class="grid cols-6" style="gap: 8px; margin: 0;">
+          <div class="ai-metric">
+            <span>RESOLUTION</span>
+            <div style="margin-top: 6px;">${resolutionBadge}</div>
+          </div>
+          <div class="ai-metric">
+            <span>CACHE</span>
+            <div style="margin-top: 6px;">${cacheBadge}</div>
+          </div>
+          <div class="ai-metric">
+            <span>PROVIDER</span>
+            <strong style="font-size: 12px;">${obs.provider || '-'}</strong>
+          </div>
+          <div class="ai-metric">
+            <span>LATENCY</span>
+            <strong style="font-size: 12px;">${obs.latency_ms ? obs.latency_ms.toFixed(0) + 'ms' : '-'}</strong>
+          </div>
+          <div class="ai-metric">
+            <span>TOKENS</span>
+            <strong style="font-size: 12px;">${formatNumber(obs.total_tokens || 0)} <small style="color: var(--text-muted); font-size: 10px; font-weight: 400;">(p:${formatNumber(obs.prompt_tokens || 0)} / c:${formatNumber(obs.completion_tokens || 0)})</small></strong>
+          </div>
+          <div class="ai-metric">
+            <span>EST. COST</span>
+            <strong style="font-size: 12px;">${obs.estimated_cost_usd ? '$' + obs.estimated_cost_usd.toFixed(6) : '-'}</strong>
+          </div>
+        </div>
       </section>
     `;
   }

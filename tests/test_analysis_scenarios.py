@@ -1058,7 +1058,7 @@ class TestEndToEndOrchestration:
 
     @pytest.mark.asyncio
     async def test_fallback_produces_insights_when_llm_fails(self) -> None:
-        """When LLM fails, get_summary returns empty key_findings (no fallback in summary)."""
+        """When LLM fails, get_summary falls back to rule-based key_findings."""
         provider = MockLLMProvider(should_fail=True)
 
         docs = [
@@ -1077,10 +1077,11 @@ class TestEndToEndOrchestration:
         result = await get_summary("MOMO", "2024-07-07", mock_collection, provider)
 
         assert result["llm_status"] == "fallback"
-        # get_summary does NOT use rule-based fallback for key_findings
-        # Fallback is only used in generate_insights (discrepancies endpoint)
-        assert result["key_findings"] == []
-        # But metrics should still be computed correctly
+        # get_summary now uses rule-based fallback for key_findings
+        # when LLM is unavailable (improvement over original behavior)
+        assert len(result["key_findings"]) >= 1
+        assert any("Mismatch rate" in f for f in result["key_findings"])
+        # Metrics should still be computed correctly
         assert result["summary_metrics"]["total_transactions"] == 5
         # 1 MATCHED, 2 AMOUNT_MISMATCH, 2 MISSING_INTERNAL = 4 mismatched
         assert result["summary_metrics"]["mismatch_rate"] == pytest.approx(80.0, rel=1e-2)

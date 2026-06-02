@@ -25,7 +25,7 @@ class AnalysisConfig(BaseSettings):
         extra="ignore",
     )
 
-    # Provider selection
+    # Primary provider
     provider: str = Field(default="openai", description="LLM provider type: openai | ollama")
     model: str = Field(default="gpt-4o", description="Model name for the selected provider")
     endpoint: str = Field(
@@ -34,9 +34,43 @@ class AnalysisConfig(BaseSettings):
     )
     api_key: Optional[str] = Field(default=None, description="API key for the LLM provider")
 
+    # Fallback provider
+    fallback_provider: str = Field(
+        default="openai",
+        description="Fallback LLM provider type when primary fails",
+    )
+    fallback_model: str = Field(
+        default="gpt-4o-mini",
+        description="Fallback model name",
+    )
+    fallback_endpoint: Optional[str] = Field(
+        default=None,
+        description="Fallback API endpoint (defaults to primary endpoint if not set)",
+    )
+    fallback_api_key: Optional[str] = Field(
+        default=None,
+        description="Fallback API key (defaults to primary key if not set)",
+    )
+
     # Connection settings
     timeout: int = Field(default=30, description="HTTP timeout in seconds for LLM calls")
     max_retries: int = Field(default=2, description="Maximum retry attempts on failure")
+
+    # JSON-mode response format
+    json_mode: bool = Field(
+        default=True,
+        description="Enable JSON-mode response format for structured LLM output",
+    )
+
+    # Cache settings
+    cache_ttl_seconds: int = Field(
+        default=300,
+        description="TTL in seconds for AI insight cache",
+    )
+    cache_enabled: bool = Field(
+        default=True,
+        description="Enable in-memory caching of AI insight results",
+    )
 
     # Alert thresholds
     alert_mismatch_rate_threshold: float = Field(
@@ -52,3 +86,8 @@ class AnalysisConfig(BaseSettings):
     def provider_type(self) -> str:
         """Normalized provider type (lowercase)."""
         return self.provider.lower()
+
+    @property
+    def fallback_provider_type(self) -> str:
+        """Normalized fallback provider type (lowercase)."""
+        return self.fallback_provider.lower()

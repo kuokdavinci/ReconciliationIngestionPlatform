@@ -4,7 +4,8 @@
     partner: "MOMO",
     date: "2024-07-07",
     focus: "operational",
-    reconStatus: ""
+    reconStatus: "",
+    explorerFilters: { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" }
   };
 
   const routes = [
@@ -133,9 +134,16 @@
     if (state.route === "explorer") {
       view.innerHTML = loadingPanel("Loading transaction logs and ingested files...");
       try {
+        const ef = state.explorerFilters || {};
+        let txnUrl = `/api/v1/data/transactions?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&limit=100`;
+        if (ef.amountMin) txnUrl += `&amount_min=${encodeURIComponent(ef.amountMin)}`;
+        if (ef.amountMax) txnUrl += `&amount_max=${encodeURIComponent(ef.amountMax)}`;
+        if (ef.dateFrom) txnUrl += `&date_from=${encodeURIComponent(ef.dateFrom)}`;
+        if (ef.dateTo) txnUrl += `&date_to=${encodeURIComponent(ef.dateTo)}`;
+        let fileUrl = `/api/v1/data/files?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&limit=100`;
         const [txsData, filesData] = await Promise.all([
-          fetchJson(`/api/v1/data/transactions?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&limit=100`).catch(() => ({ transactions: [], total: 0 })),
-          fetchJson(`/api/v1/data/files?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&limit=100`).catch(() => ({ files: [], total: 0 }))
+          fetchJson(txnUrl).catch(() => ({ transactions: [], total: 0 })),
+          fetchJson(fileUrl).catch(() => ({ files: [], total: 0 }))
         ]);
         view.innerHTML = renderDataExplorer(txsData, filesData);
       } catch (err) {
@@ -305,8 +313,6 @@
     }).join("");
 
     return `
-      ${renderPageFilters()}
-      
       ${metrics([
         ["Total Transactions", formatNumber(total), state.partner],
         ["Matched Records", formatNumber(matched), `${failed} mismatched/failed`],
@@ -314,12 +320,32 @@
         ["Mismatch Volume", mismatchAmount, "from current stream"]
       ])}
       
+      ${renderPageFilters()}
+      
       ${healthWidgetHtml}
+
+      <div style="margin-top: 32px;">
+        <div class="insights-header-row" style="margin-bottom: 16px;">
+          <div class="segmented-tabs-container">
+            ${tabs}
+          </div>
+        </div>
+        
+        <div style="margin-bottom: 24px;">
+          <h2 style="font-size: 20px; font-weight: 800; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+            <span class="material-symbols-outlined" style="color: var(--brand-primary);">troubleshoot</span>
+            AI Identified Anomalies & Recommendations (${processedItems.length})
+          </h2>
+          <div class="grid cols-3">${cards}</div>
+        </div>
+
+        ${obs ? renderAiObservation(obs) : ''}
+      </div>
       
       <div class="grid cols-2">
         <section class="panel">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h2 style="margin: 0; font-size: 16px;">Reconciliation Quality</h2>
+            <h2 style="margin: 0; font-size: 20px; font-weight: 800;">Reconciliation Quality</h2>
             <span style="font-size: 11px; color: var(--text-muted);">Threshold limit: 5%</span>
           </div>
           ${bars([
@@ -331,33 +357,9 @@
         </section>
         
         <section class="panel" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px;">
-          <h2 style="align-self: flex-start; margin-bottom: 8px; font-size: 16px;">Success Rate Distribution</h2>
+          <h2 style="align-self: flex-start; margin-bottom: 8px; font-size: 20px; font-weight: 800;">Success Rate Distribution</h2>
           ${donut(Math.max(0, 100 - mismatchRate), "Total Match Quality")}
         </section>
-      </div>
-
-      ${obs ? renderAiObservation(obs) : ''}
-
-      <div style="margin-top: 32px; border-top: 1px solid var(--border); padding-top: 32px;">
-        <div class="insights-header-row">
-          <div class="segmented-tabs-container">
-            ${tabs}
-          </div>
-          <div>
-            <button class="button primary" data-action="generate-insights">
-              <span class="material-symbols-outlined">auto_awesome</span>
-              Regenerate AI Analysis
-            </button>
-          </div>
-        </div>
-        
-        <div style="margin-top: 24px;">
-          <h2 style="font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
-            <span class="material-symbols-outlined" style="color: var(--brand-primary);">troubleshoot</span>
-            AI Identified Anomalies & Recommendations (${processedItems.length})
-          </h2>
-          <div class="grid cols-3">${cards}</div>
-        </div>
       </div>
     `;
   }
@@ -512,9 +514,9 @@
             <tr>
               <td><strong>${escapeHtml(f.filename || "-")}</strong></td>
               <td><code>${escapeHtml(f.partner || "-")}</code></td>
-              <td><span class="badge matched">${escapeHtml(f.fileType || "-")}</span></td>
+              <td><span class="badge" style="background: rgba(240,185,11,.08); color: var(--brand-primary); border-color: rgba(240,185,11,.2);">${escapeHtml(f.fileType || "-")}</span></td>
               <td style="font-variant-numeric: tabular-nums;">${formatNumber(f.recordsCount || 0)}</td>
-              <td><span class="badge ${f.processingStatus === 'COMPLETED' ? 'matched' : 'failed'}">${escapeHtml(f.processingStatus || "-")}</span></td>
+              <td><span class="badge ${f.processingStatus === 'COMPLETED' ? 'matched' : f.processingStatus === 'PROCESSING' ? 'processing' : 'failed'}">${escapeHtml(f.processingStatus || "-")}</span></td>
               <td>${formattedDate}</td>
             </tr>
           `;
@@ -544,6 +546,38 @@
 
     return `
       ${renderPageFilters()}
+      <div class="page-filters" style="margin-top: -16px;">
+        <div class="filter-group">
+          <span class="filter-label">AMOUNT MIN</span>
+          <div class="filter-input-wrapper">
+            <input id="amount-min" type="text" placeholder="0" value="">
+          </div>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">AMOUNT MAX</span>
+          <div class="filter-input-wrapper">
+            <input id="amount-max" type="text" placeholder="∞" value="">
+          </div>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">DATE FROM</span>
+          <div class="filter-input-wrapper">
+            <input id="date-from" type="date" value="">
+          </div>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">DATE TO</span>
+          <div class="filter-input-wrapper">
+            <input id="date-to" type="date" value="">
+          </div>
+        </div>
+        <div class="filter-group" style="align-self: flex-end;">
+          <button class="button primary" id="explorer-apply-btn" style="padding: 8px 20px; font-size: 12px;">
+            <span class="material-symbols-outlined" style="font-size: 14px;">search</span>
+            Apply
+          </button>
+        </div>
+      </div>
       <div style="display: grid; gap: 32px;">
         <section class="panel">
           <div class="panel-header" style="margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
@@ -962,13 +996,25 @@
       });
     }
     
+    // Explorer apply filter
+    const explorerBtn = document.getElementById("explorer-apply-btn");
+    if (explorerBtn) {
+      explorerBtn.addEventListener("click", () => {
+        state.explorerFilters = {
+          amountMin: document.getElementById("amount-min")?.value || "",
+          amountMax: document.getElementById("amount-max")?.value || "",
+          dateFrom: document.getElementById("date-from")?.value || "",
+          dateTo: document.getElementById("date-to")?.value || "",
+        };
+        render();
+      });
+    }
+
     // Actions triggers
     document.querySelectorAll("[data-action]").forEach(el => {
       el.addEventListener("click", (e) => {
         const action = el.dataset.action;
-        if (action === "generate-insights") {
-          showToast("AI Insights generation triggered...");
-        } else if (action === "run-job") {
+        if (action === "run-job") {
           showToast(`Manual triggers active for partner: ${el.dataset.partner}`);
         }
       });
@@ -1254,7 +1300,18 @@
 
   function badge(value) {
     const text = String(value);
-    return `<span class="badge ${text.toLowerCase().replace(/_/g, "-")}">${text}</span>`;
+    const cls = text.toLowerCase().replace(/_/g, "-");
+    return `<span class="badge ${cls}" style="${({
+      "matched": "",
+      "matched-failed": "background: var(--status-warning-bg); color: var(--status-warning); border-color: rgba(240,185,11,.3);",
+      "matched-reversed": "background: var(--status-processing-bg); color: var(--status-processing); border-color: rgba(59,130,246,.3);",
+      "amount-mismatch": "background: var(--status-unmatched-bg); color: var(--status-unmatched); border-color: rgba(246,70,93,.3);",
+      "status-mismatch": "background: var(--status-warning-bg); color: var(--status-warning); border-color: rgba(240,185,11,.3);",
+      "multiple-mismatch": "background: var(--status-unmatched-bg); color: var(--status-unmatched); border-color: rgba(246,70,93,.3);",
+      "missing-internal": "background: rgba(251,146,60,.12); color: #fb923c; border-color: rgba(251,146,60,.3);",
+      "missing-partner": "background: var(--status-unmatched-bg); color: var(--status-unmatched); border-color: rgba(246,70,93,.3);",
+      "unmapped-skipped": "background: rgba(255,255,255,.03); color: var(--text-muted); border-color: var(--border);",
+    })[cls] || ""}">${text}</span>`;
   }
 
   function bars(items) {

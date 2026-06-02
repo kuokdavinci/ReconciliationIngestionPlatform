@@ -16,6 +16,7 @@
 **Phase 12:** DATA-API-01, DATA-API-02
 **Phase 13:** BACKEND-AUDIT-01, UI-POLISH-01, DATA-FLOW-01
 **Phase 14:** AI-DOMAIN-01, AI-DOMAIN-02, AI-DOMAIN-03
+**Phase 15:** UI-DATA-01, UI-DATA-02, UI-DATA-03, UI-DATA-04, UI-DATA-05
 
 ---
 
@@ -240,3 +241,23 @@ Plans:
 - [ ] 14-01-PLAN.md — AI output guardrails + hallucination detection (Wave 1)
 - [ ] 14-02-PLAN.md — Code quality fixes from code review (Wave 1)
 - [ ] 14-03-PLAN.md — Eval infrastructure + reference dataset (Wave 1)
+
+---
+
+## Phase 15: UI/UX Polish & Data Explorer Enhancement
+
+**Goal:** Polish UI consistency and usability across all dashboard views. Fix styling issues (dropdown/date-picker contrast), reorder Dashboard & Insight layout, enhance Data Explorer with real DB-like filtering capabilities, add color-coded status badges, improve heading hierarchy, and remove non-functional UI elements.
+
+**Requirements:**
+- UI-DATA-01: Data Explorer status badges — color-code reconciliation status values in transaction and file tables
+- UI-DATA-02: Dropdown/date-picker styling — fix visual consistency and background contrast issues
+- UI-DATA-03: Dashboard & Insight layout restructure — move partner selection below total metrics section, remove non-functional "Regenerate AI Analysis" button
+- UI-DATA-04: Heading hierarchy improvement — increase heading sizes for Insight and Audit Log sections
+- UI-DATA-05: Data Explorer advanced filtering — add status, trace ID, amount range, and date range filters for real DB-like querying
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] 15-01-PLAN.md — Data Explorer status colors + heading hierarchy fixes (Wave 1)
+- [ ] 15-02-PLAN.md — Dashboard layout restructure + remove dead UI (Wave 2)
+- [ ] 15-03-PLAN.md — Data Explorer advanced filters + dropdown/date-picker styling (Wave 3)

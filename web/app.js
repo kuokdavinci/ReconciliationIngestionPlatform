@@ -173,6 +173,7 @@
     const mismatchRate = m.mismatch_rate || 0;
     const mismatchAmount = m.total_amount_mismatch ? formatAmount(m.total_amount_mismatch) : "-";
     const matchedPct = total ? Math.round((matched / total) * 100) : 0;
+    const obs = data.ai_observation;
     
     // Auto detect anomaly status warning
     let matchQualityStatus = `<span class="badge matched">HEALTHY</span>`;
@@ -252,6 +253,8 @@
           ${donut(Math.max(0, 100 - mismatchRate), "Total Match Quality")}
         </section>
       </div>
+
+      ${obs ? renderAiObservation(obs) : ''}
     `;
   }
 
@@ -260,6 +263,8 @@
       `<option value="${focus}" ${focus === state.focus ? "selected" : ""}>${focus}</option>`
     ).join("");
     const items = Array.isArray(discrepancies) ? discrepancies : [];
+    const obs = summary.ai_observation;
+    const llmStatus = summary.llm_status;
     
     // Render custom mapped severity logic
     const cards = items.length
@@ -272,17 +277,29 @@
         }).join("")
       : `<div class="empty-state" style="grid-column: span 3; text-align: center; padding: 40px 0;">No active anomalies found for focus: ${state.focus}.</div>`;
     
+    const statusBadge = llmStatus === "success"
+      ? `<span class="badge matched" style="font-size: 10px; padding: 2px 10px;">LLM</span>`
+      : `<span class="badge warning" style="font-size: 10px; padding: 2px 10px;">FALLBACK</span>`;
+    
     return `
       <div class="toolbar">
         <label>
           ANOMALY FILTER CATEGORY
           <select id="focus-filter">${options}</select>
         </label>
-        <button class="button primary" data-action="generate-insights">
-          <span class="material-symbols-outlined">auto_awesome</span>
-          Generate AI Insights
-        </button>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <span style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted);">
+            ${statusBadge}
+            ${obs ? `<span>${obs.total_tokens || 0} tokens</span>` : ''}
+            ${obs && obs.estimated_cost_usd ? `<span>$${obs.estimated_cost_usd.toFixed(6)}</span>` : ''}
+          </span>
+          <button class="button primary" data-action="generate-insights">
+            <span class="material-symbols-outlined">auto_awesome</span>
+            Generate AI Insights
+          </button>
+        </div>
       </div>
+      ${obs ? renderAiObservation(obs) : ''}
       <div class="grid cols-3">${cards}</div>
     `;
   }
@@ -539,6 +556,54 @@
       <section class="panel" id="config-preview-panel" style="display: none;">
         <h2>Loaded Schema Config Preview</h2>
         <div id="config-preview-content"></div>
+      </section>
+    `;
+  }
+
+  function renderAiObservation(obs) {
+    const cacheBadge = obs.cache_hit
+      ? `<span class="badge matched" style="font-size: 10px; padding: 2px 10px;">CACHE HIT</span>`
+      : `<span class="badge processing" style="font-size: 10px; padding: 2px 10px;">CACHE MISS</span>`;
+    
+    const resolutionLabel = {
+      "llm": "Primary LLM",
+      "llm_fallback": "Fallback LLM",
+      "schema_fallback": "Schema Fallback",
+      "rule_based": "Rule-based",
+    }[obs.resolution] || obs.resolution;
+
+    const resolutionBadge = obs.resolution === "llm"
+      ? `<span class="badge matched" style="font-size: 10px; padding: 2px 10px;">${resolutionLabel}</span>`
+      : `<span class="badge warning" style="font-size: 10px; padding: 2px 10px;">${resolutionLabel}</span>`;
+
+    return `
+      <section class="panel" style="margin-bottom: 24px; padding: 16px 24px;">
+        <div class="grid cols-6" style="gap: 8px; margin: 0;">
+          <div class="ai-metric">
+            <span>RESOLUTION</span>
+            <div style="margin-top: 6px;">${resolutionBadge}</div>
+          </div>
+          <div class="ai-metric">
+            <span>CACHE</span>
+            <div style="margin-top: 6px;">${cacheBadge}</div>
+          </div>
+          <div class="ai-metric">
+            <span>PROVIDER</span>
+            <strong style="font-size: 12px;">${obs.provider || '-'}</strong>
+          </div>
+          <div class="ai-metric">
+            <span>LATENCY</span>
+            <strong style="font-size: 12px;">${obs.latency_ms ? obs.latency_ms.toFixed(0) + 'ms' : '-'}</strong>
+          </div>
+          <div class="ai-metric">
+            <span>TOKENS</span>
+            <strong style="font-size: 12px;">${formatNumber(obs.total_tokens || 0)} <small style="color: var(--text-muted); font-size: 10px; font-weight: 400;">(p:${formatNumber(obs.prompt_tokens || 0)} / c:${formatNumber(obs.completion_tokens || 0)})</small></strong>
+          </div>
+          <div class="ai-metric">
+            <span>EST. COST</span>
+            <strong style="font-size: 12px;">${obs.estimated_cost_usd ? '$' + obs.estimated_cost_usd.toFixed(6) : '-'}</strong>
+          </div>
+        </div>
       </section>
     `;
   }

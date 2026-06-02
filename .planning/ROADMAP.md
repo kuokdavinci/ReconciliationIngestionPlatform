@@ -14,6 +14,7 @@
 **Phase 10:** REPORT-01, REPORT-02, REPORT-03, REPORT-04
 **Phase 11:** AI-ANALYSIS-01, AI-ANALYSIS-02, AI-ANALYSIS-03
 **Phase 12:** DATA-API-01, DATA-API-02
+**Phase 13:** BACKEND-AUDIT-01, UI-POLISH-01, DATA-FLOW-01
 
 ---
 
@@ -202,3 +203,16 @@ Plans:
 
 Plans:
 - [ ] 12-01-PLAN.md — Reconciliation API + Data Explorer API: endpoints, repository extensions, app registration, tests
+
+---
+
+## Phase 13: Backend Audit & UI Polish
+
+**Goal:** Audit backend correctness, refine UI to show core features (mapping usage list), and verify data flow ensures unmapped partner data is normalized before reconciliation.
+
+**Requirements:**
+- BACKEND-AUDIT-01: Backend correctness audit — verify all components (ingestion, normalization, reconciliation, AI analysis) produce correct results across edge cases
+- UI-POLISH-01: UI refinement — display mapping configuration usage list and other core feature data in the dashboard
+- DATA-FLOW-01: Data flow verification — ensure unmapped partner data is properly normalized/rejected before entering reconciliation pipeline
+
+**Plans:** 0 plans

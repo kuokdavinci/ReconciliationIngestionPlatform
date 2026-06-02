@@ -2,22 +2,22 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 14
-status: planning
-last_updated: "2026-06-02T04:36:30.189Z"
+current_phase: 15
+status: ready to plan
+last_updated: "2026-06-02T05:00:00.000Z"
 progress:
-  total_phases: 14
+  total_phases: 15
   completed_phases: 9
-  total_plans: 21
+  total_plans: 24
   completed_plans: 18
-  percent: 85
+  percent: 75
 ---
 
 # State
 
 ## Position
 
-- **Current Phase:** 13
+- **Current Phase:** 15
 - **Status:** Ready to plan
 - **Last Updated:** 2026-06-02
 
@@ -43,6 +43,19 @@ progress:
 - Max page size capped at 1000 records
 - No auth/authz for MVP (same as existing Phase 11 API)
 
+### Phase 15 (new)
+
+- Color-coded status badges using existing badge() helper + CSS classes
+- Pagination with in-memory limit/offset (MVP, adequate for expected data volumes)
+- Data Explorer: status, trace, amount range, date range filters
+- Backend amount range uses Decimal128 comparison in MongoDB
+- Dashboard layout: filters below metrics (Overview only)
+- "Regenerate AI Analysis" button removed (non-functional)
+- Section headings increased to 20px/800 weight
+- Dropdown/date-picker use dark-theme-compatible contrast styling
+- New CSS class `.section-heading` for consistent heading styling
+- All changes backward-compatible (new filter params are optional)
+
 ## Blockers
 
 - None
@@ -52,3 +65,6 @@ progress:
 - [ ] Phase 12: Create Reconciliation + Data Explorer API endpoints
 - [ ] Phase 12: Extend repositories with query + aggregation methods
 - [ ] Phase 12: Register routers + write tests
+- [ ] Phase 15: Plan 01 — Status colors + heading fixes
+- [ ] Phase 15: Plan 02 — Dashboard layout + remove dead UI
+- [ ] Phase 15: Plan 03 — Advanced filters + dropdown styling

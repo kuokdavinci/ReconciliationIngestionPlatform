@@ -316,6 +316,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.grid.cols-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 
 /* High-End Panels & Metrics */
 .panel, .metric {
@@ -430,6 +431,31 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 .insight-severity.high { background: var(--status-unmatched-bg); color: var(--status-unmatched); border: 1px solid rgba(239, 68, 68, 0.2); }
 .insight-severity.medium { background: var(--status-warning-bg); color: var(--status-warning); border: 1px solid rgba(251, 146, 60, 0.2); }
 .insight-severity.low { background: var(--status-matched-bg); color: var(--status-matched); border: 1px solid rgba(34, 197, 94, 0.2); }
+
+/* AI Observation Metadata Panel */
+.ai-metric {
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.02);
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.04);
+}
+
+.ai-metric span {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.ai-metric strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
 
 /* Standardized Tag & Alert Badges */
 .insight-severity.critical, .badge.critical, .badge.failed {

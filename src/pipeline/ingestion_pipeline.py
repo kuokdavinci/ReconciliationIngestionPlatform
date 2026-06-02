@@ -13,12 +13,13 @@ import string
 import time
 from typing import Any, Optional
 
+from src.config.config_health import check_and_refresh_config, record_config_run_health
 from src.config.loader import ConfigLoader
 from src.core.enums import ProcessingStatus
 from src.core.types import ProcessingStats
 from src.logging import StructuredLogger, get_structured_logger
 from src.models.data_container import DataContainer, DataContainerRepository, PartnerData
-from src.models.mapping_config import MappingConfig
+from src.models.mapping_config import MappingConfig, MappingConfigRepository
 from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
 from src.normalizer.normalizer import TransactionNormalizer
 from src.readers import create_reader
@@ -134,6 +135,7 @@ class IngestionPipeline:
         file_type: Any,  # FileType enum
         reconciliation_date: Any,  # datetime
         config_version: Optional[str] = None,
+        enable_config_health_check: bool = False,
     ) -> IngestionResult:
         """Process an entire reconciliation file end-to-end.
 
@@ -141,14 +143,15 @@ class IngestionPipeline:
         1. Compute SHA256 hash of file_path
         2. Check file duplicate — if found, return early with error
         3. Create ReconciliationFile record with PROCESSING status
-        4. Load MappingConfig via config_loader
-        5. Create stream reader via create_reader
-        6. Create TransactionNormalizer with config.field_mappings
-        7. Create Validator with data_container_repo and reconciliation_file_repo
-        8. For each row: normalize → validate → batch buffer → flush
-        9. Flush remaining batch
-        10. Update ReconciliationFile stats and status to COMPLETED
-        11. Return IngestionResult
+        4. (Optional) Config health check — detect stale config + auto-generate
+        5. Load MappingConfig via config_loader
+        6. Create stream reader via create_reader
+        7. Create TransactionNormalizer with config.field_mappings
+        8. Create Validator with data_container_repo and reconciliation_file_repo
+        9. For each row: normalize → validate → batch buffer → flush
+        10. Flush remaining batch
+        11. Update ReconciliationFile stats and status to COMPLETED
+        12. Return IngestionResult
 
         On any exception: update status to FAILED, return partial stats.
 
@@ -159,6 +162,8 @@ class IngestionPipeline:
             file_type: FileType enum value.
             reconciliation_date: Date of the reconciliation file.
             config_version: Optional config version for load_by_version.
+            enable_config_health_check: If True, check config freshness before
+                processing and auto-generate new config if file structure changed.
 
         Returns:
             IngestionResult with file_record, stats, and errors.
@@ -214,15 +219,41 @@ class IngestionPipeline:
             # Emit FILE_STARTED event
             self._logger.emit_file_started(str(file_record.id), file_name, partner)
 
-            # Step 4: Load MappingConfig
-            if config_version is not None:
-                config = await self._config_loader.load_by_version(
-                    partner, config_version
-                )
-            else:
-                config = await self._config_loader.load_by_partner_type(
-                    partner, workflow_type, file_type
-                )
+            # Step 4: Load or auto-detect MappingConfig
+            config: Optional[MappingConfig] = None
+
+            # 4a: Optional config health check — detect stale + auto-generate
+            if enable_config_health_check:
+                config_repo = MappingConfigRepository(self._db)
+                try:
+                    config = await check_and_refresh_config(
+                        file_path=file_path,
+                        partner=partner,
+                        workflow_type=workflow_type,
+                        file_type=file_type,
+                        config_loader=self._config_loader,
+                        config_repo=config_repo,
+                        config_version=config_version,
+                    )
+                    self._logger.get_logger().info(
+                        f"config_health_check_passed for {partner}"
+                    )
+                except Exception as hc_exc:
+                    self._logger.get_logger().warning(
+                        f"Config health check failed for {partner}: {hc_exc} "
+                        "- falling back to normal config loading"
+                    )
+
+            # 4b: Normal config loading if health check didn't produce one
+            if config is None:
+                if config_version is not None:
+                    config = await self._config_loader.load_by_version(
+                        partner, config_version
+                    )
+                else:
+                    config = await self._config_loader.load_by_partner_type(
+                        partner, workflow_type, file_type
+                    )
 
             # Step 5-7: Create reader, normalizer, validator
             with create_reader(file_path, config) as reader:
@@ -355,6 +386,18 @@ class IngestionPipeline:
                 file_record.total_rows = total_rows
                 file_record.success_rows = success_rows
                 file_record.failed_rows = failed_rows
+
+            if enable_config_health_check:
+                config_repo = MappingConfigRepository(self._db)
+                await record_config_run_health(
+                    config_repo=config_repo,
+                    partner=partner,
+                    workflow_type=workflow_type,
+                    file_type=file_type,
+                    config_version=config_version,
+                    total_rows=total_rows,
+                    failed_rows=failed_rows,
+                )
 
             # Emit FILE_COMPLETED event
             duration_ms = (time.monotonic() - start_time) * 1000

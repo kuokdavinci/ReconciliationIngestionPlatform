@@ -105,10 +105,11 @@ def write_csv(filepath: str, records: list[dict]):
 
 
 def write_json(filepath: str, records: list[dict]):
-    rows = [[rec["id"], rec["trace"], rec["amount"], rec["status"], rec["transDate"]] for rec in records]
+    rows = [HEADERS]
+    rows.extend([rec["id"], rec["trace"], rec["amount"], rec["status"], rec["transDate"]] for rec in records)
     with open(filepath, "w") as f:
         json.dump(rows, f, indent=2)
-    print(f"  Wrote: {filepath}  ({len(rows)} rows)")
+    print(f"  Wrote: {filepath}  ({len(records)} data rows + header)")
 
 
 def write_tsv(filepath: str, records: list[dict]):

@@ -13,6 +13,7 @@ class JSONStreamReader:
         self,
         file_path: str | Path,
         *,
+        start_row: int = 1,
         skip_empty_rows: bool = True,
         encoding: str = "utf-8",
     ) -> None:
@@ -26,6 +27,7 @@ class JSONStreamReader:
             )
 
         self._file_path: Path = path
+        self._start_row = start_row
         self._skip_empty_rows = skip_empty_rows
         self._encoding = encoding
         self._rows: list[Any] | None = None
@@ -36,6 +38,7 @@ class JSONStreamReader:
     ) -> JSONStreamReader:
         return cls(
             file_path=file_path,
+            start_row=config.start_row,
             skip_empty_rows=True,
         )
 
@@ -71,7 +74,10 @@ class JSONStreamReader:
         if self._rows is None:
             raise RuntimeError("Reader must be used as context manager")
 
-        for row in self._rows:
+        for row_number, row in enumerate(self._rows, start=1):
+            if row_number < self._start_row:
+                continue
+
             if self._skip_empty_rows and self._is_empty_row(row):
                 continue
 

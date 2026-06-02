@@ -32,6 +32,7 @@ from src.analysis.schemas import (
     GroupResult,
     SummaryResult,
 )
+from src.analysis.guardrails import validate_insights
 from src.analysis.services import (
     build_analysis_input,
     format_findings,
@@ -101,6 +102,7 @@ def _build_observation(
     cache_key: str = "",
     schema_valid: bool = True,
     resolution: str = "llm",
+    guardrail_result: dict | None = None,
 ) -> AIObservation:
     """Build an AIObservation from generation context.
 
@@ -114,6 +116,7 @@ def _build_observation(
         cache_key: Cache key used.
         schema_valid: Whether schema validation passed.
         resolution: Resolution path.
+        guardrail_result: Guardrail validation result dict (optional).
 
     Returns:
         AIObservation with populated fields.
@@ -145,6 +148,7 @@ def _build_observation(
         cache_key=cache_key,
         schema_valid=schema_valid,
         resolution=resolution,
+        guardrail_result=guardrail_result,
     )
 
 
@@ -242,13 +246,14 @@ async def get_summary(
 
     if cache_hit:
         parsed_results, schema_valid = cached_results
+        guardrail_result = None
         logger.info(
             f"Cache hit for {cache_key}",
             extra={"event": "ai_insight_cache_hit", "cache_key": cache_key},
         )
     else:
         # Step 6: LLM enrichment for key_findings (with fallback chain)
-        parsed_results, schema_valid = await _generate_insights_with_fallback(
+        parsed_results, schema_valid, guardrail_result = await _generate_insights_with_fallback(
             analysis_input, llm_provider, start_time
         )
 
@@ -285,6 +290,7 @@ async def get_summary(
         cache_key=cache_key,
         schema_valid=schema_valid,
         resolution=resolution,
+        guardrail_result=guardrail_result,
     )
     _log_observation(observation)
 
@@ -311,6 +317,7 @@ async def get_summary(
         },
         "grouped_stats": grouped_stats,
         "key_findings": key_findings,
+        "guardrail_result": guardrail_result,
         "generated_at": date,
         "llm_status": _llm_status(resolution),
         "ai_observation": observation.model_dump(),
@@ -398,12 +405,13 @@ async def get_discrepancies(
 
     if cache_hit:
         insights, schema_valid = cached_results
+        guardrail_result = None
         logger.info(
             f"Cache hit for {cache_key}",
             extra={"event": "ai_insight_cache_hit", "cache_key": cache_key},
         )
     else:
-        insights, schema_valid = await _generate_insights_with_fallback(
+        insights, schema_valid, guardrail_result = await _generate_insights_with_fallback(
             analysis_input, llm_provider, start_time
         )
 
@@ -426,6 +434,7 @@ async def get_discrepancies(
         cache_key=cache_key,
         schema_valid=schema_valid,
         resolution=resolution,
+        guardrail_result=guardrail_result,
     )
     _log_observation(observation)
 
@@ -465,22 +474,93 @@ async def generate_insights(
     Returns:
         List of AnalysisResult objects (LLM-enriched or rule-based fallback).
     """
-    results, _ = await _generate_insights_with_fallback(analysis_input, llm_provider, time.monotonic())
+    results, _, _ = await _generate_insights_with_fallback(analysis_input, llm_provider, time.monotonic())
     return results
+
+
+def _sanitize_mismatch_rate(
+    results: list[AnalysisResult],
+    actual_rate: float,
+) -> list[AnalysisResult]:
+    """Ensure any mismatch rate mentioned in LLM output matches the actual computed value.
+
+    The LLM sometimes recomputes its own mismatch rate percentage from grouped counts
+    rather than using the authoritative mismatch_rate from MetricsService. This sanitizer
+    detects such discrepancies and corrects them.
+
+    Args:
+        results: List of AnalysisResult from the LLM.
+        actual_rate: The authoritative mismatch_rate from MetricsService.
+
+    Returns:
+        List of AnalysisResult with corrected mismatch rate percentages.
+    """
+    import re
+
+    sanitized = []
+    for r in results:
+        title = r.title
+        desc = r.description
+
+        def _fix_mismatch_percentage(text: str) -> str:
+            if not text:
+                return text
+            # Match patterns like "mismatch rate at 35%", "mismatch rate of 35%",
+            # "35% mismatch rate", "35.0% mismatch rate", "rate is 35%"
+            text = re.sub(
+                r"(\d+[\.\d]*)\s*%\s*mismatch\s+rate",
+                f"{actual_rate}% mismatch rate",
+                text,
+                flags=re.IGNORECASE,
+            )
+            text = re.sub(
+                r"mismatch\s+rate\s+(?:is|at|of)\s+(\d+[\.\d]*)\s*%",
+                f"mismatch rate is {actual_rate}%",
+                text,
+                flags=re.IGNORECASE,
+            )
+            return text
+
+        new_title = _fix_mismatch_percentage(title)
+        new_desc = _fix_mismatch_percentage(desc)
+
+        if new_title != title or new_desc != desc:
+            logger.info(
+                f"Sanitized mismatch rate in insight: '{title}' -> '{new_title}'",
+                extra={
+                    "event": "ai_insight_mismatch_rate_sanitized",
+                    "actual_rate": actual_rate,
+                    "original_title": title,
+                },
+            )
+
+        sanitized.append(
+            AnalysisResult(
+                type=r.type,
+                severity=r.severity,
+                title=new_title,
+                description=new_desc,
+                affected_count=r.affected_count,
+                recommendation=r.recommendation,
+            )
+        )
+
+    return sanitized
 
 
 async def _generate_insights_with_fallback(
     analysis_input: AnalysisInput,
     llm_provider: LLMProvider,
     start_time: float,
-) -> tuple[list[AnalysisResult], bool]:
+) -> tuple[list[AnalysisResult], bool, dict | None]:
     """Generate insights with structured output, fallback chain, and schema validation.
 
     Flow:
     1. Build prompts
     2. Call LLM via provider (AIProviderRouter handles fallback chain)
     3. Parse with structured AIInsight schema validation
-    4. Fallback: if schema fails, return rule-based results
+    4. Run guardrail validation
+    5. Fallback: if schema fails, return rule-based results
 
     Args:
         analysis_input: Structured input with metrics, groups, anomalies.
@@ -488,7 +568,7 @@ async def _generate_insights_with_fallback(
         start_time: Monotonic start time for latency tracking.
 
     Returns:
-        Tuple of (list of AnalysisResult, schema_valid boolean).
+        Tuple of (list of AnalysisResult, schema_valid boolean, guardrail_result dict or None).
     """
     try:
         system_prompt = build_system_prompt()
@@ -513,24 +593,53 @@ async def _generate_insights_with_fallback(
 
         if not llm_response:
             logger.warning("LLM returned no response, falling back to rule-based")
-            return _rule_based_fallback(analysis_input), False
+            return _rule_based_fallback(analysis_input), False, None
 
         # Parse with structured schema validation
         parsed_results, schema_valid = parse_structured_insight(llm_response)
 
-        if parsed_results:
-            return parsed_results, schema_valid
+        if not parsed_results:
+            logger.warning("LLM returned no parseable findings, falling back to rule-based")
+            return _rule_based_fallback(analysis_input), False, None
 
-        # LLM returned no parseable findings — fallback to rule-based
-        logger.warning("LLM returned no parseable findings, falling back to rule-based")
-        return _rule_based_fallback(analysis_input), False
+        # Run guardrail validation: cross-reference LLM claims against input data
+        guardrail = validate_insights(analysis_input, parsed_results)
+        guardrail_dict: dict | None = guardrail.to_dict() if guardrail.findings else None
+
+        if not guardrail.is_valid:
+            logger.warning(
+                f"Guardrail rejected {len(guardrail.unsupported_claims)} unsupported claims, "
+                f"falling back to rule-based. Risk: {guardrail.risk_level}",
+                extra={
+                    "event": "ai_insight_guardrail_reject",
+                    "unsupported_count": len(guardrail.unsupported_claims),
+                    "risk_level": guardrail.risk_level,
+                },
+            )
+            return _rule_based_fallback(analysis_input), schema_valid, guardrail_dict
+
+        if guardrail.warnings:
+            logger.info(
+                f"Guardrail warnings: {len(guardrail.warnings)}",
+                extra={
+                    "event": "ai_insight_guardrail_warning",
+                    "warning_count": len(guardrail.warnings),
+                    "risk_level": guardrail.risk_level,
+                },
+            )
+
+        # Sanitize: ensure mismatch rate percentages match the computed value
+        actual_rate = analysis_input.summary_metrics.get("mismatch_rate", 0)
+        parsed_results = _sanitize_mismatch_rate(parsed_results, actual_rate)
+
+        return parsed_results, schema_valid, guardrail_dict
 
     except Exception as exc:
         logger.warning(
             f"LLM call failed, falling back to rule-based: {exc}",
             extra={"event": "ai_insight_llm_error", "error": str(exc)},
         )
-        return _rule_based_fallback(analysis_input), False
+        return _rule_based_fallback(analysis_input), False, None
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Schedule Management - FinTrust OS</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "secondary": "#0051d5",
+                        "on-secondary-fixed": "#00174b",
+                        "tertiary-fixed-dim": "#4edea3",
+                        "surface-variant": "#e0e3e5",
+                        "surface-container": "#eceef0",
+                        "secondary-container": "#316bf3",
+                        "surface-dim": "#d8dadc",
+                        "on-primary-container": "#7c839b",
+                        "tertiary-container": "#002113",
+                        "on-tertiary-fixed-variant": "#005236",
+                        "error-container": "#ffdad6",
+                        "tertiary": "#000000",
+                        "tertiary-fixed": "#6ffbbe",
+                        "primary": "#000000",
+                        "on-tertiary-fixed": "#002113",
+                        "outline": "#76777d",
+                        "secondary-fixed": "#dbe1ff",
+                        "secondary-fixed-dim": "#b4c5ff",
+                        "on-background": "#191c1e",
+                        "surface": "#f7f9fb",
+                        "on-secondary": "#ffffff",
+                        "on-primary": "#ffffff",
+                        "background": "#f7f9fb",
+                        "on-error": "#ffffff",
+                        "surface-container-high": "#e6e8ea",
+                        "surface-container-highest": "#e0e3e5",
+                        "on-tertiary": "#ffffff",
+                        "outline-variant": "#c6c6cd",
+                        "on-surface-variant": "#45464d",
+                        "primary-fixed": "#dae2fd",
+                        "on-secondary-container": "#fefcff",
+                        "error": "#ba1a1a",
+                        "inverse-primary": "#bec6e0",
+                        "primary-container": "#131b2e",
+                        "primary-fixed-dim": "#bec6e0",
+                        "on-primary-fixed": "#131b2e",
+                        "on-tertiary-container": "#009668",
+                        "on-error-container": "#93000a",
+                        "surface-container-lowest": "#ffffff",
+                        "on-surface": "#191c1e",
+                        "surface-tint": "#565e74",
+                        "on-primary-fixed-variant": "#3f465c",
+                        "inverse-on-surface": "#eff1f3",
+                        "on-secondary-fixed-variant": "#003ea8",
+                        "surface-bright": "#f7f9fb",
+                        "inverse-surface": "#2d3133",
+                        "surface-container-low": "#f2f4f6"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    spacing: {
+                        "base": "8px",
+                        "container-max": "1440px",
+                        "lg": "24px",
+                        "sm": "8px",
+                        "xl": "32px",
+                        "gutter": "24px",
+                        "md": "16px",
+                        "xs": "4px"
+                    },
+                    fontFamily: {
+                        "headline-sm": ["Inter"],
+                        "data-mono": ["Inter"],
+                        "label-md": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "body-lg": ["Inter"],
+                        "body-md": ["Inter"],
+                        "body-sm": ["Inter"]
+                    },
+                    fontSize: {
+                        "headline-sm": ["20px", { lineHeight: "28px", fontWeight: "600" }],
+                        "data-mono": ["14px", { lineHeight: "20px", fontWeight: "500" }],
+                        "label-md": ["12px", { lineHeight: "16px", letterSpacing: "0.05em", fontWeight: "600" }],
+                        "headline-md": ["24px", { lineHeight: "32px", letterSpacing: "-0.01em", fontWeight: "600" }],
+                        "headline-lg": ["32px", { lineHeight: "40px", letterSpacing: "-0.02em", fontWeight: "700" }],
+                        "body-lg": ["16px", { lineHeight: "24px", fontWeight: "400" }],
+                        "body-md": ["14px", { lineHeight: "20px", fontWeight: "400" }],
+                        "body-sm": ["12px", { lineHeight: "16px", fontWeight: "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { background-color: #f7f9fb; }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md text-body-md antialiased overflow-x-hidden">
+<!-- SideNavBar -->
+<nav class="h-screen w-64 fixed left-0 top-0 bg-surface-container-low flex flex-col border-r border-outline-variant z-40">
+<!-- Brand Header -->
+<div class="p-lg flex items-center gap-md">
+<div class="w-10 h-10 rounded bg-primary flex items-center justify-center flex-shrink-0">
+<span class="material-symbols-outlined text-on-primary" style="font-variation-settings: 'FILL' 1;">account_balance</span>
+</div>
+<div>
+<h1 class="text-headline-md font-headline-md font-bold text-primary">FinTrust OS</h1>
+<p class="text-label-md font-label-md text-on-surface-variant">Institutional Grade</p>
+</div>
+</div>
+<!-- CTA -->
+<div class="px-md mb-lg">
+<button class="w-full bg-secondary text-on-secondary rounded flex items-center justify-center gap-sm py-2 px-4 scale-95 active:scale-90 transition-transform">
+<span class="material-symbols-outlined text-[18px]">add</span>
+<span class="text-label-md font-label-md">New Request</span>
+</button>
+</div>
+<!-- Navigation Tabs -->
+<div class="flex-1 flex flex-col gap-xs px-sm overflow-y-auto">
+<!-- Dashboard -->
+<a class="flex items-center gap-md px-md py-2.5 rounded text-on-surface-variant hover:text-secondary hover:bg-surface-container-high transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="text-label-md font-label-md">Dashboard</span>
+</a>
+<!-- Schedules (ACTIVE) -->
+<a class="flex items-center gap-md px-md py-2.5 rounded text-secondary font-bold border-r-4 border-secondary bg-secondary-container/10" href="#">
+<span class="material-symbols-outlined">calendar_today</span>
+<span class="text-label-md font-label-md">Schedules</span>
+</a>
+<!-- Results -->
+<a class="flex items-center gap-md px-md py-2.5 rounded text-on-surface-variant hover:text-secondary hover:bg-surface-container-high transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">fact_check</span>
+<span class="text-label-md font-label-md">Results</span>
+</a>
+<!-- Mapping -->
+<a class="flex items-center gap-md px-md py-2.5 rounded text-on-surface-variant hover:text-secondary hover:bg-surface-container-high transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">account_tree</span>
+<span class="text-label-md font-label-md">Mapping</span>
+</a>
+<!-- Settings -->
+<a class="flex items-center gap-md px-md py-2.5 rounded text-on-surface-variant hover:text-secondary hover:bg-surface-container-high transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="text-label-md font-label-md">Settings</span>
+</a>
+</div>
+<!-- Footer Tabs -->
+<div class="mt-auto border-t border-outline-variant p-sm flex flex-col gap-xs">
+<a class="flex items-center gap-md px-md py-2.5 rounded text-on-surface-variant hover:text-secondary hover:bg-surface-container-high transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">help</span>
+<span class="text-label-md font-label-md">Support</span>
+</a>
+<a class="flex items-center gap-md px-md py-2.5 rounded text-on-surface-variant hover:text-secondary hover:bg-surface-container-high transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">dark_mode</span>
+<span class="text-label-md font-label-md">Dark Mode</span>
+</a>
+</div>
+</nav>
+<!-- Main Content Wrapper -->
+<div class="ml-64 flex flex-col min-h-screen">
+<!-- TopNavBar -->
+<header class="bg-surface border-b border-outline-variant flex justify-between items-center w-full h-16 px-gutter sticky top-0 z-50">
+<div class="flex items-center gap-lg">
+<div class="text-headline-sm font-headline-sm font-bold text-primary">Reconciliation Engine</div>
+<!-- Search on Left -->
+<div class="relative hidden lg:block w-64">
+<span class="material-symbols-outlined absolute left-2.5 top-2 text-on-surface-variant text-[20px]">search</span>
+<input class="w-full bg-surface-container-low border border-outline-variant rounded pl-10 pr-4 py-1.5 text-body-md font-body-md focus:outline-none focus:border-secondary focus:ring-1 focus:ring-secondary transition-all" placeholder="Search components..." type="text"/>
+</div>
+</div>
+<!-- Trailing Icons -->
+<div class="flex items-center gap-sm">
+<button class="text-on-surface-variant hover:bg-surface-container-high rounded-full p-2 transition-all duration-150 ease-in-out flex items-center justify-center">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="text-on-surface-variant hover:bg-surface-container-high rounded-full p-2 transition-all duration-150 ease-in-out flex items-center justify-center">
+<span class="material-symbols-outlined">history</span>
+</button>
+<button class="text-on-surface-variant hover:bg-surface-container-high rounded-full p-2 transition-all duration-150 ease-in-out flex items-center justify-center">
+<span class="material-symbols-outlined">account_circle</span>
+</button>
+</div>
+</header>
+<!-- Page Canvas -->
+<main class="flex-1 p-xl">
+<!-- Page Header -->
+<div class="flex flex-col md:flex-row md:items-center justify-between mb-xl gap-md">
+<div>
+<h2 class="text-headline-lg font-headline-lg text-primary mb-xs">Partner Schedules</h2>
+<p class="text-body-lg font-body-lg text-on-surface-variant">Manage automated data ingestion and export routines.</p>
+</div>
+<button class="bg-secondary hover:bg-secondary-fixed-variant text-on-secondary text-label-md font-label-md rounded px-lg py-2.5 flex items-center gap-sm transition-colors shadow-sm">
+<span class="material-symbols-outlined text-[18px]">add_circle</span>
+                    Add New Schedule
+                </button>
+</div>
+<!-- KPI Cards / Bento Top Row -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-lg mb-xl">
+<!-- KPI 1 -->
+<div class="bg-surface border border-[#E2E8F0] rounded-xl p-lg flex flex-col gap-sm relative overflow-hidden group hover:shadow-[0px_4px_12px_rgba(15,23,42,0.05)] transition-shadow">
+<div class="flex justify-between items-start">
+<span class="text-label-md font-label-md text-on-surface-variant uppercase tracking-wider">Total Active</span>
+<div class="w-8 h-8 rounded-full bg-tertiary-fixed-dim/20 flex items-center justify-center text-on-tertiary-fixed-variant">
+<span class="material-symbols-outlined text-[18px]">sync</span>
+</div>
+</div>
+<div class="text-headline-lg font-headline-lg text-primary mt-sm">24</div>
+<div class="text-body-sm font-body-sm text-on-surface-variant flex items-center gap-xs mt-auto pt-2 border-t border-[#F1F5F9]">
+<span class="material-symbols-outlined text-[14px] text-tertiary-fixed-dim">trending_up</span>
+<span>+2 this week</span>
+</div>
+</div>
+<!-- KPI 2 -->
+<div class="bg-surface border border-[#E2E8F0] rounded-xl p-lg flex flex-col gap-sm relative overflow-hidden group hover:shadow-[0px_4px_12px_rgba(15,23,42,0.05)] transition-shadow">
+<div class="flex justify-between items-start">
+<span class="text-label-md font-label-md text-on-surface-variant uppercase tracking-wider">Next Run (Within 1h)</span>
+<div class="w-8 h-8 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px]">schedule</span>
+</div>
+</div>
+<div class="text-headline-lg font-headline-lg text-primary mt-sm">8</div>
+<div class="text-body-sm font-body-sm text-on-surface-variant mt-auto pt-2 border-t border-[#F1F5F9]">
+                        Across 3 partners
+                    </div>
+</div>
+<!-- KPI 3 -->
+<div class="bg-surface border border-[#E2E8F0] rounded-xl p-lg flex flex-col gap-sm relative overflow-hidden group hover:shadow-[0px_4px_12px_rgba(15,23,42,0.05)] transition-shadow">
+<div class="flex justify-between items-start">
+<span class="text-label-md font-label-md text-on-surface-variant uppercase tracking-wider">Failed Runs (24h)</span>
+<div class="w-8 h-8 rounded-full bg-error-container flex items-center justify-center text-on-error-container">
+<span class="material-symbols-outlined text-[18px]">error</span>
+</div>
+</div>
+<div class="text-headline-lg font-headline-lg text-error mt-sm">1</div>
+<div class="text-body-sm font-body-sm text-on-surface-variant flex items-center gap-xs mt-auto pt-2 border-t border-[#F1F5F9]">
+<span class="text-error font-medium">Requires attention</span>
+</div>
+</div>
+</div>
+<!-- Data Table Card Container -->
+<div class="bg-surface border border-[#E2E8F0] rounded-xl overflow-hidden shadow-[0px_2px_8px_rgba(15,23,42,0.02)]">
+<!-- Table Controls / Filters -->
+<div class="p-lg border-b border-[#F1F5F9] flex flex-col sm:flex-row justify-between items-center gap-md bg-surface-bright">
+<div class="relative w-full sm:w-72">
+<span class="material-symbols-outlined absolute left-3 top-2.5 text-on-surface-variant text-[18px]">search</span>
+<input class="w-full bg-surface border border-outline-variant rounded-lg pl-10 pr-4 py-2 text-body-md font-body-md focus:outline-none focus:border-secondary focus:ring-1 focus:ring-secondary transition-all" placeholder="Filter by partner or source..." type="text"/>
+</div>
+<div class="flex items-center gap-sm w-full sm:w-auto">
+<span class="text-label-md font-label-md text-on-surface-variant">Status:</span>
+<select class="bg-surface border border-outline-variant rounded-lg px-3 py-2 text-body-md font-body-md focus:outline-none focus:border-secondary">
+<option>All Statuses</option>
+<option>Active</option>
+<option>Paused</option>
+<option>Failed</option>
+</select>
+<button class="ml-2 text-on-surface-variant hover:text-primary transition-colors flex items-center">
+<span class="material-symbols-outlined">filter_list</span>
+</button>
+</div>
+</div>
+<!-- Table -->
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container-lowest border-b border-[#F1F5F9]">
+<th class="p-md text-label-md font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap">Partner Details</th>
+<th class="p-md text-label-md font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap">Source</th>
+<th class="p-md text-label-md font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap">Frequency</th>
+<th class="p-md text-label-md font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap">Last Run</th>
+<th class="p-md text-label-md font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap">Next Run</th>
+<th class="p-md text-label-md font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap">Status</th>
+<th class="p-md text-label-md font-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="text-body-md font-body-md">
+<!-- Row 1 -->
+<tr class="border-b border-[#F1F5F9] hover:bg-surface-container-low transition-colors group">
+<td class="p-md">
+<div class="flex items-center gap-sm">
+<div class="w-8 h-8 rounded bg-primary-fixed-dim/20 flex items-center justify-center text-on-primary-fixed font-bold text-xs">BA</div>
+<div>
+<div class="text-primary font-medium">Bank A</div>
+<div class="text-body-sm font-body-sm text-on-surface-variant">Recon_Daily_Txns</div>
+</div>
+</div>
+</td>
+<td class="p-md">
+<div class="flex items-center gap-xs text-on-surface-variant">
+<span class="material-symbols-outlined text-[16px]">api</span>
+                                        API
+                                    </div>
+</td>
+<td class="p-md text-on-surface">Daily <span class="text-on-surface-variant text-body-sm">at 02:00 UTC</span></td>
+<td class="p-md text-data-mono font-data-mono text-on-surface-variant">Oct 26, 02:00</td>
+<td class="p-md text-data-mono font-data-mono text-primary">Oct 27, 02:00</td>
+<td class="p-md">
+<span class="inline-flex items-center px-2 py-0.5 rounded text-label-md font-label-md bg-tertiary-fixed-dim/20 text-on-tertiary-fixed-variant">Active</span>
+</td>
+<td class="p-md text-right">
+<button class="text-on-surface-variant hover:text-secondary opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="border-b border-[#F1F5F9] hover:bg-surface-container-low transition-colors group">
+<td class="p-md">
+<div class="flex items-center gap-sm">
+<div class="w-8 h-8 rounded bg-secondary-fixed-dim/20 flex items-center justify-center text-on-secondary-fixed font-bold text-xs">PG</div>
+<div>
+<div class="text-primary font-medium">Payment Gateway B</div>
+<div class="text-body-sm font-body-sm text-on-surface-variant">Settlement_Hourly</div>
+</div>
+</div>
+</td>
+<td class="p-md">
+<div class="flex items-center gap-xs text-on-surface-variant">
+<span class="material-symbols-outlined text-[16px]">folder_open</span>
+                                        SFTP
+                                    </div>
+</td>
+<td class="p-md text-on-surface">Hourly <span class="text-on-surface-variant text-body-sm">(:00)</span></td>
+<td class="p-md text-data-mono font-data-mono text-on-surface-variant">Oct 26, 14:00</td>
+<td class="p-md text-data-mono font-data-mono text-primary">Oct 26, 15:00</td>
+<td class="p-md">
+<span class="inline-flex items-center px-2 py-0.5 rounded text-label-md font-label-md bg-tertiary-fixed-dim/20 text-on-tertiary-fixed-variant">Active</span>
+</td>
+<td class="p-md text-right">
+<button class="text-on-surface-variant hover:text-secondary opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 3 - Failed -->
+<tr class="border-b border-[#F1F5F9] hover:bg-surface-container-low transition-colors group bg-error-container/5">
+<td class="p-md">
+<div class="flex items-center gap-sm">
+<div class="w-8 h-8 rounded bg-outline-variant/30 flex items-center justify-center text-on-surface font-bold text-xs">LC</div>
+<div>
+<div class="text-primary font-medium">Legacy Sys C</div>
+<div class="text-body-sm font-body-sm text-on-surface-variant">EOD_Balances</div>
+</div>
+</div>
+</td>
+<td class="p-md">
+<div class="flex items-center gap-xs text-on-surface-variant">
+<span class="material-symbols-outlined text-[16px]">folder_open</span>
+                                        SFTP
+                                    </div>
+</td>
+<td class="p-md text-on-surface">Weekly <span class="text-on-surface-variant text-body-sm">(Fri 00:00)</span></td>
+<td class="p-md text-data-mono font-data-mono text-error">Oct 20, 00:00 <span class="material-symbols-outlined text-[14px] align-middle ml-1">error</span></td>
+<td class="p-md text-data-mono font-data-mono text-primary">Oct 27, 00:00</td>
+<td class="p-md">
+<span class="inline-flex items-center px-2 py-0.5 rounded text-label-md font-label-md bg-error-container text-on-error-container">Failed</span>
+</td>
+<td class="p-md text-right">
+<button class="text-on-surface-variant hover:text-secondary opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 4 - Paused -->
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="p-md">
+<div class="flex items-center gap-sm">
+<div class="w-8 h-8 rounded bg-surface-container-high flex items-center justify-center text-on-surface-variant font-bold text-xs">CD</div>
+<div>
+<div class="text-on-surface-variant font-medium">Custodian D</div>
+<div class="text-body-sm font-body-sm text-outline">Intraday_Positions</div>
+</div>
+</div>
+</td>
+<td class="p-md">
+<div class="flex items-center gap-xs text-outline">
+<span class="material-symbols-outlined text-[16px]">api</span>
+                                        API
+                                    </div>
+</td>
+<td class="p-md text-outline">Real-time</td>
+<td class="p-md text-data-mono font-data-mono text-outline">-</td>
+<td class="p-md text-data-mono font-data-mono text-outline">-</td>
+<td class="p-md">
+<span class="inline-flex items-center px-2 py-0.5 rounded text-label-md font-label-md bg-surface-variant text-on-surface-variant">Paused</span>
+</td>
+<td class="p-md text-right">
+<button class="text-on-surface-variant hover:text-secondary opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</main>
+</div>
+</body></html>

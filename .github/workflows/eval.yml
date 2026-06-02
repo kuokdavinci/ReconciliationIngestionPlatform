@@ -1,0 +1,47 @@
+name: Eval — AI Analysis Quality
+
+on:
+  push:
+    branches: [main, "feature/*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run guardrail validation tests
+        run: uv run pytest tests/test_analysis_guardrails.py -v --tb=short
+        env:
+          AI_API_KEY: "sk-test-fake-key"
+
+      - name: Run provider fallback tests
+        run: uv run pytest tests/test_analysis_providers.py -v --tb=short
+        env:
+          AI_API_KEY: "sk-test-fake-key"
+
+      - name: Run analysis scenario tests (no real LLM)
+        run: uv run pytest tests/test_analysis_scenarios.py -v --tb=short
+        env:
+          AI_API_KEY: "sk-test-fake-key"
+
+      - name: Run code quality tests
+        run: uv run pytest tests/test_analysis_insights.py tests/test_analysis_services.py tests/test_analysis_schemas.py tests/test_analysis_metrics.py tests/test_analysis_grouping.py tests/test_analysis_alerter.py tests/test_analysis_reporter.py -v --tb=short
+        env:
+          AI_API_KEY: "sk-test-fake-key"

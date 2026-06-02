@@ -277,3 +277,246 @@ async def test_reconciliation_duplicate_internal_handling(mock_db):
     # Should use the new record which matches partner record exactly
     assert results[0].reconciliation_status == ReconciliationStatus.MATCHED
     assert results[0].internal_record_id == "int_new"
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_skipped_empty_status(mock_db):
+    """A partner record with empty status is skipped by the pre-check guard."""
+    engine = ReconciliationEngine(mock_db)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    partner_record = DataContainer(
+        identify=partner,
+        workflowType="UPC",
+        reconciliationDate=recon_date,
+        sourceFileId="00000000-0000-0000-0000-000000000001",
+        partnerData=PartnerData(
+            _id="txn_01",
+            trace="trace_01",
+            status="",  # empty status — should be skipped after guard
+            amount=Decimal("150000"),
+            currency="VND",
+        ),
+    )
+
+    engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
+    engine._internal_repo.find_many = AsyncMock(return_value=[])
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date)
+
+    # The record with empty status is skipped, but creates an UNMAPPED_SKIPPED result
+    # (for stats visibility per D-05)
+    assert len(results) == 1
+    assert results[0].reconciliation_status == ReconciliationStatus.UNMAPPED_SKIPPED
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_all_records_skipped(mock_db):
+    """Multiple partner records all with empty status — all skipped."""
+    engine = ReconciliationEngine(mock_db)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    partner_records = [
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId="00000000-0000-0000-0000-000000000001",
+            partnerData=PartnerData(
+                _id=f"txn_0{i}",
+                trace=f"trace_0{i}",
+                status="",  # empty status
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for i in range(3)
+    ]
+
+    engine._data_repo.find_many = AsyncMock(return_value=partner_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=[])
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date)
+
+    # After guard: all 3 records skipped, each produces UNMAPPED_SKIPPED result
+    assert len(results) == 3
+    for r in results:
+        assert r.reconciliation_status == ReconciliationStatus.UNMAPPED_SKIPPED
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_mixed_valid_and_skipped(mock_db):
+    """3 partner records: 1 valid (matched), 2 with empty status (skipped)."""
+    engine = ReconciliationEngine(mock_db)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    # Valid record
+    valid_record = DataContainer(
+        identify=partner,
+        workflowType="UPC",
+        reconciliationDate=recon_date,
+        sourceFileId="00000000-0000-0000-0000-000000000001",
+        partnerData=PartnerData(
+            _id="txn_valid",
+            trace="trace_valid",
+            status="Thành công",
+            amount=Decimal("150000"),
+            currency="VND",
+        ),
+    )
+
+    # Two invalid records with empty status
+    invalid_records = [
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId="00000000-0000-0000-0000-000000000001",
+            partnerData=PartnerData(
+                _id=f"txn_invalid_{i}",
+                trace=f"trace_invalid_{i}",
+                status="",
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for i in range(2)
+    ]
+
+    internal_record = InternalTransaction(
+        _id="int_01",
+        partner=partner,
+        partnerTxnId="trace_valid",
+        amount=Decimal("150000"),
+        status=TransactionStatus.SUCCESS,
+        transactionTime=recon_date,
+    )
+
+    engine._data_repo.find_many = AsyncMock(return_value=[valid_record] + invalid_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date)
+
+    # After guard: 2 skipped (UNMAPPED_SKIPPED), 1 valid (MATCHED)
+    assert len(results) == 3
+    matched = [r for r in results if r.reconciliation_status == ReconciliationStatus.MATCHED]
+    skipped = [r for r in results if r.reconciliation_status == ReconciliationStatus.UNMAPPED_SKIPPED]
+    assert len(matched) == 1
+    assert len(skipped) == 2
+
+
+@pytest.mark.asyncio
+async def test_skipped_record_creates_unmapped_skipped(mock_db):
+    """A skipped record creates a ReconciliationResult with UNMAPPED_SKIPPED status."""
+    engine = ReconciliationEngine(mock_db)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    partner_record = DataContainer(
+        identify=partner,
+        workflowType="UPC",
+        reconciliationDate=recon_date,
+        sourceFileId="00000000-0000-0000-0000-000000000001",
+        partnerData=PartnerData(
+            _id="txn_skip_01",
+            trace="trace_skip_01",
+            status="",  # empty status triggers pre-check skip
+            amount=Decimal("150000"),
+            currency="VND",
+        ),
+    )
+
+    engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
+    engine._internal_repo.find_many = AsyncMock(return_value=[])
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date)
+
+    assert len(results) == 1
+    assert results[0].reconciliation_status == ReconciliationStatus.UNMAPPED_SKIPPED
+    assert results[0].partner_record_id == str(partner_record.id)
+
+
+@pytest.mark.asyncio
+async def test_mixed_skipped_and_matched_guard(mock_db):
+    """3 records: 1 valid matched, 2 skipped — 3 total results with correct statuses."""
+    engine = ReconciliationEngine(mock_db)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    # Valid record
+    valid_record = DataContainer(
+        identify=partner,
+        workflowType="UPC",
+        reconciliationDate=recon_date,
+        sourceFileId="00000000-0000-0000-0000-000000000001",
+        partnerData=PartnerData(
+            _id="txn_valid",
+            trace="trace_valid",
+            status="Thành công",
+            amount=Decimal("150000"),
+            currency="VND",
+        ),
+    )
+
+    # Skipped records (empty status)
+    skipped_records = [
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId="00000000-0000-0000-0000-000000000001",
+            partnerData=PartnerData(
+                _id=f"txn_skip_{i}",
+                trace=f"trace_skip_{i}",
+                status="",
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for i in range(2)
+    ]
+
+    internal_record = InternalTransaction(
+        _id="int_01",
+        partner=partner,
+        partnerTxnId="trace_valid",
+        amount=Decimal("150000"),
+        status=TransactionStatus.SUCCESS,
+        transactionTime=recon_date,
+    )
+
+    engine._data_repo.find_many = AsyncMock(return_value=[valid_record] + skipped_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date)
+
+    assert len(results) == 3
+
+    # Find which result is MATCHED
+    matched = [r for r in results if r.reconciliation_status == ReconciliationStatus.MATCHED]
+    skipped = [r for r in results if r.reconciliation_status == ReconciliationStatus.UNMAPPED_SKIPPED]
+    assert len(matched) == 1
+    assert len(skipped) == 2
+
+    # Verify insert_many receives all 3 results (including skipped for stats)
+    engine._result_repo.insert_many.assert_called_once()
+    inserted = engine._result_repo.insert_many.call_args[0][0]
+    assert len(inserted) == 3

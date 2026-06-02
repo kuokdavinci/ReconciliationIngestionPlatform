@@ -821,3 +821,94 @@ class TestPipelineLogging:
         failed_events = [e for e in events if e[0] == "FILE_FAILED"]
         assert len(failed_events) == 1
         assert "Config load failed" in failed_events[0][1]["error"]
+
+
+class TestPipelineAllInvalidRows:
+    """Tests for process_file when ALL rows are invalid."""
+
+    @pytest.mark.asyncio
+    async def test_process_file_all_rows_invalid(self):
+        """All rows invalid — COMPLETED with 0 success_rows."""
+        from src.pipeline import IngestionPipeline
+        from src.models.reconciliation_file import ReconciliationFileRepository
+        from src.models.data_container import DataContainerRepository
+        from src.models.mapping_config import MappingConfig
+        from src.config.loader import ConfigLoader
+
+        field_mappings = [
+            FieldMapping(path="id", column="A", type=FieldMappingType.STRING, required=True),
+            FieldMapping(path="amount", column="B", type=FieldMappingType.DECIMAL, required=True),
+            FieldMapping(path="currency", constant="VND", type=FieldMappingType.CONSTANT),
+            FieldMapping(
+                path="status",
+                column="C",
+                type=FieldMappingType.MAPPING,
+                mapping={"Success": "SUCCESS", "Failed": "FAILED"},
+            ),
+        ]
+
+        mock_config = MappingConfig(
+            partner="MOMO",
+            workflow_type="UPC",
+            file_type=FileType.SETTLEMENT,
+            sheet_name="Sheet1",
+            start_row=2,
+            field_mappings=field_mappings,
+        )
+
+        mock_config_loader = MagicMock(spec=ConfigLoader)
+        mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
+
+        mock_db = MagicMock()
+        mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
+        mock_recon_repo.find_by_file_hash = AsyncMock(return_value=None)
+        mock_recon_repo.create = AsyncMock(side_effect=lambda doc: doc)
+        mock_recon_repo.update_processing_stats = AsyncMock(return_value=True)
+        mock_recon_repo.update_status = AsyncMock(return_value=True)
+
+        mock_data_repo = MagicMock(spec=DataContainerRepository)
+        mock_data_repo.insert_many = AsyncMock(return_value=0)
+
+        mock_db.__getitem__ = MagicMock(side_effect=lambda name: MagicMock())
+
+        pipeline = IngestionPipeline(
+            db=mock_db, config_loader=mock_config_loader, batch_size=100
+        )
+        pipeline._recon_repo = mock_recon_repo
+        pipeline._data_repo = mock_data_repo
+
+        import tempfile
+        import openpyxl
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Sheet1"
+            # Row 1: header (skipped by start_row=2)
+            ws.append(["ID", "Amount", "Status"])
+            # All data rows have empty IDs (invalid — STRING converts to error)
+            ws.append(["", 100, "Success"])
+            ws.append(["", 200, "Success"])
+            ws.append(["", 300, "Success"])
+            wb.save(f.name)
+            temp_path = f.name
+
+        try:
+            rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
+            result = await pipeline.process_file(
+                file_path=temp_path,
+                partner="MOMO",
+                workflow_type="UPC",
+                file_type=FileType.SETTLEMENT,
+                reconciliation_date=rec_date,
+            )
+
+            assert result.stats.total_rows == 3
+            assert result.stats.success_rows == 0
+            assert result.stats.failed_rows == 3
+            # Pipeline handles per-row errors gracefully — status is COMPLETED
+            assert result.file_record.processing_status == ProcessingStatus.COMPLETED
+            assert len(result.errors) >= 3
+        finally:
+            from pathlib import Path
+            Path(temp_path).unlink(missing_ok=True)

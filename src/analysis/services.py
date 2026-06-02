@@ -125,6 +125,9 @@ def _extract_json_from_response(llm_response: str) -> dict[str, Any] | None:
 def parse_llm_insights(llm_response: str) -> list[AnalysisResult]:
     """Parse LLM JSON response into a list of AnalysisResult objects.
 
+    Legacy parser — uses manual dict extraction.
+    Prefer parse_structured_insight() for new code.
+
     Expected JSON format:
     ```json
     {
@@ -174,6 +177,47 @@ def parse_llm_insights(llm_response: str) -> list[AnalysisResult]:
             continue
 
     return results
+
+
+def parse_structured_insight(
+    llm_response: str,
+) -> tuple[list[AnalysisResult], bool]:
+    """Parse LLM response using the AIInsight schema with pydantic validation.
+
+    Uses AIInsightResponse pydantic model for strict schema validation.
+    Returns both parsed results and a schema_valid flag.
+
+    Args:
+        llm_response: Raw string response from the LLM.
+
+    Returns:
+        Tuple of (list of AnalysisResult, schema_valid boolean).
+        If schema validation fails, returns (empty list, False).
+    """
+    from src.analysis.schemas import AIInsightResponse
+
+    data = _extract_json_from_response(llm_response)
+    if data is None:
+        logger.warning("Failed to parse LLM response as JSON")
+        return [], False
+
+    try:
+        validated = AIInsightResponse(**data)
+        results = [
+            AnalysisResult(
+                type=insight.type,
+                severity=insight.severity,
+                title=insight.title,
+                description=insight.description,
+                affected_count=insight.affected_count,
+                recommendation=insight.recommendation,
+            )
+            for insight in validated.findings
+        ]
+        return results, True
+    except Exception as exc:
+        logger.warning(f"Schema validation failed for LLM response: {exc}")
+        return [], False
 
 
 # ---------------------------------------------------------------------------

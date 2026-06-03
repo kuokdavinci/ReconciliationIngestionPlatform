@@ -118,11 +118,22 @@ uv run python run.py serve
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /transactions?partner=X&date=Y&trace=Z&status=W` | Browse DataContainer records with optional filters and pagination |
+| `GET /transactions?partner=X&date=Y&trace=Z&status=W&amountMin=N&amountMax=M&dateFrom=D&dateTo=T` | Browse DataContainer records with optional filters (amount range, date range) and pagination |
 | `GET /transactions/{id}` | Get single transaction by UUID |
 | `GET /files?partner=X&date=Y&status=Z` | List reconciliation files with optional filters |
 | `GET /files/{id}` | Get file detail with associated transaction count |
 | `GET /stats?partner=X&date=Y` | Aggregate data volume statistics |
+
+**Mapping Config API v2** (`/api/v1/mapping`):
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /ai-generate?partner=X` | Upload sample spreadsheet — AI generates field mappings automatically |
+| `POST /validate` | Validate mapping config rules (required fields, duplicate columns, empty sources) |
+| `POST /test` | Test transformation of a sample row against a mapping config |
+| `POST /publish` | Publish mapping config to MongoDB with version history snapshot |
+| `GET /versions?partner=X` | List published config versions for a partner, sorted by date |
+| `GET /version/{id}` | Get a specific version by ID from history collection |
 
 ### 7. Operations Dashboard (Web UI)
 
@@ -132,7 +143,7 @@ A browser-based dashboard for monitoring and managing the platform:
 # Terminal 1 — Start the FastAPI backend
 uv run python run.py serve --port 8000
 
-# Terminal 2 — Start the dashboard proxy server
+# Terminal 2 — Start the dashboard proxy server (supports POST proxying)
 python web/server.py --port 5173 --api http://localhost:8000
 ```
 
@@ -142,7 +153,11 @@ Then open `http://localhost:5173` and switch `Data Source` to `Live API`.
 - **Overview** — Key metrics (files processed, success rates, anomaly counts) with a **Reconciliation Health** widget showing healthy/warning/anomaly status per partner
 - **Scheduler** — View and manage automated ingestion jobs
 - **Reconciliation** — Browse reconciliation results by partner and date
-- **Mapping Configs** — View active mapping configurations per partner with field mapping details (column, type, required flag, mapping rules)
+- **Mapping Configs** — View active mapping configurations per partner with field mapping details (column, type, required flag, mapping rules), approve `PENDING_REVIEW` or `STALE` configs, or re-run AI generation
+- **Partner Mapping Studio v2** — 3-step guided onboarding flow:
+  1. **Choose Source** — Upload a partner sample spreadsheet (`.xlsx/.xls/.csv`) for AI auto-generation, upload an existing JSON schema, or paste a JSON template
+  2. **Data Preview & AI Mapping** — Inspect detected file structure, tweak AI-proposed column mappings in the visual mapper or raw JSON editor, accept AI-suggested constants
+  3. **Validation & Test** — Quality score with checklist (required fields, duplicate mappings, empty sources), run transformation tests on sample rows, browse version history, and publish
 - **AI Insights** — LLM-generated insights, discrepancy analysis, daily reports
 - **Settings** — Configure partner mappings and system settings
 
@@ -310,16 +325,22 @@ Partner Excel File
 - **Audit trail** — every record includes createdBy, createdDate, lastModifiedBy, lastModifiedDate
 - **AI-powered analysis** — LLM generates actionable insights from reconciliation results (mismatch patterns, operational issues, daily reports) with privacy-by-design (no raw data sent to LLM)
 - **Automated scheduling** — APScheduler daemon fetches partner files via SFTP on cron schedules, with persistent job state in MongoDB
-- **FastAPI REST API** — serves AI insights, reconciliation results, data explorer, and mapping config endpoints
-- **Operations Dashboard** — browser-based UI with Overview, Reconciliation, Mapping Configs, AI Insights tabs
+- **FastAPI REST API** — serves AI insights, reconciliation results, data explorer, mapping config endpoints, and Mapping Studio v2
+- **Operations Dashboard** — browser-based UI with Overview, Reconciliation, Mapping Configs, AI Insights, Mapping Studio tabs
 - **Data flow guard** — ReconciliationEngine pre-checks each partner record for valid normalized data before processing; invalid records are skipped with structured warning logs and tracked in stats
+- **AI config auto-generation** — upload partner sample files; AI infers field mappings, data types, constants, and status normalization rules automatically
+- **Config health auto-detection** — file structure signatures (MD5 of headers + column count) detect stale configs; error rate > 20% triggers AI re-generation; low-confidence outputs are saved as `PENDING_REVIEW` for manual approval
+- **Self-healing pipeline** — `IngestionPipeline` calls `check_and_refresh_config()` before each run and `record_config_run_health()` after, enabling automatic recovery from partner file format changes
+- **Config version history** — every publish snapshots to `reconciliation_mapping_config_history` with version restore support from the dashboard
+- **Multi-format raw signature reader** — `compute_signature()` reads CSV, TSV, XLSX, and JSON without a MappingConfig, enabling structure fingerprinting for any partner file
+- **Graceful sheet fallback** — `ExcelStreamReader` falls back to the active/first sheet when the configured sheet name is missing, with a structured warning log
 
 ## Project Structure
 
 ```
 src/
 ├── core/           # Canonical types, enums, constants (incl. ReconciliationStatus)
-├── config/         # Settings, ConfigCache, ConfigValidator, ConfigLoader
+├── config/         # Settings, ConfigCache, ConfigValidator, ConfigLoader, ConfigHealthService, StructureSignature
 ├── readers/        # ExcelStreamReader (openpyxl read-only)
 ├── normalizer/     # TransactionNormalizer (dynamic field mapping)
 ├── validators/     # Validator (business rules + duplicate detection)
@@ -342,7 +363,7 @@ src/
 │   ├── insights.py     # AI insights endpoints (summary, discrepancies, reports)
 │   ├── reconciliation.py  # Reconciliation results API (results, stats)
 │   ├── data_explorer.py   # Data Explorer API (transactions, files, stats)
-│   └── mappings.py        # Mapping config API (GET /api/v1/mappings)
+│   └── mappings.py        # Mapping config API v1 & v2 (list, approve, save, ai-generate, validate, test, publish, versions)
 ├── scheduler/      # APScheduler daemon (SFTP fetch, cron jobs)
 ├── logging/        # StructuredLogger (JSON/text formatters)
 └── models/         # MongoDB models, repositories, indexes
@@ -432,6 +453,13 @@ Example MappingConfig:
 | AI: LLM fallback to rule-based | Graceful degradation — insights still available when LLM is unavailable |
 | AI: provider abstraction | Swappable LLM backends (OpenAI-compatible, Ollama deferred) |
 | Reconciliation: pre-check guard | Skip unnormalized records with warning log + `UNMAPPED_SKIPPED` status before processing — prevents silent errors and tracks in stats |
+| Config health: structure signature fingerprint | MD5 of headers + column count provides cheap staleness detection before AI generation |
+| Config health: error rate threshold (20%) | Failed-row ratio detects semantic drift (wrong columns, status values, date formats) even when header structure matches |
+| Config health: PENDING_REVIEW for low confidence | AI-generated configs below 85% confidence require human approval before auto-application — prevents silent misconfiguration |
+| Config health: self-healing pipeline | `check_and_refresh_config` runs before each ingestion; `record_config_run_health` runs after — ensures automatic recovery without manual intervention |
+| Mapping Studio: 3-step guided flow | Upload → Preview/Tweak → Validate/Publish reduces partner onboarding friction and prevents publishing broken schemas |
+| Mapping Studio: version history on publish | Every publish snapshots the full config to a history collection — enables rollback and audit trail |
+| Excel reader: fallback_on_missing_sheet | Graceful degradation when partner renames a sheet — logs warning instead of crashing the pipeline |
 | UI: vanilla JS SPA | No build step, no framework dependency — serve `index.html` directly or via proxy server |
 
 ## License

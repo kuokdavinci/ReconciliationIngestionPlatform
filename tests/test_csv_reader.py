@@ -287,3 +287,58 @@ class TestCreateReader:
                 create_reader(path, _mapping_config())
         finally:
             path.unlink(missing_ok=True)
+
+    def test_tsv_extension_returns_csv_reader(self) -> None:
+        path = _temp_path(".tsv")
+        path.write_text("id\tamount\nTXN001\t100\n", encoding="utf-8")
+        try:
+            reader = create_reader(path, _mapping_config())
+        finally:
+            path.unlink(missing_ok=True)
+        assert isinstance(reader, CSVStreamReader)
+
+    def test_json_extension_returns_json_reader(self) -> None:
+        from src.readers.json_reader import JSONStreamReader
+        path = _temp_path(".json")
+        path.write_text("[]\n", encoding="utf-8")
+        try:
+            reader = create_reader(path, _mapping_config())
+        finally:
+            path.unlink(missing_ok=True)
+        assert isinstance(reader, JSONStreamReader)
+
+
+class TestTSVStreamReader:
+    """Tests for TSV (tab-separated) support."""
+
+    def test_tsv_basic_iteration(self) -> None:
+        path = _temp_path(".tsv")
+        path.write_text("id\tamount\nTXN001\t100000\nTXN002\t200000\n", encoding="utf-8")
+        try:
+            with CSVStreamReader(path, delimiter="\t", start_row=2) as reader:
+                rows = list(reader.iter_rows())
+        finally:
+            path.unlink(missing_ok=True)
+        assert rows == [("TXN001", "100000"), ("TXN002", "200000")]
+
+    def test_tsv_custom_delimiter(self) -> None:
+        path = _temp_path(".tsv")
+        path.write_text("id\tamount\tstatus\nA\t500\tOK\nB\t300\tFAIL\n", encoding="utf-8")
+        try:
+            with CSVStreamReader(path, delimiter="\t", start_row=2) as reader:
+                rows = list(reader.iter_rows())
+        finally:
+            path.unlink(missing_ok=True)
+        assert rows == [("A", "500", "OK"), ("B", "300", "FAIL")]
+
+    def test_tsv_from_mapping_config_uses_tab_delimiter(self) -> None:
+        path = _temp_path(".tsv")
+        path.write_text("id\tval\nX\t1\nY\t2\n", encoding="utf-8")
+        try:
+            reader = CSVStreamReader.from_mapping_config(path, _mapping_config(start_row=2))
+            assert reader._delimiter == "\t"
+            with reader as r:
+                rows = list(r.iter_rows())
+        finally:
+            path.unlink(missing_ok=True)
+        assert rows == [("X", "1"), ("Y", "2")]

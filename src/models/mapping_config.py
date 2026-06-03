@@ -1,7 +1,7 @@
 """MappingConfig model and repository for dynamic parsing configuration."""
 
 from datetime import datetime, timezone
-from typing import Optional, Union
+from typing import Any, Optional, Union
 from uuid import UUID, uuid4
 
 from bson import ObjectId
@@ -18,6 +18,10 @@ class MappingConfig(BaseModel):
 
     The field_mappings array defines how source columns map to canonical fields,
     including transformations, constants, and status normalization rules.
+
+    The structure_signature field stores a fingerprint of the file format at the
+    time the config was created. It is used by ConfigHealthService to detect
+    when a partner's file structure has changed (stale config).
     """
 
     model_config = ConfigDict(
@@ -33,6 +37,12 @@ class MappingConfig(BaseModel):
     start_row: int = Field(default=2, alias="startRow")
     field_mappings: list[FieldMapping] = Field(alias="fieldMappings")
     config_version: Optional[str] = Field(default=None, alias="configVersion")
+    structure_signature: Optional[dict[str, Any]] = Field(
+        default=None, alias="structureSignature"
+    )
+    config_health: Optional[dict[str, Any]] = Field(
+        default=None, alias="configHealth"
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), alias="createdAt"
     )

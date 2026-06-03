@@ -219,6 +219,7 @@ async def main():
     parser.add_argument("--seed-mock", action="store_true", help="Seed mock internal transactions for testing reconciliation")
     parser.add_argument("--port", type=int, default=8000, help="Port for FastAPI server (default: 8000)")
     parser.add_argument("--serve", action="store_true", help="Start FastAPI server")
+    parser.add_argument("--reconcile", type=str, help="Reconciliation date (YYYY-MM-DD) to run reconciliation directly")
     args = parser.parse_args()
 
     # 1. Database Connection

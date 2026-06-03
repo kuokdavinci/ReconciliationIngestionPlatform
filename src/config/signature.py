@@ -63,10 +63,13 @@ def _read_raw_csv(path: Path, max_rows: int = 20) -> list[list[str]]:
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.reader(f, delimiter=delimiter)
         rows = []
-        for i, row in enumerate(reader):
-            if i >= max_rows:
+        for row in reader:
+            normalized = [_normalize_cell(c) for c in row]
+            if not rows and not any(normalized):
+                continue
+            if len(rows) >= max_rows:
                 break
-            rows.append([_normalize_cell(c) for c in row])
+            rows.append(normalized)
     return rows
 
 
@@ -75,10 +78,13 @@ def _read_raw_xlsx(path: Path, max_rows: int = 20) -> list[list[str]]:
     wb = openpyxl.load_workbook(path, read_only=True)
     ws = wb.active
     rows = []
-    for i, row in enumerate(ws.iter_rows(values_only=True)):
-        if i >= max_rows:
+    for row in ws.iter_rows(values_only=True):
+        normalized = [_normalize_cell(c) for c in row]
+        if not rows and not any(normalized):
+            continue
+        if len(rows) >= max_rows:
             break
-        rows.append([_normalize_cell(c) for c in row])
+        rows.append(normalized)
     wb.close()
     return rows
 

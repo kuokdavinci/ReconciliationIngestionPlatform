@@ -17,9 +17,29 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def do_POST(self) -> None:
+        if self.path.startswith("/api/"):
+            self.proxy_api()
+            return
+        self.send_error(404, "File not found")
+
     def proxy_api(self) -> None:
         target = self.api_target.rstrip("/") + self.path
-        request = Request(target, headers={"Accept": "application/json"})
+        content_length = int(self.headers.get("Content-Length", 0))
+        req_data = self.rfile.read(content_length) if content_length > 0 else None
+        
+        headers = {
+            "Accept": "application/json",
+        }
+        if "Content-Type" in self.headers:
+            headers["Content-Type"] = self.headers["Content-Type"]
+
+        request = Request(
+            target,
+            data=req_data,
+            headers=headers,
+            method=self.command,
+        )
         try:
             with urlopen(request, timeout=60) as response:
                 body = response.read()

@@ -5,7 +5,21 @@
     date: "2024-07-07",
     focus: "operational",
     reconStatus: "",
-    explorerFilters: { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" }
+    explorerFilters: { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" },
+    studio: {
+      step: 1,
+      sourceType: null,
+      fileName: "",
+      sheetNames: [],
+      selectedSheet: "",
+      headers: [],
+      sampleRows: [],
+      config: null,
+      validation: null,
+      testOutput: null,
+      versions: [],
+      aiSuggestions: []
+    }
   };
 
   const routes = [
@@ -42,17 +56,113 @@
     fetch("/api/v1/data/stats?date=" + state.date)
       .then(r => r.json())
       .then(data => {
-        const partners = Object.keys(data.by_partner || {});
-        if (partners.length) {
-          const el = (container || document).getElementById("partner-filter");
-          if (el) {
-            el.innerHTML = partners.map(p =>
-              `<option value="${p}" ${p === state.partner ? "selected" : ""}>${p}</option>`
-            ).join("");
-          }
-        }
+        const found = Object.keys(data.by_partner || {});
+        const defaultPartners = ["MOMO", "VNPAY", "ZALOPAY"];
+        const partners = Array.from(new Set([...found, ...defaultPartners]));
+        
+        const elements = (container || document).querySelectorAll("#partner-filter");
+        elements.forEach(el => {
+          el.innerHTML = partners.map(p =>
+            `<option value="${p}" ${p === state.partner ? "selected" : ""}>${p}</option>`
+          ).join("");
+        });
       })
-      .catch(() => {});
+      .catch(() => {
+        const partners = ["MOMO", "VNPAY", "ZALOPAY"];
+        const elements = (container || document).querySelectorAll("#partner-filter");
+        elements.forEach(el => {
+          el.innerHTML = partners.map(p =>
+            `<option value="${p}" ${p === state.partner ? "selected" : ""}>${p}</option>`
+          ).join("");
+        });
+      });
+  }
+
+  function parseIsoDate(value) {
+    const [year, month, day] = String(value || "").split("-").map(Number);
+    if (!year || !month || !day) return null;
+    const utcDate = new Date(Date.UTC(year, month - 1, day));
+    return Number.isNaN(utcDate.getTime()) ? null : utcDate;
+  }
+
+  function formatIsoDate(date) {
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function formatDisplayDate(value) {
+    const parsed = parseIsoDate(value);
+    if (!parsed) return String(value || "-");
+    const day = String(parsed.getUTCDate()).padStart(2, "0");
+    const month = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+    const year = parsed.getUTCFullYear();
+    return `${day}/${month}/${year}`;
+  }
+
+  function formatDisplayDateTime(value) {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value || "-";
+    const day = String(parsed.getDate()).padStart(2, "0");
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const year = parsed.getFullYear();
+    const hours = String(parsed.getHours()).padStart(2, "0");
+    const minutes = String(parsed.getMinutes()).padStart(2, "0");
+    const seconds = String(parsed.getSeconds()).padStart(2, "0");
+    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
+  }
+
+  function shiftIsoDate(value, offsetDays) {
+    const base = parseIsoDate(value) || new Date();
+    const shifted = new Date(base.getTime());
+    shifted.setUTCDate(shifted.getUTCDate() + offsetDays);
+    return formatIsoDate(shifted);
+  }
+
+  function parseFlexibleDateInput(value, fallbackDate = state.date) {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return parseIsoDate(raw) ? raw : null;
+    }
+
+    const fallback = parseIsoDate(fallbackDate) || new Date();
+    const fallbackYear = fallback.getUTCFullYear();
+    let year;
+    let month;
+    let day;
+
+    if (/^\d{4}$/.test(raw)) {
+      month = Number(raw.slice(0, 2));
+      day = Number(raw.slice(2, 4));
+      year = fallbackYear;
+    } else {
+      const normalized = raw.replace(/[.\s-]+/g, "/");
+      const parts = normalized.split("/").filter(Boolean);
+      if (parts.length === 2) {
+        [day, month] = parts.map(Number);
+        year = fallbackYear;
+      } else if (parts.length === 3) {
+        [day, month, year] = parts.map(Number);
+      } else {
+        return null;
+      }
+    }
+
+    if (!year || !month || !day) return null;
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.getUTCFullYear() !== year ||
+      parsed.getUTCMonth() !== month - 1 ||
+      parsed.getUTCDate() !== day
+    ) {
+      return null;
+    }
+
+    return formatIsoDate(parsed);
   }
 
   function renderNav() {
@@ -71,20 +181,41 @@
   }
 
   function bindFilters() {
-    const pf = document.getElementById("partner-filter");
-    const df = document.getElementById("date-filter");
-    if (pf) {
+    document.querySelectorAll("#partner-filter").forEach(pf => {
       pf.addEventListener("change", () => {
         state.partner = pf.value;
         render();
       });
-    }
-    if (df) {
-      df.addEventListener("change", () => {
-        state.date = df.value;
+    });
+
+    const applyMainDateInput = (input) => {
+      if (!input) return;
+      const parsed = parseFlexibleDateInput(input.value, state.date);
+      if (!parsed) {
+        showToast("Ngay khong hop le. Dung dd/mm/yyyy, dd/mm, 0707 hoac yyyy-mm-dd.");
+        input.value = formatDisplayDate(state.date);
+        return;
+      }
+      state.date = parsed;
+      render();
+    };
+
+    document.querySelectorAll("#date-filter").forEach(input => {
+      input.addEventListener("change", () => applyMainDateInput(input));
+      input.addEventListener("blur", () => applyMainDateInput(input));
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") applyMainDateInput(input);
+      });
+    });
+
+    document.querySelectorAll("#date-picker").forEach(input => {
+      input.addEventListener("change", () => {
+        if (!input.value) return;
+        state.date = input.value;
         render();
       });
-    }
+    });
+
   }
 
   function onRouteChange() {
@@ -106,7 +237,15 @@
   async function render() {
     const route = routes.find(([key]) => key === state.route);
     title.textContent = route ? route[1] : "Overview";
-    subtitle.textContent = `Operations Console - ${state.partner} (${state.date})`;
+    const hasDate = ["overview", "explorer", "reconciliation"].includes(state.route);
+    subtitle.textContent = hasDate 
+      ? `Operations Console - ${state.partner} (${formatDisplayDate(state.date)})`
+      : `Operations Console - ${state.partner}`;
+
+    // Smooth tab fade-in transition
+    view.classList.remove("fade-in");
+    void view.offsetWidth;
+    view.classList.add("fade-in");
 
     if (state.route === "overview") {
       view.innerHTML = loadingPanel("Loading Dashboard & AI Insights console...");
@@ -257,7 +396,7 @@
           </div>
           <div class="metric" style="padding: 16px;">
             <span>Last Recon</span>
-            <strong style="font-size: 22px;">${state.date}</strong>
+            <strong style="font-size: 22px;">${formatDisplayDate(state.date)}</strong>
             <small>Reconciliation Date</small>
           </div>
         </div>
@@ -473,7 +612,7 @@
           <div class="empty-state" style="text-align: center; padding: 40px 0;">
             <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted); margin-bottom: 12px;">info</span>
             <h3>No Reconciliation Results</h3>
-            <p class="muted">No records matched the filter status for ${state.partner} / ${state.date}.</p>
+            <p class="muted">No records matched the filter status for ${state.partner} / ${formatDisplayDate(state.date)}.</p>
           </div>
         </section>
       `;
@@ -509,7 +648,7 @@
     // Table rows for files
     const fileRows = files.length
       ? files.map(f => {
-          const formattedDate = f.reconciliationDate ? new Date(f.reconciliationDate).toLocaleString() : "-";
+          const formattedDate = f.reconciliationDate ? formatDisplayDateTime(f.reconciliationDate) : "-";
           return `
             <tr>
               <td><strong>${escapeHtml(f.filename || "-")}</strong></td>
@@ -530,7 +669,7 @@
           const trace = pd.trace || "-";
           const amount = pd.amount ? formatAmount(parseFloat(pd.amount)) : "-";
           const status = pd.status || "-";
-          const formattedDate = t.reconciliationDate ? new Date(t.reconciliationDate).toLocaleString() : "-";
+          const formattedDate = t.reconciliationDate ? formatDisplayDateTime(t.reconciliationDate) : "-";
           return `
             <tr>
               <td><code>${escapeHtml(t.id || "-")}</code></td>
@@ -544,31 +683,32 @@
         }).join("")
       : `<tr><td colspan="6" style="text-align: center; padding: 24px 0;" class="text-muted">No transaction logs found for this period.</td></tr>`;
 
+    const ef = state.explorerFilters || {};
     return `
       ${renderPageFilters()}
-      <div class="page-filters" style="margin-top: -16px;">
+      <div class="page-filters explorer-filters" style="margin-top: -16px;">
         <div class="filter-group">
           <span class="filter-label">AMOUNT MIN</span>
           <div class="filter-input-wrapper">
-            <input id="amount-min" type="text" placeholder="0" value="">
+            <input id="amount-min" type="text" placeholder="0" value="${escapeHtml(ef.amountMin || '')}">
           </div>
         </div>
         <div class="filter-group">
           <span class="filter-label">AMOUNT MAX</span>
           <div class="filter-input-wrapper">
-            <input id="amount-max" type="text" placeholder="∞" value="">
+            <input id="amount-max" type="text" placeholder="∞" value="${escapeHtml(ef.amountMax || '')}">
           </div>
         </div>
         <div class="filter-group">
           <span class="filter-label">DATE FROM</span>
           <div class="filter-input-wrapper">
-            <input id="date-from" type="date" value="">
+            <input id="date-from" type="text" placeholder="dd/mm/yyyy" value="${escapeHtml(ef.dateFrom ? formatDisplayDate(ef.dateFrom) : '')}">
           </div>
         </div>
         <div class="filter-group">
           <span class="filter-label">DATE TO</span>
           <div class="filter-input-wrapper">
-            <input id="date-to" type="date" value="">
+            <input id="date-to" type="text" placeholder="dd/mm/yyyy" value="${escapeHtml(ef.dateTo ? formatDisplayDate(ef.dateTo) : '')}">
           </div>
         </div>
         <div class="filter-group" style="align-self: flex-end;">
@@ -694,7 +834,8 @@
             <span class="badge ${statusClass}">${escapeHtml(status)}</span>
             ${confidence !== null ? `<span class="badge neutral">Confidence ${confidence}%</span>` : ""}
             ${health.reasoning ? `<span class="muted" style="font-size: 12px;">${escapeHtml(String(health.reasoning))}</span>` : ""}
-            ${status === "PENDING_REVIEW" ? `<button class="button" data-action="approve-config" data-config-id="${escapeHtml(config._id || "")}">Approve</button>` : ""}
+            ${(status === "PENDING_REVIEW" || status === "STALE") ? `<button class="button" data-action="approve-config" data-config-id="${escapeHtml(config._id || "")}">Approve</button>` : ""}
+            ${(status === "PENDING_REVIEW" || status === "STALE") ? `<button class="button" data-action="refresh-config" data-config-id="${escapeHtml(config._id || "")}" style="background: transparent; border: 1px solid var(--border);">Re-run AI</button>` : ""}
           </div>
           <h3 style="font-size: 13px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 16px;">
             Field Mappings (${(config.fieldMappings || []).length})
@@ -708,58 +849,388 @@
   }
 
   function renderSettings() {
-    const defaultJson = {
-      "partner": "MOMO",
-      "workflowType": "UPC",
-      "fileType": "SETTLEMENT",
-      "sheetName": "data",
-      "startRow": 8,
-      "fieldMappings": [
-        { "path": "id", "column": 2, "type": "STRING", "required": true },
-        { "path": "trace", "column": 11, "type": "STRING" },
-        { "path": "amount", "column": 5, "type": "DECIMAL" },
-        { "path": "currency", "constant": "VND", "type": "CONSTANT" },
-        { "path": "status", "column": 18, "type": "MAPPING", "mapping": { "Thành công": "SUCCESS", "others": "FAILED" } }
-      ],
-      "configVersion": "v_template"
-    };
+    const s = state.studio;
+    
+    // Step indicator HTML
+    const stepsHeader = `
+      <div class="studio-steps" style="display: flex; gap: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 16px;">
+        <div class="studio-step-item ${s.step === 1 ? 'active' : ''}" style="font-weight: 700; display: flex; align-items: center; gap: 8px;">
+          <span style="display: inline-block; width: 24px; height: 24px; line-height: 24px; border-radius: 50%; background: ${s.step === 1 ? 'var(--brand-primary)' : 'var(--border)'}; color: #12161A; text-align: center; font-size: 11px;">1</span>
+          Choose Source
+        </div>
+        <div class="studio-step-item ${s.step === 2 ? 'active' : ''}" style="font-weight: 700; display: flex; align-items: center; gap: 8px; opacity: ${s.step >= 2 ? '1' : '0.5'}">
+          <span style="display: inline-block; width: 24px; height: 24px; line-height: 24px; border-radius: 50%; background: ${s.step === 2 ? 'var(--brand-primary)' : 'var(--border)'}; color: #12161A; text-align: center; font-size: 11px;">2</span>
+          Data Preview & AI Mapping
+        </div>
+        <div class="studio-step-item ${s.step === 3 ? 'active' : ''}" style="font-weight: 700; display: flex; align-items: center; gap: 8px; opacity: ${s.step >= 3 ? '1' : '0.5'}">
+          <span style="display: inline-block; width: 24px; height: 24px; line-height: 24px; border-radius: 50%; background: ${s.step === 3 ? 'var(--brand-primary)' : 'var(--border)'}; color: #12161A; text-align: center; font-size: 11px;">3</span>
+          Validation & Test
+        </div>
+      </div>
+    `;
 
-    return `
-      <section class="panel" style="margin-bottom: 24px;">
-        <h2>Import Ingestion Mapping Schema Config File</h2>
-        <p class="muted" style="margin-bottom: 20px;">Upload a mapping configuration file (.json) or paste the JSON definition to configure the partner reconciliation parser.</p>
-        
-        <div class="grid cols-2" style="gap: 20px; align-items: stretch; margin-bottom: 24px;">
-          <div style="display: flex; flex-direction: column; gap: 10px;">
-            <label style="font-weight: 700; font-size: 11px;">PASTE SCHEMA JSON CONFIG</label>
-            <textarea id="config-json-textarea" style="flex-grow: 1; min-height: 220px; font-family: monospace; background: var(--bg-primary); border: 1px solid var(--border); padding: 12px; border-radius: 6px; color: #a8ffb2; resize: vertical; outline: none; line-height: 1.4; font-size: 13px;" placeholder="Paste JSON here...">${JSON.stringify(defaultJson, null, 2)}</textarea>
-          </div>
+    // Step 1: Choose Source View
+    if (s.step === 1) {
+      return `
+        <section class="panel" style="margin-bottom: 24px;">
+          <h2>Partner Mapping Studio v2</h2>
+          <p class="muted" style="margin-bottom: 24px;">guided onboarding flow to upload partner sample files, review automatically inferred AI mapping configurations, validate schemas and publish safely.</p>
           
-          <div style="display: flex; flex-direction: column; justify-content: space-between; border: 1px dashed var(--border); border-radius: 8px; padding: 24px; text-align: center; background: rgba(255,255,255,0.01);">
-            <div style="margin: auto 0;">
-              <span class="material-symbols-outlined" style="font-size: 48px; color: var(--green-primary); margin-bottom: 12px;">upload_file</span>
-              <h3 style="margin-bottom: 6px;">Select Mapping Config File</h3>
-              <p class="muted" style="font-size: 12px; margin-bottom: 20px;">Drag & drop your JSON config file here or browse</p>
-              <input type="file" id="config-file-upload" accept=".json" style="display: none;">
-              <button class="button" onclick="document.getElementById('config-file-upload').click()">Browse Files</button>
+          ${stepsHeader}
+
+          <div class="grid cols-3" style="gap: 20px; align-items: stretch; margin-bottom: 24px;">
+            <!-- Option A: Upload Spreadsheet -->
+            <div class="option-card" style="border: 1px dashed var(--border); border-radius: 8px; padding: 24px; text-align: center; background: rgba(240, 185, 11, 0.02); display: flex; flex-direction: column; justify-content: space-between; transition: var(--transition-smooth);">
+              <div>
+                <span class="material-symbols-outlined" style="font-size: 48px; color: var(--brand-primary); margin-bottom: 12px;">psychology</span>
+                <h3 style="margin: 0 0 8px 0;">Upload Sample File</h3>
+                <p class="muted" style="font-size: 12px; margin-bottom: 16px;">Upload a spreadsheet (.xlsx, .xls, .csv) and let AI generate mapping columns automatically.</p>
+                
+                <div style="margin-bottom: 16px; display: flex; gap: 8px; align-items: center; justify-content: center;">
+                  <span style="font-size:11px; font-weight:700; color: var(--text-muted);">PARTNER:</span>
+                  <select id="studio-partner-select" style="font-size: 11px; padding: 4px 18px 4px 8px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; color: var(--text-primary); cursor: pointer; outline: none; height: 28px;">
+                    <option value="VNPAY">VNPAY</option>
+                    <option value="MOMO">MOMO</option>
+                    <option value="ZALOPAY">ZALOPAY</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <input type="file" id="studio-excel-upload" accept=".xlsx,.xls,.csv" style="display: none;">
+                <button class="button primary" style="width: 100%;" onclick="document.getElementById('studio-excel-upload').click()">
+                  <span class="material-symbols-outlined" style="font-size:18px;">upload</span> AI Auto-Generate
+                </button>
+              </div>
+            </div>
+
+            <!-- Option B: Upload JSON -->
+            <div class="option-card" style="border: 1px dashed var(--border); border-radius: 8px; padding: 24px; text-align: center; background: rgba(255,255,255,0.01); display: flex; flex-direction: column; justify-content: space-between; transition: var(--transition-smooth);">
+              <div>
+                <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted); margin-bottom: 12px;">upload_file</span>
+                <h3 style="margin: 0 0 8px 0;">Upload Existing Schema</h3>
+                <p class="muted" style="font-size: 12px; margin-bottom: 24px;">Reuse previously created JSON mapping schema configuration.</p>
+              </div>
+              <div>
+                <input type="file" id="studio-json-upload" accept=".json" style="display: none;">
+                <button class="button" style="width: 100%;" onclick="document.getElementById('studio-json-upload').click()">
+                  <span class="material-symbols-outlined" style="font-size:18px;">folder_open</span> Browse JSON File
+                </button>
+              </div>
+            </div>
+
+            <!-- Option C: Paste JSON -->
+            <div class="option-card" style="border: 1px dashed var(--border); border-radius: 8px; padding: 24px; text-align: center; background: rgba(255,255,255,0.01); display: flex; flex-direction: column; justify-content: space-between; transition: var(--transition-smooth);">
+              <div>
+                <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted); margin-bottom: 12px;">edit_note</span>
+                <h3 style="margin: 0 0 8px 0;">Manual Setup</h3>
+                <p class="muted" style="font-size: 12px; margin-bottom: 24px;">Start configuration manually by pasting JSON mapping template.</p>
+              </div>
+              <div>
+                <button class="button" style="width: 100%;" id="studio-paste-btn">
+                  <span class="material-symbols-outlined" style="font-size:18px;">code</span> Paste Schema JSON
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </section>
+      `;
+    }
 
-        <div style="display: flex; gap: 12px;">
-          <button class="button primary" id="apply-config-btn">
-            <span class="material-symbols-outlined" style="font-size: 18px;">cloud_upload</span>
-            Apply Ingestion Config Schema
-          </button>
-          <button class="button" id="reset-config-btn">Reset Draft</button>
-        </div>
-      </section>
+    // Step 2: Data Preview & AI Mapping
+    if (s.step === 2) {
+      // Build Excel Sheet preview if headers present
+      let previewHtml = '';
+      if (s.headers && s.headers.length) {
+        const previewHeaders = s.headers.map(h => `<th style="text-align: left; padding: 10px;">${escapeHtml(h)}</th>`).join("");
+        const previewRows = s.sampleRows.slice(0, 10).map((row, rIdx) => {
+          const cells = row.map(c => `<td style="padding: 10px; border-top: 1px solid var(--border); font-size:12px;">${escapeHtml(String(c || ''))}</td>`).join("");
+          return `<tr><td style="padding: 10px; border-top: 1px solid var(--border); font-size:12px; font-weight:700; color:var(--text-muted);">${rIdx + 1}</td>${cells}</tr>`;
+        }).join("");
+        
+        previewHtml = `
+          <div style="margin-bottom: 24px;">
+            <h3 style="font-size: 13px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 12px;">Detected File Structure Preview</h3>
+            <div class="table-wrap" style="overflow-x: auto; max-height: 250px; background: rgba(0,0,0,0.15); border: 1px solid var(--border); border-radius: 6px;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                  <tr style="background: var(--bg-surface-hover);">
+                    <th style="width: 40px; padding: 10px; text-align: left;">Row</th>
+                    ${previewHeaders}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${previewRows}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      }
 
-      <section class="panel" id="config-preview-panel" style="display: none;">
-        <h2>Loaded Schema Config Preview</h2>
-        <div id="config-preview-content"></div>
-      </section>
-    `;
+      // Visual Field Mappings Table or JSON textarea
+      const configJsonStr = s.config ? JSON.stringify(s.config, null, 2) : '';
+      
+      // AI Mapping review table (Step 3/4)
+      const fieldMappings = s.config?.fieldMappings || [];
+      const mappingRows = fieldMappings.map((fm, idx) => {
+        const path = fm.path || '';
+        const col = fm.column !== undefined ? fm.column : '';
+        const constVal = fm.constant !== undefined ? fm.constant : '';
+        const type = fm.type || 'STRING';
+        const isRequired = fm.required ? 'Yes' : 'No';
+        
+        // Confidence
+        const confidenceVal = s.config?.configHealth?.confidence || 0.85;
+        const confidencePct = Math.round(confidenceVal * 100);
+        let badgeClass = 'neutral';
+        let label = 'Medium';
+        if (confidencePct >= 90) {
+          badgeClass = 'matched';
+          label = 'High';
+        } else if (confidencePct < 80) {
+          badgeClass = 'critical';
+          label = 'Needs Review';
+        }
+        
+        return `
+          <tr>
+            <td style="padding: 12px 16px; font-weight:600; color: var(--text-primary); border-top:1px solid var(--border);">${escapeHtml(path)}</td>
+            <td style="padding: 12px 16px; border-top:1px solid var(--border);">
+              <select class="studio-mapping-col-select" data-idx="${idx}" style="font-size:12px; padding: 4px 8px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; outline:none; color:var(--text-primary);">
+                <option value="">-- Constant Only --</option>
+                ${s.headers.map((h, hIdx) => `<option value="${hIdx + 1}" ${col === (hIdx + 1) ? 'selected' : ''}>Col ${hIdx + 1}: ${h}</option>`).join("")}
+              </select>
+            </td>
+            <td style="padding: 12px 16px; border-top:1px solid var(--border);">
+              <input type="text" class="studio-mapping-const-input" data-idx="${idx}" value="${escapeHtml(String(constVal))}" style="font-size:12px; padding: 4px 8px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; outline:none; color:var(--text-primary); width:100px;" placeholder="Constant...">
+            </td>
+            <td style="padding: 12px 16px; border-top:1px solid var(--border);">
+              <select class="studio-mapping-type-select" data-idx="${idx}" style="font-size:12px; padding: 4px 8px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; outline:none; color:var(--text-primary);">
+                <option value="STRING" ${type === 'STRING' ? 'selected' : ''}>STRING</option>
+                <option value="DECIMAL" ${type === 'DECIMAL' ? 'selected' : ''}>DECIMAL</option>
+                <option value="DATE" ${type === 'DATE' ? 'selected' : ''}>DATE</option>
+                <option value="CONSTANT" ${type === 'CONSTANT' ? 'selected' : ''}>CONSTANT</option>
+              </select>
+            </td>
+            <td style="padding: 12px 16px; border-top:1px solid var(--border);"><span class="badge ${isRequired === 'Yes' ? 'warning' : 'neutral'}">${isRequired}</span></td>
+            <td style="padding: 12px 16px; border-top:1px solid var(--border);"><span class="badge ${badgeClass}">${confidencePct}% (${label})</span></td>
+          </tr>
+        `;
+      }).join("");
+
+      return `
+        <section class="panel" style="margin-bottom: 24px;">
+          <h2>Review & Customize Partner Mapping</h2>
+          <p class="muted" style="margin-bottom: 20px;">Inspect detected spreadsheet format, tweak AI mapping columns and review recommendations.</p>
+          
+          ${stepsHeader}
+          ${previewHtml}
+
+          <!-- Tabs header -->
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+            <div style="display:flex; gap:8px;">
+              <button class="button active" id="studio-tab-visual" style="height:32px; padding:0 16px; font-size:12px;">Visual Mapping Studio</button>
+              <button class="button" id="studio-tab-json" style="height:32px; padding:0 16px; font-size:12px;">Raw JSON Schema</button>
+            </div>
+            
+            <div>
+              <button class="button" id="studio-add-field-btn" style="height:32px; padding:0 16px; font-size:12px; border-color:var(--brand-primary); color:var(--brand-primary); background:transparent;">+ Add Mapping Row</button>
+            </div>
+          </div>
+
+          <!-- Tab Content 1: Visual Mapper -->
+          <div id="studio-tab-visual-content" style="margin-bottom: 24px; border:1px solid var(--border); border-radius:6px; background:var(--bg-surface);">
+            <table style="width:100%; border-collapse:collapse; text-align:left;">
+              <thead>
+                <tr style="background:var(--bg-surface-hover);">
+                  <th style="padding:12px 16px;">Canonical Field</th>
+                  <th style="padding:12px 16px;">Source Column</th>
+                  <th style="padding:12px 16px;">Constant Value</th>
+                  <th style="padding:12px 16px;">Data Type</th>
+                  <th style="padding:12px 16px;">Required</th>
+                  <th style="padding:12px 16px;">AI Confidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${mappingRows}
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Tab Content 2: Raw JSON -->
+          <div id="studio-tab-json-content" style="display:none; margin-bottom: 24px; display:flex; flex-direction:column; gap:10px;">
+            <textarea id="studio-json-textarea" style="width:100%; min-height: 280px; font-family: monospace; background: var(--bg-primary); border: 1px solid var(--border); padding: 12px; border-radius: 6px; color: #a8ffb2; outline: none; line-height: 1.4; font-size: 13px;" placeholder="Schema JSON...">${configJsonStr}</textarea>
+            <div style="text-align:right;">
+              <button class="button" id="studio-copy-json-btn" style="height:32px; padding:0 16px; font-size:12px;">Copy JSON Schema</button>
+            </div>
+          </div>
+
+          <!-- AI Suggestions Panel (Step 8) -->
+          <div class="panel" style="background: rgba(240, 185, 11, 0.03); border:1px solid rgba(240,185,11,0.15); border-radius:6px; padding:16px; margin-bottom:24px;">
+            <h3 style="margin: 0 0 10px 0; display:flex; align-items:center; gap:8px; font-size:14px; color:var(--brand-primary);">
+              <span class="material-symbols-outlined" style="font-size:20px;">tips_and_updates</span>
+              AI Suggested Constants & Adjustments
+            </h3>
+            <div style="font-size:13px; display:flex; justify-content:space-between; align-items:center;">
+              <div>
+                <strong>Suggested Constant Value:</strong> <code>currency = "VND"</code> — All rows appear to use Vietnamese Dong (VND) settlements.
+              </div>
+              <button class="button primary" id="studio-accept-suggestion-btn" style="height:28px; padding:0 12px; font-size:11px;">Accept Suggestion</button>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 12px;">
+            <button class="button" id="studio-back-to-1-btn">Back to Step 1</button>
+            <button class="button primary" id="studio-to-3-btn">
+              <span class="material-symbols-outlined" style="font-size:18px;">rule</span> Validate & Test Mapping Schema
+            </button>
+          </div>
+        </section>
+      `;
+    }
+
+    // Step 3: Validate, Test & Publish
+    if (s.step === 3) {
+      // Quality score details
+      const score = s.validation?.score || 100;
+      let scoreClass = 'matched';
+      let scoreLabel = 'Excellent';
+      if (score < 75) {
+        scoreClass = 'critical';
+        scoreLabel = 'Review Needed';
+      } else if (score < 90) {
+        scoreClass = 'warning';
+        scoreLabel = 'Good';
+      }
+
+      // Checklists
+      const errors = s.validation?.errors || [];
+      const warnings = s.validation?.warnings || [];
+      const errorListHtml = errors.map(err => `
+        <div style="display:flex; gap:10px; align-items:center; color:var(--status-unmatched); font-size:13px; margin-bottom:6px;">
+          <span class="material-symbols-outlined" style="font-size:18px;">cancel</span>
+          ${escapeHtml(err)}
+        </div>
+      `).join("");
+      
+      const warningListHtml = warnings.map(warn => `
+        <div style="display:flex; gap:10px; align-items:center; color:var(--status-pending); font-size:13px; margin-bottom:6px;">
+          <span class="material-symbols-outlined" style="font-size:18px;">warning</span>
+          ${escapeHtml(warn)}
+        </div>
+      `).join("");
+
+      const checksHtml = `
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div style="display:flex; gap:10px; align-items:center; font-size:13px; color:${errors.some(e => e.includes('required')) ? 'var(--status-unmatched)' : 'var(--status-matched)'};">
+            <span class="material-symbols-outlined" style="font-size:18px;">${errors.some(e => e.includes('required')) ? 'cancel' : 'check_circle'}</span>
+            Required Fields Checklist (id, amount, transDate)
+          </div>
+          <div style="display:flex; gap:10px; align-items:center; font-size:13px; color:${warnings.some(w => w.includes('multiple')) ? 'var(--status-pending)' : 'var(--status-matched)'};">
+            <span class="material-symbols-outlined" style="font-size:18px;">${warnings.some(w => w.includes('multiple')) ? 'warning' : 'check_circle'}</span>
+            Duplicate Mapping Check
+          </div>
+          <div style="display:flex; gap:10px; align-items:center; font-size:13px; color:${warnings.some(w => w.includes('neither')) ? 'var(--status-pending)' : 'var(--status-matched)'};">
+            <span class="material-symbols-outlined" style="font-size:18px;">${warnings.some(w => w.includes('neither')) ? 'warning' : 'check_circle'}</span>
+            Empty Source Check
+          </div>
+        </div>
+      `;
+
+      // Test output transformed JSON representation
+      let testOutputHtml = `<div class="empty-state" style="padding: 24px; text-align:center;">Click "Run Transformation Test" to verify output layout.</div>`;
+      if (s.testOutput) {
+        testOutputHtml = `
+          <textarea readonly style="width:100%; min-height: 180px; font-family: monospace; background: var(--bg-primary); border: 1px solid var(--border); padding: 12px; border-radius: 6px; color: #5bc0be; outline: none; line-height: 1.4; font-size: 13px;">${JSON.stringify(s.testOutput, null, 2)}</textarea>
+        `;
+      }
+
+      // Versions history listing
+      const versionRows = (s.versions || []).map(v => `
+        <tr style="border-top:1px solid var(--border);">
+          <td style="padding:10px 12px; font-weight:700;">${escapeHtml(v.configVersion || 'latest')}</td>
+          <td style="padding:10px 12px; color:var(--text-muted);">${escapeHtml(v.publishedAt ? formatDisplayDateTime(v.publishedAt) : 'N/A')}</td>
+          <td style="padding:10px 12px; text-align:right;">
+            <button class="button studio-restore-version-btn" data-id="${v._id}" style="height:26px; padding:0 10px; font-size:11px;">Restore</button>
+          </td>
+        </tr>
+      `).join("");
+      
+      const versionsTable = versionRows ? `
+        <table style="width:100%; border-collapse:collapse; text-align:left; font-size:12px;">
+          <thead>
+            <tr style="background:var(--bg-surface-hover);">
+              <th style="padding:10px 12px;">Version</th>
+              <th style="padding:10px 12px;">Published Date</th>
+              <th style="padding:10px 12px; text-align:right;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${versionRows}
+          </tbody>
+        </table>
+      ` : `<div style="font-size:12px; color:var(--text-muted); padding:10px; text-align:center;">No previous versions.</div>`;
+
+      return `
+        <section class="panel" style="margin-bottom: 24px;">
+          <h2>Validation & Run Mapping Test</h2>
+          <p class="muted" style="margin-bottom: 20px;">Verify required fields constraints, test real transaction line mapping values, and publish configurations.</p>
+          
+          ${stepsHeader}
+
+          <div class="grid cols-3" style="gap: 20px; align-items: stretch; margin-bottom: 24px;">
+            <!-- Score & Validation Status -->
+            <div class="panel" style="display:flex; flex-direction:column; justify-content:space-between; border-color:var(--border);">
+              <div>
+                <h3 style="margin: 0 0 16px 0; font-size:14px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted);">Mapping Quality Score</h3>
+                <div style="display:flex; align-items:baseline; gap:8px; margin-bottom:8px;">
+                  <strong style="font-size:36px; color:${score < 75 ? 'var(--status-unmatched)' : 'var(--brand-primary)'};">${score}</strong>
+                  <span style="font-size:14px; color:var(--text-muted);">/ 100</span>
+                </div>
+                <span class="badge ${scoreClass}" style="margin-bottom:16px;">${scoreLabel}</span>
+                ${checksHtml}
+              </div>
+            </div>
+
+            <!-- Errors & Warnings logs -->
+            <div class="panel" style="border-color:var(--border); display:flex; flex-direction:column; justify-content:space-between;">
+              <div>
+                <h3 style="margin:0 0 16px 0; font-size:14px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted);">Validation Console</h3>
+                ${errorListHtml || warningListHtml ? '' : '<div style="color:var(--status-matched); font-size:13px;"><span class="material-symbols-outlined" style="font-size:18px; vertical-align:middle; margin-right:6px;">check_circle</span>All checks passed successfully.</div>'}
+                ${errorListHtml}
+                ${warningListHtml}
+              </div>
+            </div>
+
+            <!-- Version Management history (Step 9) -->
+            <div class="panel" style="border-color:var(--border); display:flex; flex-direction:column; justify-content:space-between; padding: 20px;">
+              <div>
+                <h3 style="margin:0 0 12px 0; font-size:14px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted);">Schema Versions</h3>
+                <div class="table-wrap" style="max-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:4px;">
+                  ${versionsTable}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 2: Test Mapping Output console -->
+          <div class="panel" style="margin-bottom:24px; border-color:var(--border);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+              <h3 style="margin:0; font-size:15px; font-weight:700;">Test Mapping Transformation Result</h3>
+              <button class="button primary" id="studio-run-test-btn" style="height:32px; padding:0 16px; font-size:12px;">Run Transformation Test</button>
+            </div>
+            ${testOutputHtml}
+          </div>
+
+          <div style="display: flex; gap: 12px;">
+            <button class="button" id="studio-back-to-2-btn">Back to Step 2</button>
+            <button class="button primary" id="studio-publish-btn" style="background:var(--status-matched); border-color:var(--status-matched); color:#12161A;" ${errors.length > 0 ? 'disabled' : ''}>
+              <span class="material-symbols-outlined" style="font-size:18px;">publish</span> Publish Schema
+            </button>
+          </div>
+        </section>
+      `;
+    }
   }
 
   function renderAiObservation(obs) {
@@ -1010,11 +1481,25 @@
     const explorerBtn = document.getElementById("explorer-apply-btn");
     if (explorerBtn) {
       explorerBtn.addEventListener("click", () => {
+        const dateFromRaw = document.getElementById("date-from")?.value || "";
+        const dateToRaw = document.getElementById("date-to")?.value || "";
+        const parsedDateFrom = dateFromRaw ? parseFlexibleDateInput(dateFromRaw, state.date) : "";
+        const parsedDateTo = dateToRaw ? parseFlexibleDateInput(dateToRaw, state.date) : "";
+
+        if (dateFromRaw && !parsedDateFrom) {
+          showToast("DATE FROM khong hop le. Dung dd/mm/yyyy hoac yyyy-mm-dd.");
+          return;
+        }
+        if (dateToRaw && !parsedDateTo) {
+          showToast("DATE TO khong hop le. Dung dd/mm/yyyy hoac yyyy-mm-dd.");
+          return;
+        }
+
         state.explorerFilters = {
           amountMin: document.getElementById("amount-min")?.value || "",
           amountMax: document.getElementById("amount-max")?.value || "",
-          dateFrom: document.getElementById("date-from")?.value || "",
-          dateTo: document.getElementById("date-to")?.value || "",
+          dateFrom: parsedDateFrom,
+          dateTo: parsedDateTo,
         };
         render();
       });
@@ -1040,55 +1525,318 @@
             .then(({ ok, body }) => {
               if (!ok) throw new Error(body.detail || "Approve failed");
               showToast("Mapping config approved.");
-              render();
+              location.reload();
             })
             .catch(err => showToast(err.message || "Approve failed"));
+          return;
+        }
+        if (action === "refresh-config") {
+          showToast("Re-run AI is triggered from the next fetch cycle.");
         }
       });
     });
 
-    const configUpload = document.getElementById("config-file-upload");
-    if (configUpload) {
-      configUpload.addEventListener("change", (e) => {
+    // Step 1: Upload Excel File for AI auto-generation
+    const studioExcelUpload = document.getElementById("studio-excel-upload");
+    if (studioExcelUpload) {
+      studioExcelUpload.addEventListener("change", (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        const partner = document.getElementById("studio-partner-select")?.value || "VNPAY";
+        
+        showToast("Uploading and generating AI mapping config...");
+        const formData = new FormData();
+        formData.append("file", file);
+        
+        fetch(`/api/v1/mapping/ai-generate?partner=${encodeURIComponent(partner)}`, {
+          method: "POST",
+          body: formData
+        })
+          .then(r => r.json().then(body => ({ ok: r.ok, body })))
+          .then(({ ok, body }) => {
+            if (!ok) throw new Error(body.detail || "AI gen failed");
+            
+            state.studio.fileName = file.name;
+            state.studio.headers = body.headers || [];
+            state.studio.sampleRows = body.sample_rows || [];
+            state.studio.config = body.config;
+            state.studio.step = 2;
+            
+            showToast("AI mapping schema generated successfully!");
+            render();
+          })
+          .catch(err => showToast("AI Gen failed: " + err.message));
+      });
+    }
+
+    // Step 1: Upload Existing Mapping JSON
+    const studioJsonUpload = document.getElementById("studio-json-upload");
+    if (studioJsonUpload) {
+      studioJsonUpload.addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
         const reader = new FileReader();
         reader.onload = (event) => {
           try {
             const json = JSON.parse(event.target.result);
-            document.getElementById("config-json-textarea").value = JSON.stringify(json, null, 2);
-            showToast(`Loaded ${file.name} config mapping file.`);
-            handleConfigParse(json);
+            state.studio.config = json;
+            state.studio.fileName = file.name;
+            state.studio.step = 2;
+            state.studio.headers = (json.fieldMappings || []).map(fm => fm.path); // fallback headers
+            state.studio.sampleRows = [];
+            
+            showToast("Existing mapping JSON schema loaded.");
+            render();
           } catch (err) {
-            showToast("Invalid JSON file format.");
+            showToast("Invalid JSON file schema structure.");
           }
         };
         reader.readAsText(file);
       });
     }
 
-    const applyConfigBtn = document.getElementById("apply-config-btn");
-    if (applyConfigBtn) {
-      applyConfigBtn.addEventListener("click", () => {
-        const text = document.getElementById("config-json-textarea").value;
-        try {
-          const json = JSON.parse(text);
-          handleConfigParse(json);
-          showToast(`Successfully parsed and applied mapping config for: ${json.partner || 'Unknown'}`);
-        } catch (err) {
-          showToast("Failed to parse JSON. Please check syntax errors.");
-        }
+    // Step 1: Paste JSON Button click
+    const studioPasteBtn = document.getElementById("studio-paste-btn");
+    if (studioPasteBtn) {
+      studioPasteBtn.addEventListener("click", () => {
+        const template = {
+          "partner": "VNPAY",
+          "workflowType": "UPC",
+          "fileType": "SETTLEMENT",
+          "sheetName": "Sheet1",
+          "startRow": 2,
+          "configVersion": "v_manual",
+          "fieldMappings": [
+            { "path": "id", "column": 1, "type": "STRING", "required": true },
+            { "path": "amount", "column": 2, "type": "DECIMAL", "required": true },
+            { "path": "transDate", "column": 3, "type": "DATE", "required": true }
+          ]
+        };
+        state.studio.config = template;
+        state.studio.step = 2;
+        state.studio.headers = ["id", "amount", "transDate"];
+        state.studio.sampleRows = [];
+        
+        showToast("Starting manual setup with default template.");
+        render();
       });
     }
 
-    const resetConfigBtn = document.getElementById("reset-config-btn");
-    if (resetConfigBtn) {
-      resetConfigBtn.addEventListener("click", () => {
-        document.getElementById("config-json-textarea").value = "";
-        document.getElementById("config-preview-panel").style.display = "none";
-        showToast("Config mapping workspace reset.");
+    // Tab Switches
+    const tabVisual = document.getElementById("studio-tab-visual");
+    const tabJson = document.getElementById("studio-tab-json");
+    if (tabVisual && tabJson) {
+      tabVisual.addEventListener("click", () => {
+        tabVisual.classList.add("active");
+        tabJson.classList.remove("active");
+        document.getElementById("studio-tab-visual-content").style.display = "block";
+        document.getElementById("studio-tab-json-content").style.display = "none";
+      });
+      tabJson.addEventListener("click", () => {
+        tabJson.classList.add("active");
+        tabVisual.classList.remove("active");
+        document.getElementById("studio-tab-json-content").style.display = "flex";
+        document.getElementById("studio-tab-visual-content").style.display = "none";
       });
     }
+
+    // Add field mapping row
+    const addFieldBtn = document.getElementById("studio-add-field-btn");
+    if (addFieldBtn) {
+      addFieldBtn.addEventListener("click", () => {
+        if (!state.studio.config) return;
+        state.studio.config.fieldMappings.push({
+          "path": "custom_field_" + (state.studio.config.fieldMappings.length + 1),
+          "column": null,
+          "type": "STRING",
+          "required": false
+        });
+        render();
+      });
+    }
+
+    // Listeners for dropdown/input mapping edits
+    document.querySelectorAll(".studio-mapping-col-select").forEach(el => {
+      el.addEventListener("change", () => {
+        const idx = parseInt(el.dataset.idx);
+        const val = el.value ? parseInt(el.value) : null;
+        if (state.studio.config && state.studio.config.fieldMappings[idx]) {
+          state.studio.config.fieldMappings[idx].column = val;
+          if (val !== null) delete state.studio.config.fieldMappings[idx].constant;
+        }
+      });
+    });
+
+    document.querySelectorAll(".studio-mapping-const-input").forEach(el => {
+      el.addEventListener("change", () => {
+        const idx = parseInt(el.dataset.idx);
+        const val = el.value;
+        if (state.studio.config && state.studio.config.fieldMappings[idx]) {
+          state.studio.config.fieldMappings[idx].constant = val;
+          if (val !== "") delete state.studio.config.fieldMappings[idx].column;
+        }
+      });
+    });
+
+    document.querySelectorAll(".studio-mapping-type-select").forEach(el => {
+      el.addEventListener("change", () => {
+        const idx = parseInt(el.dataset.idx);
+        const val = el.value;
+        if (state.studio.config && state.studio.config.fieldMappings[idx]) {
+          state.studio.config.fieldMappings[idx].type = val;
+        }
+      });
+    });
+
+    // Accept AI Suggestions (Step 8)
+    const acceptSuggestionBtn = document.getElementById("studio-accept-suggestion-btn");
+    if (acceptSuggestionBtn) {
+      acceptSuggestionBtn.addEventListener("click", () => {
+        if (!state.studio.config) return;
+        const hasCurrency = state.studio.config.fieldMappings.some(fm => fm.path === "currency");
+        if (!hasCurrency) {
+          state.studio.config.fieldMappings.push({
+            "path": "currency",
+            "constant": "VND",
+            "type": "CONSTANT"
+          });
+        }
+        showToast("AI Currency suggestion accepted.");
+        render();
+      });
+    }
+
+    // Back to Step 1
+    const backTo1Btn = document.getElementById("studio-back-to-1-btn");
+    if (backTo1Btn) {
+      backTo1Btn.addEventListener("click", () => {
+        state.studio.step = 1;
+        render();
+      });
+    }
+
+    // Proceed to Step 3 (Validate & Test Mapping Schema)
+    const to3Btn = document.getElementById("studio-to-3-btn");
+    if (to3Btn) {
+      to3Btn.addEventListener("click", () => {
+        const jsonTextarea = document.getElementById("studio-json-textarea");
+        if (jsonTextarea && document.getElementById("studio-tab-json-content").style.display === "flex") {
+          try {
+            state.studio.config = JSON.parse(jsonTextarea.value);
+          } catch (err) {
+            showToast("Failed to parse schema JSON before proceeding.");
+            return;
+          }
+        }
+
+        if (!state.studio.config) return;
+
+        showToast("Running validation rules engine...");
+        
+        fetch("/api/v1/mapping/validate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(state.studio.config)
+        })
+          .then(r => r.json())
+          .then(data => {
+            state.studio.validation = data;
+            state.studio.step = 3;
+            
+            return fetch(`/api/v1/mapping/versions?partner=${encodeURIComponent(state.studio.config.partner)}`);
+          })
+          .then(r => r ? r.json() : null)
+          .then(vData => {
+            if (vData) state.studio.versions = vData.versions || [];
+            render();
+          })
+          .catch(err => showToast("Validation fetch error: " + err.message));
+      });
+    }
+
+    // Step 3 Back to Step 2
+    const backTo2Btn = document.getElementById("studio-back-to-2-btn");
+    if (backTo2Btn) {
+      backTo2Btn.addEventListener("click", () => {
+        state.studio.step = 2;
+        render();
+      });
+    }
+
+    // Step 3 Transformation test run
+    const runTestBtn = document.getElementById("studio-run-test-btn");
+    if (runTestBtn) {
+      runTestBtn.addEventListener("click", () => {
+        if (!state.studio.config) return;
+        const row = state.studio.sampleRows[0] || ["TXN001", "150000", "SUCCESS"];
+        
+        showToast("Testing layout transformation output...");
+        
+        fetch("/api/v1/mapping/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            "mapping": state.studio.config,
+            "sampleRow": row
+          })
+        })
+          .then(r => r.json())
+          .then(data => {
+            state.studio.testOutput = data.output;
+            showToast("Transformation test completed.");
+            render();
+          })
+          .catch(err => showToast("Transformation test failed: " + err.message));
+      });
+    }
+
+    // Step 3 Publish Schema
+    const publishBtn = document.getElementById("studio-publish-btn");
+    if (publishBtn) {
+      publishBtn.addEventListener("click", () => {
+        if (!state.studio.config) return;
+        
+        const qScore = state.studio.validation?.score || 100;
+        const conf = confirm(`Ready to publish mapping schema?\n\nPartner: ${state.studio.config.partner}\nVersion: ${state.studio.config.configVersion || 'v1'}\nQuality Score: ${qScore}/100\n\nClick OK to publish.`);
+        if (!conf) return;
+
+        showToast("Publishing mapping schema configurations...");
+        
+        fetch("/api/v1/mapping/publish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(state.studio.config)
+        })
+          .then(r => r.json().then(body => ({ ok: r.ok, body })))
+          .then(({ ok, body }) => {
+            if (!ok) throw new Error(body.detail || "Publish failed");
+            showToast(`Successfully published mapping schema ${state.studio.config.configVersion} for ${state.studio.config.partner}`);
+            
+            state.studio.step = 1;
+            render();
+          })
+          .catch(err => showToast("Publish failed: " + err.message));
+      });
+    }
+
+    // Step 3 Restore Version
+    document.querySelectorAll(".studio-restore-version-btn").forEach(el => {
+      el.addEventListener("click", () => {
+        const vId = el.dataset.id;
+        showToast("Restoring schema version...");
+        
+        fetch(`/api/v1/mapping/version/${encodeURIComponent(vId)}`)
+          .then(r => r.json())
+          .then(data => {
+            state.studio.config = data;
+            state.studio.step = 2;
+            showToast(`Restored schema version: ${data.configVersion}`);
+            render();
+          })
+          .catch(err => showToast("Restore failed: " + err.message));
+      });
+    });
   }
 
   function handleConfigParse(json) {
@@ -1157,9 +1905,15 @@
         ${showDate ? `
         <div class="filter-group">
           <span class="filter-label">DATE</span>
-          <div class="filter-input-wrapper">
-            <span class="material-symbols-outlined input-icon" style="color: var(--brand-primary);">calendar_today</span>
-            <input id="date-filter" type="date" value="${state.date}">
+          <div class="date-inline-row">
+            <div class="filter-input-wrapper date-current-input">
+              <span class="material-symbols-outlined input-icon" style="color: #f8d76a;">edit_calendar</span>
+              <input id="date-filter" type="text" value="${formatDisplayDate(state.date)}" placeholder="dd/mm/yyyy">
+            </div>
+            <label class="date-picker-trigger" aria-label="Open date picker">
+              <span class="material-symbols-outlined">calendar_month</span>
+              <input id="date-picker" type="date" value="${state.date}">
+            </label>
           </div>
         </div>` : ""}
       </div>

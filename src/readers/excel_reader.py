@@ -42,6 +42,7 @@ class ExcelStreamReader:
         start_row: int = 1,
         skip_empty_rows: bool = True,
         skip_patterns: list[str] | None = None,
+        fallback_on_missing_sheet: bool = False,
     ) -> None:
         """Initialize the reader with a file path.
 
@@ -77,6 +78,7 @@ class ExcelStreamReader:
             skip_patterns if skip_patterns is not None
             else self.DEFAULT_SKIP_PATTERNS
         )
+        self._fallback_on_missing_sheet: bool = fallback_on_missing_sheet
 
     @classmethod
     def from_mapping_config(
@@ -99,6 +101,7 @@ class ExcelStreamReader:
             sheet_name=config.sheet_name,
             start_row=config.start_row,
             skip_empty_rows=True,
+            fallback_on_missing_sheet=True,
         )
 
     def __enter__(self) -> Self:
@@ -155,8 +158,16 @@ class ExcelStreamReader:
         self._require_workbook()
         if self._sheet_name is not None:
             if self._sheet_name not in self._workbook.sheetnames:  # type: ignore[union-attr]
-                raise KeyError(f"Sheet '{self._sheet_name}' not found")
-            self._worksheet = self._workbook[self._sheet_name]  # type: ignore[index]
+                if self._fallback_on_missing_sheet:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Sheet '{self._sheet_name}' not found. Falling back to active/first sheet: '{self._workbook.active.title}'"
+                    )
+                    self._worksheet = self._workbook.active  # type: ignore[assignment]
+                else:
+                    raise KeyError(f"Sheet '{self._sheet_name}' not found")
+            else:
+                self._worksheet = self._workbook[self._sheet_name]  # type: ignore[index]
         elif self._sheet_index is not None:
             try:
                 self._worksheet = self._workbook.worksheets[self._sheet_index]  # type: ignore[union-attr]

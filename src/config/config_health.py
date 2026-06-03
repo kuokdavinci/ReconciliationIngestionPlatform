@@ -236,8 +236,13 @@ async def record_config_run_health(
     """
     error_rate = _compute_error_rate(total_rows, failed_rows)
     stale = error_rate >= ERROR_RATE_THRESHOLD
+    query = _config_query(partner, workflow_type, file_type, config_version)
+    doc = await config_repo.collection.find_one(query)
+    if doc and doc.get("configHealth") is None:
+        await config_repo.collection.update_one(query, {"$set": {"configHealth": {}}})
+
     await config_repo.collection.update_one(
-        _config_query(partner, workflow_type, file_type, config_version),
+        query,
         {
             "$set": {
                 "configHealth.lastRunTotalRows": total_rows,
@@ -277,8 +282,13 @@ async def _attach_signature(
 ) -> None:
     sig_dict = sig.to_dict()
     config.structure_signature = sig_dict
+    query = _config_query(partner, workflow_type, file_type, config_version)
+    doc = await config_repo.collection.find_one(query)
+    if doc and doc.get("configHealth") is None:
+        await config_repo.collection.update_one(query, {"$set": {"configHealth": {}}})
+
     await config_repo.collection.update_one(
-        _config_query(partner, workflow_type, file_type, config_version),
+        query,
         {
             "$set": {
                 "structureSignature": sig_dict,

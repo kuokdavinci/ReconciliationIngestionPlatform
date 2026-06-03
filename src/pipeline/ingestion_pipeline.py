@@ -256,6 +256,12 @@ class IngestionPipeline:
                     )
 
             # Step 5-7: Create reader, normalizer, validator
+            if config.sheet_name and "{" in config.sheet_name:
+                from src.fetchers.base import BaseFetcher
+                import copy
+                config = copy.copy(config)
+                config.sheet_name = BaseFetcher.interpolate_date(config.sheet_name, reconciliation_date)
+
             with create_reader(file_path, config) as reader:
                 normalizer = TransactionNormalizer(config.field_mappings)
                 validator = Validator(

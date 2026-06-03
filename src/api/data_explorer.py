@@ -4,6 +4,8 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from bson import Decimal128
+
 from src.models.data_container import DataContainer, DataContainerRepository
 from src.models.reconciliation_file import ReconciliationFileRepository
 
@@ -56,6 +58,10 @@ async def list_transactions(
     date: Optional[str] = Query(default=None, description="Date (YYYY-MM-DD)"),
     trace: Optional[str] = Query(default=None, description="Transaction trace ID"),
     status: Optional[str] = Query(default=None, description="Transaction status"),
+    amount_min: Optional[float] = Query(default=None, description="Minimum amount filter"),
+    amount_max: Optional[float] = Query(default=None, description="Maximum amount filter"),
+    date_from: Optional[str] = Query(default=None, description="Start date (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(default=None, description="End date (YYYY-MM-DD)"),
     limit: int = Query(default=100, ge=1, le=1000, description="Max results (max 1000)"),
     offset: int = Query(default=0, ge=0, description="Number of results to skip"),
 ):
@@ -84,6 +90,22 @@ async def list_transactions(
 
         if status:
             query["partnerData.status"] = status
+
+        if amount_min is not None or amount_max is not None:
+            amt_filter: dict = {}
+            if amount_min is not None:
+                amt_filter["$gte"] = Decimal128(str(amount_min))
+            if amount_max is not None:
+                amt_filter["$lte"] = Decimal128(str(amount_max))
+            query["partnerData.amount"] = amt_filter
+
+        if date_from or date_to:
+            dr_filter: dict = {}
+            if date_from:
+                dr_filter["$gte"] = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            if date_to:
+                dr_filter["$lte"] = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+            query["reconciliationDate"] = dr_filter
 
         repo = DataContainerRepository(db)
         records = await repo.find_many(query)
@@ -161,6 +183,15 @@ async def list_files(
             d = r.model_dump(by_alias=True)
             if "_id" in d:
                 d["_id"] = str(d["_id"])
+            dc_count = await db["data_container"].count_documents({"sourceFileId": d["_id"]})
+            file_partner = d.get("partner", "")
+            file_date_raw = d.get("reconciliationDate")
+            file_date_str = file_date_raw.strftime("%Y-%m-%d") if hasattr(file_date_raw, "strftime") else str(file_date_raw)[:10] if file_date_raw else None
+            rr_count = 0
+            if file_partner and file_date_str:
+                rr_count = await db["reconciliation_result"].count_documents({"partner": file_partner, "date": file_date_str})
+            record_count = max(dc_count, rr_count)
+            d["recordsCount"] = record_count
             files.append(d)
 
         return {

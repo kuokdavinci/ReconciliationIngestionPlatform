@@ -215,9 +215,11 @@ async def main():
     parser.add_argument("--list-jobs", action="store_true", help="List all scheduled jobs")
     parser.add_argument("--date", type=str, help="Date for reconciliation (YYYY-MM-DD)")
     parser.add_argument("--partner", type=str, default="MOMO", help="Partner identifier for reconciliation")
+    parser.add_argument("--data", type=str, help="Path to local data file (bypasses SFTP)")
     parser.add_argument("--seed-mock", action="store_true", help="Seed mock internal transactions for testing reconciliation")
     parser.add_argument("--port", type=int, default=8000, help="Port for FastAPI server (default: 8000)")
     parser.add_argument("--serve", action="store_true", help="Start FastAPI server")
+    parser.add_argument("--reconcile", type=str, help="Reconciliation date (YYYY-MM-DD) to run reconciliation directly")
     args = parser.parse_args()
 
     # 1. Database Connection
@@ -349,44 +351,62 @@ async def main():
         await config_repo.create(config_doc)
         print("MappingConfig successfully uploaded to MongoDB!")
 
-    # 3. SFTP Connection and File Download
-    sftp_host = os.getenv("SFTP_HOST", "localhost")
-    sftp_port = int(os.getenv("SFTP_PORT", "2222"))
-    sftp_user = os.getenv("SFTP_USER", "foo")
-    sftp_pass = os.getenv("SFTP_PASS", "pass")
-    
-    remote_path = f"/upload/{remote_filename}"
-    local_dir = Path("./tmp_downloads")
-    local_dir.mkdir(exist_ok=True)
-    local_path = local_dir / remote_filename
-    
-    print(f"Connecting to SFTP {sftp_user}@{sftp_host}:{sftp_port}...")
-    try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(sftp_host, port=sftp_port, username=sftp_user, password=sftp_pass, timeout=10)
-        
-        sftp = ssh.open_sftp()
-        print(f"Downloading {remote_path} from SFTP...")
-        sftp.get(remote_path, str(local_path))
-        sftp.close()
-        ssh.close()
-        print(f"File downloaded successfully to {local_path}")
-    except Exception as e:
-        print(f"SFTP connection/download failed: {e}")
-        fallback_path = Path("./sftp_data") / remote_filename
-        if fallback_path.exists():
-            print(f"Using local sftp_data fallback: {fallback_path}")
-            local_path = fallback_path
-        else:
-            print("Error: Could not retrieve file from SFTP or local sftp_data folder.")
+    # Determine partner and file path
+    partner = args.partner
+    if not args.data and not args.config:
+        print("Error: Provide --data (local file) or --config (SFTP workflow).")
+        return
+    if args.data:
+        local_path = Path(args.data)
+        if not local_path.exists():
+            print(f"Error: Data file not found: {local_path}")
             return
+        print(f"Using local data file: {local_path}")
+    else:
+        # 3. SFTP Connection and File Download
+        sftp_host = os.getenv("SFTP_HOST", "localhost")
+        sftp_port = int(os.getenv("SFTP_PORT", "2222"))
+        sftp_user = os.getenv("SFTP_USER", "foo")
+        sftp_pass = os.getenv("SFTP_PASS", "pass")
+        
+        remote_path = f"/upload/{remote_filename}"
+        local_dir = Path("./tmp_downloads")
+        local_dir.mkdir(exist_ok=True)
+        local_path = local_dir / remote_filename
+        
+        print(f"Connecting to SFTP {sftp_user}@{sftp_host}:{sftp_port}...")
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(sftp_host, port=sftp_port, username=sftp_user, password=sftp_pass, timeout=10)
+            
+            sftp = ssh.open_sftp()
+            print(f"Downloading {remote_path} from SFTP...")
+            sftp.get(remote_path, str(local_path))
+            sftp.close()
+            ssh.close()
+            print(f"File downloaded successfully to {local_path}")
+        except Exception as e:
+            print(f"SFTP connection/download failed: {e}")
+            fallback_path = Path("./sftp_data") / remote_filename
+            if fallback_path.exists():
+                print(f"Using local sftp_data fallback: {fallback_path}")
+                local_path = fallback_path
+            else:
+                print("Error: Could not retrieve file from SFTP or local sftp_data folder.")
+                return
+
+    # Determine reconciliation date
+    if args.date:
+        recon_date = datetime.strptime(args.date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    else:
+        recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
 
     # 4. Clean up previous records for a fresh run
-    reconciliation_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
-    print(f"Cleaning up any existing records for {partner} on 2024-07-07...")
-    await db["reconciliation_file"].delete_many({"partner": partner, "reconciliationDate": reconciliation_date})
-    await db["data_container"].delete_many({"identify": partner, "reconciliationDate": reconciliation_date})
+    date_str = recon_date.strftime("%Y-%m-%d")
+    print(f"Cleaning up any existing records for {partner} on {date_str}...")
+    await db["reconciliation_file"].delete_many({"partner": partner, "reconciliationDate": recon_date})
+    await db["data_container"].delete_many({"identify": partner, "reconciliationDate": recon_date})
     
     # 5. Run Ingestion Pipeline
     config_repo = MappingConfigRepository(db)
@@ -402,8 +422,9 @@ async def main():
         partner=partner,
         workflow_type="UPC",
         file_type=FileType.SETTLEMENT,
-        reconciliation_date=reconciliation_date,
-        config_version="v_template"
+        reconciliation_date=recon_date,
+        config_version="v_template",
+        enable_config_health_check=True,
     )
     
     # 6. Print Results
@@ -421,10 +442,11 @@ async def main():
     saved_count = await db["data_container"].count_documents({"identify": partner})
     print(f"Verified documents in MongoDB (data_container): {saved_count}")
     
-    if local_path.exists() and "tmp_downloads" in str(local_path):
+    # Clean up temp files (only if downloaded via SFTP)
+    if not args.data and local_path.exists() and "tmp_downloads" in str(local_path):
         try:
             local_path.unlink()
-            # Only remove directory if it is empty
+            local_dir = Path("./tmp_downloads")
             if local_dir.exists() and not any(local_dir.iterdir()):
                 local_dir.rmdir()
             print("Cleaned up temporary download files.")

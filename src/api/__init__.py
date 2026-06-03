@@ -73,7 +73,10 @@ def create_app() -> FastAPI:
 
     # Register mappings router
     from src.api.mappings import router as mappings_router
-
     app.include_router(mappings_router)
+
+    # Register mappings v2 router
+    from src.api.mappings import router_v2 as mappings_v2_router
+    app.include_router(mappings_v2_router)
 
     return app

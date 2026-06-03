@@ -53,10 +53,25 @@ body {
   color: var(--text-primary);
   background: var(--bg-primary);
   font-family: var(--font);
-  font-size: 18px; /* Base font size increased to 18px */
+  font-size: 14px; /* Crisp base font size for dashboard tables and layout */
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 button, input, select, textarea {
@@ -128,7 +143,7 @@ button, input, select, textarea {
 
 .brand strong {
   display: block;
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 800;
   letter-spacing: -0.02em;
   color: var(--text-primary);
@@ -136,7 +151,7 @@ button, input, select, textarea {
 
 .brand-subtitle {
   display: block;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -192,6 +207,7 @@ button, input, select, textarea {
 .page-filters {
   display: flex;
   gap: 16px;
+  flex-wrap: wrap;
   align-items: flex-end;
   margin-bottom: 24px;
   padding: 16px 20px;
@@ -204,6 +220,11 @@ button, input, select, textarea {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+}
+
+.page-filters .filter-group:last-child {
+  flex: 1;
 }
 
 .page-filters .filter-label {
@@ -223,6 +244,63 @@ button, input, select, textarea {
   padding: 8px 12px;
   min-width: 180px;
   transition: var(--transition-smooth);
+}
+
+.explorer-filters .filter-group {
+  flex: 1 1 180px;
+}
+
+.explorer-filters .filter-group:last-child {
+  flex: 0 0 auto;
+}
+
+.explorer-filters .filter-input-wrapper {
+  min-width: 0;
+}
+
+.explorer-filters .button {
+  white-space: nowrap;
+}
+
+.page-filters .date-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-filters .date-current-input {
+  min-width: 220px;
+}
+
+.date-picker-trigger {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: #f8d76a;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: var(--transition-smooth);
+}
+
+.date-picker-trigger:hover {
+  border-color: var(--brand-primary);
+  background: rgba(240, 185, 11, 0.08);
+}
+
+.date-picker-trigger .material-symbols-outlined {
+  font-size: 20px;
+}
+
+.date-picker-trigger input[type="date"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .page-filters .filter-input-wrapper:hover {
@@ -252,11 +330,31 @@ button, input, select, textarea {
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23F0B90B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  padding-right: 24px;
 }
 
 .page-filters select option {
   background: var(--bg-surface);
   color: var(--text-primary);
+}
+
+@media (max-width: 960px) {
+  .page-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-filters .filter-group:last-child,
+  .page-filters .date-current-input {
+    width: 100%;
+  }
+
+  .page-filters .date-inline-row {
+    width: 100%;
+  }
 }
 
 .sidebar-footer {
@@ -268,7 +366,7 @@ button, input, select, textarea {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--text-muted);
@@ -348,7 +446,7 @@ button, input, select, textarea {
 }
 
 select, input[type="date"], input[type="text"] {
-  height: 44px; /* Larger inputs */
+  height: 44px;
   padding: 0 16px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -359,9 +457,28 @@ select, input[type="date"], input[type="text"] {
   transition: var(--transition-smooth);
 }
 
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23F0B90B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 36px;
+  cursor: pointer;
+}
+
+select:hover, input[type="date"]:hover, input[type="text"]:hover {
+  border-color: rgba(240, 185, 11, 0.4);
+}
+
 select:focus, input[type="date"]:focus, input[type="text"]:focus {
   border-color: var(--brand-primary);
   box-shadow: 0 0 0 3px rgba(240, 185, 11, 0.2);
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.8);
+  cursor: pointer;
 }
 
 /* Content Area */
@@ -427,7 +544,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 }
 
 .metric span {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 800;
   letter-spacing: 0.08em;
   color: var(--text-muted);
@@ -437,7 +554,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 .metric strong {
   display: block;
   margin-top: 10px;
-  font-size: 32px;
+  font-size: 36px;
   font-weight: 800;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
@@ -447,7 +564,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 .metric small {
   display: block;
   margin-top: 6px;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--text-muted);
 }
 
@@ -496,7 +613,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 }
 
 .insight-type-badge {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -507,7 +624,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 }
 
 .insight-severity {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   padding: 3px 8px;
   border-radius: 4px;
@@ -530,7 +647,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 }
 
 .insight-title {
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 700;
   line-height: 1.4;
   margin: 0;
@@ -538,7 +655,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 }
 
 .insight-desc {
-  font-size: 13px;
+  font-size: 15px;
   color: #94A3B8;
   line-height: 1.5;
 }
@@ -576,16 +693,11 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.05em;
   color: var(--brand-accent-blue);
 }
-
-.insight-action-box.critical .insight-action-header { color: #f87171; }
-.insight-action-box.high .insight-action-header { color: #fb923c; }
-.insight-action-box.medium .insight-action-header { color: #60a5fa; }
-.insight-action-box.low .insight-action-header { color: #4ade80; }
 
 .insight-action-header .action-icon {
   font-size: 14px;
@@ -609,7 +721,7 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
 }
 
@@ -963,6 +1075,11 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 .button:hover {
   background: var(--bg-surface-hover);
   border-color: var(--brand-primary);
+  transform: translateY(-1px);
+}
+
+.button:active {
+  transform: translateY(1px) scale(0.98);
 }
 
 .button.primary {
@@ -974,8 +1091,12 @@ select:focus, input[type="date"]:focus, input[type="text"]:focus {
 }
 
 .button.primary:hover {
-  transform: translateY(-1px);
+  transform: translateY(-2px);
   box-shadow: 0 6px 18px rgba(240, 185, 11, 0.35);
+}
+
+.button.primary:active {
+  transform: translateY(1px) scale(0.98);
 }
 
 /* Standardized Tables */
@@ -994,7 +1115,7 @@ table {
 
 th {
   padding: 14px 18px;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.08em;
   color: var(--text-muted);
@@ -1007,7 +1128,7 @@ td {
   padding: 16px 18px;
   border-bottom: 1px solid var(--border);
   color: #E2E8F0;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 tr:last-child td {

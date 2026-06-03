@@ -9,7 +9,12 @@ from typing import Self, TextIO
 
 from src.models.mapping_config import MappingConfig
 
-VALID_EXTENSIONS = {".csv"}
+VALID_EXTENSIONS = {".csv", ".tsv"}
+
+_DELIMITER_MAP = {
+    ".csv": ",",
+    ".tsv": "\t",
+}
 
 
 class CSVStreamReader:
@@ -61,10 +66,13 @@ class CSVStreamReader:
         cls, file_path: str | Path, config: MappingConfig
     ) -> CSVStreamReader:
         """Create a CSVStreamReader from a MappingConfig object."""
+        path = Path(file_path)
+        delimiter = _DELIMITER_MAP.get(path.suffix.lower(), ",")
         return cls(
             file_path=file_path,
             start_row=config.start_row,
             skip_empty_rows=True,
+            delimiter=delimiter,
         )
 
     def __enter__(self) -> Self:

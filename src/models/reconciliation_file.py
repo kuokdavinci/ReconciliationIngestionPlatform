@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.core.enums import FileType, ProcessingStatus
+from src.core.enums import FileType, ProcessingStatus, ReconciliationScopeType
 from src.models.repository import BaseRepository
 
 
@@ -36,6 +36,13 @@ class ReconciliationFile(BaseModel):
     success_rows: int = Field(default=0, alias="successRows")
     failed_rows: int = Field(default=0, alias="failedRows")
     config_version: Optional[str] = Field(default=None, alias="configVersion")
+    scope_type: ReconciliationScopeType = Field(
+        default=ReconciliationScopeType.UNCONFIRMED,
+        alias="scopeType",
+    )
+    scope_confidence: float = Field(default=0.0, alias="scopeConfidence")
+    scope_reason: list[str] = Field(default_factory=list, alias="scopeReason")
+    scope_signals: dict = Field(default_factory=dict, alias="scopeSignals")
     uploaded_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), alias="uploadedAt"
     )

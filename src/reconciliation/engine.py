@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from src.core.enums import ReconciliationStatus, TransactionStatus
+from src.core.enums import ReconciliationScopeType, ReconciliationStatus, TransactionStatus
 from src.models.data_container import DataContainer, DataContainerRepository
 from src.models.internal_transaction import (
     InternalTransaction,
@@ -51,6 +51,19 @@ class ReconciliationEngine:
             return str(pd.id).strip()
         return None
 
+    def _is_finalized_internal_status(self, status: TransactionStatus | str) -> bool:
+        """Return True when an internal transaction is finalized for reconciliation.
+
+        Pending internal rows should not participate in reconciliation yet because
+        they are still in-flight and would inflate `MISSING_PARTNER` counts.
+        """
+        normalized = self._normalize_status(str(status))
+        return normalized in {
+            TransactionStatus.SUCCESS,
+            TransactionStatus.FAILED,
+            TransactionStatus.REVERSED,
+        }
+
     def _pre_check_record(self, partner_record: DataContainer) -> tuple[bool, str]:
         """Pre-check a partner record before reconciliation.
 
@@ -77,7 +90,12 @@ class ReconciliationEngine:
 
         return True, ""
 
-    async def reconcile(self, partner: str, reconciliation_date: datetime) -> list[ReconciliationResult]:
+    async def reconcile(
+        self,
+        partner: str,
+        reconciliation_date: datetime,
+        source_file_id: str | None = None,
+    ) -> list[ReconciliationResult]:
         """Execute reconciliation matching for a given partner and date.
 
         Args:
@@ -88,7 +106,7 @@ class ReconciliationEngine:
             List of generated ReconciliationResult documents.
         """
         self._logger.get_logger().info(
-            f"reconciliation_started for partner={partner} date={reconciliation_date.isoformat()}"
+            f"reconciliation_started for partner={partner} date={reconciliation_date.isoformat()} source_file_id={source_file_id or '-'}"
         )
 
         # 1. Calculate boundaries of target date
@@ -96,27 +114,56 @@ class ReconciliationEngine:
         end_of_day = reconciliation_date.replace(hour=23, minute=59, second=59, microsecond=999999)
         date_str = reconciliation_date.strftime("%Y-%m-%d")
 
+        scope_type = ReconciliationScopeType.FULL_SNAPSHOT
+        if source_file_id:
+            file_doc = await self._db["reconciliation_file"].find_one({"_id": source_file_id})
+            raw_scope = (file_doc or {}).get("scopeType")
+            if raw_scope:
+                try:
+                    scope_type = ReconciliationScopeType(str(raw_scope))
+                except ValueError:
+                    scope_type = ReconciliationScopeType.UNCONFIRMED
+
         # 2. Fetch partner transactions
-        partner_records = await self._data_repo.find_many({
+        partner_query = {
             "identify": partner,
             "reconciliationDate": {
                 "$gte": start_of_day,
                 "$lte": end_of_day,
             }
-        })
+        }
+        if source_file_id and scope_type != ReconciliationScopeType.FULL_SNAPSHOT:
+            partner_query["sourceFileId"] = source_file_id
+        partner_records = await self._data_repo.find_many(partner_query)
 
         # 3. Fetch internal transactions
-        internal_records = await self._internal_repo.find_many({
+        internal_query = {
             "partner": partner,
             "transactionTime": {
                 "$gte": start_of_day,
                 "$lte": end_of_day,
             }
-        })
+        }
+        internal_records = await self._internal_repo.find_many(internal_query)
 
-        # 4. Resolve duplicates in internal transactions (latest updated wins)
+        # 4. Keep only finalized internal transactions, then resolve duplicates
+        finalized_internal_records = [
+            record for record in internal_records
+            if self._is_finalized_internal_status(record.status)
+        ]
+
+        scoped_partner_keys = {
+            key for key in (self._resolve_partner_txn_id(record) for record in partner_records)
+            if key
+        }
+        if scope_type != ReconciliationScopeType.FULL_SNAPSHOT and scoped_partner_keys:
+            finalized_internal_records = [
+                record for record in finalized_internal_records
+                if record.partner_txn_id.strip() in scoped_partner_keys
+            ]
+
         internal_by_key: dict[str, InternalTransaction] = {}
-        for record in internal_records:
+        for record in finalized_internal_records:
             key = record.partner_txn_id.strip()
             if key not in internal_by_key:
                 internal_by_key[key] = record
@@ -142,6 +189,8 @@ class ReconciliationEngine:
                     partner=partner,
                     date=date_str,
                     partnerTxnId=str(partner_record.id),
+                    sourceFileId=source_file_id,
+                    scopeType=scope_type.value,
                     partnerRecordId=str(partner_record.id),
                     reconciliationStatus=ReconciliationStatus.UNMAPPED_SKIPPED,
                 )
@@ -198,6 +247,8 @@ class ReconciliationEngine:
                     internalAmount=internal_amount,
                     partnerStatus=partner_status,
                     internalStatus=internal_status,
+                    sourceFileId=source_file_id,
+                    scopeType=scope_type.value,
                     reconciliationStatus=recon_status,
                     partnerRecordId=str(partner_record.id),
                     internalRecordId=str(internal_record.id),
@@ -212,6 +263,8 @@ class ReconciliationEngine:
                     partnerTxnId=partner_txn_id,
                     partnerAmount=partner_amount,
                     partnerStatus=partner_status,
+                    sourceFileId=source_file_id,
+                    scopeType=scope_type.value,
                     reconciliationStatus=ReconciliationStatus.MISSING_INTERNAL,
                     partnerRecordId=str(partner_record.id),
                 )
@@ -228,6 +281,8 @@ class ReconciliationEngine:
                     internalTxnId=internal_record.id,
                     internalAmount=internal_record.amount,
                     internalStatus=internal_record.status,
+                    sourceFileId=source_file_id,
+                    scopeType=scope_type.value,
                     reconciliationStatus=ReconciliationStatus.MISSING_PARTNER,
                     internalRecordId=str(internal_record.id),
                 )
@@ -235,9 +290,27 @@ class ReconciliationEngine:
 
         # 7. Write results to database
         if results:
-            # Clean up old results for the same keys to ensure idempotency
-            target_ids = [r.id for r in results]
-            await self._result_repo.collection.delete_many({"_id": {"$in": target_ids}})
+            if source_file_id and scope_type == ReconciliationScopeType.REPLACEMENT:
+                # Replacement files should overwrite any prior result rows for the same key set.
+                replacement_keys = list(scoped_partner_keys)
+                await self._result_repo.collection.delete_many({
+                    "partner": partner,
+                    "date": date_str,
+                    "$or": [
+                        {"sourceFileId": source_file_id},
+                        {"partnerTxnId": {"$in": replacement_keys}},
+                    ],
+                })
+            elif source_file_id and scope_type != ReconciliationScopeType.FULL_SNAPSHOT:
+                # For incremental scopes, replace only this file slice.
+                await self._result_repo.collection.delete_many({
+                    "partner": partner,
+                    "date": date_str,
+                    "sourceFileId": source_file_id,
+                })
+            else:
+                # Replace the full partner/date slice so reruns do not leave stale rows behind.
+                await self._result_repo.collection.delete_many({"partner": partner, "date": date_str})
             await self._result_repo.insert_many(results)
 
         self._logger.get_logger().info(

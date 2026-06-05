@@ -111,7 +111,7 @@ async def seed_happy():
     print()
     print("✅ Done. Start the API server and open the dashboard to see happy-case metrics.")
     print("   API:  uv run python run.py serve")
-    print("   Dash: python web/server.py --port 5173 --api http://localhost:8000")
+    print("   Dash: python frontend/server.py --port 5173 --api http://localhost:8000")
 
     client.close()
 

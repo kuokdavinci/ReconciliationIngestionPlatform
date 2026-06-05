@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: str = "json"
     app_name: str = "reconciliation-ingestion"
+    strict_mapping_approval_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_prefix="APP_",

@@ -1,6 +1,7 @@
 """MappingConfig model and repository for dynamic parsing configuration."""
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Optional, Union
 from uuid import UUID, uuid4
 
@@ -11,6 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from src.core.enums import FileType
 from src.core.types import FieldMapping
 from src.models.repository import BaseRepository
+
+
+class MappingConfigStatus(str, Enum):
+    APPROVED = "APPROVED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
 
 
 class MappingConfig(BaseModel):
@@ -43,6 +51,13 @@ class MappingConfig(BaseModel):
     config_health: Optional[dict[str, Any]] = Field(
         default=None, alias="configHealth"
     )
+    status: MappingConfigStatus = MappingConfigStatus.APPROVED
+    approved_at: Optional[datetime] = Field(default=None, alias="approvedAt")
+    approved_by: Optional[str] = Field(default=None, alias="approvedBy")
+    superseded_at: Optional[datetime] = Field(default=None, alias="supersededAt")
+    superseded_by_config_id: Optional[str] = Field(
+        default=None, alias="supersededByConfigId"
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), alias="createdAt"
     )
@@ -72,6 +87,7 @@ class MappingConfigRepository(BaseRepository[MappingConfig]):
                 "partner": partner,
                 "workflowType": workflow_type,
                 "fileType": file_type.value,
+                "status": MappingConfigStatus.APPROVED.value,
             }
         )
 
@@ -80,5 +96,25 @@ class MappingConfigRepository(BaseRepository[MappingConfig]):
     ) -> Optional[MappingConfig]:
         """Find a mapping config by partner and version identifier."""
         return await self.find_one(
-            {"partner": partner, "configVersion": version}
+            {
+                "partner": partner,
+                "configVersion": version,
+                "status": MappingConfigStatus.APPROVED.value,
+            }
         )
+
+    async def find_latest_pending_by_partner_and_type(
+        self, partner: str, workflow_type: str, file_type: FileType
+    ) -> Optional[MappingConfig]:
+        raw = await self.collection.find_one(
+            {
+                "partner": partner,
+                "workflowType": workflow_type,
+                "fileType": file_type.value,
+                "status": MappingConfigStatus.PENDING_APPROVAL.value,
+            },
+            sort=[("createdAt", -1)],
+        )
+        if raw is None:
+            return None
+        return self._from_mongo(raw)

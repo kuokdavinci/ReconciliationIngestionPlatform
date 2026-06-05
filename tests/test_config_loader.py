@@ -162,6 +162,37 @@ class TestLoadByPartnerType:
         self.repository.find_by_partner_and_type.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_cache_invalidated_when_different_config_approved(self):
+        """load_by_partner_type invalidates cache if a different config is approved in DB."""
+        from unittest.mock import MagicMock
+        config = _make_config()
+        key = "MOMO:UPC:SETTLEMENT:latest"
+        self.cache.put(key, config)
+
+        # Create a custom dummy repository class to bypass the Mock checks
+        class DummyCollection:
+            def __init__(self):
+                self.find_one = AsyncMock(return_value={"_id": "different_id"})
+
+        class DummyRepository:
+            def __init__(self):
+                self.collection = DummyCollection()
+                self.find_by_partner_and_type = AsyncMock()
+
+        dummy_repo = DummyRepository()
+        dummy_repo.find_by_partner_and_type.return_value = config
+
+        # Set loader's repository to our dummy
+        self.loader._repository = dummy_repo
+
+        result = await self.loader.load_by_partner_type("MOMO", "UPC", FileType.SETTLEMENT)
+
+        # It should detect the ID mismatch, invalidate the cache, query find_by_partner_and_type, and return config
+        assert result is config
+        dummy_repo.find_by_partner_and_type.assert_called_once()
+        dummy_repo.collection.find_one.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_cache_miss_queries_db_validates_caches_returns(self):
         """load_by_partner_type queries DB on cache miss, validates, caches, returns."""
         config = _make_config()

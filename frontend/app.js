@@ -1248,7 +1248,7 @@
                 <p>${escapeHtml(packet.recommendedAction?.reason || packet.riskSummary?.summary || "-")}</p>
               </div>
               ${packet.reviewedAt ? `<div class="muted" style="font-size:12px;">Reviewed by ${escapeHtml(packet.reviewedBy || "Administrator")} on ${escapeHtml(formatDisplayDateTime(packet.reviewedAt))}</div>` : ""}
-              ${packet._id ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(packet._id)}" data-partner="${escapeHtml(packet.partner)}">Open Approval Desk</button>` : ""}
+              ${packet._id ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(packet._id)}" data-partner="${escapeHtml(packet.partner)}" style="margin-top: 8px;">Open Approval Desk</button>` : ""}
             </article>
           `).join("")}
         </div>

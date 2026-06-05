@@ -1080,15 +1080,15 @@ code,
 }
 
 .badge.severity-high {
-  background: var(--status-warning-bg);
-  color: var(--status-warning);
-  border-color: rgba(240, 185, 11, 0.3);
-}
-
-.badge.severity-medium {
   background: rgba(251, 146, 60, 0.12);
   color: #fb923c;
   border-color: rgba(251, 146, 60, 0.3);
+}
+
+.badge.severity-medium {
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
+  border-color: rgba(240, 185, 11, 0.3);
 }
 
 .badge.severity-low {

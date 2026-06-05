@@ -28,6 +28,33 @@ INDEXES: dict[str, list[IndexModel]] = {
             ],
             name="idx_partner_workflow_type",
         ),
+        IndexModel(
+            [
+                ("partner", ASCENDING),
+                ("workflowType", ASCENDING),
+                ("fileType", ASCENDING),
+                ("status", ASCENDING),
+            ],
+            unique=True,
+            partialFilterExpression={"status": "APPROVED"},
+            name="idx_partner_workflow_type_single_approved",
+        ),
+    ],
+    "copilot_action": [
+        IndexModel(
+            [("status", ASCENDING), ("type", ASCENDING), ("partner", ASCENDING)],
+            name="idx_copilot_action_status_type_partner",
+        ),
+    ],
+    "review_packet": [
+        IndexModel(
+            [("status", ASCENDING), ("partner", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_review_packet_status_partner_created",
+        ),
+        IndexModel(
+            [("proposalConfigId", ASCENDING)],
+            name="idx_review_packet_proposal_config",
+        ),
     ],
     "data_container": [
         IndexModel(
@@ -82,3 +109,8 @@ async def apply_indexes(db: AsyncIOMotorDatabase) -> None:
     """
     for collection_name, indexes in INDEXES.items():
         await db[collection_name].create_indexes(indexes)
+
+    await db["reconciliation_mapping_config"].update_many(
+        {"status": {"$exists": False}},
+        {"$set": {"status": "APPROVED"}},
+    )

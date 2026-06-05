@@ -117,6 +117,8 @@ class FetchConfigRepository:
     async def create(self, config: FetchConfig) -> FetchConfig:
         """Insert a new fetch config into the database."""
         doc = config.model_dump(by_alias=True, exclude_none=False)
+        if "_id" in doc:
+            doc["_id"] = str(doc["_id"])
         await self._collection.insert_one(doc)
         return config
 

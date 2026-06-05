@@ -28,6 +28,8 @@ class StructureSignature:
     column_count: int = 0
     sample_rows: list[list[str]] = field(default_factory=list)
     hash: str = ""
+    header_row_index: int = 1
+    first_data_row_index: int = 2
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -35,6 +37,8 @@ class StructureSignature:
             "columnCount": self.column_count,
             "sampleRows": self.sample_rows[:5],
             "hash": self.hash,
+            "headerRowIndex": self.header_row_index,
+            "firstDataRowIndex": self.first_data_row_index,
         }
 
     @classmethod
@@ -44,6 +48,8 @@ class StructureSignature:
             column_count=data.get("columnCount", 0),
             sample_rows=data.get("sampleRows", []),
             hash=data.get("hash", ""),
+            header_row_index=data.get("headerRowIndex", 1),
+            first_data_row_index=data.get("firstDataRowIndex", 2),
         )
 
 
@@ -85,6 +91,25 @@ def _read_raw_xlsx(path: Path, max_rows: int = 20) -> list[list[str]]:
         if len(rows) >= max_rows:
             break
         rows.append(normalized)
+    wb.close()
+    return rows
+
+
+def _read_raw_xlsx_with_indices(
+    path: Path,
+    max_rows: int = 20,
+) -> list[tuple[int, list[str]]]:
+    import openpyxl
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    ws = wb.active
+    rows: list[tuple[int, list[str]]] = []
+    for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        normalized = [_normalize_cell(c) for c in row]
+        if not rows and not any(normalized):
+            continue
+        if len(rows) >= max_rows:
+            break
+        rows.append((row_idx, normalized))
     wb.close()
     return rows
 
@@ -132,6 +157,24 @@ def compute_signature(file_path: str | Path, sample_size: int = 10) -> Structure
     3. Compute column count and MD5 hash.
     4. Return StructureSignature with up to sample_size data rows.
     """
+    p = Path(file_path)
+    if p.suffix.lower() in (".xlsx", ".xlsm"):
+        raw_with_indices = _read_raw_xlsx_with_indices(p, max_rows=sample_size + 1)
+        if not raw_with_indices:
+            return StructureSignature()
+        (header_row_index, headers), *sample_indexed = raw_with_indices
+        sample = [row for _, row in sample_indexed[:sample_size]]
+        first_data_row_index = sample_indexed[0][0] if sample_indexed else header_row_index + 1
+        column_count = len(headers)
+        return StructureSignature(
+            headers=headers,
+            column_count=column_count,
+            sample_rows=sample,
+            hash=_compute_hash(headers, column_count),
+            header_row_index=header_row_index,
+            first_data_row_index=first_data_row_index,
+        )
+
     raw = read_raw_rows(file_path, max_rows=sample_size + 1)
     if not raw:
         return StructureSignature()
@@ -145,4 +188,6 @@ def compute_signature(file_path: str | Path, sample_size: int = 10) -> Structure
         column_count=column_count,
         sample_rows=sample,
         hash=_compute_hash(headers, column_count),
+        header_row_index=1,
+        first_data_row_index=2 if sample else 1,
     )

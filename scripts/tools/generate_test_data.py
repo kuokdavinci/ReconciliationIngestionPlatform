@@ -356,7 +356,7 @@ def main():
     print(f"  4. Seed internal:   uv run python scripts/generate_test_data.py "
           f"--seed-db --partner {args.partner} --date {args.date} --count {args.count}")
     print(f"  5. Start API:       uv run python run.py --serve")
-    print(f"  6. Start dash:      python web/server.py --port 5173 --api http://localhost:8000")
+    print(f"  6. Start dash:      python frontend/server.py --port 5173 --api http://localhost:8000")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ Falls back gracefully if LLM is unavailable.
 
 import json
 import logging
+import re
 from typing import Any, Optional
 
 from src.analysis.config import AnalysisConfig
@@ -115,12 +116,94 @@ def _build_field_mappings(raw: list[dict]) -> list[FieldMapping]:
     return result
 
 
+def _looks_like_decimal(value: str) -> bool:
+    cleaned = str(value).strip().replace(",", "")
+    if not cleaned:
+        return False
+    return bool(re.fullmatch(r"-?\d+(\.\d+)?", cleaned))
+
+
+def _looks_like_date(value: str) -> bool:
+    cleaned = str(value).strip()
+    if not cleaned:
+        return False
+    patterns = (
+        r"\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$",
+        r"\d{4}/\d{2}/\d{2}( \d{2}:\d{2}:\d{2})?$",
+        r"\d{2}/\d{2}/\d{4}( \d{2}:\d{2}:\d{2})?$",
+    )
+    return any(re.fullmatch(p, cleaned) for p in patterns)
+
+
+def _score_column(path: str, column_index: int, sample_rows: list[list[str]]) -> int:
+    score = 0
+    for row in sample_rows:
+        value = row[column_index] if column_index < len(row) else ""
+        value = str(value).strip()
+        if not value:
+            continue
+        score += 1
+        if path in {"id", "trace"} and re.search(r"txn|trans|trace|id", value, re.IGNORECASE):
+            score += 4
+        if path == "amount" and _looks_like_decimal(value):
+            score += 4
+        if path == "transDate" and _looks_like_date(value):
+            score += 4
+        if path == "status" and any(token in value.lower() for token in ("success", "thành công", "failed", "pending", "reversed", "thất bại")):
+            score += 4
+    return score
+
+
+def _refine_generated_mapping(
+    parsed: dict[str, Any],
+    headers: list[str],
+    sample_rows: list[list[str]],
+    first_data_row_index: Optional[int],
+) -> dict[str, Any]:
+    parsed["startRow"] = first_data_row_index or parsed.get("startRow") or 2
+    field_mappings = parsed.get("fieldMappings") or []
+    max_cols = max((len(r) for r in sample_rows), default=len(headers))
+
+    header_candidates = {
+        "id": ("id", "transid", "transaction", "mstransid"),
+        "trace": ("trace", "partner", "invoice", "mahdon", "mahdon", "mshdon", "mstransid"),
+        "amount": ("amount", "total", "mstotalamount"),
+        "transDate": ("date", "time", "ngay", "hoanthanh"),
+        "status": ("status", "trangthai"),
+    }
+
+    for fm in field_mappings:
+        if getattr(fm, "type", None) == FieldMappingType.CONSTANT:
+            continue
+        path = getattr(fm, "path", "")
+        if path not in header_candidates:
+            continue
+
+        best_col = None
+        best_score = -1
+        for idx in range(max_cols):
+            header = str(headers[idx] if idx < len(headers) else "").lower().replace(" ", "")
+            score = _score_column(path, idx, sample_rows)
+            if any(token in header for token in header_candidates[path]):
+                score += 10
+            if score > best_score:
+                best_score = score
+                best_col = idx + 1
+
+        if best_col is not None and best_score > 0:
+            fm.column = best_col
+
+    return parsed
+
+
 async def generate_config_from_samples(
     partner: str,
     headers: list[str],
     sample_rows: list[list[str]],
     *,
     known_constants: Optional[dict[str, str]] = None,
+    header_row_index: Optional[int] = None,
+    first_data_row_index: Optional[int] = None,
 ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     """Generate a MappingConfig from sample data using LLM.
 
@@ -158,7 +241,12 @@ Sample data (headers row + {len(sample_rows)} data rows):
 Row 1 (headers): {headers}
 {sample_rows[:10] if len(str(sample_rows)) > 1000 else table}
 
-Analyze the column structure and generate a MappingConfig."""
+Analyze the column structure and generate a MappingConfig.
+
+Absolute file positions:
+- Header row index: {header_row_index or 1}
+- First data row index: {first_data_row_index or 2}
+- startRow MUST be the absolute 1-based row index of the first actual data row."""
 
     user_prompt += """
 
@@ -195,5 +283,12 @@ DATE DETECTION RULES:
         parsed["fieldMappings"] = _build_field_mappings(parsed["fieldMappings"])
     except Exception as e:
         return None, f"Failed to build field mappings: {e}"
+
+    parsed = _refine_generated_mapping(
+        parsed,
+        headers=headers,
+        sample_rows=sample_rows,
+        first_data_row_index=first_data_row_index,
+    )
 
     return parsed, None

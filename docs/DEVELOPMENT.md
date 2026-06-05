@@ -57,8 +57,11 @@ uv run python -m pytest -x -q
 | `test_logger.py` | 22 | JSON/text formatting, event emission |
 | `test_phase8.py` | 51 | Pre-reconciliation phase extensions |
 | `test_reconciliation.py` | 6 | Matching, classification, duplicate handling |
+| `test_api_review_packets.py` | — | Review packet approval endpoints (approve, reject, list) |
+| `test_api_automation.py` | — | Automation job listing and status aggregation |
+| `test_api_automation_run.py` | — | Run Now real execution flow |
 
-**Total: 398 tests**
+**Total: 600+ tests**
 
 ## Coding Conventions
 
@@ -118,17 +121,22 @@ async def test_something(self, tmp_path):
 AdapterService/
 ├── src/
 │   ├── core/              # Canonical types, enums, constants
-│   ├── config/            # Settings, cache, validator, loader
-│   ├── readers/           # ExcelStreamReader, CSV reader
+│   ├── config/            # Settings, cache, validator, loader, config_health
+│   ├── readers/           # ExcelStreamReader, CSV reader, JSON reader
 │   ├── normalizer/        # TransactionNormalizer
 │   ├── validators/        # Validator
 │   ├── pipeline/          # IngestionPipeline
 │   ├── reconciliation/    # ReconciliationEngine (match + classify)
-│   ├── scheduler/         # APScheduler daemon for automated fetching
-│   ├── fetchers/          # SFTP, filedrop, API fetchers
+│   ├── api/               # FastAPI (insights, reconciliation, data_explorer,
+│   │                      #   mappings, review_packets, automation, operations)
+│   ├── scheduler/         # APScheduler daemon (daily_partner_fetch_job, run_fetch_config_once)
+│   ├── fetchers/          # SFTP, filedrop, API fetchers (base protocol + implementations)
 │   ├── logging/           # StructuredLogger
 │   └── models/            # MongoDB models, repositories, indexes
-├── tests/                 # Test suite (398 tests)
+│       ├── review_packet.py    # ReviewPacket approval model
+│       ├── copilot_action.py   # CopilotAction audit trail
+│       └── fetch_config.py     # FetchConfig automation routes
+├── tests/                 # Test suite (600+ tests)
 ├── docs/                  # Documentation
 ├── docker/                # Docker Compose services
 ├── pyproject.toml         # Project metadata, dependencies

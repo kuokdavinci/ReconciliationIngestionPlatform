@@ -13,7 +13,11 @@ import string
 import time
 from typing import Any, Optional
 
-from src.config.config_health import check_and_refresh_config, record_config_run_health
+from src.config.config_health import (
+    ConfigurationApprovalRequiredError,
+    check_and_refresh_config,
+    record_config_run_health,
+)
 from src.config.loader import ConfigLoader
 from src.core.enums import ProcessingStatus
 from src.core.types import ProcessingStats
@@ -23,6 +27,7 @@ from src.models.mapping_config import MappingConfig, MappingConfigRepository
 from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
 from src.normalizer.normalizer import TransactionNormalizer
 from src.readers import create_reader
+from src.reconciliation.scope import classify_scope
 from src.validators.validator import Validator
 
 
@@ -143,7 +148,7 @@ class IngestionPipeline:
         1. Compute SHA256 hash of file_path
         2. Check file duplicate — if found, return early with error
         3. Create ReconciliationFile record with PROCESSING status
-        4. (Optional) Config health check — detect stale config + auto-generate
+        4. (Optional) Config health check — detect stale config + create approval proposal
         5. Load MappingConfig via config_loader
         6. Create stream reader via create_reader
         7. Create TransactionNormalizer with config.field_mappings
@@ -163,7 +168,7 @@ class IngestionPipeline:
             reconciliation_date: Date of the reconciliation file.
             config_version: Optional config version for load_by_version.
             enable_config_health_check: If True, check config freshness before
-                processing and auto-generate new config if file structure changed.
+                processing and create approval proposals if file structure changed.
 
         Returns:
             IngestionResult with file_record, stats, and errors.
@@ -205,6 +210,12 @@ class IngestionPipeline:
 
             # Step 3: Create ReconciliationFile with PROCESSING status
             file_name = Path(file_path).name
+            scope_meta = await classify_scope(
+                self._db,
+                partner=partner,
+                file_name=file_name,
+                reconciliation_date=reconciliation_date,
+            )
             file_record = ReconciliationFile(
                 partner=partner,
                 file_name=file_name,
@@ -213,6 +224,10 @@ class IngestionPipeline:
                 reconciliation_date=reconciliation_date,
                 processing_status=ProcessingStatus.PROCESSING,
                 config_version=config_version,
+                scope_type=scope_meta["scopeType"],
+                scope_confidence=scope_meta["scopeConfidence"],
+                scope_reason=scope_meta["scopeReason"],
+                scope_signals=scope_meta["scopeSignals"],
             )
             file_record = await self._recon_repo.create(file_record)
 
@@ -234,10 +249,20 @@ class IngestionPipeline:
                         config_loader=self._config_loader,
                         config_repo=config_repo,
                         config_version=config_version,
+                        source_file_name=file_name,
+                        source_file_id=str(file_record.id),
+                        source_file_path=file_path,
+                        reconciliation_date=reconciliation_date,
                     )
                     self._logger.get_logger().info(
                         f"config_health_check_passed for {partner}"
                     )
+                except ConfigurationApprovalRequiredError as approval_exc:
+                    raise RuntimeError(
+                        f"configuration approval required for partner={partner}; "
+                        f"proposal_id={approval_exc.proposal_id or 'unknown'}; "
+                        f"action_id={approval_exc.action_id or 'unknown'}"
+                    ) from approval_exc
                 except Exception as hc_exc:
                     self._logger.get_logger().warning(
                         f"Config health check failed for {partner}: {hc_exc} "

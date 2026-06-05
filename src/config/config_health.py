@@ -1,11 +1,4 @@
-"""ConfigHealthService — detects stale configs and auto-generates new ones.
-
-Orchestrates the full flow:
-1. Compute file signature before pipeline runs
-2. Compare with stored config signature
-3. Check error rate from recent runs
-4. If stale → AI-generate new config → validate → save
-"""
+"""Config health detection that creates approval-gated proposals."""
 
 import logging
 from datetime import datetime, timezone
@@ -14,25 +7,48 @@ from typing import Any, Optional
 
 from src.config.ai_generator import generate_config_from_samples
 from src.config.loader import ConfigLoader
+from src.config.settings import settings
 from src.config.signature import StructureSignature, compute_signature
 from src.config.validator import ConfigValidator
 from src.core.enums import FileType
+from src.models.copilot_action import (
+    CopilotAction,
+    CopilotActionRepository,
+    CopilotActionType,
+)
 from src.models.mapping_config import (
     MappingConfig,
     MappingConfigRepository,
+    MappingConfigStatus,
 )
+from src.models.review_packet import (
+    ReviewPacket,
+    ReviewPacketRepository,
+    ReviewPacketSourceType,
+)
+from src.reconciliation.scope import classify_scope
 
 logger = logging.getLogger(__name__)
 
-ERROR_RATE_THRESHOLD = 0.20  # 20% failure rate triggers re-detect
-SAMPLE_SIZE = 10  # number of data rows to send to LLM
-AUTO_APPLY_CONFIDENCE_THRESHOLD = 0.85
+ERROR_RATE_THRESHOLD = 0.20
+SAMPLE_SIZE = 10
 
 
-def _compute_error_rate(
-    total_rows: int,
-    failed_rows: int,
-) -> float:
+class ConfigurationApprovalRequiredError(Exception):
+    """Raised when ingestion must stop until a human approves a config."""
+
+    def __init__(
+        self,
+        message: str,
+        proposal_id: Optional[str] = None,
+        action_id: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.proposal_id = proposal_id
+        self.action_id = action_id
+
+
+def _compute_error_rate(total_rows: int, failed_rows: int) -> float:
     if total_rows == 0:
         return 0.0
     return failed_rows / total_rows
@@ -46,36 +62,15 @@ async def check_and_refresh_config(
     config_loader: ConfigLoader,
     config_repo: MappingConfigRepository,
     config_version: Optional[str] = None,
+    source_file_name: Optional[str] = None,
+    source_file_id: Optional[str] = None,
+    source_file_path: Optional[str] = None,
+    reconciliation_date: Optional[datetime] = None,
 ) -> MappingConfig:
-    """Check if config is stale and auto-refresh if needed.
-
-    Process:
-    1. Compute file structure signature.
-    2. Load current config from DB.
-    3. If config has a stored signature → compare with file signature.
-    4. If config has error rate history from recent runs → check threshold.
-    5. If stale (signature mismatch OR error rate > 20%):
-       a. Call AIConfigGenerator with sample data.
-       b. If AI succeeds → validate, save new config with new signature.
-       c. If AI fails → log warning, use existing config.
-    6. Return the (possibly refreshed) config.
-
-    Args:
-        file_path: Path to the data file.
-        partner: Partner identifier.
-        workflow_type: Workflow type.
-        file_type: File type.
-        config_loader: ConfigLoader instance.
-        config_repo: MappingConfig repository.
-        config_version: Optional config version.
-
-    Returns:
-        A validated MappingConfig (possibly freshly generated).
-    """
-    # 1. Compute signature from file
+    """Detect stale config and create a pending proposal without changing runtime."""
     sig = compute_signature(file_path, sample_size=SAMPLE_SIZE)
+    action_repo = CopilotActionRepository(config_repo.collection.database)
 
-    # 2. Load current config
     try:
         if config_version is not None:
             config = await config_loader.load_by_version(partner, config_version)
@@ -84,13 +79,9 @@ async def check_and_refresh_config(
                 partner, workflow_type, file_type
             )
     except Exception:
-        logger.warning(
-            f"No existing config found for {partner} — will attempt AI generation"
-        )
+        logger.warning("No approved config found for %s", partner)
         config = None
 
-    # 3-4. Check if config is stale. If this is an older config without a
-    # stored signature, bootstrap the fingerprint and keep using it.
     if config is not None and _has_no_signature(config):
         await _attach_signature(
             config=config,
@@ -106,117 +97,29 @@ async def check_and_refresh_config(
     if config is not None and not _is_config_stale(config, sig):
         return config
 
-    # 5. Stale or no config — try AI generation
-    if not sig.sample_rows:
-        logger.warning(f"No sample rows to analyze for {partner}")
-        if config is not None:
-            return config
-        raise ValueError(f"No config found for {partner} and no sample data available")
-
-    known_constants = {
-        "provider": partner,
-    }
-
-    result, error = await generate_config_from_samples(
-        partner=partner,
-        headers=sig.headers,
-        sample_rows=sig.sample_rows,
-        known_constants=known_constants,
-    )
-
-    if error or result is None:
-        logger.error(f"AI config generation failed for {partner}: {error}")
-        if config is not None:
-            logger.warning(f"Falling back to existing config for {partner}")
-            return config
-        raise ValueError(
-            f"AI config generation failed for {partner} and no fallback config exists"
-        )
-
-    confidence = float(result.get("confidence") or 0.0)
-
-    # Low-confidence AI output should not be auto-applied.
-    if confidence < AUTO_APPLY_CONFIDENCE_THRESHOLD:
-        pending_config = MappingConfig(
-            partner=partner,
-            workflowType=workflow_type,
-            fileType=file_type,
-            sheetName=result.get("sheetName") or "Sheet1",
-            startRow=result.get("startRow", 1),
-            fieldMappings=result.get("fieldMappings", []),
-            configVersion=config_version,
-            structureSignature=sig.to_dict(),
-            configHealth={
-                "stale": True,
-                "status": "PENDING_REVIEW",
-                "source": "ai_generated",
-                "confidence": confidence,
-                "reasoning": result.get("reasoning"),
-                "updatedAt": datetime.now(timezone.utc),
-            },
-        )
-        await _upsert_config(
-            config_repo=config_repo,
-            config=pending_config,
-            partner=partner,
-            workflow_type=workflow_type,
-            file_type=file_type,
-            config_version=config_version,
-        )
-        logger.info(
-            f"AI config for {partner} needs review (confidence={confidence:.2f})"
-        )
-        return pending_config
-
-    # Build and save new config
-    new_config = MappingConfig(
-        partner=partner,
-        workflowType=workflow_type,
-        fileType=file_type,
-        sheetName=result.get("sheetName") or "Sheet1",
-        startRow=result.get("startRow", 1),
-        fieldMappings=result.get("fieldMappings", []),
-        configVersion=config_version,
-        structureSignature=sig.to_dict(),
-        configHealth={
-            "stale": False,
-            "status": "ACTIVE",
-            "source": "ai_generated",
-            "confidence": confidence,
-            "reasoning": result.get("reasoning"),
-            "updatedAt": datetime.now(timezone.utc),
-        },
-    )
-
-    validator = ConfigValidator()
-    validation_errors = validator.validate(new_config)
-    if validation_errors:
-        logger.error(f"AI-generated config failed validation: {validation_errors}")
-        if config is not None:
-            return config
-        raise ValueError(f"AI-generated config failed validation: {validation_errors}")
-
-    await _upsert_config(
-        config_repo=config_repo,
-        config=new_config,
+    proposal, action = await _create_mapping_proposal(
+        sig=sig,
         partner=partner,
         workflow_type=workflow_type,
         file_type=file_type,
+        config_repo=config_repo,
+        action_repo=action_repo,
         config_version=config_version,
+        reason="No approved config found" if config is None else "Detected stale or changed file structure",
+        source_file_name=source_file_name,
+        source_file_id=source_file_id,
+        source_file_path=source_file_path,
+        reconciliation_date=reconciliation_date,
     )
 
-    # Invalidate cache so next load picks up the new config
-    config_loader.invalidate_cache(
-        config_loader._cache_key_version(partner, config_version)
-        if config_version
-        else config_loader._cache_key_partner_type(partner, workflow_type, file_type)
-    )
+    if config is not None or not settings.strict_mapping_approval_enabled:
+        return config
 
-    logger.info(
-        f"AI generated new MappingConfig for {partner} "
-        f"(confidence: {result.get('confidence', 'N/A')})"
+    raise ConfigurationApprovalRequiredError(
+        f"Configuration approval required for {partner}",
+        proposal_id=str(proposal.id),
+        action_id=str(action.id),
     )
-    return new_config
 
 
 async def record_config_run_health(
@@ -228,12 +131,6 @@ async def record_config_run_health(
     total_rows: int,
     failed_rows: int,
 ) -> float:
-    """Persist post-run config health based on normalization failure rate.
-
-    High failed-row ratio means the config may still structurally match the
-    file, but semantic mapping can be outdated (wrong column, status values,
-    date format, etc.). The next health check treats this as stale.
-    """
     error_rate = _compute_error_rate(total_rows, failed_rows)
     stale = error_rate >= ERROR_RATE_THRESHOLD
     query = _config_query(partner, workflow_type, file_type, config_version)
@@ -262,13 +159,15 @@ def _config_query(
     file_type: FileType,
     config_version: Optional[str],
 ) -> dict[str, Any]:
-    if config_version is not None:
-        return {"partner": partner, "configVersion": config_version}
-    return {
+    query = {
         "partner": partner,
         "workflowType": workflow_type,
         "fileType": file_type.value,
+        "status": MappingConfigStatus.APPROVED.value,
     }
+    if config_version is not None:
+        query["configVersion"] = config_version
+    return query
 
 
 async def _attach_signature(
@@ -303,58 +202,218 @@ def _has_no_signature(config: MappingConfig) -> bool:
     return getattr(config, "structure_signature", None) is None
 
 
-async def _upsert_config(
-    config_repo: MappingConfigRepository,
-    config: MappingConfig,
+async def _create_mapping_proposal(
+    sig: StructureSignature,
     partner: str,
     workflow_type: str,
     file_type: FileType,
+    config_repo: MappingConfigRepository,
+    action_repo: CopilotActionRepository,
     config_version: Optional[str],
-) -> None:
-    await config_repo.collection.delete_many(
-        _config_query(partner, workflow_type, file_type, config_version)
+    reason: str,
+    source_file_name: Optional[str] = None,
+    source_file_id: Optional[str] = None,
+    source_file_path: Optional[str] = None,
+    reconciliation_date: Optional[datetime] = None,
+) -> tuple[MappingConfig, CopilotAction]:
+    packet_repo = ReviewPacketRepository(config_repo.collection.database)
+    scope_meta = await classify_scope(
+        config_repo.collection.database,
+        partner=partner,
+        file_name=source_file_name or f"{partner.lower()}-scheduled-fetch",
+        reconciliation_date=reconciliation_date,
     )
-    config_repo._set_model_class(MappingConfig)
-    await config_repo.create(config)
+    existing_pending = await config_repo.find_latest_pending_by_partner_and_type(
+        partner, workflow_type, file_type
+    )
+    if existing_pending is not None:
+        existing_action = await action_repo.find_one(
+            {
+                "targetConfigId": str(existing_pending.id),
+                "type": CopilotActionType.MAPPING_PROPOSAL.value,
+            }
+        )
+        if existing_action is not None:
+            existing_packet = await packet_repo.find_latest_by_proposal(str(existing_pending.id))
+            if existing_packet is None:
+                active_runtime = await config_repo.find_by_partner_and_type(
+                    partner, workflow_type, file_type
+                )
+                await packet_repo.create(
+                    ReviewPacket(
+                        sourceType=ReviewPacketSourceType.SCHEDULER_JOB,
+                        partner=partner,
+                        fileName=source_file_name or f"{partner.lower()}-scheduled-fetch",
+                        fileTypeDetected=file_type.value,
+                        structureSignature=sig.to_dict(),
+                        activeRuntimeConfigId=str(active_runtime.id) if active_runtime else None,
+                        proposalConfigId=str(existing_pending.id),
+                        targetActionId=str(existing_action.id),
+                        sourceFileId=source_file_id,
+                        sourceFilePath=source_file_path,
+                        scopeType=scope_meta["scopeType"],
+                        scopeConfidence=scope_meta["scopeConfidence"],
+                        scopeReason=scope_meta["scopeReason"],
+                        scopeSignals=scope_meta["scopeSignals"],
+                        recommendedAction={
+                            "actionType": "APPROVE_AND_ACTIVATE_NEXT_RUNTIME" if active_runtime else "APPROVE_REQUIRED_BEFORE_RUNTIME",
+                            "reason": reason,
+                            "confidence": float(existing_pending.config_health.get("confidence") or 0.0) if existing_pending.config_health else 0.0,
+                        },
+                        parseStrategy={
+                            "sheetName": existing_pending.sheet_name,
+                            "startRow": existing_pending.start_row,
+                            "fieldMappingCount": len(existing_pending.field_mappings),
+                            "strategy": "AI inferred parser from scheduled partner fetch sample",
+                        },
+                        validationGates=[
+                            {
+                                "gateKey": "proposal_reused",
+                                "label": "Existing pending proposal reused",
+                                "status": "warn" if active_runtime else "fail",
+                                "reason": "A pending proposal already existed; this job is surfacing it for review.",
+                            },
+                        ],
+                        samplePreview=[
+                            {"rowIndex": idx + 1, "values": row}
+                            for idx, row in enumerate(sig.sample_rows[:5])
+                        ],
+                        riskSummary={
+                            "severity": "medium" if active_runtime else "high",
+                            "summary": reason,
+                        },
+                        runtimeDecisionHint="KEEP_CURRENT_RUNTIME_UNTIL_APPROVED" if active_runtime else "BLOCK_UNTIL_APPROVED",
+                    )
+                )
+            return existing_pending, existing_action
+
+    if not sig.sample_rows:
+        raise ConfigurationApprovalRequiredError(
+            f"Configuration approval required for {partner}; no sample rows available"
+        )
+
+    result, error = await generate_config_from_samples(
+        partner=partner,
+        headers=sig.headers,
+        sample_rows=sig.sample_rows,
+        known_constants={"provider": partner},
+        header_row_index=sig.header_row_index,
+        first_data_row_index=sig.first_data_row_index,
+    )
+    if error or result is None:
+        raise ConfigurationApprovalRequiredError(
+            f"Configuration approval required for {partner}; AI proposal generation failed"
+        )
+
+    proposal = MappingConfig(
+        partner=partner,
+        workflowType=workflow_type,
+        fileType=file_type,
+        sheetName=result.get("sheetName") or "Sheet1",
+        startRow=result.get("startRow", 1),
+        fieldMappings=result.get("fieldMappings", []),
+        configVersion=config_version,
+        structureSignature=sig.to_dict(),
+        status=MappingConfigStatus.PENDING_APPROVAL,
+        configHealth={
+            "stale": True,
+            "status": "PENDING_APPROVAL",
+            "source": "ai_generated",
+            "confidence": float(result.get("confidence") or 0.0),
+            "reasoning": result.get("reasoning"),
+            "updatedAt": datetime.now(timezone.utc),
+        },
+    )
+
+    validation_errors = ConfigValidator().validate(proposal)
+    if validation_errors:
+        raise ConfigurationApprovalRequiredError(
+            f"Configuration approval required for {partner}; AI proposal failed validation"
+        )
+
+    await config_repo.create(proposal)
+    action = CopilotAction(
+        type=CopilotActionType.MAPPING_PROPOSAL,
+        partner=partner,
+        workflowType=workflow_type,
+        fileType=file_type,
+        targetConfigId=str(proposal.id),
+        payload={
+            "proposedMappings": [
+                fm.model_dump(by_alias=True) if hasattr(fm, "model_dump") else fm
+                for fm in proposal.field_mappings
+            ],
+            "sheetName": proposal.sheet_name,
+            "startRow": proposal.start_row,
+            "structureSignature": sig.to_dict(),
+            "confidence": float(result.get("confidence") or 0.0),
+            "reasoning": result.get("reasoning"),
+        },
+        reason=reason,
+    )
+    await action_repo.create(action)
+    active_runtime = await config_repo.find_by_partner_and_type(
+        partner, workflow_type, file_type
+    )
+    validation_gates = [
+        {
+            "gateKey": "structure_signature",
+            "label": "Structure drift detected",
+            "status": "fail" if active_runtime is None else "warn",
+            "reason": reason,
+        },
+        {
+            "gateKey": "proposal_generated",
+            "label": "Proposal generated",
+            "status": "pass",
+            "reason": "AI generated a candidate parsing strategy and field mapping set.",
+        },
+    ]
+    packet = ReviewPacket(
+        sourceType=ReviewPacketSourceType.SCHEDULER_JOB,
+        partner=partner,
+        fileName=source_file_name or f"{partner.lower()}-scheduled-fetch",
+        fileTypeDetected=file_type.value,
+        structureSignature=sig.to_dict(),
+        activeRuntimeConfigId=str(active_runtime.id) if active_runtime else None,
+        proposalConfigId=str(proposal.id),
+        targetActionId=str(action.id),
+        sourceFileId=source_file_id,
+        sourceFilePath=source_file_path,
+        scopeType=scope_meta["scopeType"],
+        scopeConfidence=scope_meta["scopeConfidence"],
+        scopeReason=scope_meta["scopeReason"],
+        scopeSignals=scope_meta["scopeSignals"],
+        recommendedAction={
+            "actionType": "APPROVE_AND_ACTIVATE_NEXT_RUNTIME" if active_runtime else "APPROVE_REQUIRED_BEFORE_RUNTIME",
+            "reason": reason,
+            "confidence": float(result.get("confidence") or 0.0),
+        },
+        parseStrategy={
+            "sheetName": proposal.sheet_name,
+            "startRow": proposal.start_row,
+            "fieldMappingCount": len(proposal.field_mappings),
+            "strategy": "AI inferred parser from scheduled partner fetch sample",
+        },
+        validationGates=validation_gates,
+        samplePreview=[
+            {"rowIndex": idx + 1, "values": row}
+            for idx, row in enumerate(sig.sample_rows[:5])
+        ],
+        riskSummary={
+            "severity": "medium" if active_runtime else "high",
+            "summary": reason,
+        },
+        runtimeDecisionHint="KEEP_CURRENT_RUNTIME_UNTIL_APPROVED" if active_runtime else "BLOCK_UNTIL_APPROVED",
+    )
+    await packet_repo.create(packet)
+    return proposal, action
 
 
 def _is_config_stale(config: MappingConfig, sig: StructureSignature) -> bool:
-    """Check whether a config is stale compared to the file signature.
-
-    Positive signals (ANY triggers stale):
-    1. Config has a stored signature AND it differs from the file's signature.
-    2. Config has NO stored signature → assume first-use, not stale.
-    """
-    health = getattr(config, "config_health", None) or {}
-    if health.get("stale") is True:
-        logger.info("Config marked stale by previous run health")
-        return True
-
-    last_error_rate = health.get("lastRunErrorRate")
-    if isinstance(last_error_rate, (int, float)) and last_error_rate >= ERROR_RATE_THRESHOLD:
-        logger.info(f"Config stale due to error rate: {last_error_rate:.2%}")
-        return True
-
-    stored_sig_raw = getattr(config, "structure_signature", None)
-    if not isinstance(stored_sig_raw, dict):
-        return False
-
-    stored_sig = StructureSignature.from_dict(stored_sig_raw)
-
-    # Compare hashes — quick check
-    if stored_sig.hash != sig.hash:
-        logger.info(
-            f"Config signature mismatch: stored={stored_sig.hash[:8]} "
-            f"vs file={sig.hash[:8]}"
-        )
-        return True
-
-    # Double-check column count
-    if stored_sig.column_count != sig.column_count:
-        logger.info(
-            f"Column count changed: stored={stored_sig.column_count} "
-            f"vs file={sig.column_count}"
-        )
-        return True
-
-    return False
+    config_sig = getattr(config, "structure_signature", None) or {}
+    config_health = getattr(config, "config_health", None) or {}
+    return (
+        config_sig != sig.to_dict()
+        or bool(config_health.get("stale"))
+    )

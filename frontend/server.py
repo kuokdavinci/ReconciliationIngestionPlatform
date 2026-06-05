@@ -17,6 +17,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+        # SPA fallback: non-API GET routes should resolve to index.html.
+        if code == 404 and self.command == "GET" and not self.path.startswith("/api/"):
+            self.path = "/index.html"
+            return super().do_GET()
+        super().send_error(code, message, explain)
+
     def do_POST(self) -> None:
         if self.path.startswith("/api/"):
             self.proxy_api()

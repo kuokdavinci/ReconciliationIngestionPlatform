@@ -1247,8 +1247,7 @@
                 <strong>Agent recommendation</strong>
                 <p>${escapeHtml(packet.recommendedAction?.reason || packet.riskSummary?.summary || "-")}</p>
               </div>
-              ${packet.parseStrategy?.strategy ? `<div class="muted" style="font-size:12px;">${escapeHtml(packet.parseStrategy.strategy)}</div>` : ""}
-              ${packet.reviewedAt ? `<div class="muted" style="font-size:12px;">Reviewed by ${escapeHtml(packet.reviewedBy || "Administrator")}</div>` : ""}
+              ${packet.reviewedAt ? `<div class="muted" style="font-size:12px;">Reviewed by ${escapeHtml(packet.reviewedBy || "Administrator")} on ${escapeHtml(formatDisplayDateTime(packet.reviewedAt))}</div>` : ""}
               ${packet._id ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(packet._id)}" data-partner="${escapeHtml(packet.partner)}">Open Approval Desk</button>` : ""}
             </article>
           `).join("")}

@@ -87,7 +87,7 @@ Return a JSON object with a single key "findings" containing an array of insight
     {
       "type": "<insight_type>",
       "severity": "low|medium|high|critical",
-      "title": "<short_action_oriented_title>",
+      "title": "<very_short_scan_friendly_title_max_6_words>",
       "description": "<detailed_explanation_with_quantified_impact_and_pattern>",
       "affected_count": <number>,
       "recommendation": "<specific_actionable_next_step>"
@@ -96,23 +96,36 @@ Return a JSON object with a single key "findings" containing an array of insight
 }
 ```
 
+## Title and Scanning Rules
+1. Make the `title` extremely concise, short (maximum 4-6 words), and scan-friendly.
+2. It MUST immediately state the error type and impact (e.g., 'Ingestion: 77 records missing' or 'Amount Mismatch: 32 records' or 'MOMO Mismatch: 5%').
+3. Avoid long descriptions or wordy titles.
+
 ## Example Insights
 
-### Good (high quality)
+### Good (high quality & concise title)
 ```json
 {
   "type": "missing_internal",
   "severity": "high",
-  "title": "18 internal records missing — potential ingestion gap in batch #B-042",
+  "title": "Ingestion: 18 records missing",
   "description": "18 transactions (1.4% of total, 24.5M VND) exist on MOMO side but are missing internally. Pattern: concentrated — all 18 records share a 10-minute window (14:20-14:30), suggesting a batch ingestion failure rather than random data loss. If this gap repeats daily, it would affect ~500 records/month.",
   "affected_count": 18,
   "recommendation": "Compare MOMO settlement file #B-042 against internal ingestion manifest for 2024-07-07 14:00-15:00. Re-trigger ingestion for that window if missing files are found."
 }
 ```
 
-### Poor (too generic)
+### Poor (too wordy title)
 ```json
 {
+  "type": "missing_internal",
+  "severity": "high",
+  "title": "There are 18 internal records that are missing which indicates potential ingestion gap in batch #B-042",
+  "description": "There are 18 missing internal records.",
+  "affected_count": 18,
+  "recommendation": "Investigate missing records."
+}
+```
   "type": "missing_internal",
   "severity": "medium",
   "title": "Missing internal records found",

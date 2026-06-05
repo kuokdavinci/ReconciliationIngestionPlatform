@@ -79,4 +79,16 @@ def create_app() -> FastAPI:
     from src.api.mappings import router_v2 as mappings_v2_router
     app.include_router(mappings_v2_router)
 
+    from src.api.copilot import router as copilot_router
+    app.include_router(copilot_router)
+
+    from src.api.operations import router as operations_router
+    app.include_router(operations_router)
+
+    from src.api.review_packets import router as review_packets_router
+    app.include_router(review_packets_router)
+
+    from src.api.automation import router as automation_router
+    app.include_router(automation_router)
+
     return app

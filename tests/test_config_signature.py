@@ -45,6 +45,21 @@ class TestReadRawRows:
         p.unlink(missing_ok=True)
         assert rows == [["x", "y"], ["10", "20"]]
 
+    def test_xlsx_skips_leading_empty_rows(self) -> None:
+        from openpyxl import Workbook
+        p = _path(".xlsx")
+        wb = Workbook()
+        ws = wb.active
+        ws.append([None, None])
+        ws.append([None, None])
+        ws.append(["h1", "h2"])
+        ws.append(["v1", "v2"])
+        wb.save(str(p))
+        wb.close()
+        rows = read_raw_rows(p)
+        p.unlink(missing_ok=True)
+        assert rows == [["h1", "h2"], ["v1", "v2"]]
+
     def test_json_file(self) -> None:
         import json
         p = _path(".json")
@@ -80,6 +95,25 @@ class TestComputeSignature:
         assert sig.column_count == 3
         assert sig.headers == ["id", "amount", "status"]
         assert len(sig.sample_rows) == 2
+        assert sig.header_row_index == 1
+        assert sig.first_data_row_index == 2
+
+    def test_xlsx_signature_keeps_absolute_row_positions(self) -> None:
+        from openpyxl import Workbook
+        p = _path(".xlsx")
+        wb = Workbook()
+        ws = wb.active
+        for _ in range(6):
+            ws.append([None, None, None])
+        ws.append(["STT", "msTransId", "msNgayHoanThanh"])
+        ws.append(["1", "MOMO_TXN_9000", "2026-06-05 12:00:00"])
+        wb.save(str(p))
+        wb.close()
+        sig = compute_signature(p)
+        p.unlink(missing_ok=True)
+        assert sig.header_row_index == 7
+        assert sig.first_data_row_index == 8
+        assert sig.headers[1] == "msTransId"
 
     def test_hash_consistency(self) -> None:
         p1 = _path(".csv")

@@ -262,7 +262,9 @@ async def data_stats(
         if partner:
             by_partner[partner] = total_transactions
         else:
+            match_stage = {"$match": dc_query} if dc_query else None
             pipeline = [
+                *( [match_stage] if match_stage else [] ),
                 {"$group": {"_id": "$identify", "count": {"$sum": 1}}},
             ]
             cursor = db["data_container"].aggregate(pipeline)

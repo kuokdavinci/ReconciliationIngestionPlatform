@@ -60,6 +60,9 @@ services:
       - .env
     environment:
       - APP_MONGODB_URL=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
+    volumes:
+      - ./downloads:/app/downloads
+      - ./sftp_data:/app/sftp_data
 
   scheduler:
     build:

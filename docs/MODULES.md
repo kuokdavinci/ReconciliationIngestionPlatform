@@ -354,6 +354,127 @@ async def apply_indexes(db: AsyncIOMotorDatabase) -> None
 
 ---
 
+## New Models (Approval & Automation)
+
+### src/models/review_packet.py
+
+```python
+class ReviewPacketStatus(str, Enum):
+    PENDING | APPROVED | REJECTED | SUPERSEDED
+
+class ReviewPacketSourceType(str, Enum):
+    UPLOAD | SCHEDULER_JOB
+
+class ReviewDecisionMode(str, Enum):
+    APPROVE_ACTIVATE_NEXT_RUNTIME
+    APPROVE_KEEP_CURRENT_FOR_FILE
+    REJECT
+    SEND_TO_MAPPING_STUDIO
+
+class ReviewPacket(BaseModel):
+    id: Union[UUID, str, ObjectId]     # _id
+    source_type: ReviewPacketSourceType # sourceType
+    partner: str
+    file_name: str                      # fileName
+    file_type_detected: str             # fileTypeDetected
+    structure_signature: Optional[dict] # structureSignature
+    active_runtime_config_id: Optional[str]  # activeRuntimeConfigId
+    proposal_config_id: Optional[str]        # proposalConfigId
+    target_action_id: Optional[str]          # targetActionId
+    source_file_id: Optional[str]            # sourceFileId
+    recommended_action: dict                 # recommendedAction
+    parse_strategy: dict                     # parseStrategy
+    validation_gates: list[dict]            # validationGates
+    sample_preview: list[dict]             # samplePreview
+    risk_summary: dict                      # riskSummary
+    runtime_decision_hint: Optional[str]    # runtimeDecisionHint
+    status: ReviewPacketStatus
+    decision_mode: Optional[ReviewDecisionMode]  # decisionMode
+    created_at: datetime                    # createdAt
+    reviewed_at: Optional[datetime]         # reviewedAt
+    reviewed_by: Optional[str]              # reviewedBy
+
+class ReviewPacketRepository(BaseRepository[ReviewPacket]):
+    def __init__(self, db) -> None
+    async def find_latest_by_proposal(self, proposal_config_id: str) -> Optional[ReviewPacket]
+```
+
+### src/models/copilot_action.py
+
+```python
+class CopilotActionType(str, Enum):
+    MAPPING_PROPOSAL
+
+class CopilotActionStatus(str, Enum):
+    PENDING_APPROVAL | APPROVED | REJECTED
+
+class CopilotAction(BaseModel):
+    id: Union[UUID, str, ObjectId]  # _id
+    type: CopilotActionType
+    partner: str
+    workflow_type: str                      # workflowType
+    file_type: str                          # fileType
+    target_config_id: str                   # targetConfigId
+    payload: dict                           # Proposed mappings, sheet, signature, confidence, reasoning
+    reason: Optional[str]
+    status: CopilotActionStatus
+    created_at: datetime                    # createdAt
+    reviewed_at: Optional[datetime]         # reviewedAt
+
+class CopilotActionRepository(BaseRepository[CopilotAction]):
+    # Inherits find_one, find_many, create from BaseRepository
+```
+
+### src/models/fetch_config.py
+
+```python
+class FetchMethod(str, Enum):
+    SFTP | FILEDROP | HTTP_POLL
+
+class FetchConfig(BaseModel):
+    id: Union[UUID, str, ObjectId]  # _id
+    partner: str
+    fetch_method: FetchMethod              # fetchMethod
+    schedule: str                           # Cron expression (e.g. "0 2 * * *")
+    enabled: bool
+    local_download_dir: str                 # localDownloadDir
+    remote_path: Optional[str]             # remotePath (SFTP/FILEDROP)
+    base_url: Optional[str]                # baseUrl (HTTP_POLL)
+    username: Optional[str]
+    encrypted_password: Optional[str]       # encryptedPassword
+    created_at: datetime                    # createdAt
+    updated_at: datetime                    # updatedAt
+
+class FetchConfigRepository:
+    def __init__(self, db) -> None
+    async def find_enabled(self) -> list[FetchConfig]
+    async def find_by_partner(self, partner: str) -> Optional[FetchConfig]
+```
+
+### src/models/mapping_config.py
+
+```python
+class MappingConfigStatus(str, Enum):
+    APPROVED | PENDING_APPROVAL | REJECTED | SUPERSEDED
+
+class MappingConfig(BaseModel):
+    # Existing fields plus:
+    status: MappingConfigStatus          # Lifecycle status (default: APPROVED for legacy)
+    config_health: Optional[dict]        # configHealth: stale, error_rate, confidence, reasoning
+    approved_at: Optional[datetime]      # approvedAt
+    approved_by: Optional[str]           # approvedBy
+    superseded_at: Optional[datetime]    # supersededAt
+    superseded_by_config_id: Optional[str]  # supersededByConfigId
+    structure_signature: Optional[dict]  # structureSignature
+
+class MappingConfigRepository(BaseRepository[MappingConfig]):
+    # Plus:
+    async def find_by_partner_and_type(self, partner, workflow_type, file_type) -> Optional[MappingConfig]
+    async def find_latest_pending_by_partner_and_type(self, partner, workflow_type, file_type) -> Optional[MappingConfig]
+```
+
+---
+
 ## src/analysis/
 
 ### config.py
@@ -547,6 +668,47 @@ class ThresholdAlerter:
 
 ---
 
+## src/config/
+
+### config_health.py
+
+```python
+class ConfigurationApprovalRequiredError(Exception):
+    # Raised when ingestion must stop until a human approves a config
+
+ERROR_RATE_THRESHOLD = 0.20  # 20%
+
+async def check_and_refresh_config(
+    file_path, partner, workflow_type, file_type,
+    config_loader, config_repo, config_version=None,
+    source_file_name=None, source_file_id=None,
+) -> MappingConfig:
+    # 1. compute_signature() to detect format
+    # 2. If no signature on current config → attach it
+    # 3. If signature matches → return current config (no change)
+    # 4. If stale or no config → _create_mapping_proposal()
+
+async def record_config_run_health(
+    config_repo, partner, workflow_type, file_type,
+    config_version, total_rows, failed_rows,
+) -> float:
+    # Compute error rate, mark config stale if > 20%
+
+async def _create_mapping_proposal(
+    sig, partner, workflow_type, file_type,
+    config_repo, action_repo, config_version, reason,
+    source_file_name=None, source_file_id=None,
+) -> tuple[MappingConfig, CopilotAction]:
+    # 1. Check for existing pending proposal → reuse if found
+    # 2. AI generate config via generate_config_from_samples()
+    # 3. Create MappingConfig (PENDING_APPROVAL)
+    # 4. Create CopilotAction (PENDING_APPROVAL)
+    # 5. Create ReviewPacket (SCHEDULER_JOB, PENDING)
+    # 6. Return (proposal, action)
+```
+
+---
+
 ## src/api/
 
 ### __init__.py
@@ -559,6 +721,8 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     # Initialize FastAPI app with lifespan, include routers
+    # Routers included: insights, reconciliation, data_explorer,
+    #   mappings (v1 + v2), review_packets, automation, operations
 ```
 
 ### insights.py
@@ -579,6 +743,75 @@ async def insights_discrepancies(partner: str, date: str, focus: str = "operatio
 @router.get("/reports/daily")
 async def reports_daily(date: str):
     # Calls DailyReporter.generate_report()
+```
+
+### review_packets.py
+
+```python
+router = APIRouter(prefix="/api/v1/review-packets")
+
+@router.get("")
+async def list_review_packets(request: Request, status: Optional[str] = None, partner: Optional[str] = None):
+    # Query packets by status and/or partner, sorted by created_at desc
+    # Returns {"packets": [...]}
+
+@router.get("/{packet_id}")
+async def get_review_packet(request: Request, packet_id: str):
+    # Returns {"packet": {...}}
+
+@router.post("/{packet_id}/approve-activate")
+async def approve_activate_packet(request: Request, packet_id: str, payload: ReviewDecisionPayload):
+    # 1. Find proposal config via proposalConfigId
+    # 2. Supersede current APPROVED config
+    # 3. Set proposal to APPROVED
+    # 4. Mark packet APPROVED + APPROVE_ACTIVATE_NEXT_RUNTIME
+    # 5. Sync CopilotAction status
+
+@router.post("/{packet_id}/approve-keep-current")
+async def approve_keep_current_packet(request: Request, packet_id: str, payload: ReviewDecisionPayload):
+    # Mark packet APPROVED + APPROVE_KEEP_CURRENT_FOR_FILE
+    # No config changes
+
+@router.post("/{packet_id}/reject")
+async def reject_packet(request: Request, packet_id: str, payload: ReviewDecisionPayload):
+    # Mark packet REJECTED + REJECT
+
+@router.post("/{packet_id}/send-to-studio")
+async def send_packet_to_studio(request: Request, packet_id: str, payload: ReviewDecisionPayload):
+    # Mark decisionMode = SEND_TO_MAPPING_STUDIO
+    # UI routes to Mapping Studio with packet context
+```
+
+### automation.py
+
+```python
+router = APIRouter(prefix="/api/v1/automation")
+
+@router.get("/jobs")
+async def list_automation_jobs(request: Request):
+    # Fetch all enabled FetchConfigs
+    # For each, aggregate ReviewPackets (sourceType=SCHEDULER_JOB)
+    # Return pendingReviewPackets count + recentPackets[0..2]
+    # Returns {"jobs": [...]}
+
+@router.post("/jobs/{partner}/run")
+async def run_automation_job_now(request: Request, partner: str):
+    # Validate FetchConfig exists and is enabled
+    # Call run_fetch_config_once() (real fetch + ingest + config health)
+    # Returns {"ok": true, "result": {...}}
+```
+
+### operations.py
+
+```python
+router = APIRouter(prefix="/api/v1/operations")
+
+@router.get("/intake")
+async def get_partner_intake(request: Request, partner: Optional[str] = None, date: Optional[str] = None):
+    # Query files, mappings, actions, packets for partner
+    # Compute partner state (ACTIVE/NEEDS_REVIEW/BLOCKED/NO_ACTIVITY)
+    # Build activity feed
+    # Returns {"partners": [...], "detail": {...}}
 ```
 
 ---

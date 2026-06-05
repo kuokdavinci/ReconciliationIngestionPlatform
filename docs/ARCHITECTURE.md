@@ -7,47 +7,78 @@ The Reconciliation Ingestion Platform is a data pipeline that transforms heterog
 ## High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        IngestionPipeline                            │
-│                                                                     │
-│  ┌──────────────┐    ┌──────────────┐    ┌───────────────────────┐  │
-│  │ ExcelStream  │───▶│ Transaction │───▶│      Validator        │  │
-│  │   Reader     │    │  Normalizer  │    │  (duplicate detect)   │  │
-│  └──────────────┘    └──────────────┘    └───────────┬───────────┘  │
-│         ▲                    ▲                       │              │
-│         │                    │                       ▼              │
-│  ┌──────────────┐    ┌──────────────┐    ┌───────────────────────┐  │
-│  │ ConfigLoader │    │ MappingConfig│    │  DataContainerRepo    │  │
-│  │  (cached)    │    │  (from DB)   │    │  (batch insert)       │  │
-│  └──────────────┘    └──────────────┘    └───────────────────────┘  │
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │                    StructuredLogger                         │    │
-│  │  FILE_STARTED → ROW_SUCCESS/ROW_FAILED → FILE_COMPLETED     │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────┘
-
-                            ▼
-              ┌─────────────────────────────────┐
-              │      ReconciliationEngine        │
-              │                                  │
-              │  1. Fetch partner records         │
-              │     (DataContainer by partner+date)│
-              │  2. Fetch internal records        │
-              │     (InternalTransaction by       │
-              │      partner+date)                │
-              │  3. Resolve duplicates            │
-              │     (latest updatedAt wins)       │
-              │  4. Match by partnerTxnId         │
-              │  5. Classify: MATCHED /           │
-              │     AMOUNT_MISMATCH /             │
-              │     STATUS_MISMATCH /             │
-              │     MULTIPLE_MISMATCH /           │
-              │     MISSING_INTERNAL /            │
-              │     MISSING_PARTNER               │
-              │  6. Store in                      │
-              │     reconciliation_result         │
-              └─────────────────────────────────┘
+                         ┌──────────────────────────────────────────┐
+                         │          Operations Dashboard            │
+                         │    (frontend/ — Vanilla JS SPA)          │
+                         │                                          │
+                         │  Command Center · Data Intake            │
+                         │  Review Queue · Reconciliation           │
+                         │  Mapping Studio · Automation             │
+                         └─────────────┬────────────────────────────┘
+                                       │ HTTP /api/*
+                                       ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                     FastAPI Server (src/api/)                       │
+│                                                                    │
+│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────────┐  │
+│  │  operations.py │  │ review_packets │  │  automation.py       │  │
+│  │  GET /intake   │  │ GET/POST ...   │  │  GET /jobs           │  │
+│  └───────┬────────┘  │ approve/*      │  │  POST /{p}/run      │  │
+│          │           │ reject          │  └──────────┬───────────┘  │
+│          │           │ send-to-studio  │             │              │
+│          │           └───────┬─────────┘             │              │
+│  ┌───────┴────────┐  ┌───────┴─────────┐  ┌─────────┴───────────┐  │
+│  │  mappings.py   │  │  insights.py    │  │  reconciliation.py  │  │
+│  │  /mappings/*   │  │  /insights/*    │  │  /reconciliation/*  │  │
+│  │  /mapping/*    │  │  /reports/*     │  │  /data/*            │  │
+│  └───────┬────────┘  └───────┬─────────┘  └─────────────────────┘  │
+│          │                    │                                      │
+│          └────────┬───────────┘                                      │
+│                   ▼                                                  │
+│          ┌──────────────────────┐          ┌──────────────────────┐  │
+│          │  AI Analysis Layer   │          │  Reconciliation      │  │
+│          │  (insights.py)       │          │  Engine              │  │
+│          └──────────┬───────────┘          └──────────┬───────────┘  │
+└─────────────────────┼────────────────────────────────┼──────────────┘
+                      │                                │
+                      ▼                                ▼
+     ┌──────────────────────────────────────────────────────────┐
+     │                      MongoDB                              │
+     │  ┌──────────────┐  ┌──────────────┐  ┌────────────────┐  │
+     │  │ data_        │  │ internal_    │  │reconciliation_ │  │
+     │  │ container    │  │ transaction  │  │  result        │  │
+     │  ├──────────────┤  ├──────────────┤  ├────────────────┤  │
+     │  │reconciliation│  │reconciliation│  │ review_packet  │  │
+     │  │  _file       │  │_mapping_    │  │                │  │
+     │  │              │  │ config (OR   │  │ PENDING →      │  │
+     │  │              │  │ PENDING_     │  │ APPROVED /     │  │
+     │  │              │  │ APPROVAL /   │  │ REJECTED       │  │
+     │  │              │  │ APPROVED /   │  │                │  │
+     │  │              │  │ SUPERSEDED)  │  │                │  │
+     │  ├──────────────┤  ├──────────────┤  ├────────────────┤  │
+     │  │ copilot_     │  │ fetch_config │  │ apscheduler_   │  │
+     │  │ action       │  │              │  │ jobs           │  │
+     │  └──────────────┘  └──────────────┘  └────────────────┘  │
+     └──────────────────────────────────────────────────────────┘
+                           ▲
+              ┌────────────┴────────────────┐
+              │    Config Health             │
+              │  (src/config/config_health)  │
+              │                              │
+              │  1. compute_signature()       │
+              │  2. Detect stale config        │
+              │  3. AI generate proposal       │
+              │  4. Create ReviewPacket        │
+              └───────────────────────────────┘
+                           ▲
+              ┌────────────┴────────────────┐
+              │  Scheduler (APScheduler)     │
+              │  (src/scheduler/jobs.py)     │
+              │                              │
+              │  • daily_partner_fetch_job   │
+              │  • run_fetch_config_once     │
+              │  → creates ReviewPacket      │
+              └──────────────────────────────┘
 ```
 
 ## Module Responsibilities
@@ -341,9 +372,9 @@ Two-tier validation:
 
 ### 11. `src/api/` — FastAPI Server
 
-FastAPI application serving the AI Analysis Layer endpoints.
+FastAPI application serving all platform API endpoints.
 
-**Endpoints:**
+**Insights Endpoints:**
 
 | Method | Path | Description | Parameters |
 |--------|------|-------------|------------|
@@ -351,9 +382,168 @@ FastAPI application serving the AI Analysis Layer endpoints.
 | `GET` | `/api/v1/insights/discrepancies` | LLM-powered deep analysis by focus type | `partner`, `date`, `focus` |
 | `GET` | `/api/v1/reports/daily` | Daily batch report | `date` |
 
+**Reconciliation & Data Explorer Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/reconciliation/results` | Reconciliation results with optional status filter |
+| `GET` | `/api/v1/reconciliation/stats` | Aggregated reconciliation stats |
+| `GET` | `/api/v1/data/transactions` | Browse canonical transactions |
+| `GET` | `/api/v1/data/files` | List reconciliation files |
+| `GET` | `/api/v1/data/stats` | Data volume statistics |
+
+**Mappings Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/mappings` | List mapping configs |
+| `POST` | `/api/v1/mapping/ai-generate` | Upload sample → AI generates field mappings |
+| `POST` | `/api/v1/mapping/validate` | Validate mapping config rules |
+| `POST` | `/api/v1/mapping/test` | Test transformation against sample data |
+| `POST` | `/api/v1/mapping/publish` | Publish config to MongoDB with version snapshot |
+| `GET` | `/api/v1/mapping/versions` | List published config versions |
+| `GET` | `/api/v1/mapping/version/{id}` | Get specific version |
+
+**Operations Endpoints (Data Intake):**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/operations/intake` | Partner intake summary + detail with pending items |
+
+**Review Packet Endpoints (Approval Desk):**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/review-packets` | List pending/historic review packets |
+| `GET` | `/api/v1/review-packets/{packet_id}` | Get packet detail |
+| `POST` | `/api/v1/review-packets/{packet_id}/approve-activate` | Approve + activate next runtime |
+| `POST` | `/api/v1/review-packets/{packet_id}/approve-keep-current` | Approve but keep current runtime |
+| `POST` | `/api/v1/review-packets/{packet_id}/reject` | Reject proposal |
+| `POST` | `/api/v1/review-packets/{packet_id}/send-to-studio` | Handoff to Mapping Studio |
+
+**Automation Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/automation/jobs` | List enabled fetch configs with pending packet counts |
+| `POST` | `/api/v1/automation/jobs/{partner}/run` | Execute Run Now (real fetch + ingest + config health) |
+
 **Startup:** `python run.py serve` (uvicorn on port 8000, configurable via `--port`)
 
 **Lifespan:** MongoDB connection managed via FastAPI lifespan context manager.
+
+### 12. `src/api/operations.py` — Data Intake & Partner State
+
+Provides the operational overview for the Data Intake dashboard.
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/operations/intake` | Partner-level intake summary with state, files, and pending items |
+
+**Key logic:**
+- `_compute_partner_state()` — derives ACTIVE / NEEDS_REVIEW / BLOCKED / NO_ACTIVITY per partner based on approved configs, pending proposals, pending review packets, and latest file
+- `_build_activity_items()` — merges FILE/CONFIG/ACTION/REVIEW events into a unified, reverse-chronological activity feed
+- Returns both a summary array (all partners) and a detailed view (selected partner)
+
+### 13. `src/api/review_packets.py` — Approval Desk
+
+Central approval endpoints for `ReviewPacket` lifecycle.
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/review-packets` | List packets (optional `status`, `partner` filters) |
+| `GET` | `/api/v1/review-packets/{packet_id}` | Get single packet |
+| `POST` | `/api/v1/review-packets/{packet_id}/approve-activate` | Approve and supersede current runtime config |
+| `POST` | `/api/v1/review-packets/{packet_id}/approve-keep-current` | Approve but keep current runtime config for this file |
+| `POST` | `/api/v1/review-packets/{packet_id}/reject` | Reject proposal |
+| `POST` | `/api/v1/review-packets/{packet_id}/send-to-studio` | Send packet context to Mapping Studio for refinement |
+
+**Approve-activate flow:**
+1. Find proposal config via `proposalConfigId`
+2. Find current approved config → set status to `SUPERSEDED`
+3. Set proposal config status to `APPROVED`
+4. Mark packet as `APPROVED` with `decisionMode=APPROVE_ACTIVATE_NEXT_RUNTIME`
+5. Sync `CopilotAction` status to `APPROVED`
+
+### 14. `src/api/automation.py` — Automation Visibility
+
+Provides visibility into scheduled fetch configs and their review packet output.
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/automation/jobs` | List all enabled fetch configs with pending packet counts and recent packets |
+| `POST` | `/api/v1/automation/jobs/{partner}/run` | Trigger real `run_fetch_config_once()` execution |
+
+**Key features:**
+- Aggregates `FetchConfig` with `ReviewPacket` data per partner
+- `pendingReviewPackets` count shows how many SCHEDULER_JOB packets are waiting
+- `recentPackets[0..2]` shows latest packet status per job
+- Run Now executes actual fetch → ingest → config health pipeline (not a mock)
+
+### 15. `src/config/config_health.py` — Self-Healing Config
+
+Config health detection that creates approval-gated proposals when partner file formats change.
+
+**Key functions:**
+
+| Function | Description |
+|----------|-------------|
+| `check_and_refresh_config()` | Detects stale config via `compute_signature()`, triggers AI proposal + `ReviewPacket` creation |
+| `record_config_run_health()` | Records error rate after ingestion, marks config stale if > 20% |
+| `_create_mapping_proposal()` | Creates `MappingConfig` (PENDING_APPROVAL) + `CopilotAction` + `ReviewPacket` atomically |
+
+**Flow:**
+1. `check_and_refresh_config()` reads file signature via `compute_signature()`
+2. Compares against saved signature in current approved `MappingConfig`
+3. If stale or no config exists → calls `_create_mapping_proposal()`
+4. AI generates field mappings via `generate_config_from_samples()`
+5. Proposal saved as `PENDING_APPROVAL` → `ReviewPacket` created → pipeline pauses or continues based on config availability
+
+### 16. `src/models/review_packet.py` — Review Packet Model
+
+The central approval document for all config-change proposals.
+
+**`ReviewPacketStatus`:** PENDING → APPROVED / REJECTED / SUPERSEDED
+
+**`ReviewDecisionMode`:**
+- `APPROVE_ACTIVATE_NEXT_RUNTIME` — approve + supersede current config
+- `APPROVE_KEEP_CURRENT_FOR_FILE` — approve, keep current runtime
+- `REJECT` — deny proposal
+- `SEND_TO_MAPPING_STUDIO` — route to Mapping Studio for refinement
+
+**`ReviewPacket` fields:**
+- `sourceType` — UPLOAD or SCHEDULER_JOB
+- `proposalConfigId` — reference to the `MappingConfig` proposal
+- `activeRuntimeConfigId` — current approved config (if any)
+- `recommendedAction` — AI's suggested action type + confidence
+- `parseStrategy` — sheet name, start row, field mapping count
+- `validationGates` — structured pass/warn/fail checks
+- `samplePreview` — first 5 sample rows from the source file
+- `riskSummary` — severity + summary text
+
+### 17. `src/models/copilot_action.py` — Copilot Action Audit Trail
+
+Audit log for every AI-generated proposal.
+
+**`CopilotActionType`:** `MAPPING_PROPOSAL`
+
+**`CopilotActionStatus`:** `PENDING_APPROVAL` → `APPROVED` / `REJECTED`
+
+**Fields:** partner, workflow type, file type, target config ID, payload (proposed mappings, sheet, signature, confidence, reasoning), reason.
+
+### 18. `src/models/fetch_config.py` — Automation Route Config
+
+Defines scheduler/automation routes per partner.
+
+**`FetchMethod`:** SFTP, FILEDROP, HTTP_POLL
+
+**Fields:** partner, fetch method, schedule (cron expression), enabled, local download dir, remote path / URL, credentials (encrypted), next fetch window.
 
 ## Data Flow
 
@@ -369,7 +559,12 @@ See [DATA_FLOW.md](DATA_FLOW.md) for detailed end-to-end flow including AI Analy
 | Memory exhaustion from large files | openpyxl read-only mode, streaming |
 | Config injection via MappingConfig | ConfigValidator structural checks |
 | Log field overflow | Sanitize to 256 chars max |
-| Unindexed queries | 11 indexes defined, applied on startup |
+| Unindexed queries | 13+ indexes defined across 8 collections, applied on startup |
 | Reconciliation: duplicate internal records for same partnerTxnId | Latest updatedAt wins (deterministic tie-break) |
 | Reconciliation: non-idempotent results | Delete-many + insert-many pattern for matching keys |
 | Reconciliation: Vietnamese/non-standard status strings | Normalized via _normalize_status() before comparison |
+| Unauthorized config activation without review | `MappingConfig.status == PENDING_APPROVAL` blocks ingestion; requires explicit `APPROVE_ACTIVATE_NEXT_RUNTIME` via API |
+| Stale config silently processing wrong format | `check_and_refresh_config()` runs before each ingestion; structure signature fingerprint detects format shifts |
+| Duplicate review packets for same partner | `_create_mapping_proposal()` reuses existing pending proposal + action; only creates new `ReviewPacket` if none exists |
+| Automation auto-approval missing human review | Automation mode is "Recommend Only" — never auto-approves; always creates `ReviewPacket` in PENDING status |
+| Packet source type spoofing | `sourceType` (UPLOAD/SCHEDULER_JOB) is set at creation and never mutated |

@@ -1201,7 +1201,7 @@
         ["Partners Covered", formatNumber(jobs.length), "Configured partner fetch routes"],
         ["Mode", "Recommend Only", "Automation recommends but does not auto-approve"]
       ])}
-      <section class="panel">
+      <section class="panel" style="margin-bottom: 24px;">
         <div class="panel-header with-icon">
           <div>
             <h2 class="section-title">Scheduler Jobs</h2>
@@ -1248,7 +1248,7 @@
                 <p>${escapeHtml(packet.recommendedAction?.reason || packet.riskSummary?.summary || "-")}</p>
               </div>
               ${packet.parseStrategy?.strategy ? `<div class="muted" style="font-size:12px;">${escapeHtml(packet.parseStrategy.strategy)}</div>` : ""}
-              ${packet.reviewedAt ? `<div class="muted" style="font-size:12px;">Reviewed ${escapeHtml(formatDisplayDateTime(packet.reviewedAt))}</div>` : ""}
+              ${packet.reviewedAt ? `<div class="muted" style="font-size:12px;">Reviewed by ${escapeHtml(packet.reviewedBy || "Administrator")}</div>` : ""}
               ${packet._id ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(packet._id)}" data-partner="${escapeHtml(packet.partner)}">Open Approval Desk</button>` : ""}
             </article>
           `).join("")}

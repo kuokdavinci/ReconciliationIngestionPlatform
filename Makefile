@@ -1,4 +1,7 @@
-.PHONY: test test-eval ci clean
+.PHONY: test test-eval ci clean \
+	momo-e2e-run momo-e2e-job momo-e2e-rebuild \
+	momo-e2e-phase2-file momo-e2e-help momo-e2e-reset momo-e2e-phase2 \
+	momo-e2e-missing-partner-demo
 
 # ── Test ──────────────────────────────────────────────────────────
 test:
@@ -28,6 +31,42 @@ eval-all:
 # ── CI — runs everything except real LLM E2E tests ──────────────
 ci:
 	uv run pytest tests/ --ignore=tests/test_analysis_e2e.py --ignore=tests/test_phase8.py -v --tb=short
+
+# ── MOMO E2E shortcuts ────────────────────────────────────────────
+momo-e2e-reset:
+	PYTHONPATH=. python scratch/seed_momo_e2e.py reset
+
+momo-e2e-phase2:
+	PYTHONPATH=. python scratch/seed_momo_e2e.py phase2
+
+momo-e2e-missing-partner-demo:
+	PYTHONPATH=. python scratch/seed_momo_e2e.py missing_partner_demo
+
+momo-e2e-run:
+	curl -s -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .
+
+momo-e2e-job:
+	curl -s http://localhost:8000/api/v1/automation/jobs | jq '.jobs[] | select(.partner == "MOMO")'
+
+momo-e2e-rebuild:
+	docker compose up -d --build api scheduler
+
+momo-e2e-phase2-file:
+	python -c 'import openpyxl, datetime; date_str = datetime.datetime.now().strftime("%Y-%m-%d"); wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Sheet1"; [ws.append([]) for _ in range(6)]; headers = [""] * 30; headers[0], headers[1], headers[4], headers[7], headers[10], headers[17] = "STT", "msTransId", "msTotalAmount", "msNgayHoanThanh", "msMaHDon", "msTrangThaiGd"; ws.append(headers); [ws.append([(str(i + 1) if c == 0 else (f"MOMO_TXN_91{i:02d}" if c in (1, 10) else (str(100000 + i * 5000) if c == 4 else (f"{date_str} 12:00:00" if c == 7 else ("Thành công" if c == 17 else ""))))) for c in range(30)]) for i in range(20)]; filename = f"sftp_data/settlement_MOMO_{date_str.replace(\"-\", \"\")}.xlsx"; wb.save(filename); print(f"Generated Phase 2 Excel sheet: {filename}")'
+
+momo-e2e-help:
+	@echo "MOMO E2E — start here (2 main commands):"
+	@echo "  make momo-e2e-reset               # clean Phase 1 (20 internal rows 9000-9019 + partner file)"
+	@echo "  make momo-e2e-phase2              # add Phase 2 (20 internal rows 9100-9119 + new partner file)"
+	@echo ""
+	@echo "Optional:"
+	@echo "  make momo-e2e-missing-partner-demo  # inject MOMO_TXN_90_MISSING_PARTNER for engine demo"
+	@echo ""
+	@echo "Inspection / ops:"
+	@echo "  make momo-e2e-run         # trigger MOMO automation run"
+	@echo "  make momo-e2e-job         # inspect MOMO automation job"
+	@echo "  make momo-e2e-phase2-file # write Wave 2 partner file (9100-9119) only"
+	@echo "  make momo-e2e-rebuild     # rebuild api + scheduler containers"
 
 # ── Clean ─────────────────────────────────────────────────────────
 clean:

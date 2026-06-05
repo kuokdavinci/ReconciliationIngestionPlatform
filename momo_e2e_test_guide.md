@@ -14,34 +14,86 @@ That means a "green" scenario must never preload unrelated finalized internal ro
 
 ## Quick Start
 
-The canonical seed script is [`scratch/seed_momo_e2e.py`](scratch/seed_momo_e2e.py) (do **not** use the legacy `seed_momo_scheduler_green.py` — it preloads 40 internal rows against a 19-row file and produces false `MISSING_PARTNER` results).
+The canonical seed script is [`scratch/seed_momo_e2e.py`](/home/kuokdavinci/AdapterService/scratch/seed_momo_e2e.py). Do **not** use the legacy `seed_momo_scheduler_green.py`.
 
-### Happy path — 2 main commands
+### Happy path — exact retry steps
+
+1. Reset Phase 1 data:
 
 ```bash
-make momo-e2e-reset    # 1. clean Phase 1: 20 internal rows 9000-9019 + partner file
-make momo-e2e-phase2   # 2. add Phase 2:   20 internal rows 9100-9119 + new partner file
-# 3. trigger automation (see make momo-e2e-help)
-# 4. inspect results: 20 MATCHED per wave, 0 MISSING_PARTNER
+make momo-e2e-reset
 ```
 
-The `make momo-e2e-reset` target wipes all MOMO collections, seeds exactly 20 wave1 internal rows, and writes a partner xlsx with those same 20 keys. A `FULL_SNAPSHOT` ingestion then produces `20 MATCHED, 0 MISSING_PARTNER`.
+2. Trigger automation so the missing config creates a pending review packet:
 
-The `make momo-e2e-phase2` target adds exactly 20 wave2 internal rows (wave1 rows are kept) and **overwrites** the partner file with the 20 wave2 keys. Because the engine sees a same-day file (scope = `INCREMENTAL_APPEND`), it filters internal rows down to the partner-file key set, so wave1 rows are scoped out and the result is `20 MATCHED, 0 MISSING_PARTNER`.
+```bash
+make momo-e2e-run
+```
+
+3. In the UI, open the MOMO packet in `Review Queue` and approve it.
+   Scope expectation:
+   `FULL_SNAPSHOT`
+
+4. Verify Phase 1 result.
+   Expected:
+   * `20 MATCHED`
+   * `0 MISSING_PARTNER`
+
+5. Prepare Phase 2 data:
+
+```bash
+make momo-e2e-phase2
+```
+
+6. Trigger automation again:
+
+```bash
+make momo-e2e-run
+```
+
+7. Verify Phase 2 result.
+   Scope expectation:
+   `INCREMENTAL_APPEND`
+
+   Expected:
+   * current run reconciles only wave2 keys `MOMO_TXN_9100..MOMO_TXN_9119`
+   * `20 MATCHED`
+   * `0 MISSING_PARTNER`
+
+Use this to inspect the job after each run if needed:
+
+```bash
+make momo-e2e-job
+```
 
 ### Missing-partner demo
 
+1. Prepare the baseline and anomaly:
+
 ```bash
-make momo-e2e-reset                 # 1. clean Phase 1 baseline
-make momo-e2e-missing-partner-demo  # 2. inject MOMO_TXN_90_MISSING_PARTNER + write wave1 partner file
-# 3. trigger a FULL_SNAPSHOT ingestion (no source_file_id)
-# 4. expect: 20 MATCHED + 1 MISSING_PARTNER (partner_txn_id = MOMO_TXN_90_MISSING_PARTNER)
+make momo-e2e-reset
+make momo-e2e-missing-partner-demo
 ```
 
-### Troubleshooting
+2. Trigger automation:
 
-- If you see unexpected `MISSING_PARTNER` rows right after `make momo-e2e-reset`, you are likely still running `seed_momo_scheduler_green.py` — switch to the 2-command flow above.
-- For the full target list and what each one does, run `make momo-e2e-help`.
+```bash
+make momo-e2e-run
+```
+
+3. In the UI, approve the packet and keep the proposed scope as:
+   `FULL_SNAPSHOT`
+
+4. Expected:
+   * `20 MATCHED`
+   * `1 MISSING_PARTNER`
+   * missing key: `MOMO_TXN_90_MISSING_PARTNER`
+
+### Fast checks
+
+- If you see unexpected `MISSING_PARTNER` rows right after `make momo-e2e-reset`, you are likely still running the old seed flow or approving with the wrong packet/file.
+- If Phase 2 still shows wave1 rows in the current run, verify the packet/file scope is `INCREMENTAL_APPEND`.
+- For the full target list, run `make momo-e2e-help`.
 
 ---
 

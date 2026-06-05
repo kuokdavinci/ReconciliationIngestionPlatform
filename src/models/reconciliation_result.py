@@ -34,6 +34,8 @@ class ReconciliationResult(BaseModel):
     internal_status: Optional[str] = Field(default=None, alias="internalStatus")
 
     reconciliation_status: ReconciliationStatus = Field(alias="reconciliationStatus")
+    source_file_id: Optional[str] = Field(default=None, alias="sourceFileId")
+    scope_type: Optional[str] = Field(default=None, alias="scopeType")
 
     partner_record_id: Optional[str] = Field(default=None, alias="partnerRecordId")
     internal_record_id: Optional[str] = Field(default=None, alias="internalRecordId")

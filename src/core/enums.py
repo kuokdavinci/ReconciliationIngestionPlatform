@@ -41,3 +41,11 @@ class ReconciliationStatus(StrEnum):
     MISSING_PARTNER = "MISSING_PARTNER"
     UNMAPPED_SKIPPED = "UNMAPPED_SKIPPED"
 
+
+class ReconciliationScopeType(StrEnum):
+    """Scope classification for a reconciliation file/run."""
+
+    UNCONFIRMED = "UNCONFIRMED"
+    FULL_SNAPSHOT = "FULL_SNAPSHOT"
+    INCREMENTAL_APPEND = "INCREMENTAL_APPEND"
+    REPLACEMENT = "REPLACEMENT"

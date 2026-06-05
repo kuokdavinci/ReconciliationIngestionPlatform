@@ -180,6 +180,20 @@ def _log_observation(obs: AIObservation) -> None:
     )
 
 
+def _compute_results_hash(results: list[Any]) -> str:
+    import hashlib
+    # Compute a unique fingerprint for the results list
+    result_fingerprints = []
+    for r in results:
+        txn_id = getattr(r, "partner_txn_id", "") or getattr(r, "internal_txn_id", "") or ""
+        status = getattr(r, "reconciliation_status", "") or ""
+        result_fingerprints.append(f"{txn_id}:{status}")
+    result_fingerprints.sort()
+    
+    fingerprint_str = ",".join(result_fingerprints)
+    return hashlib.md5(fingerprint_str.encode("utf-8")).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # get_summary — orchestration for summary endpoint
 # ---------------------------------------------------------------------------
@@ -238,7 +252,8 @@ async def get_summary(
     # Step 5: Check cache if enabled
     cache_enabled = cfg.cache_enabled
     model_name = _get_model_name(llm_provider)
-    cache_key = build_cache_key(partner, date, "operational", model_name)
+    results_hash = _compute_results_hash(results)
+    cache_key = build_cache_key(partner, date, "operational", model_name, reconciliation_run_id=results_hash)
     insight_cache = get_insight_cache() if cache_enabled and model_name else None
 
     cached_results = insight_cache.get(cache_key) if insight_cache else None
@@ -364,7 +379,7 @@ async def get_discrepancies(
     results = await _query_reconciliation_results(collection, partner, date)
     logger.info(
         f"Queried {len(results)} results for discrepancies ({focus}) for {partner} on {date}",
-        extra={"event": "ai_insight_discrepancy_query", "partner": partner, "date": date, "focus": focus},
+        extra={"event": "ai_insight_discrepancy_query", "partner": partner, "date": date, "focus": focus, "count": len(results)},
     )
 
     # Step 2: Compute metrics
@@ -397,7 +412,8 @@ async def get_discrepancies(
     # Step 6: Check cache if enabled
     cache_enabled = cfg.cache_enabled
     model_name = _get_model_name(llm_provider)
-    cache_key = build_cache_key(partner, date, focus, model_name)
+    results_hash = _compute_results_hash(results)
+    cache_key = build_cache_key(partner, date, focus, model_name, reconciliation_run_id=results_hash)
     insight_cache = get_insight_cache() if cache_enabled and model_name else None
 
     cached_results = insight_cache.get(cache_key) if insight_cache else None
@@ -682,7 +698,7 @@ def _rule_based_fallback(analysis_input: AnalysisInput) -> list[AnalysisResult]:
             AnalysisResult(
                 type=anomaly.type,
                 severity=severity,
-                title=f"Detected {anomaly.type}: {anomaly.count} occurrences",
+                title=f"Anomalies: {anomaly.count} {anomaly.type.replace('_', ' ')}",
                 description=f"Found {anomaly.count} {anomaly.type} anomalies"
                 + (f" for partners: {', '.join(anomaly.partners_affected)}" if anomaly.partners_affected else "")
                 + (f" in amount range {anomaly.amount_range}" if anomaly.amount_range else ""),
@@ -698,7 +714,7 @@ def _rule_based_fallback(analysis_input: AnalysisInput) -> list[AnalysisResult]:
             AnalysisResult(
                 type="missing_internal",
                 severity="medium" if missing_internal > 5 else "low",
-                title=f"{missing_internal} missing internal records",
+                title=f"Missing Internal: {missing_internal} records",
                 description=f"{missing_internal} transactions are MISSING_INTERNAL — internal system has not received data.",
                 affected_count=missing_internal,
                 recommendation="Check ingestion pipeline for data delivery delays.",
@@ -711,7 +727,7 @@ def _rule_based_fallback(analysis_input: AnalysisInput) -> list[AnalysisResult]:
             AnalysisResult(
                 type="missing_partner",
                 severity="medium" if missing_partner > 5 else "low",
-                title=f"{missing_partner} missing partner records",
+                title=f"Missing Partner: {missing_partner} records",
                 description=f"{missing_partner} transactions are MISSING_PARTNER — partner has not provided data.",
                 affected_count=missing_partner,
                 recommendation="Contact partner to verify data delivery.",

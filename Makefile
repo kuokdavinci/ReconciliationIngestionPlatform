@@ -34,13 +34,13 @@ ci:
 
 # ── MOMO E2E shortcuts ────────────────────────────────────────────
 momo-e2e-reset:
-	PYTHONPATH=. python scratch/seed_momo_e2e.py reset
+	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py reset
 
 momo-e2e-phase2:
-	PYTHONPATH=. python scratch/seed_momo_e2e.py phase2
+	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py phase2
 
 momo-e2e-missing-partner-demo:
-	PYTHONPATH=. python scratch/seed_momo_e2e.py missing_partner_demo
+	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py missing_partner_demo
 
 momo-e2e-run:
 	curl -s -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .

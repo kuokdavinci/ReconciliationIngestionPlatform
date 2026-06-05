@@ -288,9 +288,7 @@ async def _ensure_fetch_config(db) -> None:
         cleanupAfterIngest=False,
         filedrop=FileDropConfig(directory="./sftp_data", pattern="settlement_MOMO_*.xlsx"),
     )
-    await repo._collection.insert_one(
-        fetch_config.model_dump(by_alias=True, exclude_none=False)
-    )
+    await repo.create(fetch_config)
 
 
 # ── CLI entry point ──────────────────────────────────────────────────────────

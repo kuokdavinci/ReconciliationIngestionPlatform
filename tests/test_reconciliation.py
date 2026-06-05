@@ -220,6 +220,195 @@ async def test_reconciliation_missing_partner(mock_db):
 
 
 @pytest.mark.asyncio
+async def test_reconciliation_ignores_pending_internal_for_missing_partner(mock_db):
+    """Pending internal rows should not produce MISSING_PARTNER results."""
+    engine = ReconciliationEngine(mock_db)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    pending_internal_record = InternalTransaction(
+        _id="int_pending",
+        partner=partner,
+        partnerTxnId="trace_01",
+        amount=Decimal("150000"),
+        status=TransactionStatus.PENDING,
+        transactionTime=recon_date,
+    )
+
+    engine._data_repo.find_many = AsyncMock(return_value=[])
+    engine._internal_repo.find_many = AsyncMock(return_value=[pending_internal_record])
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date)
+
+    assert results == []
+    engine._result_repo.collection.delete_many.assert_not_called()
+    engine._result_repo.insert_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_incremental_scope_ignores_unrelated_internal_rows(mock_db):
+    """Incremental scope should only reconcile against keys present in the file."""
+    engine = ReconciliationEngine(mock_db)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+    source_file_id = "00000000-0000-0000-0000-000000000001"
+
+    partner_record = DataContainer(
+        identify=partner,
+        workflowType="UPC",
+        reconciliationDate=recon_date,
+        sourceFileId=source_file_id,
+        partnerData=PartnerData(
+            _id="txn_01",
+            trace="trace_01",
+            status="Thành công",
+            amount=Decimal("150000"),
+            currency="VND",
+        ),
+    )
+
+    matched_internal = InternalTransaction(
+        _id="int_01",
+        partner=partner,
+        partnerTxnId="trace_01",
+        amount=Decimal("150000"),
+        status=TransactionStatus.SUCCESS,
+        transactionTime=recon_date,
+    )
+    unrelated_internal = InternalTransaction(
+        _id="int_02",
+        partner=partner,
+        partnerTxnId="trace_02",
+        amount=Decimal("90000"),
+        status=TransactionStatus.SUCCESS,
+        transactionTime=recon_date,
+    )
+
+    file_collection = MagicMock()
+    file_collection.find_one = AsyncMock(return_value={"_id": source_file_id, "scopeType": "INCREMENTAL_APPEND"})
+    mock_db.__getitem__ = MagicMock(side_effect=lambda name: file_collection if name == "reconciliation_file" else MagicMock())
+
+    engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
+    engine._internal_repo.find_many = AsyncMock(return_value=[matched_internal, unrelated_internal])
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date, source_file_id=source_file_id)
+
+    assert len(results) == 1
+    assert results[0].reconciliation_status == ReconciliationStatus.MATCHED
+    engine._result_repo.collection.delete_many.assert_called_once_with({
+        "partner": partner,
+        "date": "2024-07-07",
+        "sourceFileId": source_file_id,
+    })
+    assert results[0].source_file_id == source_file_id
+    assert results[0].scope_type == "INCREMENTAL_APPEND"
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_full_snapshot_replaces_entire_day_slice(mock_db):
+    """Full snapshot should still replace the whole day slice."""
+    engine = ReconciliationEngine(mock_db)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    partner_record = DataContainer(
+        identify=partner,
+        workflowType="UPC",
+        reconciliationDate=recon_date,
+        sourceFileId="00000000-0000-0000-0000-000000000001",
+        partnerData=PartnerData(
+            _id="txn_01",
+            trace="trace_01",
+            status="Thành công",
+            amount=Decimal("150000"),
+            currency="VND",
+        ),
+    )
+    internal_record = InternalTransaction(
+        _id="int_01",
+        partner=partner,
+        partnerTxnId="trace_01",
+        amount=Decimal("150000"),
+        status=TransactionStatus.SUCCESS,
+        transactionTime=recon_date,
+    )
+
+    engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
+    engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date)
+
+    assert len(results) == 1
+    engine._result_repo.collection.delete_many.assert_called_once_with({
+        "partner": partner,
+        "date": "2024-07-07",
+    })
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_replacement_scope_replaces_prior_keys(mock_db):
+    """Replacement scope should delete prior rows for the same key set across files."""
+    engine = ReconciliationEngine(mock_db)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+    source_file_id = "00000000-0000-0000-0000-000000000009"
+
+    partner_record = DataContainer(
+        identify=partner,
+        workflowType="UPC",
+        reconciliationDate=recon_date,
+        sourceFileId=source_file_id,
+        partnerData=PartnerData(
+            _id="txn_01",
+            trace="trace_01",
+            status="Thành công",
+            amount=Decimal("150000"),
+            currency="VND",
+        ),
+    )
+    internal_record = InternalTransaction(
+        _id="int_01",
+        partner=partner,
+        partnerTxnId="trace_01",
+        amount=Decimal("150000"),
+        status=TransactionStatus.SUCCESS,
+        transactionTime=recon_date,
+    )
+
+    file_collection = MagicMock()
+    file_collection.find_one = AsyncMock(return_value={"_id": source_file_id, "scopeType": "REPLACEMENT"})
+    mock_db.__getitem__ = MagicMock(side_effect=lambda name: file_collection if name == "reconciliation_file" else MagicMock())
+
+    engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
+    engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date, source_file_id=source_file_id)
+
+    assert len(results) == 1
+    engine._result_repo.collection.delete_many.assert_called_once_with({
+        "partner": partner,
+        "date": "2024-07-07",
+        "$or": [
+            {"sourceFileId": source_file_id},
+            {"partnerTxnId": {"$in": ["trace_01"]}},
+        ],
+    })
+    assert results[0].scope_type == "REPLACEMENT"
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_duplicate_internal_handling(mock_db):
     """Test that duplicate internal records keep the latest based on updatedAt."""
     engine = ReconciliationEngine(mock_db)

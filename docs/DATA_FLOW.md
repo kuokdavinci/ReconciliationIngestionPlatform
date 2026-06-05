@@ -2,10 +2,12 @@
 
 ## End-to-End Flow
 
-Two main data flows exist in the system:
+Four main data flows exist in the system:
 
 1. **Ingestion Flow** — Partner Excel files are parsed, normalized, validated, and persisted to `data_container`.
 2. **Reconciliation Flow** — Ingestion output (`data_container`) is matched against internal system records (`internal_transaction`) to produce reconciliation reports (`reconciliation_result`).
+3. **Review Packet Flow** — Config proposals (from upload, scheduler, or config health drift) create `ReviewPacket` documents that go through human approval before activation.
+4. **Automation Run Flow** — Scheduled fetch jobs pull files from partners, run ingestion, and trigger config health checks — all results reflected in real-time dashboard.
 
 ---
 
@@ -599,4 +601,266 @@ GET /api/v1/insights/summary?date=invalid
 
 GET /api/v1/insights/discrepancies?partner=MOMO&date=2024-07-07&focus=unknown
 → 400 Bad Request: "Invalid focus. Must be operational, partner, or inconsistency"
+```
+
+---
+
+## Review Packet Flow
+
+The review packet is the central approval document. Every config-change proposal creates one, regardless of trigger source.
+
+### Trigger Sources
+
+| Source | Trigger | `sourceType` |
+|--------|---------|-------------|
+| Direct upload | User uploads a file from Review Queue → API creates proposal + packet | `UPLOAD` |
+| Scheduler job | `run_fetch_config_once()` detects format drift → creates proposal + packet | `SCHEDULER_JOB` |
+| Config health drift | `check_and_refresh_config()` before ingestion detects stale signature → creates proposal + packet | `SCHEDULER_JOB` |
+
+### Upload Flow (from UI)
+
+```
+User clicks "Upload File For Review" in Review Queue
+  → POST /api/v1/mapping/ai-generate?partner=X
+    → compute_signature(file)
+    → generate_config_from_samples() (AI field mapping inference)
+    → Creates MappingConfig with status=PENDING_APPROVAL
+    → Creates CopilotAction with status=PENDING_APPROVAL
+    → Creates ReviewPacket:
+        sourceType=UPLOAD
+        partner=X
+        proposalConfigId=<new config id>
+        recommendedAction={ actionType, confidence }
+        parseStrategy={ sheetName, startRow, fieldMappingCount }
+        validationGates=[ structure, proposal, runtime ]
+        samplePreview=[ first 5 rows ]
+        riskSummary={ severity, summary }
+        status=PENDING
+    → UI auto-routes to Review Queue with packet in drawer
+```
+
+### Scheduler Job Flow
+
+```
+APScheduler triggers daily_partner_fetch_job()
+  → For each enabled fetch_config:
+    → create_fetcher(config.fetch_method)
+    → FetchResult: files downloaded to local dir
+    → For each downloaded file:
+      → IngestionPipeline.process_file()
+        → check_and_refresh_config() before ingestion:
+          → compute_signature(file)
+          → Compare with saved signature in approved config
+          → If stale or no config:
+            → generate_config_from_samples() (AI inference)
+            → Create MappingConfig (PENDING_APPROVAL)
+            → Create CopilotAction (PENDING_APPROVAL)
+            → Create ReviewPacket (SCHEDULER_JOB, PENDING)
+            → If existing pending config found, reuse it
+            → Block ingestion if no runtime config exists
+```
+
+### Approval Flow (via API)
+
+```
+User reviews packet in Review Queue drawer
+
+Option A: Approve & Activate Next Runtime
+  POST /api/v1/review-packets/{id}/approve-activate
+    → Find proposal MappingConfig
+    → Find current APPROVED config → set status=SUPERSEDED
+    → Set proposal status=APPROVED
+    → Set packet status=APPROVED, decisionMode=APPROVE_ACTIVATE_NEXT_RUNTIME
+    → Sync CopilotAction to APPROVED
+    → Intake state recomputed → partner transitions to ACTIVE
+
+Option B: Approve Keep Current
+  POST /api/v1/review-packets/{id}/approve-keep-current
+    → Set packet status=APPROVED, decisionMode=APPROVE_KEEP_CURRENT_FOR_FILE
+    → Current runtime config remains unchanged
+    → Proposal can be used for one-off file processing
+
+Option C: Reject
+  POST /api/v1/review-packets/{id}/reject
+    → Set packet status=REJECTED, decisionMode=REJECT
+    → Proposal remains PENDING_APPROVAL (preserved for auditing)
+
+Option D: Send to Mapping Studio
+  POST /api/v1/review-packets/{id}/send-to-studio
+    → Set decisionMode=SEND_TO_MAPPING_STUDIO
+    → UI loads studio with packet context (headers, sample rows, config ID)
+    → Operator can refine proposal in studio
+    → Return to Review Queue to approve/reject
+```
+
+### Packet Fields (detailed)
+
+```json
+{
+  "_id": "uuid",
+  "sourceType": "UPLOAD | SCHEDULER_JOB",
+  "partner": "MOMO",
+  "fileName": "VNPAY_structure_changed.csv",
+  "fileTypeDetected": "SETTLEMENT",
+  "structureSignature": { "headers": [...], "columnCount": 10, "md5": "..." },
+  "activeRuntimeConfigId": "uuid-of-current-approved-config",
+  "proposalConfigId": "uuid-of-pending-proposal",
+  "targetActionId": "uuid-of-copilot-action",
+  "sourceFileId": "uuid-of-source-file",
+  "recommendedAction": {
+    "actionType": "APPROVE_AND_ACTIVATE_NEXT_RUNTIME",
+    "reason": "Detected stale or changed file structure",
+    "confidence": 0.92
+  },
+  "parseStrategy": {
+    "sheetName": "Sheet1",
+    "startRow": 2,
+    "fieldMappingCount": 12,
+    "strategy": "AI inferred parser from sample"
+  },
+  "validationGates": [
+    { "gateKey": "structure_signature", "label": "Structure drift detected", "status": "warn", "reason": "..." },
+    { "gateKey": "proposal_generated", "label": "Proposal generated", "status": "pass", "reason": "..." },
+    { "gateKey": "runtime_safety", "label": "Runtime safety", "status": "warn", "reason": "..." }
+  ],
+  "samplePreview": [
+    { "rowIndex": 1, "values": ["col1", "col2", ...] }
+  ],
+  "riskSummary": { "severity": "medium", "summary": "..." },
+  "runtimeDecisionHint": "KEEP_CURRENT_RUNTIME_UNTIL_APPROVED | BLOCK_UNTIL_APPROVED",
+  "status": "PENDING | APPROVED | REJECTED | SUPERSEDED",
+  "decisionMode": "APPROVE_ACTIVATE_NEXT_RUNTIME | APPROVE_KEEP_CURRENT_FOR_FILE | REJECT | SEND_TO_MAPPING_STUDIO",
+  "createdAt": "ISO8601",
+  "reviewedAt": "ISO8601",
+  "reviewedBy": "operator-name"
+}
+```
+
+---
+
+## Automation Run Flow
+
+### Run Now (from UI)
+
+```
+User clicks "Run Now" for MOMO job in Automation view
+  → POST /api/v1/automation/jobs/MOMO/run
+    → Find FetchConfig for MOMO
+    → Call run_fetch_config_once(config, db, config_loader, ...)
+      → Create fetcher (SFTP/FILEDROP/HTTP)
+      → Fetch partner files to local download dir
+      → For each file:
+        → IngestionPipeline.process_file()
+          → check_and_refresh_config() before processing
+          → If format drift detected:
+            → AI generate proposal → create ReviewPacket
+          → If config valid: ingest file → data_container
+      → Return { success, total, failed, errors, processingStatus }
+    → API returns { ok: true, result: {...} }
+    → UI refreshes Automation view
+      → pendingReviewPackets reflects new count
+      → recentPackets[0] shows latest status
+```
+
+### Job Visibility (GET /api/v1/automation/jobs)
+
+```json
+{
+  "jobs": [
+    {
+      "partner": "MOMO",
+      "fetchMethod": "SFTP",
+      "schedule": "0 2 * * *",
+      "enabled": true,
+      "localDownloadDir": "/downloads/momo",
+      "destination": "/remote/path/momo",
+      "pendingReviewPackets": 1,
+      "updatedAt": "2026-06-04T...",
+      "recentPackets": [
+        {
+          "_id": "uuid",
+          "fileName": "momo-scheduled-fetch",
+          "status": "PENDING",
+          "sourceType": "SCHEDULER_JOB",
+          "recommendedAction": { ... },
+          "riskSummary": { ... },
+          "createdAt": "2026-06-04T..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## Data Intake Flow
+
+The Data Intake view computes partner state and activity in real-time.
+
+### Partner State Derivation
+
+```
+GET /api/v1/operations/intake?partner=MOMO&date=2024-07-07
+
+1. Query all collections for partner:
+   - reconciliation_file (files)
+   - reconciliation_mapping_config (mappings)
+   - copilot_action (actions)
+   - review_packet (packets)
+
+2. For each partner, compute state:
+   has_approved = any mapping with status=APPROVED
+   has_pending_proposals = any mapping with status=PENDING_APPROVAL
+   has_pending_packets = any packet with status=PENDING
+   has_latest_file = most recent file record
+
+   if !has_approved && (has_pending_proposals || has_pending_packets):
+     state = BLOCKED
+   elif has_pending_proposals || has_pending_packets:
+     state = NEEDS_REVIEW
+   elif has_approved:
+     state = ACTIVE
+   else:
+     state = NO_ACTIVITY
+
+3. Build activity feed (FILE + CONFIG + ACTION + REVIEW events)
+   → Sorted by timestamp descending, latest 12 items
+
+4. Return:
+   - partners[]: summary for all partners
+   - detail: expanded view for selected partner
+     - statusHeader: { overallState, primaryReason, nextAction }
+     - currentRuntimeConfigSummary
+     - latestFileSummary
+     - pendingItems[]
+     - reviewPackets[]
+     - recentActivity[]
+```
+
+### Error Scenarios
+
+**Review packet creation fails:**
+```
+_create_mapping_proposal() → AI generation fails
+  → ConfigurationApprovalRequiredError raised
+  → Pipeline logs error, continues with existing config if available
+  → No incomplete packet is persisted
+```
+
+**Approve-activate on non-existent proposal:**
+```
+POST /api/v1/review-packets/{id}/approve-activate
+  → proposalConfigId not found
+  → Packet still marked APPROVED, but proposal not activated
+  → Config status left unchanged
+  → Operator notified via dashboard after refresh
+```
+
+**Run Now on disabled job:**
+```
+POST /api/v1/automation/jobs/MOMO/run
+  → fetch_config.enabled == false
+  → 400 Bad Request: "Automation job is disabled."
+  → No execution attempted
 ```

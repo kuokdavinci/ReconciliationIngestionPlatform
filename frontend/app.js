@@ -686,77 +686,96 @@
 
   function renderCopilotPanel(copilot) {
     if (!copilot) {
-      return `
-        <aside class="copilot-panel panel">
-          <div class="loading-row">
-            <div class="spinner"></div>
-            <div>
-              <h2 style="margin: 0;">Copilot Panel</h2>
-              <p class="muted" style="margin: 4px 0 0;">Loading recommendation...</p>
-            </div>
+      return `<aside class="copilot-panel panel">
+        <div class="loading-row">
+          <div class="spinner"></div>
+          <div>
+            <h2 style="margin: 0;">Copilot</h2>
+            <p class="muted" style="margin: 4px 0 0;">Loading recommendation...</p>
           </div>
-        </aside>
-      `;
+        </div>
+      </aside>`;
     }
 
+    const status = String(copilot.status || "healthy").toUpperCase();
+    const riskLevel = copilot.riskLevel || "low";
+    const headline = copilot.headline || "No action needed";
+    const summary = copilot.summary || "";
+    const reasons = Array.isArray(copilot.reasons) ? copilot.reasons : [];
+    const primaryAction = copilot.primaryAction || null;
+    const secondaryActions = Array.isArray(copilot.secondaryActions) ? copilot.secondaryActions : [];
+
+    // Evidence (for collapsed section)
     const evidence = copilot.evidence || {};
+    const safeChecks = Array.isArray(evidence.safeChecks) ? evidence.safeChecks : [];
     const latestFile = evidence.latestFile || null;
     const runtime = evidence.runtime || {};
     const proposal = evidence.proposal || {};
-    const explanation = Array.isArray(copilot.explanation) ? copilot.explanation : [];
-    const actions = Array.isArray(copilot.actions) ? copilot.actions : [];
-    const safeChecks = Array.isArray(evidence.safeChecks) ? evidence.safeChecks : [];
-    const recommendedKey = copilot.recommendedAction?.key || "";
 
-    const actionButtons = actions.length
-      ? actions.map(action => {
-        const styleClass = action.style === "primary" ? "primary" : "secondary-action";
-        const icon = {
-          review_proposal: "fact_check",
-          approve_activate_next_runtime: "rocket_launch",
-          approve_keep_current: "verified",
-          reject_proposal: "block",
-          open_mapping_details: "schema",
-          refresh_context: "refresh",
-        }[action.key] || "play_arrow";
-        return `
-          <button
-            class="button ${styleClass}"
-            data-action="copilot-action"
-            data-copilot-action="${escapeHtml(action.key)}"
-            ${action.enabled === false ? "disabled" : ""}
-          >
-            <span class="material-symbols-outlined" style="font-size:18px;">${icon}</span>
-            ${escapeHtml(action.label || action.key)}
-          </button>
-        `;
-      }).join("")
-      : `<div class="muted">No action available.</div>`;
+    // Action buttons
+    const actionButtons = [];
+    if (primaryAction) {
+      const iconMap = {
+        open_mapping_details: "schema",
+        review_proposal: "fact_check",
+        refresh_context: "refresh",
+      };
+      actionButtons.push(`
+        <button class="button primary copilot-primary-action"
+          data-action="copilot-action"
+          data-copilot-action="${escapeHtml(primaryAction.key)}"
+          ${primaryAction.enabled === false ? "disabled" : ""}>
+          <span class="material-symbols-outlined">${iconMap[primaryAction.key] || "play_arrow"}</span>
+          ${escapeHtml(primaryAction.label || primaryAction.key)}
+        </button>
+      `);
+    }
+    secondaryActions.forEach(action => {
+      actionButtons.push(`
+        <button class="button secondary-action"
+          data-action="copilot-action"
+          data-copilot-action="${escapeHtml(action.key)}"
+          ${action.enabled === false ? "disabled" : ""}>
+          ${escapeHtml(action.label || action.key)}
+        </button>
+      `);
+    });
 
     return `
-      <aside class="copilot-panel panel">
-        <div class="copilot-header">
+      <aside class="copilot-panel panel copilot-compact">
+        <div class="copilot-header-compact">
           <div>
-            <p class="eyebrow">Copilot Panel</p>
-            <h2>${escapeHtml(copilot.headline || "No action needed")}</h2>
+            <p class="eyebrow">Copilot</p>
+            <h2>${escapeHtml(headline)}</h2>
           </div>
-          ${severityBadge(copilot.riskLevel || "low")}
+          ${severityBadge(riskLevel)}
         </div>
 
         <div class="copilot-status-row">
-          ${badge(String(copilot.status || "healthy").toUpperCase())}
-          ${recommendedKey ? `<span class="badge neutral">Recommended: ${escapeHtml(copilot.recommendedAction?.label || recommendedKey)}</span>` : `<span class="badge matched">No action needed</span>`}
+          ${badge(status)}
+          ${primaryAction ? `<span class="badge neutral">Recommended: ${escapeHtml(primaryAction.label)}</span>` : '<span class="badge matched">No action needed</span>'}
         </div>
 
+        ${summary ? `<p class="copilot-summary">${escapeHtml(summary)}</p>` : ''}
+
+        ${reasons.length ? `
         <div class="copilot-section">
-          <h3>Why</h3>
-          <ul class="copilot-explanation">
-            ${(explanation.length ? explanation : ["No current blocker for this partner."]).map(item => `<li>${escapeHtml(item)}</li>`).join("")}
+          <h3>Key reasons</h3>
+          <ul class="copilot-reasons">
+            ${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}
           </ul>
+        </div>` : ''}
+
+        <div class="copilot-section copilot-actions">
+          ${actionButtons.join('') || '<div class="muted">No action available.</div>'}
         </div>
 
-        <div class="copilot-section">
-          <h3>Evidence</h3>
+        ${/* Collapsed Evidence section */''}
+        <details class="copilot-collapsed">
+          <summary class="copilot-collapsed-summary">
+            <span class="material-symbols-outlined">expand_more</span>
+            Evidence details
+          </summary>
           <div class="copilot-evidence-grid">
             <div>
               <span>Latest file</span>
@@ -774,24 +793,23 @@
               <small>${proposal.source === "review_packet" ? "Ready in review queue" : proposal.source === "mapping_proposal" ? "Draft mapping available" : "-"}</small>
             </div>
           </div>
-        </div>
+        </details>
 
-        <div class="copilot-section">
-          <h3>Safe Checks</h3>
+        ${safeChecks.length ? `
+        <details class="copilot-collapsed">
+          <summary class="copilot-collapsed-summary">
+            <span class="material-symbols-outlined">expand_more</span>
+            Safe checks
+          </summary>
           <div class="copilot-checks">
             ${safeChecks.map(check => `
               <div class="copilot-check ${escapeHtml(check.status || "warn")}">
                 <span class="material-symbols-outlined">${check.status === "pass" ? "check_circle" : check.status === "fail" ? "cancel" : "warning"}</span>
                 <strong>${escapeHtml(check.label || "-")}</strong>
               </div>
-            `).join("") || `<div class="muted">No checks available.</div>`}
+            `).join('')}
           </div>
-        </div>
-
-        <div class="copilot-section">
-          <h3>Actions</h3>
-          <div class="copilot-actions">${actionButtons}</div>
-        </div>
+        </details>` : ''}
       </aside>
     `;
   }

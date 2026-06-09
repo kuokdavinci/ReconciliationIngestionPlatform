@@ -170,7 +170,7 @@ async def test_copilot_context_needs_review_for_pending_packet():
     data = await get_context(request, partner="MOMO", date="2026-06-05")
 
     assert data["status"] == "needs_review"
-    assert data["recommendedAction"] == {"key": "review_proposal", "label": "Open Review Queue", "style": "primary", "enabled": True}
+    assert data["recommendedAction"] == {"key": "review_proposal", "label": "Open Review Center", "style": "primary", "enabled": True}
     assert data["headline"] == "File structure changed; a review item is ready"
     assert data["evidence"]["proposal"]["source"] == "review_packet"
 

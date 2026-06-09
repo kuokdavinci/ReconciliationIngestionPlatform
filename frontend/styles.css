@@ -2605,3 +2605,128 @@ code {
   color: var(--text-muted);
   line-height: 1.4;
 }
+
+/* ── Compact Copilot Panel ─────────────────────────── */
+.copilot-compact {
+  min-width: 320px;
+}
+
+.copilot-header-compact {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.copilot-header-compact h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.copilot-summary {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.copilot-reasons {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.copilot-reasons li {
+  font-size: 13px;
+  color: var(--text-primary);
+  padding-left: 16px;
+  position: relative;
+  line-height: 1.4;
+}
+
+.copilot-reasons li::before {
+  content: "•";
+  position: absolute;
+  left: 4px;
+  color: var(--text-muted);
+}
+
+.copilot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.copilot-primary-action {
+  flex: 1;
+  min-width: 160px;
+  justify-content: center;
+}
+
+/* Collapsed sections */
+.copilot-collapsed {
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+  padding-top: 8px;
+}
+
+.copilot-collapsed-summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 4px 0;
+  user-select: none;
+}
+
+.copilot-collapsed-summary:hover {
+  color: var(--text-primary);
+}
+
+.copilot-collapsed-summary .material-symbols-outlined {
+  font-size: 18px;
+  transition: transform 0.2s ease;
+}
+
+.copilot-collapsed[open] .copilot-collapsed-summary .material-symbols-outlined {
+  transform: rotate(90deg);
+}
+
+.copilot-collapsed .copilot-evidence-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.copilot-collapsed .copilot-evidence-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.copilot-collapsed .copilot-evidence-grid span {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.copilot-collapsed .copilot-evidence-grid strong {
+  font-size: 13px;
+}
+
+.copilot-collapsed .copilot-evidence-grid small {
+  font-size: 11px;
+  color: var(--text-muted);
+}

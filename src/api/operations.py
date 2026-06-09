@@ -56,9 +56,9 @@ def _serialize_packet(packet) -> dict:
 
 def _compute_partner_state(approved_config, pending_proposals, pending_actions, latest_file):
     if approved_config is None and (pending_proposals or pending_actions):
-        return "BLOCKED", "No approved runtime config", "Create or review a draft mapping in Review Queue"
+        return "BLOCKED", "No approved runtime config", "Create or review a draft mapping in Review Center"
     if pending_proposals or pending_actions:
-        return "NEEDS_REVIEW", "Pending review items require attention", "Review pending items in Review Queue"
+        return "NEEDS_REVIEW", "Pending review items require attention", "Review pending items in Review Center"
     if approved_config is not None:
         if latest_file is not None:
             return "ACTIVE", "Approved runtime config is available", "Monitor latest file processing"

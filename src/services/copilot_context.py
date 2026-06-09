@@ -361,7 +361,7 @@ class CopilotContextService:
         if has_packet or has_draft:
             primary = {
                 "key": "review_proposal",
-                "label": "Open Review Queue",
+                "label": "Open Review Center",
                 "style": "primary",
                 "enabled": True,
             }

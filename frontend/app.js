@@ -556,7 +556,7 @@
             ${item.fileName ? `<div class="muted">${escapeHtml(item.fileName)}</div>` : ""}
           </div>
           <div class="intake-list-actions">
-            ${item.reviewItemId ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(item.reviewItemId)}" data-partner="${escapeHtml(detail.partner || state.partner)}">Open Review Drawer</button>` : `<button class="button" data-action="go-review-queue">Open Review Queue</button>`}
+            ${item.reviewItemId ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(item.reviewItemId)}" data-partner="${escapeHtml(detail.partner || state.partner)}">Review details</button>` : `<button class="button" data-action="go-review-queue">Open Review Queue</button>`}
           </div>
         </div>
       `).join("")
@@ -588,6 +588,14 @@
         </div>
       `;
 
+    const streamBadges = [];
+    const overallState = header.overallState || "";
+    if (overallState) streamBadges.push(badge(overallState));
+    if (blockedFiles.length) streamBadges.push(`<span class="badge critical">${blockedFiles.length} file${blockedFiles.length > 1 ? "s" : ""} failed</span>`);
+    if (pendingItems.length) streamBadges.push(`<span class="badge warning">${pendingItems.length} review item${pendingItems.length > 1 ? "s" : ""} waiting</span>`);
+
+    const latestFileName = latestFile?.fileName || latestFile?.file_name || null;
+
     return `
       ${renderPageFilters({ showDate: true, showClear: false })}
       <section class="page-section">
@@ -604,21 +612,13 @@
 
       <div class="intake-copilot-layout">
         <div class="intake-primary-column">
-          <section class="panel intake-banner">
-            <div class="intake-detail-header">
-              <div>
-                <p class="eyebrow">Selected Partner</p>
-                <h2 style="margin: 0;">${escapeHtml(detail.partner || state.partner)}</h2>
-                <p class="muted" style="margin: 6px 0 0;">${escapeHtml(header.primaryReason || "Operational state for this partner.")}</p>
-              </div>
-              <div class="intake-status-cta">
-                ${badge(header.overallState || "NO_ACTIVITY")}
-                <button class="button" data-action="go-review-queue">Open Review Queue</button>
-                <button class="button secondary-action" data-action="go-mapping-studio">Create Draft</button>
-              </div>
+          <div class="intake-stream-header">
+            <div class="intake-stream-info">
+              <h2>${escapeHtml(detail.partner || state.partner)}</h2>
+              <div class="intake-stream-badges">${streamBadges.join('')}</div>
             </div>
-            ${renderApprovalUploadEntry("Upload a partner file directly. If the structure needs review, the system will generate a review item.")}
-          </section>
+            <p class="muted intake-stream-desc">${escapeHtml(header.primaryReason || "Operational state for this partner.")}${latestFileName ? ` · ${escapeHtml(latestFileName)}` : ""}</p>
+          </div>
 
           <div class="intake-status-grid">
             <section class="panel intake-status-section" data-section="runtime">
@@ -676,17 +676,20 @@
               <div class="intake-list-stack">${pendingList}</div>
             </section>
           </div>
+
+          <div class="intake-actions-row">
+            ${renderApprovalUploadEntry("Upload a partner file directly. If the structure needs review, the system will generate a review item.")}
+            <button class="button secondary-action" data-action="go-mapping-studio">Open Mapping Studio</button>
+          </div>
         </div>
         ${renderCopilotPanel(copilot)}
       </div>
-
-
     `;
   }
 
   function renderCopilotPanel(copilot) {
     if (!copilot) {
-      return `<aside class="copilot-panel panel">
+      return `<aside class="copilot-panel panel copilot-compact">
         <div class="loading-row">
           <div class="spinner"></div>
           <div>
@@ -698,99 +701,208 @@
     }
 
     const status = String(copilot.status || "healthy").toUpperCase();
+    const rawStatus = String(copilot.status || "healthy");
     const riskLevel = copilot.riskLevel || "low";
-    const headline = copilot.headline || "No action needed";
+    const headline = copilot.headline || "";
     const summary = copilot.summary || "";
     const reasons = Array.isArray(copilot.reasons) ? copilot.reasons : [];
     const primaryAction = copilot.primaryAction || null;
     const secondaryActions = Array.isArray(copilot.secondaryActions) ? copilot.secondaryActions : [];
 
-    // Evidence (for collapsed section)
     const evidence = copilot.evidence || {};
     const safeChecks = Array.isArray(evidence.safeChecks) ? evidence.safeChecks : [];
     const latestFile = evidence.latestFile || null;
     const runtime = evidence.runtime || {};
     const proposal = evidence.proposal || {};
 
-    // Action buttons
-    const actionButtons = [];
-    if (primaryAction) {
-      const iconMap = {
-        open_mapping_details: "schema",
-        review_proposal: "fact_check",
-        refresh_context: "refresh",
-      };
-      actionButtons.push(`
-        <button class="button primary copilot-primary-action"
-          data-action="copilot-action"
-          data-copilot-action="${escapeHtml(primaryAction.key)}"
-          ${primaryAction.enabled === false ? "disabled" : ""}>
-          <span class="material-symbols-outlined">${iconMap[primaryAction.key] || "play_arrow"}</span>
-          ${escapeHtml(primaryAction.label || primaryAction.key)}
-        </button>
-      `);
+    // Derive verdict and message
+    const verdictMap = {
+      healthy: "No approval needed",
+      monitor: "Monitor only",
+      needs_review: "Review required before approving",
+      blocked: "Blocked until mapping is fixed"
+    };
+    const verdictMsgMap = {
+      healthy: "Runtime is ready and no pending review item exists.",
+      monitor: "Latest file has an issue, but approved runtime remains available.",
+      needs_review: "A review item is waiting before the next runtime change can be approved.",
+      blocked: "No approved runtime is available. A mapping fix is required before processing can continue."
+    };
+    const verdict = verdictMap[rawStatus] || verdictMap.healthy;
+    const verdictMsg = verdictMsgMap[rawStatus] || verdictMsgMap.healthy;
+
+    const verdictTone = rawStatus === "healthy" ? "matched"
+      : rawStatus === "blocked" ? "critical"
+      : "warning";
+
+    // Build situation summary
+    const runtimeVersion = runtime.version || null;
+    const runtimeActive = runtime.state === "approved";
+    const latestFileName = latestFile?.name || null;
+    const failedFile = latestFile && String(latestFile.status || "").toLowerCase() === "failed";
+    const hasProposal = proposal.state && proposal.state !== "none";
+    const proposalReason = (proposal.reason || "").toLowerCase();
+
+    const situationLines = [];
+    if (headline) {
+      situationLines.push(`<div class="copilot-brief-line"><span class="copilot-line-label">What changed</span><span>${escapeHtml(headline)}</span></div>`);
     }
-    secondaryActions.forEach(action => {
-      actionButtons.push(`
-        <button class="button secondary-action"
-          data-action="copilot-action"
-          data-copilot-action="${escapeHtml(action.key)}"
-          ${action.enabled === false ? "disabled" : ""}>
-          ${escapeHtml(action.label || action.key)}
-        </button>
-      `);
-    });
+    if (runtimeVersion) {
+      situationLines.push(`<div class="copilot-brief-line"><span class="copilot-line-label">Current runtime</span><span>${escapeHtml(runtimeVersion)}${runtimeActive ? " is active and can continue" : ""}</span></div>`);
+    }
+    if (hasProposal || rawStatus === "needs_review") {
+      const reviewCount = 1;
+      situationLines.push(`<div class="copilot-brief-line"><span class="copilot-line-label">Review state</span><span>${reviewCount} review item${reviewCount > 1 ? "s" : ""} waiting for approval</span></div>`);
+    }
+
+    // Build key evidence lines
+    const evidenceLines = [];
+    if (latestFileName) {
+      const fileDesc = failedFile
+        ? `Latest file failed: ${escapeHtml(latestFileName)}`
+        : `Latest file: ${escapeHtml(latestFileName)}`;
+      evidenceLines.push(`<div class="copilot-evidence-item">${fileDesc}</div>`);
+    }
+    if (runtimeVersion) {
+      const runtimeDesc = runtimeActive
+        ? `Active runtime: ${escapeHtml(runtimeVersion)}`
+        : `No active runtime`;
+      evidenceLines.push(`<div class="copilot-evidence-item">${runtimeDesc}</div>`);
+    }
+    if (hasProposal) {
+      const proposalLabel = escapeHtml(proposalReason || "Proposed runtime update");
+      evidenceLines.push(`<div class="copilot-evidence-item">Pending review item: ${proposalLabel}</div>`);
+    }
+
+    // Label helpers
+    const actionLabel = (key) => {
+      const labels = {
+        review_proposal: "Open Review Queue",
+        approve_activate_next_runtime: "Approve next runtime",
+        approve_keep_current: "Keep current runtime",
+        reject_proposal: "Reject proposed change",
+        open_mapping_details: "View mapping details",
+        refresh_context: "Refresh"
+      };
+      return labels[key] || key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    };
+
+    const actionIcon = (key) => {
+      const icons = {
+        review_proposal: "fact_check",
+        approve_activate_next_runtime: "check_circle",
+        approve_keep_current: "pause_circle",
+        reject_proposal: "cancel",
+        open_mapping_details: "schema",
+        refresh_context: "refresh"
+      };
+      return icons[key] || "play_arrow";
+    };
+
+    // Separate actions by type
+    const decisionKeys = ["approve_activate_next_runtime", "approve_keep_current", "reject_proposal"];
+    const utilityKeys = ["refresh_context", "open_mapping_details"];
+    const decisionActions = secondaryActions.filter(a => decisionKeys.includes(a.key));
+    const utilityActions = secondaryActions.filter(a => utilityKeys.includes(a.key));
+    const isDecidable = rawStatus === "needs_review" && (hasProposal || reasons.some(r => r.toLowerCase().includes("review")));
 
     return `
-      <aside class="copilot-panel panel copilot-compact">
-        <div class="copilot-header-compact">
-          <div>
-            <p class="eyebrow">Copilot</p>
-            <h2>${escapeHtml(headline)}</h2>
+      <aside class="copilot-panel panel copilot-compact copilot-brief">
+        <div class="copilot-brief-header">
+          <span class="copilot-brief-title">APPROVAL BRIEF</span>
+          <div class="copilot-brief-status">
+            ${badge(status)}
+            ${severityBadge(riskLevel)}
           </div>
-          ${severityBadge(riskLevel)}
         </div>
 
-        <div class="copilot-status-row">
-          ${badge(status)}
-          ${status === "HEALTHY" ? '<span class="badge matched">No action needed</span>' : primaryAction ? `<span class="badge neutral">Recommended: ${escapeHtml(primaryAction.label)}</span>` : ''}
+        <div class="copilot-brief-verdict verdict-${escapeHtml(rawStatus)}">
+          <span class="verdict-label">Verdict</span>
+          <span class="verdict-text">${escapeHtml(verdict)}</span>
+          <span class="verdict-msg">${escapeHtml(verdictMsg)}</span>
         </div>
 
-        ${summary ? `<p class="copilot-summary">${escapeHtml(summary)}</p>` : ''}
-
-        ${reasons.length ? `
-        <div class="copilot-section">
-          <h3>Key reasons</h3>
-          <ul class="copilot-reasons">
-            ${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}
-          </ul>
+        ${situationLines.length ? `
+        <div class="copilot-brief-section">
+          <h3 class="copilot-section-title">Situation</h3>
+          <div class="copilot-brief-lines">
+            ${situationLines.join('')}
+          </div>
         </div>` : ''}
 
-        <div class="copilot-section copilot-actions">
-          ${actionButtons.join('') || '<div class="muted">No action available.</div>'}
+        ${evidenceLines.length ? `
+        <div class="copilot-brief-section">
+          <h3 class="copilot-section-title">Key evidence</h3>
+          <div class="copilot-evidence-list">
+            ${evidenceLines.map(l => `<div class="copilot-evidence-row">${l}</div>`).join('')}
+          </div>
+        </div>` : ''}
+
+        <div class="copilot-brief-section">
+          <h3 class="copilot-section-title">Recommended next step</h3>
+          <div class="copilot-primary-row">
+            ${primaryAction ? `
+            <button class="button primary copilot-primary-action"
+              data-action="copilot-action"
+              data-copilot-action="${escapeHtml(primaryAction.key)}"
+              ${primaryAction.enabled === false ? "disabled" : ""}>
+              <span class="material-symbols-outlined">${actionIcon(primaryAction.key)}</span>
+              ${escapeHtml(actionLabel(primaryAction.key))}
+            </button>` : '<span class="muted">No action required.</span>'}
+          </div>
         </div>
 
-        ${/* Collapsed Evidence section */''}
+        ${isDecidable ? `
+        <div class="copilot-brief-section copilot-decision-section">
+          <h3 class="copilot-section-title">Decision controls</h3>
+          <p class="copilot-decision-hint">Inspect the review item before deciding.</p>
+          <div class="copilot-decision-actions">
+            ${decisionActions.map(a => {
+              const isDestructive = a.key === "reject_proposal";
+              return `
+              <button class="button ${isDestructive ? "danger" : "secondary-action"} copilot-decision-btn"
+                data-action="copilot-action"
+                data-copilot-action="${escapeHtml(a.key)}"
+                ${a.enabled === false ? "disabled" : ""}>
+                <span class="material-symbols-outlined">${actionIcon(a.key)}</span>
+                ${escapeHtml(actionLabel(a.key))}
+              </button>`;
+            }).join('')}
+          </div>
+        </div>` : ''}
+
+        <div class="copilot-brief-utility">
+          ${utilityActions.map(a => `
+            <button class="copilot-utility-btn"
+              data-action="copilot-action"
+              data-copilot-action="${escapeHtml(a.key)}">
+              ${escapeHtml(actionLabel(a.key))}
+            </button>
+          `).join('')}
+        </div>
+
         <details class="copilot-collapsed">
           <summary class="copilot-collapsed-summary">
             <span class="material-symbols-outlined">expand_more</span>
             Evidence details
           </summary>
-          <div class="copilot-evidence-grid">
-            <div>
-              <span>Latest file</span>
-              <strong>${escapeHtml(latestFile?.name || "No file")}</strong>
-              <small>${escapeHtml(latestFile?.status || "-")}</small>
-            </div>
-            <div>
-              <span>Runtime</span>
-              <strong>${escapeHtml(runtime.state || "unknown")}</strong>
-              <small>${escapeHtml(runtime.version || "-")}</small>
-            </div>
-            <div>
-              <span>Draft status</span>
-              <strong>${escapeHtml((proposal.state || "none").replace(/_/g, " "))}</strong>
-              <small>${proposal.source === "review_packet" ? "Ready in review queue" : proposal.source === "mapping_proposal" ? "Draft mapping available" : "-"}</small>
+          <div class="copilot-brief-evidence">
+            <div class="copilot-evidence-grid">
+              <div>
+                <span>Latest file</span>
+                <strong>${escapeHtml(latestFile?.name || "No file")}</strong>
+                <small>${escapeHtml(latestFile?.status || "-")}</small>
+              </div>
+              <div>
+                <span>Runtime</span>
+                <strong>${escapeHtml(runtime.state || "unknown")}</strong>
+                <small>${escapeHtml(runtime.version || "-")}</small>
+              </div>
+              <div>
+                <span>Draft status</span>
+                <strong>${escapeHtml((proposal.state || "none").replace(/_/g, " "))}</strong>
+                <small>${proposal.source === "review_packet" ? "Ready in review queue" : proposal.source === "mapping_proposal" ? "Draft mapping available" : "-"}</small>
+              </div>
             </div>
           </div>
         </details>
@@ -802,12 +914,16 @@
             Safe checks
           </summary>
           <div class="copilot-checks">
-            ${safeChecks.map(check => `
+            ${safeChecks.map(check => {
+              const checkLabel = check.label === "Latest file can continue" ? "Current runtime can continue" :
+                check.label === "Draft ready" ? "Draft mapping available" :
+                check.label;
+              return `
               <div class="copilot-check ${escapeHtml(check.status || "warn")}">
                 <span class="material-symbols-outlined">${check.status === "pass" ? "check_circle" : check.status === "fail" ? "cancel" : "warning"}</span>
-                <strong>${escapeHtml(check.label || "-")}</strong>
-              </div>
-            `).join('')}
+                <strong>${escapeHtml(checkLabel)}</strong>
+              </div>`;
+            }).join('')}
           </div>
         </details>` : ''}
       </aside>

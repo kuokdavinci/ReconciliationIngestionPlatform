@@ -1,20 +1,41 @@
-"""FastAPI router for copilot approval actions."""
+"""FastAPI router for embedded Copilot dashboard context."""
 
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
+from src.api.mappings import MappingReviewPayload, approve_mapping_config, reject_mapping_config
+from src.api.review_packets import (
+    ReviewDecisionPayload,
+    approve_activate_packet,
+    approve_keep_current_packet,
+    reject_packet,
+)
 from src.models.copilot_action import CopilotActionRepository, CopilotActionStatus
+from src.services.copilot_context import CopilotContextService
 
 router = APIRouter(prefix="/api/v1/copilot")
 
 
-def _get_repo(request: Request) -> CopilotActionRepository:
+class CopilotActionPayload(BaseModel):
+    partner: Optional[str] = None
+    date: Optional[str] = None
+    file_id: Optional[str] = Field(default=None, alias="fileId")
+    reviewed_by: Optional[str] = Field(default=None, alias="reviewedBy")
+    scope_type: Optional[str] = Field(default=None, alias="scopeType")
+
+
+def _get_db(request: Request):
     db = getattr(request.app.state, "db", None)
     if db is None:
         raise HTTPException(status_code=503, detail="Database connection not available.")
-    return CopilotActionRepository(db)
+    return db
+
+
+def _get_repo(request: Request) -> CopilotActionRepository:
+    return CopilotActionRepository(_get_db(request))
 
 
 def _serialize(action) -> dict:
@@ -25,12 +46,119 @@ def _serialize(action) -> dict:
     return data
 
 
+@router.get("/context")
+async def get_context(
+    request: Request,
+    partner: str = Query(...),
+    date: Optional[str] = Query(default=None),
+):
+    return await CopilotContextService(_get_db(request)).context(partner=partner, date=date)
+
+
+@router.get("/context/file/{file_id}")
+async def get_file_context(
+    request: Request,
+    file_id: str,
+    partner: str = Query(...),
+):
+    return await CopilotContextService(_get_db(request)).context(partner=partner, file_id=file_id)
+
+
+@router.post("/actions/{action_key}")
+async def execute_copilot_action(
+    request: Request,
+    action_key: str,
+    payload: CopilotActionPayload,
+):
+    partner = payload.partner
+    if not partner:
+        raise HTTPException(status_code=400, detail="Partner is required for Copilot actions.")
+
+    service = CopilotContextService(_get_db(request))
+    resolution = await service.resolve(
+        partner=partner,
+        date=payload.date,
+        file_id=payload.file_id,
+    )
+    refs = resolution.refs
+    review_item_id = refs.get("reviewItemId")
+    draft_mapping_id = refs.get("draftMappingId")
+
+    if action_key == "refresh_context":
+        return {"ok": True, "context": resolution.context}
+
+    if action_key == "review_proposal":
+        target = {"type": "review_queue", "partner": partner}
+        if review_item_id:
+            target.update({"type": "review_drawer", "reviewItemId": review_item_id})
+        return {"ok": True, "target": target, "context": resolution.context}
+
+    if action_key == "open_mapping_details":
+        target = {"type": "mapping_studio", "partner": partner}
+        if review_item_id:
+            target["reviewItemId"] = review_item_id
+        if draft_mapping_id:
+            target["draftMappingId"] = draft_mapping_id
+        return {"ok": True, "target": target, "context": resolution.context}
+
+    if action_key == "approve_keep_current":
+        if not review_item_id:
+            raise HTTPException(status_code=400, detail="No review packet is available for this action.")
+        result = await approve_keep_current_packet(
+            request,
+            review_item_id,
+            ReviewDecisionPayload(reviewed_by=payload.reviewed_by, scopeType=payload.scope_type),
+        )
+        context = await service.context(partner=partner, date=payload.date, file_id=payload.file_id)
+        return {"ok": True, "result": result, "context": context}
+
+    if action_key == "approve_activate_next_runtime":
+        if review_item_id:
+            result = await approve_activate_packet(
+                request,
+                review_item_id,
+                ReviewDecisionPayload(reviewed_by=payload.reviewed_by, scopeType=payload.scope_type),
+            )
+        elif draft_mapping_id:
+            result = await approve_mapping_config(
+                request,
+                draft_mapping_id,
+                MappingReviewPayload(reviewed_by=payload.reviewed_by),
+            )
+        else:
+            raise HTTPException(status_code=400, detail="No proposal is available for this action.")
+        context = await service.context(partner=partner, date=payload.date, file_id=payload.file_id)
+        return {"ok": True, "result": result, "context": context}
+
+    if action_key == "reject_proposal":
+        if review_item_id:
+            result = await reject_packet(
+                request,
+                review_item_id,
+                ReviewDecisionPayload(reviewed_by=payload.reviewed_by),
+            )
+        elif draft_mapping_id:
+            result = await reject_mapping_config(
+                request,
+                draft_mapping_id,
+                MappingReviewPayload(reviewed_by=payload.reviewed_by),
+            )
+        else:
+            raise HTTPException(status_code=400, detail="No proposal is available for this action.")
+        context = await service.context(partner=partner, date=payload.date, file_id=payload.file_id)
+        return {"ok": True, "result": result, "context": context}
+
+    raise HTTPException(status_code=404, detail=f"Unsupported Copilot action: {action_key}")
+
+
 @router.get("/actions")
 async def list_actions(
     request: Request,
     status: Optional[str] = Query(default=None),
     partner: Optional[str] = Query(default=None),
 ):
+    """Compatibility endpoint for legacy approval clients."""
+
     repo = _get_repo(request)
     query: dict = {}
     if status:

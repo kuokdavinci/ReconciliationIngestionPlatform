@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from src.core.enums import FileType
 from src.models.repository import BaseRepository
@@ -40,7 +40,11 @@ class CopilotAction(BaseModel):
     partner: str
     workflow_type: Optional[str] = Field(default=None, alias="workflowType")
     file_type: Optional[FileType] = Field(default=None, alias="fileType")
-    target_config_id: Optional[str] = Field(default=None, alias="targetConfigId")
+    draft_mapping_id: Optional[str] = Field(
+        default=None,
+        alias="draftMappingId",
+        validation_alias=AliasChoices("draftMappingId", "targetConfigId"),
+    )
     target_entity_id: Optional[str] = Field(default=None, alias="targetEntityId")
     payload: dict[str, Any] = Field(default_factory=dict)
     reason: str

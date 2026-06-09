@@ -56,9 +56,9 @@ def _serialize_packet(packet) -> dict:
 
 def _compute_partner_state(approved_config, pending_proposals, pending_actions, latest_file):
     if approved_config is None and (pending_proposals or pending_actions):
-        return "BLOCKED", "No approved runtime config", "Submit or review proposal in Approvals"
+        return "BLOCKED", "No approved runtime config", "Create or review a draft mapping in Review Queue"
     if pending_proposals or pending_actions:
-        return "NEEDS_REVIEW", "Pending approval items require review", "Review pending items in Approvals"
+        return "NEEDS_REVIEW", "Pending review items require attention", "Review pending items in Review Queue"
     if approved_config is not None:
         if latest_file is not None:
             return "ACTIVE", "Approved runtime config is available", "Monitor latest file processing"
@@ -93,7 +93,7 @@ def _build_activity_items(files, mappings, actions, packets):
             {
                 "kind": "ACTION",
                 "timestamp": action.get("reviewedAt") or action.get("createdAt"),
-                "title": action.get("type") or "Copilot action",
+                "title": action.get("type") or "Copilot recommendation",
                 "status": action.get("status"),
                 "detail": action.get("reason") or "-"
             }
@@ -103,7 +103,7 @@ def _build_activity_items(files, mappings, actions, packets):
             {
                 "kind": "REVIEW",
                 "timestamp": packet.get("reviewedAt") or packet.get("createdAt"),
-                "title": packet.get("fileName") or "Review packet",
+                "title": packet.get("fileName") or "Review item",
                 "status": packet.get("status"),
                 "detail": packet.get("recommendedAction", {}).get("reason") or packet.get("riskSummary", {}).get("summary") or "-",
             }
@@ -202,10 +202,10 @@ async def get_partner_intake(
         pending_items = [
             {
                 "kind": "REVIEW_PACKET",
-                "title": item.get("recommendedAction", {}).get("actionType") or "Pending review packet",
+                "title": item.get("recommendedAction", {}).get("actionType") or "Pending review item",
                 "reason": item.get("recommendedAction", {}).get("reason") or item.get("riskSummary", {}).get("summary") or "-",
-                "targetConfigId": item.get("proposalConfigId"),
-                "reviewPacketId": item.get("_id"),
+                "draftMappingId": item.get("draftMappingId"),
+                "reviewItemId": item.get("_id"),
                 "fileName": item.get("fileName"),
                 "status": item.get("status"),
                 "createdAt": item.get("createdAt"),
@@ -213,15 +213,19 @@ async def get_partner_intake(
             for item in detail_packets
             if item.get("status") == "PENDING"
         ]
-        covered_config_ids = {item.get("proposalConfigId") for item in detail_packets if item.get("status") == "PENDING"}
+        covered_config_ids = {
+            item.get("draftMappingId")
+            for item in detail_packets
+            if item.get("status") == "PENDING"
+        }
         for m in detail_mappings:
             if m.get("status") == "PENDING_APPROVAL" and m.get("_id") not in covered_config_ids:
                 pending_items.append({
                     "kind": "MAPPING_CONFIG",
-                    "title": "Pending Mapping Proposal",
-                    "reason": m.get("configHealth", {}).get("reasoning") or "AI generated mapping proposal awaits approval.",
-                    "targetConfigId": m.get("_id"),
-                    "reviewPacketId": None,
+                    "title": "Pending Draft Mapping",
+                    "reason": m.get("configHealth", {}).get("reasoning") or "AI generated draft mapping awaits approval.",
+                    "draftMappingId": m.get("_id"),
+                    "reviewItemId": None,
                     "fileName": m.get("sheetName") or "Default Sheet",
                     "status": m.get("status"),
                     "createdAt": m.get("createdAt"),

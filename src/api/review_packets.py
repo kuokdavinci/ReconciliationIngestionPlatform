@@ -51,6 +51,7 @@ def _config_loader(request: Request) -> ConfigLoader:
 def _serialize(packet) -> dict:
     data = packet.model_dump(by_alias=True)
     data["_id"] = str(data["_id"])
+    data["reviewItemId"] = data["_id"]
     return data
 
 
@@ -327,13 +328,13 @@ async def validate_runtime_packet(request: Request, packet_id: str):
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
         raise HTTPException(status_code=404, detail="Review packet not found.")
-    if not packet.proposal_config_id:
-        raise HTTPException(status_code=400, detail="Review packet has no proposal config.")
+    if not packet.draft_mapping_id:
+        raise HTTPException(status_code=400, detail="Review item has no draft mapping.")
 
     mapping_repo = MappingConfigRepository(_get_db(request))
-    config = await mapping_repo.find_one({"_id": packet.proposal_config_id})
+    config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
     if config is None:
-        raise HTTPException(status_code=404, detail="Proposal config not found.")
+        raise HTTPException(status_code=404, detail="Draft mapping not found.")
 
     gate = await _run_runtime_validation(request, packet, config)
     ok = gate["status"] == "pass"
@@ -370,9 +371,9 @@ async def approve_activate_packet(
             )
 
     post_approve_run = None
-    if packet.proposal_config_id:
+    if packet.draft_mapping_id:
         mapping_repo = MappingConfigRepository(_get_db(request))
-        config = await mapping_repo.find_one({"_id": packet.proposal_config_id})
+        config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
         if config is not None and config.status == MappingConfigStatus.PENDING_APPROVAL:
             now = datetime.now(timezone.utc)
             current_approved = await mapping_repo.find_by_partner_and_type(
@@ -395,7 +396,7 @@ async def approve_activate_packet(
                 "reasoning": (health.get("reasoning") or "Approved from review packet."),
             })
             await mapping_repo.collection.update_one(
-                {"_id": packet.proposal_config_id},
+                {"_id": packet.draft_mapping_id},
                 {"$set": {
                     "status": MappingConfigStatus.APPROVED.value,
                     "approvedAt": now,

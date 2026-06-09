@@ -52,8 +52,8 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_review_packet_status_partner_created",
         ),
         IndexModel(
-            [("proposalConfigId", ASCENDING)],
-            name="idx_review_packet_proposal_config",
+            [("draftMappingId", ASCENDING)],
+            name="idx_review_packet_draft_mapping",
         ),
     ],
     "data_container": [

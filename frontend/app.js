@@ -651,12 +651,14 @@
     const proposal = evidence.proposal || {};
     const primaryAction = copilot.primaryAction || null;
     const secondaryActions = Array.isArray(copilot.secondaryActions) ? copilot.secondaryActions : [];
+    const decisionActions = Array.isArray(copilot.decisionActions) ? copilot.decisionActions : [];
 
     const runtimeVersion = runtime.version || null;
     const runtimeActive = runtime.state === "approved";
     const latestFileName = latestFile?.name || null;
     const latestFileFailed = latestFile && String(latestFile.status || "").toLowerCase() === "failed";
     const hasProposal = proposal.state && proposal.state !== "none";
+    const hasDecision = decisionActions.length > 0;
     const proposalReason = proposal.reason || "";
 
     const verdictMap = {
@@ -730,7 +732,6 @@
       </div>`;
 
     // Step 3: Decision — recommendation + primary CTA + secondary + decision actions
-    const decisionKeys = ["approve_activate_next_runtime", "approve_keep_current", "reject_proposal"];
     const actionLabel = (key) => ({ review_proposal: "Open Review Center", approve_activate_next_runtime: "Approve & activate", approve_keep_current: "Keep current runtime", reject_proposal: "Reject change", open_mapping_details: "View mapping", refresh_context: "Refresh" })[key] || key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     const actionIcon = (key) => ({ review_proposal: "fact_check", approve_activate_next_runtime: "check_circle", approve_keep_current: "pause_circle", reject_proposal: "cancel", open_mapping_details: "schema", refresh_context: "refresh" })[key] || "play_arrow";
 
@@ -749,11 +750,11 @@
       <div class="brief-decision-links">
         <button class="button-link" data-action="go-review-center">Open full Review Center</button>
       </div>
-      ${hasProposal ? `
+      ${hasDecision ? `
       <div class="brief-decision-actions">
         <p class="brief-decision-hint">Decide on the proposed change:</p>
         <div class="brief-decision-buttons">
-          ${secondaryActions.filter(a => decisionKeys.includes(a.key)).map(a => `
+          ${decisionActions.map(a => `
             <button class="button brief-decision-btn ${a.key === 'reject_proposal' ? 'danger' : 'secondary-action'}" data-action="copilot-action" data-copilot-action="${escapeHtml(a.key)}">
               <span class="material-symbols-outlined">${actionIcon(a.key)}</span>
               ${escapeHtml(actionLabel(a.key))}

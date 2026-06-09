@@ -174,6 +174,15 @@ button, input, select, textarea {
   background: rgba(255,255,255,0.08);
 }
 
+.nav-subgroup-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(236, 234, 227, 0.4);
+  padding: 8px 16px 4px;
+}
+
 .nav-item {
   width: 100%;
   display: flex;
@@ -2365,11 +2374,11 @@ code {
   margin-bottom: 8px;
 }
 
-.review-queue-panel {
+.review-center-panel {
   margin-bottom: 16px;
 }
 
-.review-queue-header {
+.review-center-header {
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -2377,29 +2386,29 @@ code {
   margin-bottom: 12px;
 }
 
-.review-queue-title-row {
+.review-center-title-row {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.review-queue-title-row h3 {
+.review-center-title-row h3 {
   margin: 0;
   font-size: 16px;
 }
 
-.review-queue-reason {
+.review-center-reason {
   margin: 6px 0 0;
 }
 
-.review-queue-meta {
+.review-center-meta {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.review-queue-actions {
+.review-center-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;

@@ -31,7 +31,8 @@
     selectedReviewPacketId: null,
     reviewPackets: [],
     utilityRoute: "submit-sample",
-    preservedScrollTop: null
+    preservedScrollTop: null,
+    briefOpen: false
   };
 
   const routes = [
@@ -51,6 +52,8 @@
   const toast = document.getElementById("toast");
   let activeRenderToken = 0;
   let activePartnerFetchToken = 0;
+  let briefStep = 0;
+  const BRIEF_STEPS = ["Brief", "Review", "Decision"];
 
   function init() {
     renderNav();
@@ -513,14 +516,9 @@
     const partners = data.partners || [];
     const detail = data.detail || {};
     const pendingItems = detail.pendingItems || [];
-    const recentActivity = detail.recentActivity || [];
-    const reviewPackets = (detail.reviewPackets || []).filter(p => String(p.status || "").toUpperCase() === "PENDING");
     const runtime = detail.currentRuntimeConfigSummary || {};
     const latestFile = detail.latestFileSummary || null;
     const header = detail.statusHeader || {};
-    const latestFiles = recentActivity.filter(item => item.kind === "FILE").slice(0, 6);
-    const blockedFiles = latestFiles.filter(item => String(item.status || "").toUpperCase() === "FAILED");
-    const proposalSignals = recentActivity.filter(item => item.kind === "ACTION" || item.kind === "CONFIG" || item.kind === "REVIEW").slice(0, 6);
 
     const summaryCards = partners.map(item => {
       const stateLabel = item.overallState || "NO_ACTIVITY";
@@ -538,63 +536,23 @@
             ${latest ? `<span class="badge neutral">${escapeHtml(latest.fileName || latest.file_name || "Latest file")}</span>` : ""}
             <span class="badge neutral">Files ${formatNumber(item.fileCount || 0)}</span>
             <span class="badge neutral">Pending changes ${formatNumber(item.pendingProposalCount || 0)}</span>
-            <span class="badge neutral">Pending actions ${formatNumber(item.pendingActionCount || 0)}</span>
           </div>
         </button>
       `;
     }).join("");
 
-    const pendingList = pendingItems.length
-      ? pendingItems.map(item => `
-        <div class="intake-list-card">
-          <div class="intake-list-main">
-            <div class="intake-list-title-row">
-              <strong>${escapeHtml(item.title || item.kind || "Pending review item")}</strong>
-              ${badge(item.status || "PENDING_APPROVAL")}
-            </div>
-            <p class="muted">${escapeHtml(item.reason || "-")}</p>
-            ${item.fileName ? `<div class="muted">${escapeHtml(item.fileName)}</div>` : ""}
-          </div>
-          <div class="intake-list-actions">
-            ${item.reviewItemId ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(item.reviewItemId)}" data-partner="${escapeHtml(detail.partner || state.partner)}">Review details</button>` : `<button class="button" data-action="go-review-queue">Open Review Queue</button>`}
-          </div>
-        </div>
-      `).join("")
-      : `
-        <div class="empty-state intake-empty">
-          <span class="material-symbols-outlined">fact_check</span>
-            <p>No review item is waiting.</p>
-        </div>
-      `;
-
-    const activityList = recentActivity.length
-      ? recentActivity.map(item => `
-        <div class="activity-row">
-          <div class="activity-kind">${escapeHtml(item.kind || "-")}</div>
-          <div class="activity-body">
-            <div class="activity-title-row">
-              <strong>${escapeHtml(item.title || "-")}</strong>
-              ${item.status ? badge(item.status) : ""}
-            </div>
-            <div class="muted">${escapeHtml(item.detail || "-")}</div>
-          </div>
-          <div class="activity-time">${escapeHtml(formatDisplayDateTime(item.timestamp || "-"))}</div>
-        </div>
-      `).join("")
-      : `
-        <div class="empty-state intake-empty">
-          <span class="material-symbols-outlined">history</span>
-          <p>No recent partner activity.</p>
-        </div>
-      `;
-
-    const streamBadges = [];
     const overallState = header.overallState || "";
-    if (overallState) streamBadges.push(badge(overallState));
-    if (blockedFiles.length) streamBadges.push(`<span class="badge critical">${blockedFiles.length} file${blockedFiles.length > 1 ? "s" : ""} failed</span>`);
-    if (pendingItems.length) streamBadges.push(`<span class="badge warning">${pendingItems.length} review item${pendingItems.length > 1 ? "s" : ""} waiting</span>`);
-
     const latestFileName = latestFile?.fileName || latestFile?.file_name || null;
+    const latestFileFailed = latestFile && String(latestFile.processingStatus || "").toUpperCase() === "FAILED";
+
+    const runtimeLabel = runtime.configVersion ? `Active (${escapeHtml(runtime.configVersion)})` : 'N/A';
+    const fileLabel = latestFileFailed ? 'Failed' : (latestFileName ? 'OK' : 'None');
+    const reviewLabel = pendingItems.length > 0 ? `${pendingItems.length} waiting` : 'None';
+
+    const copilotStatusText = copilot ? (() => {
+      const m = { healthy: "No approval needed", monitor: "Monitor only", needs_review: "Review required", blocked: "Blocked" };
+      return m[String(copilot.status || "healthy")] || "No approval needed";
+    })() : '';
 
     return `
       ${renderPageFilters({ showDate: true, showClear: false })}
@@ -610,324 +568,234 @@
         </div>
       </section>
 
-      <div class="intake-copilot-layout">
-        <div class="intake-primary-column">
-          <div class="intake-stream-header">
-            <div class="intake-stream-info">
-              <h2>${escapeHtml(detail.partner || state.partner)}</h2>
-              <div class="intake-stream-badges">${streamBadges.join('')}</div>
-            </div>
-            <p class="muted intake-stream-desc">${escapeHtml(header.primaryReason || "Operational state for this partner.")}${latestFileName ? ` · ${escapeHtml(latestFileName)}` : ""}</p>
+      <div class="intake-dashboard-card">
+        <div class="intake-dash-top">
+          <h2>${escapeHtml(detail.partner || state.partner)}</h2>
+          ${badge(overallState)}
+        </div>
+        <div class="intake-dash-facts">
+          <div class="intake-dash-fact">
+            <span class="dash-fact-label">Runtime</span>
+            <span class="dash-fact-value ${!runtime.configVersion ? 'muted' : ''}">${runtimeLabel}</span>
           </div>
-
-          <div class="intake-status-grid">
-            <section class="panel intake-status-section" data-section="runtime">
-              <div class="panel-header">
-                <span class="material-symbols-outlined">settings</span>
-                <h2>Runtime Status</h2>
-              </div>
-              <div class="intake-summary-stack">
-                <div class="intake-summary-row">
-                  <span class="muted">Next action</span>
-                  <strong>${escapeHtml(header.nextAction || "-")}</strong>
-                </div>
-                <div class="intake-summary-row">
-                  <span class="muted">Runtime config</span>
-                  <strong>${runtime.sheetName || runtime.approvedAt ? escapeHtml(runtime.configVersion || "Approved config") : "No approved runtime config"}</strong>
-                </div>
-                <div class="intake-summary-row">
-                  <span class="muted">Sheet / row</span>
-                  <strong>${runtime.sheetName ? `${escapeHtml(runtime.sheetName)} / ${escapeHtml(String(runtime.startRow || 2))}` : "-"}</strong>
-                </div>
-                <div class="intake-summary-row">
-                  <span class="muted">Approved at</span>
-                  <strong>${runtime.approvedAt ? escapeHtml(formatDisplayDateTime(runtime.approvedAt)) : "-"}</strong>
-                </div>
-              </div>
-            </section>
-
-            <section class="panel intake-status-section" data-section="file-status">
-              <div class="panel-header">
-                <span class="material-symbols-outlined">description</span>
-                <h2>Latest File Status</h2>
-              </div>
-              <div class="intake-mini-list">
-                ${(latestFiles.length ? latestFiles : [{ title: "No files received yet", detail: "Wait for partner delivery." }]).map(item => {
-                  const isFailed = String(item.status || "").toUpperCase() === "FAILED";
-                  return `
-                  <div class="mini-row${isFailed ? ' mini-row-failed' : ''}">
-                    <div>
-                      <strong>${escapeHtml(item.title || "-")}</strong>
-                      <div class="muted">${escapeHtml(item.detail || "-")}</div>
-                      ${item.timestamp ? `<div class="muted file-time">${escapeHtml(formatDisplayDateTime(item.timestamp))}</div>` : ""}
-                    </div>
-                    <div>${item.status ? (isFailed ? `<span class="badge danger"><span class="material-symbols-outlined" style="font-size:14px;vertical-align:text-bottom;">warning</span> ${escapeHtml(item.status)}</span>` : badge(item.status)) : ""}</div>
-                  </div>
-                `;
-                }).join("")}
-              </div>
-            </section>
-
-            <section class="panel intake-status-section" data-section="readiness">
-              <div class="panel-header">
-                <span class="material-symbols-outlined">fact_check</span>
-                <h2>Review Readiness</h2>
-              </div>
-              <div class="intake-list-stack">${pendingList}</div>
-            </section>
+          <div class="intake-dash-fact${latestFileFailed ? ' fact-failed' : ''}">
+            <span class="dash-fact-label">Latest file</span>
+            <span class="dash-fact-value">${escapeHtml(fileLabel)}</span>
           </div>
-
-          <div class="intake-actions-row">
-            ${renderApprovalUploadEntry("Upload a partner file directly. If the structure needs review, the system will generate a review item.")}
-            <button class="button secondary-action" data-action="go-mapping-studio">Open Mapping Studio</button>
+          <div class="intake-dash-fact${pendingItems.length ? ' fact-warn' : ''}">
+            <span class="dash-fact-label">Review</span>
+            <span class="dash-fact-value">${escapeHtml(reviewLabel)}</span>
           </div>
         </div>
-        ${renderCopilotPanel(copilot)}
+        <div class="intake-dash-copilot">
+          <span class="dash-copilot-text">Copilot: ${escapeHtml(copilotStatusText)}</span>
+          <button class="button primary" data-action="open-copilot-brief">Open Brief</button>
+        </div>
+        <div class="intake-dash-utility">
+          <input type="file" class="review-upload-input" accept=".xlsx,.xls,.csv" style="display:none;">
+          <button class="button-link" data-action="open-review-upload">Upload file</button>
+        </div>
       </div>
+      ${state.briefOpen ? renderCopilotBrief(copilot, pendingItems) : ''}
     `;
   }
 
-  function renderCopilotPanel(copilot) {
-    if (!copilot) {
-      return `<aside class="copilot-panel panel copilot-compact">
-        <div class="loading-row">
-          <div class="spinner"></div>
-          <div>
-            <h2 style="margin: 0;">Copilot</h2>
-            <p class="muted" style="margin: 4px 0 0;">Loading recommendation...</p>
-          </div>
-        </div>
-      </aside>`;
-    }
+  function renderCopilotSummaryCard(copilot) {
+    if (!copilot) return '';
 
-    const status = String(copilot.status || "healthy").toUpperCase();
     const rawStatus = String(copilot.status || "healthy");
     const riskLevel = copilot.riskLevel || "low";
-    const headline = copilot.headline || "";
-    const summary = copilot.summary || "";
-    const reasons = Array.isArray(copilot.reasons) ? copilot.reasons : [];
-    const primaryAction = copilot.primaryAction || null;
-    const secondaryActions = Array.isArray(copilot.secondaryActions) ? copilot.secondaryActions : [];
-
     const evidence = copilot.evidence || {};
-    const safeChecks = Array.isArray(evidence.safeChecks) ? evidence.safeChecks : [];
-    const latestFile = evidence.latestFile || null;
     const runtime = evidence.runtime || {};
+    const latestFile = evidence.latestFile || null;
     const proposal = evidence.proposal || {};
 
-    // Derive verdict and message
     const verdictMap = {
       healthy: "No approval needed",
       monitor: "Monitor only",
       needs_review: "Review required before approving",
       blocked: "Blocked until mapping is fixed"
     };
-    const verdictMsgMap = {
-      healthy: "Runtime is ready and no pending review item exists.",
-      monitor: "Latest file has an issue, but approved runtime remains available.",
-      needs_review: "A review item is waiting before the next runtime change can be approved.",
-      blocked: "No approved runtime is available. A mapping fix is required before processing can continue."
-    };
     const verdict = verdictMap[rawStatus] || verdictMap.healthy;
-    const verdictMsg = verdictMsgMap[rawStatus] || verdictMsgMap.healthy;
 
-    const verdictTone = rawStatus === "healthy" ? "matched"
-      : rawStatus === "blocked" ? "critical"
-      : "warning";
+    const parts = [];
+    if (runtime.version) parts.push("Runtime active");
+    if (latestFile && String(latestFile.status || "").toLowerCase() === "failed") parts.push("Latest file failed");
+    if (proposal.state && proposal.state !== "none") parts.push("1 review item");
 
-    // Build situation summary
+    return `
+      <aside class="copilot-summary-card">
+        <div class="copilot-summary-top">
+          <span class="copilot-summary-eyebrow">COPILOT BRIEF</span>
+          ${severityBadge(riskLevel)}
+        </div>
+        <div class="copilot-summary-verdict verdict-${escapeHtml(rawStatus)}">${escapeHtml(verdict)}</div>
+        <div class="copilot-summary-condensed">${parts.length ? escapeHtml(parts.join(' · ')) : 'No issues detected'}</div>
+        <button class="button primary copilot-summary-cta" data-action="open-copilot-brief">Open full brief</button>
+      </aside>
+    `;
+  }
+
+  function renderCopilotBrief(copilot = state.copilotContext, pendingItems = []) {
+    if (!copilot) return '';
+
+    const rawStatus = String(copilot.status || "healthy");
+    const riskLevel = copilot.riskLevel || "low";
+    const headline = copilot.headline || "";
+    const summary = copilot.summary || "";
+    const evidence = copilot.evidence || {};
+    const safeChecks = Array.isArray(evidence.safeChecks) ? evidence.safeChecks : [];
+    const latestFile = evidence.latestFile || null;
+    const runtime = evidence.runtime || {};
+    const proposal = evidence.proposal || {};
+    const primaryAction = copilot.primaryAction || null;
+    const secondaryActions = Array.isArray(copilot.secondaryActions) ? copilot.secondaryActions : [];
+
     const runtimeVersion = runtime.version || null;
     const runtimeActive = runtime.state === "approved";
     const latestFileName = latestFile?.name || null;
-    const failedFile = latestFile && String(latestFile.status || "").toLowerCase() === "failed";
+    const latestFileFailed = latestFile && String(latestFile.status || "").toLowerCase() === "failed";
     const hasProposal = proposal.state && proposal.state !== "none";
-    const proposalReason = (proposal.reason || "").toLowerCase();
+    const proposalReason = proposal.reason || "";
 
-    const situationLines = [];
-    if (headline) {
-      situationLines.push(`<div class="copilot-brief-line"><span class="copilot-line-label">What changed</span><span>${escapeHtml(headline)}</span></div>`);
-    }
-    if (runtimeVersion) {
-      situationLines.push(`<div class="copilot-brief-line"><span class="copilot-line-label">Current runtime</span><span>${escapeHtml(runtimeVersion)}${runtimeActive ? " is active and can continue" : ""}</span></div>`);
-    }
-    if (hasProposal || rawStatus === "needs_review") {
-      const reviewCount = 1;
-      situationLines.push(`<div class="copilot-brief-line"><span class="copilot-line-label">Review state</span><span>${reviewCount} review item${reviewCount > 1 ? "s" : ""} waiting for approval</span></div>`);
-    }
-
-    // Build key evidence lines
-    const evidenceLines = [];
-    if (latestFileName) {
-      const fileDesc = failedFile
-        ? `Latest file failed: ${escapeHtml(latestFileName)}`
-        : `Latest file: ${escapeHtml(latestFileName)}`;
-      evidenceLines.push(`<div class="copilot-evidence-item">${fileDesc}</div>`);
-    }
-    if (runtimeVersion) {
-      const runtimeDesc = runtimeActive
-        ? `Active runtime: ${escapeHtml(runtimeVersion)}`
-        : `No active runtime`;
-      evidenceLines.push(`<div class="copilot-evidence-item">${runtimeDesc}</div>`);
-    }
-    if (hasProposal) {
-      const proposalLabel = escapeHtml(proposalReason || "Proposed runtime update");
-      evidenceLines.push(`<div class="copilot-evidence-item">Pending review item: ${proposalLabel}</div>`);
-    }
-
-    // Label helpers
-    const actionLabel = (key) => {
-      const labels = {
-        review_proposal: "Open Review Queue",
-        approve_activate_next_runtime: "Approve next runtime",
-        approve_keep_current: "Keep current runtime",
-        reject_proposal: "Reject proposed change",
-        open_mapping_details: "View mapping details",
-        refresh_context: "Refresh"
-      };
-      return labels[key] || key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    const verdictMap = {
+      healthy: "No approval needed",
+      monitor: "Monitor only",
+      needs_review: "Review required before approving",
+      blocked: "Blocked until mapping is fixed"
     };
+    const verdict = verdictMap[rawStatus] || verdictMap.healthy;
 
-    const actionIcon = (key) => {
-      const icons = {
-        review_proposal: "fact_check",
-        approve_activate_next_runtime: "check_circle",
-        approve_keep_current: "pause_circle",
-        reject_proposal: "cancel",
-        open_mapping_details: "schema",
-        refresh_context: "refresh"
-      };
-      return icons[key] || "play_arrow";
-    };
+    const statusColor = rawStatus === "healthy" ? "var(--success)"
+      : rawStatus === "monitor" ? "var(--warning)"
+      : "var(--danger)";
 
-    // Separate actions by type
+    const firstItem = pendingItems.length ? pendingItems[0] : null;
+
+    // Step 1: Brief — status + risk + verdict + 3 compact facts
+    const step1 = `
+      <div class="brief-hero">
+        <div class="brief-hero-badges">
+          ${badge(rawStatus.toUpperCase())}
+          ${severityBadge(riskLevel)}
+        </div>
+        <span class="brief-hero-verdict" style="color:${statusColor}">${escapeHtml(verdict)}</span>
+        <p class="brief-hero-line">${escapeHtml(headline || summary || "No issues detected.")}</p>
+      </div>
+      <div class="brief-facts">
+        <div class="brief-fact">
+          <span class="brief-fact-label">Runtime</span>
+          <span class="brief-fact-value">${escapeHtml(runtimeVersion || 'N/A')}${runtimeActive ? ' <span class="badge ok">active</span>' : ''}</span>
+        </div>
+        <div class="brief-fact${latestFileFailed ? ' fact-failed' : ''}">
+          <span class="brief-fact-label">Latest file</span>
+          <span class="brief-fact-value">${latestFileFailed ? 'Failed' : escapeHtml(latestFileName || 'None')}</span>
+        </div>
+        <div class="brief-fact${pendingItems.length ? ' fact-warn' : ''}">
+          <span class="brief-fact-label">Review</span>
+          <span class="brief-fact-value">${pendingItems.length ? `${pendingItems.length} item${pendingItems.length > 1 ? 's' : ''} waiting` : 'None'}</span>
+        </div>
+      </div>`;
+
+    // Step 2: Review — review item summary or monitoring summary
+    const step2 = firstItem ? `
+      <div class="brief-review-item">
+        <div class="brief-review-header">
+          <span class="brief-review-kind badge ${firstItem.kind === 'REVIEW_PACKET' ? 'warning' : 'neutral'}">${escapeHtml(firstItem.kind === 'REVIEW_PACKET' ? 'Review' : 'Draft Mapping')}</span>
+          <span class="badge ${firstItem.status === 'PENDING' ? 'warning' : 'neutral'}">${escapeHtml(firstItem.status || 'PENDING')}</span>
+        </div>
+        <h3 class="brief-review-title">${escapeHtml(firstItem.title || 'Review item')}</h3>
+        ${firstItem.reason ? `<p class="brief-review-reason">${escapeHtml(firstItem.reason)}</p>` : ''}
+        ${firstItem.fileName ? `<div class="brief-review-file"><span class="material-symbols-outlined">description</span> ${escapeHtml(firstItem.fileName)}</div>` : ''}
+      </div>
+      <div class="brief-review-impact">
+        ${safeChecks.length ? safeChecks.map(check => {
+          const label = check.label === "Latest file can continue" ? "Current runtime can continue"
+            : check.label === "Draft ready" ? "Draft mapping available"
+            : check.label;
+          return `<div class="brief-check ${escapeHtml(check.status || 'warn')}">
+            <span class="material-symbols-outlined">${check.status === "pass" ? "check_circle" : check.status === "fail" ? "cancel" : "warning"}</span>
+            <span>${escapeHtml(label)}</span>
+          </div>`;
+        }).join('') : ''}
+        ${summary ? `<p class="brief-review-impact-text">${escapeHtml(summary)}</p>` : ''}
+      </div>
+      <button class="button secondary-action brief-review-cta" data-action="go-mapping-studio"><span class="material-symbols-outlined">schema</span> Open Mapping Studio</button>` : `
+      <div class="brief-monitoring">
+        <div class="brief-monitoring-icon"><span class="material-symbols-outlined">visibility</span></div>
+        <p class="brief-monitoring-text">No review item is waiting.</p>
+        ${runtimeActive ? '<p class="brief-monitoring-text">Current runtime can continue.</p>' : ''}
+        ${latestFileFailed ? '<p class="brief-monitoring-text">Latest file needs investigation.</p>' : '<p class="brief-monitoring-text">All systems operational.</p>'}
+      </div>`;
+
+    // Step 3: Decision — recommendation + primary CTA + secondary + decision actions
     const decisionKeys = ["approve_activate_next_runtime", "approve_keep_current", "reject_proposal"];
-    const utilityKeys = ["refresh_context", "open_mapping_details"];
-    const decisionActions = secondaryActions.filter(a => decisionKeys.includes(a.key));
-    const utilityActions = secondaryActions.filter(a => utilityKeys.includes(a.key));
-    const isDecidable = rawStatus === "needs_review" && (hasProposal || reasons.some(r => r.toLowerCase().includes("review")));
+    const actionLabel = (key) => ({ review_proposal: "Open Review Queue", approve_activate_next_runtime: "Approve & activate", approve_keep_current: "Keep current runtime", reject_proposal: "Reject change", open_mapping_details: "View mapping", refresh_context: "Refresh" })[key] || key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    const actionIcon = (key) => ({ review_proposal: "fact_check", approve_activate_next_runtime: "check_circle", approve_keep_current: "pause_circle", reject_proposal: "cancel", open_mapping_details: "schema", refresh_context: "refresh" })[key] || "play_arrow";
+
+    const step3 = `
+      <div class="brief-decision-recommendation">
+        <span class="brief-rec-label">Recommendation</span>
+        <p class="brief-rec-text">${escapeHtml(summary || verdict)}</p>
+      </div>
+      ${primaryAction ? `
+      <div class="brief-decision-primary">
+        <button class="button primary brief-decision-cta" data-action="copilot-action" data-copilot-action="${escapeHtml(primaryAction.key)}">
+          <span class="material-symbols-outlined">${actionIcon(primaryAction.key)}</span>
+          ${escapeHtml(actionLabel(primaryAction.key))}
+        </button>
+      </div>` : ''}
+      <div class="brief-decision-links">
+        <button class="button-link" data-action="go-review-queue">Open full Review Queue</button>
+      </div>
+      ${hasProposal ? `
+      <div class="brief-decision-actions">
+        <p class="brief-decision-hint">Decide on the proposed change:</p>
+        <div class="brief-decision-buttons">
+          ${secondaryActions.filter(a => decisionKeys.includes(a.key)).map(a => `
+            <button class="button brief-decision-btn ${a.key === 'reject_proposal' ? 'danger' : 'secondary-action'}" data-action="copilot-action" data-copilot-action="${escapeHtml(a.key)}">
+              <span class="material-symbols-outlined">${actionIcon(a.key)}</span>
+              ${escapeHtml(actionLabel(a.key))}
+            </button>`).join('')}
+        </div>
+      </div>` : ''}`;
+
+    const panes = [step1, step2, step3];
 
     return `
-      <aside class="copilot-panel panel copilot-compact copilot-brief">
-        <div class="copilot-brief-header">
-          <span class="copilot-brief-title">APPROVAL BRIEF</span>
-          <div class="copilot-brief-status">
-            ${badge(status)}
-            ${severityBadge(riskLevel)}
-          </div>
-        </div>
-
-        <div class="copilot-brief-verdict verdict-${escapeHtml(rawStatus)}">
-          <span class="verdict-label">Verdict</span>
-          <span class="verdict-text">${escapeHtml(verdict)}</span>
-          <span class="verdict-msg">${escapeHtml(verdictMsg)}</span>
-        </div>
-
-        ${situationLines.length ? `
-        <div class="copilot-brief-section">
-          <h3 class="copilot-section-title">Situation</h3>
-          <div class="copilot-brief-lines">
-            ${situationLines.join('')}
-          </div>
-        </div>` : ''}
-
-        ${evidenceLines.length ? `
-        <div class="copilot-brief-section">
-          <h3 class="copilot-section-title">Key evidence</h3>
-          <div class="copilot-evidence-list">
-            ${evidenceLines.map(l => `<div class="copilot-evidence-row">${l}</div>`).join('')}
-          </div>
-        </div>` : ''}
-
-        <div class="copilot-brief-section">
-          <h3 class="copilot-section-title">Recommended next step</h3>
-          <div class="copilot-primary-row">
-            ${primaryAction ? `
-            <button class="button primary copilot-primary-action"
-              data-action="copilot-action"
-              data-copilot-action="${escapeHtml(primaryAction.key)}"
-              ${primaryAction.enabled === false ? "disabled" : ""}>
-              <span class="material-symbols-outlined">${actionIcon(primaryAction.key)}</span>
-              ${escapeHtml(actionLabel(primaryAction.key))}
-            </button>` : '<span class="muted">No action required.</span>'}
-          </div>
-        </div>
-
-        ${isDecidable ? `
-        <div class="copilot-brief-section copilot-decision-section">
-          <h3 class="copilot-section-title">Decision controls</h3>
-          <p class="copilot-decision-hint">Inspect the review item before deciding.</p>
-          <div class="copilot-decision-actions">
-            ${decisionActions.map(a => {
-              const isDestructive = a.key === "reject_proposal";
-              return `
-              <button class="button ${isDestructive ? "danger" : "secondary-action"} copilot-decision-btn"
-                data-action="copilot-action"
-                data-copilot-action="${escapeHtml(a.key)}"
-                ${a.enabled === false ? "disabled" : ""}>
-                <span class="material-symbols-outlined">${actionIcon(a.key)}</span>
-                ${escapeHtml(actionLabel(a.key))}
-              </button>`;
-            }).join('')}
-          </div>
-        </div>` : ''}
-
-        <div class="copilot-brief-utility">
-          ${utilityActions.map(a => `
-            <button class="copilot-utility-btn"
-              data-action="copilot-action"
-              data-copilot-action="${escapeHtml(a.key)}">
-              ${escapeHtml(actionLabel(a.key))}
-            </button>
-          `).join('')}
-        </div>
-
-        <details class="copilot-collapsed">
-          <summary class="copilot-collapsed-summary">
-            <span class="material-symbols-outlined">expand_more</span>
-            Evidence details
-          </summary>
-          <div class="copilot-brief-evidence">
-            <div class="copilot-evidence-grid">
-              <div>
-                <span>Latest file</span>
-                <strong>${escapeHtml(latestFile?.name || "No file")}</strong>
-                <small>${escapeHtml(latestFile?.status || "-")}</small>
-              </div>
-              <div>
-                <span>Runtime</span>
-                <strong>${escapeHtml(runtime.state || "unknown")}</strong>
-                <small>${escapeHtml(runtime.version || "-")}</small>
-              </div>
-              <div>
-                <span>Draft status</span>
-                <strong>${escapeHtml((proposal.state || "none").replace(/_/g, " "))}</strong>
-                <small>${proposal.source === "review_packet" ? "Ready in review queue" : proposal.source === "mapping_proposal" ? "Draft mapping available" : "-"}</small>
+      <div class="brief-overlay" data-action="close-brief">
+        <div class="brief-modal">
+          <div class="brief-modal-header">
+            <div>
+              <span class="brief-eyebrow">COPILOT BRIEF</span>
+              <div class="brief-header-badges">
+                ${badge(rawStatus.toUpperCase())}
+                ${severityBadge(riskLevel)}
               </div>
             </div>
+            <button class="brief-close-btn" data-action="close-brief">&times;</button>
           </div>
-        </details>
-
-        ${safeChecks.length ? `
-        <details class="copilot-collapsed">
-          <summary class="copilot-collapsed-summary">
-            <span class="material-symbols-outlined">expand_more</span>
-            Safe checks
-          </summary>
-          <div class="copilot-checks">
-            ${safeChecks.map(check => {
-              const checkLabel = check.label === "Latest file can continue" ? "Current runtime can continue" :
-                check.label === "Draft ready" ? "Draft mapping available" :
-                check.label;
-              return `
-              <div class="copilot-check ${escapeHtml(check.status || "warn")}">
-                <span class="material-symbols-outlined">${check.status === "pass" ? "check_circle" : check.status === "fail" ? "cancel" : "warning"}</span>
-                <strong>${escapeHtml(checkLabel)}</strong>
-              </div>`;
-            }).join('')}
+          <div class="brief-steps-row">
+            ${BRIEF_STEPS.map((s, i) => `
+              <div class="brief-step ${i === briefStep ? 'active' : i < briefStep ? 'done' : ''}" data-index="${i}">
+                <span class="brief-step-dot">${i < briefStep ? '✓' : i + 1}</span>
+                <span class="brief-step-name">${s}</span>
+              </div>`).join('')}
           </div>
-        </details>` : ''}
-      </aside>
-    `;
+          <div class="brief-pane-container">
+            ${panes.map((p, i) => `<div class="brief-pane ${i === briefStep ? 'active' : ''}" data-pane="${i}">${p}</div>`).join('')}
+          </div>
+          <div class="brief-nav">
+            <button class="button" data-action="brief-prev" ${briefStep === 0 ? 'disabled' : ''}>Back</button>
+            <div class="brief-nav-right">
+              <button class="button secondary-action" data-action="close-brief">Close</button>
+              ${briefStep < BRIEF_STEPS.length - 1
+                ? '<button class="button primary" data-action="brief-next">Next</button>'
+                : `<button class="button primary" data-action="close-brief">Done</button>`}
+            </div>
+          </div>
+        </div>
+      </div>`;
   }
 
   function renderApprovals(data) {
@@ -2806,7 +2674,14 @@
               const runInfo = body.result?.postApproveRun;
               if (runInfo?.partner) state.partner = runInfo.partner;
               if (runInfo?.date) state.date = runInfo.date;
-              showToast(actionKey === "refresh_context" ? "Recommendation refreshed." : "Copilot action completed.");
+              const decisionActions = ["reject_proposal", "approve_activate_next_runtime", "approve_keep_current"];
+              if (decisionActions.includes(actionKey)) {
+                state.briefOpen = false;
+                briefStep = 0;
+                showToast(actionKey === "reject_proposal" ? "Proposal rejected." : "Proposal approved.");
+              } else {
+                showToast(actionKey === "refresh_context" ? "Recommendation refreshed." : "Copilot action completed.");
+              }
               render();
             })
             .catch(err => {
@@ -3114,6 +2989,33 @@
               el.innerHTML = "Validate";
               showToast(err.message || "Runtime validation failed");
             });
+          return;
+        }
+        if (action === "open-copilot-brief") {
+          state.briefOpen = true;
+          briefStep = 0;
+          render();
+          return;
+        }
+        if (action === "close-brief") {
+          if (e.target !== el) return;
+          state.briefOpen = false;
+          briefStep = 0;
+          render();
+          return;
+        }
+        if (action === "brief-next") {
+          if (briefStep < BRIEF_STEPS.length - 1) {
+            briefStep++;
+            render();
+          }
+          return;
+        }
+        if (action === "brief-prev") {
+          if (briefStep > 0) {
+            briefStep--;
+            render();
+          }
           return;
         }
       });

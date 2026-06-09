@@ -261,3 +261,111 @@ Plans:
 - [ ] 15-01-PLAN.md — Data Explorer status colors + heading hierarchy fixes (Wave 1)
 - [ ] 15-02-PLAN.md — Dashboard layout restructure + remove dead UI (Wave 2)
 - [ ] 15-03-PLAN.md — Data Explorer advanced filters + dropdown/date-picker styling (Wave 3)
+
+---
+
+## Phase 16: Data Intake Screen Refactor & Copilot Decision Mode
+
+**Goal:** Reduce information overload on the Data Intake screen by replacing scattered status cards with a clearer hierarchy, and refactoring the Copilot Panel into a compact decision assistant with exactly one primary action.
+
+**Requirements:**
+- UI-INTAKE-01: Replace scattered cards (Active Runtime Config, Needs Review Now, Incoming Files, Blocked Or Failed, Review Items) with Runtime Status, Latest File Status, Review Readiness hierarchy
+- UI-INTAKE-02: Rename user-facing copy — "Blocked Or Failed" → "Latest File Status"/"File Processing Issues", "Needs Review Now" → "Review Readiness", avoid "blocked" language when approved runtime is available
+- UI-INTAKE-03: Copilot Panel compact decision mode — show only status, riskLevel, headline, summary, 2-3 reasons, one primary action + optional secondary refresh
+- UI-INTAKE-04: Move evidence, safe checks, raw runtime/draft/file details into collapsed sections
+- UI-INTAKE-05: Map decision states (healthy, monitor, needs_review, blocked) with exact primary actions and headlines
+- UI-INTAKE-06: Maintain backward compatibility — additive backend fields (summary, reasons, secondaryActions, safeChecks), legacy Mongo field names (proposalConfigId, targetConfigId) must not leak into UI
+
+**Plans:** 3/3 plans complete
+
+Plans:
+- [x] 16-01-PLAN.md — Backend: Add compact Copilot context fields (summary, reasons, primaryAction, secondaryActions) — Wave 1
+- [x] 16-02-PLAN.md — Frontend: Restructure Data Intake screen to 3-section hierarchy (Runtime Status, Latest File Status, Review Readiness) — Wave 1
+- [x] 16-03-PLAN.md — Frontend: Compact Copilot Panel with collapsed evidence/safe checks — Wave 2
+
+---
+
+## Phase 17: Navigation Restructure + Data Intake Refactor
+
+**Goal:** Restructure sidebar navigation (Mapping Studio → Tools sub-group, Review Queue → Review Center). Rewrite Data Intake landing with Partner Snapshot grid + minimal Selected Partner Summary card.
+
+**Requirements:**
+- UX-NAV-01: Reorder primary nav: Data Intake, Review Center, Reconciliation, Automation; add Tools sub-group with Mapping Studio
+- UX-NAV-02: Rename "Review Queue" → "Review Center" everywhere
+- UX-INTAKE-07: Partner Snapshot grid — partner name, overall status, latest file, file count, pending changes
+- UX-INTAKE-08: Selected Partner Summary — compact card with 3 fact pills (runtime, latest file, review), copilot sentence, Open Brief button, Upload file utility
+- UX-INTAKE-09: Remove evidence cards, safe checks, decision controls from dashboard
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] phases-17-20-ux-refactor/17-01-PLAN.md — Navigation restructure (routes, sidebar, icons, Tools group)
+- [ ] phases-17-20-ux-refactor/17-02-PLAN.md — Data Intake: Partner Snapshot grid + Selected Partner Summary
+- [ ] phases-17-20-ux-refactor/17-03-PLAN.md — Backend intake API extensions
+
+---
+
+## Phase 18: Copilot Brief 3-Step Modal
+
+**Goal:** Replace 4-step/5-step Copilot Brief with focused 3-step modal: Brief → Review → Decision. Approve/Reject/Keep only on Decision step. Modal closes and dashboard refreshes after decision.
+
+**Requirements:**
+- UX-BRIEF-01: 3-step flow — Brief (status + facts), Review (item summary or monitoring), Decision (primary CTA + optional approve/reject)
+- UX-BRIEF-02: No approve/reject/keep before Decision step
+- UX-BRIEF-03: No repeated Review Queue / Mapping Studio buttons across steps
+- UX-BRIEF-04: One dominant primary CTA per step
+- UX-BRIEF-05: After decision action, close modal, refresh dashboard, show toast
+- UX-BRIEF-06: Backend returns 3-step compatible copilot context
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] phases-17-20-ux-refactor/18-01-PLAN.md — Backend 3-step copilot context
+- [ ] phases-17-20-ux-refactor/18-02-PLAN.md — Frontend 3-step modal (Brief → Review → Decision)
+- [ ] phases-17-20-ux-refactor/18-03-PLAN.md — Confirmation, toast, dashboard refresh after decision
+
+---
+
+## Phase 19: Review Center + Mapping Studio
+
+**Goal:** Rename Review Queue → Review Center. Build full Review Center workflow (validate, approve, reject, send-to-studio). Build Mapping Studio as a workspace (upload → AI → edit → validate → handoff). Bidirectional handoff between centers.
+
+**Requirements:**
+- UX-REVIEW-01: "Review Center" replaces "Review Queue" in all UI copy
+- UX-REVIEW-02: Review Center supports validate, approve-activate, approve-keep, reject, send-to-studio
+- UX-STUDIO-01: Mapping Studio 5-step flow — upload, AI suggest, manual edit, validate, handoff
+- UX-STUDIO-02: Handoff from Studio creates review item in Review Center
+- UX-STUDIO-03: Send-to-studio from Review Center pre-loads mapping config
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] phases-17-20-ux-refactor/19-01-PLAN.md — Review Center rename + full workflow
+- [ ] phases-17-20-ux-refactor/19-02-PLAN.md — Mapping Studio workspace
+- [ ] phases-17-20-ux-refactor/19-03-PLAN.md — Handoff integration + bidirectional nav
+
+---
+
+## Phase 20: Reconciliation View + Contextual Copilot
+
+**Goal:** Reconciliation view with tabs, filters, AI Insights. Contextual Copilot per screen. Auto-trigger reconciliation after Approve & activate.
+
+**Requirements:**
+- UX-RECON-01: Reconciliation tabs — All / Matched / Unmatched / Error
+- UX-RECON-02: Filters — amount range, date range
+- UX-RECON-03: AI Insights — Summary, Anomalies, Patterns, Recommendations tabs
+- UX-COPILOT-01: Copilot context is contextual per screen (intake, review, reconciliation, automation)
+- UX-RECON-04: Approve & activate triggers reconciliation automatically
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] phases-17-20-ux-refactor/20-01-PLAN.md — Reconciliation tabs, filters, AI Insights
+- [ ] phases-17-20-ux-refactor/20-02-PLAN.md — Contextual Copilot per screen
+- [ ] phases-17-20-ux-refactor/20-03-PLAN.md — Auto-trigger reconciliation after approval
+
+---
+
+*Full plan files in `phases-17-20-ux-refactor/`*
+
+

@@ -498,3 +498,40 @@ async def send_packet_to_studio(
     packet.reviewed_at = now
     packet.reviewed_by = payload.reviewed_by
     return {"ok": True, "packet": _serialize(packet)}
+
+
+@router.post("/from-mapping/{mapping_id}")
+async def create_review_packet_from_mapping(
+    request: Request,
+    mapping_id: str,
+):
+    """Create a pending review packet from a completed mapping config (Studio handoff)."""
+    mapping_repo = MappingConfigRepository(_get_db(request))
+    mapping = await mapping_repo.find_one({"_id": mapping_id})
+    if mapping is None:
+        raise HTTPException(status_code=404, detail="Mapping config not found.")
+
+    packet = ReviewPacket(
+        source_type=ReviewPacketSourceType.STUDIO_HANDOFF,
+        partner=mapping.partner,
+        file_name=mapping.sheet_name or "Manual Configuration",
+        file_type_detected=mapping.file_type or "SETTLEMENT",
+        structure_signature=mapping.structure_signature,
+        draft_mapping_id=mapping_id,
+        parse_strategy={
+            "sheetName": mapping.sheet_name,
+            "startRow": mapping.start_row,
+            "fieldMappingCount": len(mapping.field_mappings or []),
+        },
+        risk_summary={
+            "severity": "medium",
+            "summary": "Draft mapping handed off from Mapping Studio for review.",
+        },
+        recommended_action={
+            "actionType": "APPROVE_REQUIRED_BEFORE_RUNTIME",
+            "reason": "Draft mapping ready for review and approval.",
+        },
+    )
+    repo = _repo(request)
+    created = await repo.create(packet)
+    return {"ok": True, "packet": _serialize(created)}

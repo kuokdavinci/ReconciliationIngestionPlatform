@@ -22,6 +22,7 @@ class ReviewPacketStatus(str, Enum):
 class ReviewPacketSourceType(str, Enum):
     UPLOAD = "UPLOAD"
     SCHEDULER_JOB = "SCHEDULER_JOB"
+    STUDIO_HANDOFF = "STUDIO_HANDOFF"
 
 
 class ReviewDecisionMode(str, Enum):

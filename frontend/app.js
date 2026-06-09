@@ -37,12 +37,12 @@
 
   const routes = [
     ["data-intake", "Data Intake", "inbox"],
-    ["review-queue", "Review Queue", "fact_check"],
+    ["review-center", "Review Center", "fact_check"],
     ["reconciliation", "Reconciliation", "receipt_long"],
-    ["mapping-studio", "Mapping Studio", "schema"],
+    ["automation", "Automation", "smart_toy"],
   ];
   const utilityRoutes = {
-    automation: { title: "Automation", icon: "smart_toy" }
+    "mapping-studio": { title: "Mapping Studio", icon: "schema" }
   };
 
   const view = document.getElementById("view");
@@ -261,7 +261,7 @@
         <span>${meta.title}</span>
       </button>
     `).join("");
-    nav.innerHTML = `${primary}${utility ? `<div class="nav-divider"></div>${utility}` : ""}`;
+    nav.innerHTML = `${primary}${utility ? `<div class="nav-divider"></div><div class="nav-subgroup-label">Tools</div>${utility}` : ""}`;
     
     nav.querySelectorAll("[data-route]").forEach(button => {
       button.addEventListener("click", () => {
@@ -327,7 +327,8 @@
       overview: "data-intake",
       "command-center": "data-intake",
       intake: "data-intake",
-      approvals: "review-queue",
+      approvals: "review-center",
+      "review-queue": "review-center",
       "submit-sample": "mapping-studio"
     };
     const normalized = aliases[key] || key;
@@ -355,10 +356,10 @@
     title.textContent = route ? route[1] : utility ? utility.title : "Command Center";
     const routeSubtitle = {
       "data-intake": `Track arrivals, processing state, and runtime readiness for ${state.partner}`,
-      "review-queue": `Review pending runtime changes for ${state.partner}`,
+      "review-center": `Review pending runtime changes for ${state.partner}`,
       reconciliation: `Deterministic reconciliation outcomes for ${state.partner} on ${formatDisplayDate(state.date)}`,
-      "mapping-studio": `Create a draft mapping, validate it, then send it to Review Queue`,
-      automation: `Scheduler, job visibility, and automation context`
+      automation: `Scheduler, job visibility, and automation context`,
+      "mapping-studio": `Create a draft mapping, validate it, then send it to Review Center`
     };
     subtitle.textContent = routeSubtitle[state.route] || `Operations Console - ${state.partner}`;
 
@@ -419,8 +420,8 @@
       return;
     }
 
-    if (state.route === "review-queue") {
-      view.innerHTML = loadingPanel("Loading review queue...");
+    if (state.route === "review-center") {
+      view.innerHTML = loadingPanel("Loading review center...");
       try {
         const [packets, mappings] = await Promise.all([
           fetchJson(`/api/v1/review-packets?partner=${encodeURIComponent(state.partner)}`),
@@ -730,7 +731,7 @@
 
     // Step 3: Decision — recommendation + primary CTA + secondary + decision actions
     const decisionKeys = ["approve_activate_next_runtime", "approve_keep_current", "reject_proposal"];
-    const actionLabel = (key) => ({ review_proposal: "Open Review Queue", approve_activate_next_runtime: "Approve & activate", approve_keep_current: "Keep current runtime", reject_proposal: "Reject change", open_mapping_details: "View mapping", refresh_context: "Refresh" })[key] || key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    const actionLabel = (key) => ({ review_proposal: "Open Review Center", approve_activate_next_runtime: "Approve & activate", approve_keep_current: "Keep current runtime", reject_proposal: "Reject change", open_mapping_details: "View mapping", refresh_context: "Refresh" })[key] || key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     const actionIcon = (key) => ({ review_proposal: "fact_check", approve_activate_next_runtime: "check_circle", approve_keep_current: "pause_circle", reject_proposal: "cancel", open_mapping_details: "schema", refresh_context: "refresh" })[key] || "play_arrow";
 
     const step3 = `
@@ -746,7 +747,7 @@
         </button>
       </div>` : ''}
       <div class="brief-decision-links">
-        <button class="button-link" data-action="go-review-queue">Open full Review Queue</button>
+        <button class="button-link" data-action="go-review-center">Open full Review Center</button>
       </div>
       ${hasProposal ? `
       <div class="brief-decision-actions">
@@ -869,7 +870,7 @@
         <div class="empty-state actionable">
           <span class="material-symbols-outlined">task_alt</span>
           <h3>No reviews waiting</h3>
-          <p class="muted">The review queue is clear for ${state.partner}. New format changes will appear here.</p>
+          <p class="muted">Review Center is clear for ${state.partner}. New format changes will appear here.</p>
           <button class="button" data-action="go-mapping-studio">Create Draft</button>
         </div>
       </section>
@@ -1406,7 +1407,7 @@
       ${metrics([
         ["Data Intake Today", formatNumber(total), `${state.partner} records observed today`],
         ["Needs Review", formatNumber(issueCount), `${matchedPct}% matched on current run`],
-        ["Priority Actions", formatNumber(anomalyCount), anomalyCount ? "Start with review queue and mismatches" : "No immediate blockers detected"],
+        ["Priority Actions", formatNumber(anomalyCount), anomalyCount ? "Start with Review Center and mismatches" : "No immediate blockers detected"],
         ["Financial Impact", mismatchAmount, "Amount exposed by visible mismatches"]
       ])}
 
@@ -1425,7 +1426,7 @@
             ${tabs}
           </div>
           <div class="command-center-copy">
-            <p class="muted">Severity stays above metadata. Use this to decide whether the next stop is Review Queue, Data Intake, or Reconciliation.</p>
+            <p class="muted">Severity stays above metadata. Use this to decide whether the next stop is Review Center, Data Intake, or Reconciliation.</p>
           </div>
         </section>
 
@@ -1594,15 +1595,15 @@
       },
       "UNMAPPED_SKIPPED": {
         title: "Create reviewable draft",
-        detail: "These rows were skipped because the format is not mapped yet. Build a draft mapping, validate it, then send it to Review Queue.",
+        detail: "These rows were skipped because the format is not mapped yet. Build a draft mapping, validate it, then send it to Review Center.",
         cta: "Open Mapping Studio",
         action: "go-mapping-studio"
       },
       "DEFAULT": {
         title: "Review mismatch then route work",
         detail: "Use the selected mismatch class to choose the correct next step: intake, review, or mapping update.",
-        cta: "Open Review Queue",
-        action: "go-review-queue"
+        cta: "Open Review Center",
+        action: "go-review-center"
       }
     };
     const statusTabs = [
@@ -1837,21 +1838,21 @@
       const mappingCount = Array.isArray(payload.proposedMappings) ? payload.proposedMappings.length : null;
       const draftMappingId = action.draftMappingId || "";
       return `
-        <section class="panel review-queue-panel">
-          <div class="review-queue-header">
+        <section class="panel review-center-panel">
+          <div class="review-center-header">
             <div>
-              <div class="review-queue-title-row">
-                <h3>Review Item: ${escapeHtml(statusLabel(action.type || "UNKNOWN"))}</h3>
-                ${badge(action.status || "PENDING_APPROVAL")}
+              <div class="review-center-title-row">
+                <strong>${escapeHtml(action.title || "Action item")}</strong>
+                ${action.status ? badge(action.status) : ""}
               </div>
-              <p class="muted review-queue-reason">${escapeHtml(action.reason || "Awaiting operator review.")}</p>
+              <p class="muted review-center-reason">${escapeHtml(action.reason || "Awaiting operator review.")}</p>
             </div>
-            <div class="review-queue-actions">
+            <div class="review-center-actions">
               ${draftMappingId ? `<button class="button" data-action="approve-config" data-config-id="${escapeHtml(draftMappingId)}">Approve Draft</button>` : ""}
               ${draftMappingId ? `<button class="button secondary-action" data-action="reject-config" data-config-id="${escapeHtml(draftMappingId)}">Reject Draft</button>` : ""}
             </div>
           </div>
-          <div class="review-queue-meta">
+          <div class="review-center-meta">
             <span class="badge neutral">${escapeHtml(action.partner || state.partner)}</span>
             ${action.workflowType ? `<span class="badge neutral">${escapeHtml(action.workflowType)}</span>` : ""}
             ${action.fileType ? `<span class="badge neutral">${escapeHtml(action.fileType)}</span>` : ""}
@@ -1877,7 +1878,7 @@
         ${embedded ? "" : renderPageFilters({ showDate: false, showClear: false })}
         <section class="panel">
           <div class="panel-header" style="margin-bottom: 16px;">
-            <h2 style="margin: 0;">Review Queue</h2>
+            <h2 style="margin: 0;">Review Center</h2>
           </div>
           ${actionCards}
         </section>
@@ -1961,7 +1962,7 @@
       ${embedded ? "" : renderPageFilters({ showDate: false, showClear: false })}
       <section class="panel">
         <div class="panel-header" style="margin-bottom: 16px;">
-          <h2 style="margin: 0;">Review Queue</h2>
+          <h2 style="margin: 0;">Review Center</h2>
         </div>
         ${actionCards}
       </section>
@@ -1994,7 +1995,7 @@
       return `
         <section class="panel" style="margin-bottom: 24px;">
           ${embedded ? "" : `<h2>Create Draft Mapping</h2>
-          <p class="muted" style="margin-bottom: 24px;">Upload a partner sample, review the draft mapping, then send it to the review queue.</p>`}
+          <p class="muted" style="margin-bottom: 24px;">Upload a partner sample, review the draft mapping, then send it to Review Center.</p>`}
           
           ${stepsHeader}
 
@@ -2142,7 +2143,7 @@
       return `
         <section class="panel" style="margin-bottom: 24px;">
           <h2>Review Draft Mapping</h2>
-          <p class="muted" style="margin-bottom: 20px;">Inspect the detected file structure and adjust the draft before it moves through the review queue.</p>
+          <p class="muted" style="margin-bottom: 20px;">Inspect the detected file structure and adjust the draft before it moves through Review Center.</p>
           
           ${stepsHeader}
           ${s.draftMappingId ? `
@@ -2278,20 +2279,20 @@
       return `
         <section class="panel" style="margin-bottom: 24px;">
           <h2>Validate & Prepare Review Handoff</h2>
-          <p class="muted" style="margin-bottom: 20px;">Resolve blocking issues, inspect warnings, test the transformed output, and then hand the draft to the review queue.</p>
+          <p class="muted" style="margin-bottom: 20px;">Resolve blocking issues, inspect warnings, test the transformed output, and then hand the draft to Review Center.</p>
           ${s.draftMappingId ? `
             <div class="panel" style="margin-bottom: 20px; padding: 12px 16px; display: flex; align-items: center; gap: 16px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.18); border-radius: 6px; flex-wrap: wrap;">
               <span class="material-symbols-outlined" style="color: var(--brand-accent-blue);">fact_check</span>
               <div style="font-size: 13px; color: var(--text-primary); flex-grow: 1;">
-                This draft requires review queue action before activation.
+                This draft requires Review Center action before activation.
               </div>
               <div style="display: flex; gap: 8px; align-items: center; margin-left: auto;">
                 ${badge(s.configStatus || "PENDING_APPROVAL")}
                 <button class="button ${s.handoffConfirmed ? "secondary-action" : "primary"}" id="studio-confirm-handoff-btn" style="height: 32px; padding: 0 12px; font-size: 12px;">
                   ${s.handoffConfirmed ? "Handoff Confirmed" : "Confirm Ready"}
                 </button>
-                <button class="button" id="studio-open-review-queue-btn" style="height: 32px; padding: 0 12px; font-size: 12px;">
-                  Open Review Queue
+                <button class="button" id="studio-open-review-center-btn" style="height: 32px; padding: 0 12px; font-size: 12px;">
+                  Open Review Center
                 </button>
               </div>
             </div>
@@ -2656,12 +2657,12 @@
               if (target.type === "review_drawer") {
                 if (target.reviewItemId) state.selectedReviewPacketId = target.reviewItemId;
                 showToast("Opening review drawer.");
-                location.hash = "review-queue";
+                location.hash = "review-center";
                 return;
               }
               if (target.type === "review_queue") {
-                showToast("Opening Review Queue.");
-                location.hash = "review-queue";
+                showToast("Opening Review Center.");
+                location.hash = "review-center";
                 return;
               }
               if (target.type === "mapping_studio") {
@@ -2739,10 +2740,10 @@
           render();
           return;
         }
-        if (action === "go-approvals" || action === "go-review-queue") {
+        if (action === "go-approvals" || action === "go-review-queue" || action === "go-review-center") {
           const partner = el.dataset.partner;
           if (partner) state.partner = partner;
-          location.hash = "review-queue";
+          location.hash = "review-center";
           return;
         }
         if (action === "go-review-packet") {
@@ -2750,7 +2751,7 @@
           const partner = el.dataset.partner;
           if (partner) state.partner = partner;
           if (packetId) state.selectedReviewPacketId = packetId;
-          location.hash = "review-queue";
+          location.hash = "review-center";
           return;
         }
         if (action === "open-review-upload") {
@@ -3048,8 +3049,8 @@
             if (body.reviewItemId) {
               state.selectedReviewPacketId = body.reviewItemId;
             }
-            showToast("Review item created. Opening Review Queue.");
-            location.hash = "review-queue";
+            showToast("Review item created. Opening Review Center.");
+            location.hash = "review-center";
             if (input) input.value = "";
           })
           .catch(err => {
@@ -3091,12 +3092,12 @@
             state.studio.step = 2;
             if (body.reviewItemId) {
               state.selectedReviewPacketId = body.reviewItemId;
-              showToast("Draft created. Opening Review Queue with the review drawer.");
-              location.hash = "review-queue";
+              showToast("Draft created. Opening Review Center with the review drawer.");
+              location.hash = "review-center";
               return;
             }
 
-            showToast("Draft created. Review now continues in the Review Queue.");
+            showToast("Draft created. Review now continues in the Review Center.");
             render();
           })
           .catch(err => showToast("AI Gen failed: " + err.message));
@@ -3329,13 +3330,13 @@
       });
     }
 
-    const openReviewQueueBtn = document.getElementById("studio-open-review-queue-btn");
-    if (openReviewQueueBtn) {
-      openReviewQueueBtn.addEventListener("click", () => {
+    const openReviewCenterBtn = document.getElementById("studio-open-review-center-btn");
+    if (openReviewCenterBtn) {
+      openReviewCenterBtn.addEventListener("click", () => {
         if (state.studio.reviewItemId) {
           state.selectedReviewPacketId = state.studio.reviewItemId;
         }
-        location.hash = "review-queue";
+        location.hash = "review-center";
       });
     }
 

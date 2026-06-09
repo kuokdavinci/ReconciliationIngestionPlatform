@@ -563,7 +563,7 @@
       : `
         <div class="empty-state intake-empty">
           <span class="material-symbols-outlined">fact_check</span>
-            <p>No review blockers for this partner.</p>
+            <p>No review item is waiting.</p>
         </div>
       `;
 
@@ -844,7 +844,7 @@
         <article class="review-card ${selectedPacket && selectedPacket._id === packet._id ? "active" : ""}" data-action="select-review-packet" data-packet-id="${escapeHtml(packet._id)}">
           <div class="review-card-top">
             <div>
-              <p class="eyebrow">Needs Review Now</p>
+              <p class="eyebrow">Review Readiness</p>
               <h3>${escapeHtml(packet.partner || "-")}</h3>
             </div>
             ${severityBadge(packet.riskSummary?.severity || "medium")}
@@ -1833,7 +1833,7 @@
       const payload = action.payload || {};
       const confidence = typeof payload.confidence === "number" ? Math.round(payload.confidence * 100) : null;
       const mappingCount = Array.isArray(payload.proposedMappings) ? payload.proposedMappings.length : null;
-      const targetConfigId = action.draftMappingId || "";
+      const draftMappingId = action.draftMappingId || "";
       return `
         <section class="panel review-queue-panel">
           <div class="review-queue-header">
@@ -1845,8 +1845,8 @@
               <p class="muted review-queue-reason">${escapeHtml(action.reason || "Awaiting operator review.")}</p>
             </div>
             <div class="review-queue-actions">
-              ${targetConfigId ? `<button class="button" data-action="approve-config" data-config-id="${escapeHtml(targetConfigId)}">Approve Draft</button>` : ""}
-              ${targetConfigId ? `<button class="button secondary-action" data-action="reject-config" data-config-id="${escapeHtml(targetConfigId)}">Reject Draft</button>` : ""}
+              ${draftMappingId ? `<button class="button" data-action="approve-config" data-config-id="${escapeHtml(draftMappingId)}">Approve Draft</button>` : ""}
+              ${draftMappingId ? `<button class="button secondary-action" data-action="reject-config" data-config-id="${escapeHtml(draftMappingId)}">Reject Draft</button>` : ""}
             </div>
           </div>
           <div class="review-queue-meta">

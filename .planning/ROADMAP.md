@@ -299,9 +299,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] phases-17-20-ux-refactor/17-01-PLAN.md — Navigation restructure (routes, sidebar, icons, Tools group)
-- [ ] phases-17-20-ux-refactor/17-02-PLAN.md — Data Intake: Partner Snapshot grid + Selected Partner Summary
-- [ ] phases-17-20-ux-refactor/17-03-PLAN.md — Backend intake API extensions
+- [x] phases-17-20-ux-refactor/17-01-PLAN.md — Navigation restructure (routes, sidebar, icons, Tools group)
+- [x] phases-17-20-ux-refactor/17-02-PLAN.md — Data Intake: Partner Snapshot grid + Selected Partner Summary
+- [x] phases-17-20-ux-refactor/17-03-PLAN.md — Backend intake API extensions
 
 ---
 
@@ -320,9 +320,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] phases-17-20-ux-refactor/18-01-PLAN.md — Backend 3-step copilot context
-- [ ] phases-17-20-ux-refactor/18-02-PLAN.md — Frontend 3-step modal (Brief → Review → Decision)
-- [ ] phases-17-20-ux-refactor/18-03-PLAN.md — Confirmation, toast, dashboard refresh after decision
+- [x] phases-17-20-ux-refactor/18-01-PLAN.md — Backend 3-step copilot context
+- [x] phases-17-20-ux-refactor/18-02-PLAN.md — Frontend 3-step modal (Brief → Review → Decision)
+- [x] phases-17-20-ux-refactor/18-03-PLAN.md — Confirmation, toast, dashboard refresh after decision
 
 ---
 

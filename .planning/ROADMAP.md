@@ -340,9 +340,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] phases-17-20-ux-refactor/19-01-PLAN.md — Review Center rename + full workflow
-- [ ] phases-17-20-ux-refactor/19-02-PLAN.md — Mapping Studio workspace
-- [ ] phases-17-20-ux-refactor/19-03-PLAN.md — Handoff integration + bidirectional nav
+- [x] phases-17-20-ux-refactor/19-01-PLAN.md — Review Center rename + full workflow
+- [x] phases-17-20-ux-refactor/19-02-PLAN.md — Mapping Studio workspace
+- [x] phases-17-20-ux-refactor/19-03-PLAN.md — Handoff integration + bidirectional nav
 
 ---
 

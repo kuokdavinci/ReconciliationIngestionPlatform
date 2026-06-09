@@ -1,6 +1,6 @@
 (function () {
   const state = {
-    route: "command-center",
+    route: "data-intake",
     partner: "MOMO",
     partnerOptions: ["MOMO", "VNPAY", "ZALOPAY", "ACMEPAY"],
     date: "2026-06-05",
@@ -16,8 +16,8 @@
       headers: [],
       sampleRows: [],
       config: null,
-      proposalId: null,
-      reviewPacketId: null,
+      draftMappingId: null,
+      reviewItemId: null,
       configStatus: null,
       isRuntimeEligible: null,
       validation: null,
@@ -27,6 +27,7 @@
       handoffConfirmed: false
     },
     copilotActions: [],
+    copilotContext: null,
     selectedReviewPacketId: null,
     reviewPackets: [],
     utilityRoute: "submit-sample",
@@ -34,7 +35,6 @@
   };
 
   const routes = [
-    ["command-center", "Command Center", "space_dashboard"],
     ["data-intake", "Data Intake", "inbox"],
     ["review-queue", "Review Queue", "fact_check"],
     ["reconciliation", "Reconciliation", "receipt_long"],
@@ -72,7 +72,7 @@
   async function openPacketInStudio(packetId) {
     const packet = state.reviewPackets.find(item => item._id === packetId);
     if (!packet) {
-      state.studio.reviewPacketId = packetId || null;
+      state.studio.reviewItemId = packetId || null;
       location.hash = "mapping-studio";
       return;
     }
@@ -80,18 +80,19 @@
     if (packet.partner) {
       state.partner = packet.partner;
     }
-    state.studio.reviewPacketId = packetId;
+    state.studio.reviewItemId = packetId;
     state.studio.fileName = packet.fileName || "";
     state.studio.headers = packet.structureSignature?.headers || [];
     state.studio.sampleRows = (packet.samplePreview || []).map(row => row.values || []);
-    state.studio.proposalId = packet.proposalConfigId || null;
+    state.studio.draftMappingId = packet.draftMappingId || null;
     state.studio.configStatus = packet.status || null;
     state.studio.handoffConfirmed = packet.decisionMode === "SEND_TO_MAPPING_STUDIO";
 
-    if (packet.proposalConfigId) {
+    const draftMappingId = packet.draftMappingId;
+    if (draftMappingId) {
       try {
         const response = await fetchJson(`/api/v1/mappings?partner=${encodeURIComponent(packet.partner || state.partner)}`);
-        const mapping = (response.mappings || []).find(item => item._id === packet.proposalConfigId);
+        const mapping = (response.mappings || []).find(item => item._id === draftMappingId);
         if (mapping) {
           state.studio.config = mapping;
           state.studio.step = 2;
@@ -99,7 +100,7 @@
           state.studio.step = 1;
         }
       } catch (err) {
-        showToast("Could not preload proposal config in Mapping Studio.");
+        showToast("Could not preload the draft mapping in Mapping Studio.");
         state.studio.step = 1;
       }
     } else {
@@ -318,15 +319,16 @@
   }
 
   function onRouteChange() {
-    const key = location.hash.replace("#", "") || "command-center";
+    const key = location.hash.replace("#", "") || "data-intake";
     const aliases = {
-      overview: "command-center",
+      overview: "data-intake",
+      "command-center": "data-intake",
       intake: "data-intake",
       approvals: "review-queue",
       "submit-sample": "mapping-studio"
     };
     const normalized = aliases[key] || key;
-    state.route = (routes.some(([route]) => route === normalized) || utilityRoutes[normalized]) ? normalized : "command-center";
+    state.route = (routes.some(([route]) => route === normalized) || utilityRoutes[normalized]) ? normalized : "data-intake";
     
     document.querySelectorAll(".nav-item").forEach(item => {
       const active = item.dataset.route === state.route;
@@ -349,11 +351,10 @@
     const utility = utilityRoutes[state.route];
     title.textContent = route ? route[1] : utility ? utility.title : "Command Center";
     const routeSubtitle = {
-      "command-center": `What needs attention first for ${state.partner} on ${formatDisplayDate(state.date)}`,
       "data-intake": `Track arrivals, processing state, and runtime readiness for ${state.partner}`,
-      "review-queue": `Approve or reject pending proposals for ${state.partner}`,
+      "review-queue": `Review pending runtime changes for ${state.partner}`,
       reconciliation: `Deterministic reconciliation outcomes for ${state.partner} on ${formatDisplayDate(state.date)}`,
-      "mapping-studio": `Create a proposal, validate it, then hand it to Review Queue`,
+      "mapping-studio": `Create a draft mapping, validate it, then send it to Review Queue`,
       automation: `Scheduler, job visibility, and automation context`
     };
     subtitle.textContent = routeSubtitle[state.route] || `Operations Console - ${state.partner}`;
@@ -393,14 +394,18 @@
     if (state.route === "data-intake") {
       view.innerHTML = loadingPanel("Loading data intake...");
       try {
-        const data = await fetchJson(`/api/v1/operations/intake?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`);
+        const [data, copilot] = await Promise.all([
+          fetchJson(`/api/v1/operations/intake?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`),
+          fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`)
+        ]);
         if (
           renderToken !== activeRenderToken ||
           state.route !== routeAtStart ||
           state.partner !== partnerAtStart ||
           state.date !== dateAtStart
         ) return;
-        view.innerHTML = renderPartnerIntake(data);
+        state.copilotContext = copilot;
+        view.innerHTML = renderPartnerIntake(data, copilot);
       } catch (err) {
         if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
         view.innerHTML = renderError(err);
@@ -504,7 +509,7 @@
 
   }
 
-  function renderPartnerIntake(data) {
+  function renderPartnerIntake(data, copilot) {
     const partners = data.partners || [];
     const detail = data.detail || {};
     const pendingItems = detail.pendingItems || [];
@@ -532,7 +537,7 @@
           <div class="intake-card-meta">
             ${latest ? `<span class="badge neutral">${escapeHtml(latest.fileName || latest.file_name || "Latest file")}</span>` : ""}
             <span class="badge neutral">Files ${formatNumber(item.fileCount || 0)}</span>
-            <span class="badge neutral">Pending proposals ${formatNumber(item.pendingProposalCount || 0)}</span>
+            <span class="badge neutral">Pending changes ${formatNumber(item.pendingProposalCount || 0)}</span>
             <span class="badge neutral">Pending actions ${formatNumber(item.pendingActionCount || 0)}</span>
           </div>
         </button>
@@ -549,10 +554,9 @@
             </div>
             <p class="muted">${escapeHtml(item.reason || "-")}</p>
             ${item.fileName ? `<div class="muted">${escapeHtml(item.fileName)}</div>` : ""}
-            ${item.targetConfigId ? `<code>${escapeHtml(item.targetConfigId)}</code>` : ""}
           </div>
           <div class="intake-list-actions">
-            ${item.reviewPacketId ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(item.reviewPacketId)}" data-partner="${escapeHtml(detail.partner || state.partner)}">Open Approval Desk</button>` : `<button class="button" data-action="go-review-queue">Open Review Queue</button>`}
+            ${item.reviewItemId ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(item.reviewItemId)}" data-partner="${escapeHtml(detail.partner || state.partner)}">Open Review Drawer</button>` : `<button class="button" data-action="go-review-queue">Open Review Queue</button>`}
           </div>
         </div>
       `).join("")
@@ -598,142 +602,197 @@
         </div>
       </section>
 
-      <section class="panel intake-banner">
-        <div class="intake-detail-header">
-          <div>
-            <p class="eyebrow">Selected Partner</p>
-            <h2 style="margin: 0;">${escapeHtml(detail.partner || state.partner)}</h2>
-            <p class="muted" style="margin: 6px 0 0;">${escapeHtml(header.primaryReason || "Operational state for this partner.")}</p>
-          </div>
-          <div class="intake-status-cta">
-            ${badge(header.overallState || "NO_ACTIVITY")}
-            <button class="button" data-action="go-review-queue">Open Review Queue</button>
-            <button class="button secondary-action" data-action="go-mapping-studio">Create Proposal</button>
-          </div>
-        </div>
-        ${renderApprovalUploadEntry("Upload a partner file directly. If the structure needs review, the system will generate an approval packet and open the drawer automatically.")}
-      </section>
-
-      <div class="intake-hero-grid">
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 16px;"><h2 style="margin:0;">Active Runtime Config</h2></div>
-          <div class="intake-summary-stack">
-            <div class="intake-summary-row">
-              <span class="muted">Next action</span>
-              <strong>${escapeHtml(header.nextAction || "-")}</strong>
-            </div>
-            <div class="intake-summary-row">
-              <span class="muted">Runtime config</span>
-              <strong>${runtime.sheetName || runtime.approvedAt ? escapeHtml(runtime.configVersion || "Approved config") : "No approved runtime config"}</strong>
-            </div>
-            <div class="intake-summary-row">
-              <span class="muted">Sheet / row</span>
-              <strong>${runtime.sheetName ? `${escapeHtml(runtime.sheetName)} / ${escapeHtml(String(runtime.startRow || 2))}` : "-"}</strong>
-            </div>
-            <div class="intake-summary-row">
-              <span class="muted">Latest file</span>
-              <strong>${latestFile ? escapeHtml(latestFile.fileName || "-") : "No files yet"}</strong>
-            </div>
-            <div class="intake-summary-row">
-              <span class="muted">Latest file status</span>
-              <strong>${latestFile && latestFile.processingStatus ? badge(latestFile.processingStatus) : "-"}</strong>
-            </div>
-            <div class="intake-summary-row">
-              <span class="muted">Approved at</span>
-              <strong>${runtime.approvedAt ? escapeHtml(formatDisplayDateTime(runtime.approvedAt)) : "-"}</strong>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 16px;"><h2 style="margin:0;">Needs Review Now</h2></div>
-          <div class="intake-list-stack">${pendingList}</div>
-        </section>
-      </div>
-
-      <div class="grid cols-2 intake-lower-grid">
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 16px;">
-            <h2 style="margin: 0;">Incoming Files</h2>
-          </div>
-          <div class="intake-mini-list">
-            ${(latestFiles.length ? latestFiles : [{ title: "No files received yet", detail: "Wait for partner delivery." }]).map(item => `
-              <div class="mini-row">
-                <div>
-                  <strong>${escapeHtml(item.title || "-")}</strong>
-                  <div class="muted">${escapeHtml(item.detail || "-")}</div>
-                </div>
-                <div>${item.status ? badge(item.status) : ""}</div>
+      <div class="intake-copilot-layout">
+        <div class="intake-primary-column">
+          <section class="panel intake-banner">
+            <div class="intake-detail-header">
+              <div>
+                <p class="eyebrow">Selected Partner</p>
+                <h2 style="margin: 0;">${escapeHtml(detail.partner || state.partner)}</h2>
+                <p class="muted" style="margin: 6px 0 0;">${escapeHtml(header.primaryReason || "Operational state for this partner.")}</p>
               </div>
-            `).join("")}
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 16px;">
-            <h2 style="margin: 0;">Blocked Or Failed</h2>
-          </div>
-          <div class="intake-mini-list">
-            ${(blockedFiles.length ? blockedFiles : [{ title: "No blocked files", detail: "This partner is not currently blocked." }]).map(item => `
-              <div class="mini-row">
-                <div>
-                  <strong>${escapeHtml(item.title || "-")}</strong>
-                  <div class="muted">${escapeHtml(item.detail || "-")}</div>
-                </div>
-                <div>${item.status ? badge(item.status) : ""}</div>
+              <div class="intake-status-cta">
+                ${badge(header.overallState || "NO_ACTIVITY")}
+                <button class="button" data-action="go-review-queue">Open Review Queue</button>
+                <button class="button secondary-action" data-action="go-mapping-studio">Create Draft</button>
               </div>
-            `).join("")}
-          </div>
-        </section>
-      </div>
+            </div>
+            ${renderApprovalUploadEntry("Upload a partner file directly. If the structure needs review, the system will generate a review item.")}
+          </section>
 
-      <section class="panel" style="margin-top: 24px;">
-        <div class="panel-header" style="margin-bottom: 16px;">
-          <div>
-            <h2 style="margin: 0;">Approval Packets</h2>
-            <p class="section-subtitle">Review-ready context generated from uploads or scheduled jobs before runtime changes are approved.</p>
-          </div>
-        </div>
-        <div class="intake-packet-grid">
-          ${(reviewPackets.length ? reviewPackets : [{
-            fileName: "No review packets",
-            recommendedAction: { reason: "This partner does not currently have a packet waiting for approval." },
-            riskSummary: { severity: "low" },
-            validationGates: [],
-            _id: ""
-          }]).map(packet => {
-            const gates = packet.validationGates || [];
-            const gateSummary = gates.reduce((acc, gate) => {
-              const status = String(gate.status || "").toLowerCase();
-              acc[status] = (acc[status] || 0) + 1;
-              return acc;
-            }, {});
-            return `
-              <article class="packet-summary-card">
-                <div class="review-card-top">
-                  <div>
-                    <p class="eyebrow">${escapeHtml(packet.sourceType || "REVIEW")}</p>
-                    <h3>${escapeHtml(packet.fileName || "-")}</h3>
+          <div class="intake-status-grid">
+            <section class="panel intake-status-section" data-section="runtime">
+              <div class="panel-header">
+                <span class="material-symbols-outlined">settings</span>
+                <h2>Runtime Status</h2>
+              </div>
+              <div class="intake-summary-stack">
+                <div class="intake-summary-row">
+                  <span class="muted">Next action</span>
+                  <strong>${escapeHtml(header.nextAction || "-")}</strong>
+                </div>
+                <div class="intake-summary-row">
+                  <span class="muted">Runtime config</span>
+                  <strong>${runtime.sheetName || runtime.approvedAt ? escapeHtml(runtime.configVersion || "Approved config") : "No approved runtime config"}</strong>
+                </div>
+                <div class="intake-summary-row">
+                  <span class="muted">Sheet / row</span>
+                  <strong>${runtime.sheetName ? `${escapeHtml(runtime.sheetName)} / ${escapeHtml(String(runtime.startRow || 2))}` : "-"}</strong>
+                </div>
+                <div class="intake-summary-row">
+                  <span class="muted">Approved at</span>
+                  <strong>${runtime.approvedAt ? escapeHtml(formatDisplayDateTime(runtime.approvedAt)) : "-"}</strong>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel intake-status-section" data-section="file-status">
+              <div class="panel-header">
+                <span class="material-symbols-outlined">description</span>
+                <h2>Latest File Status</h2>
+              </div>
+              <div class="intake-mini-list">
+                ${(latestFiles.length ? latestFiles : [{ title: "No files received yet", detail: "Wait for partner delivery." }]).map(item => {
+                  const isFailed = String(item.status || "").toUpperCase() === "FAILED";
+                  return `
+                  <div class="mini-row${isFailed ? ' mini-row-failed' : ''}">
+                    <div>
+                      <strong>${escapeHtml(item.title || "-")}</strong>
+                      <div class="muted">${escapeHtml(item.detail || "-")}</div>
+                      ${item.timestamp ? `<div class="muted file-time">${escapeHtml(formatDisplayDateTime(item.timestamp))}</div>` : ""}
+                    </div>
+                    <div>${item.status ? (isFailed ? `<span class="badge danger"><span class="material-symbols-outlined" style="font-size:14px;vertical-align:text-bottom;">warning</span> ${escapeHtml(item.status)}</span>` : badge(item.status)) : ""}</div>
                   </div>
-                  ${severityBadge(packet.riskSummary?.severity || "medium")}
-                </div>
-                <p class="review-reason">${escapeHtml(packet.recommendedAction?.reason || packet.riskSummary?.summary || "-")}</p>
-                <div class="review-meta-row">
-                  <span class="badge neutral">${escapeHtml(packet.fileTypeDetected || "-")}</span>
-                  ${badge(packet.status || "-")}
-                  ${packet.proposalConfigId ? `<span class="badge neutral">${escapeHtml(packet.proposalConfigId)}</span>` : ""}
-                </div>
-                <div class="review-impact-box">
-                  <strong>Gates</strong>
-                  <p>${formatNumber(gateSummary.pass || 0)} pass · ${formatNumber(gateSummary.warn || 0)} warn · ${formatNumber(gateSummary.fail || 0)} fail</p>
-                </div>
-                ${packet._id ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(packet._id)}" data-partner="${escapeHtml(packet.partner)}">Open Approval Desk</button>` : ""}
-              </article>
-            `;
-          }).join("")}
+                `;
+                }).join("")}
+              </div>
+            </section>
+
+            <section class="panel intake-status-section" data-section="readiness">
+              <div class="panel-header">
+                <span class="material-symbols-outlined">fact_check</span>
+                <h2>Review Readiness</h2>
+              </div>
+              <div class="intake-list-stack">${pendingList}</div>
+            </section>
+          </div>
         </div>
-      </section>
+        ${renderCopilotPanel(copilot)}
+      </div>
 
 
+    `;
+  }
+
+  function renderCopilotPanel(copilot) {
+    if (!copilot) {
+      return `
+        <aside class="copilot-panel panel">
+          <div class="loading-row">
+            <div class="spinner"></div>
+            <div>
+              <h2 style="margin: 0;">Copilot Panel</h2>
+              <p class="muted" style="margin: 4px 0 0;">Loading recommendation...</p>
+            </div>
+          </div>
+        </aside>
+      `;
+    }
+
+    const evidence = copilot.evidence || {};
+    const latestFile = evidence.latestFile || null;
+    const runtime = evidence.runtime || {};
+    const proposal = evidence.proposal || {};
+    const explanation = Array.isArray(copilot.explanation) ? copilot.explanation : [];
+    const actions = Array.isArray(copilot.actions) ? copilot.actions : [];
+    const safeChecks = Array.isArray(evidence.safeChecks) ? evidence.safeChecks : [];
+    const recommendedKey = copilot.recommendedAction?.key || "";
+
+    const actionButtons = actions.length
+      ? actions.map(action => {
+        const styleClass = action.style === "primary" ? "primary" : "secondary-action";
+        const icon = {
+          review_proposal: "fact_check",
+          approve_activate_next_runtime: "rocket_launch",
+          approve_keep_current: "verified",
+          reject_proposal: "block",
+          open_mapping_details: "schema",
+          refresh_context: "refresh",
+        }[action.key] || "play_arrow";
+        return `
+          <button
+            class="button ${styleClass}"
+            data-action="copilot-action"
+            data-copilot-action="${escapeHtml(action.key)}"
+            ${action.enabled === false ? "disabled" : ""}
+          >
+            <span class="material-symbols-outlined" style="font-size:18px;">${icon}</span>
+            ${escapeHtml(action.label || action.key)}
+          </button>
+        `;
+      }).join("")
+      : `<div class="muted">No action available.</div>`;
+
+    return `
+      <aside class="copilot-panel panel">
+        <div class="copilot-header">
+          <div>
+            <p class="eyebrow">Copilot Panel</p>
+            <h2>${escapeHtml(copilot.headline || "No action needed")}</h2>
+          </div>
+          ${severityBadge(copilot.riskLevel || "low")}
+        </div>
+
+        <div class="copilot-status-row">
+          ${badge(String(copilot.status || "healthy").toUpperCase())}
+          ${recommendedKey ? `<span class="badge neutral">Recommended: ${escapeHtml(copilot.recommendedAction?.label || recommendedKey)}</span>` : `<span class="badge matched">No action needed</span>`}
+        </div>
+
+        <div class="copilot-section">
+          <h3>Why</h3>
+          <ul class="copilot-explanation">
+            ${(explanation.length ? explanation : ["No current blocker for this partner."]).map(item => `<li>${escapeHtml(item)}</li>`).join("")}
+          </ul>
+        </div>
+
+        <div class="copilot-section">
+          <h3>Evidence</h3>
+          <div class="copilot-evidence-grid">
+            <div>
+              <span>Latest file</span>
+              <strong>${escapeHtml(latestFile?.name || "No file")}</strong>
+              <small>${escapeHtml(latestFile?.status || "-")}</small>
+            </div>
+            <div>
+              <span>Runtime</span>
+              <strong>${escapeHtml(runtime.state || "unknown")}</strong>
+              <small>${escapeHtml(runtime.version || "-")}</small>
+            </div>
+            <div>
+              <span>Draft status</span>
+              <strong>${escapeHtml((proposal.state || "none").replace(/_/g, " "))}</strong>
+              <small>${proposal.source === "review_packet" ? "Ready in review queue" : proposal.source === "mapping_proposal" ? "Draft mapping available" : "-"}</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="copilot-section">
+          <h3>Safe Checks</h3>
+          <div class="copilot-checks">
+            ${safeChecks.map(check => `
+              <div class="copilot-check ${escapeHtml(check.status || "warn")}">
+                <span class="material-symbols-outlined">${check.status === "pass" ? "check_circle" : check.status === "fail" ? "cancel" : "warning"}</span>
+                <strong>${escapeHtml(check.label || "-")}</strong>
+              </div>
+            `).join("") || `<div class="muted">No checks available.</div>`}
+          </div>
+        </div>
+
+        <div class="copilot-section">
+          <h3>Actions</h3>
+          <div class="copilot-actions">${actionButtons}</div>
+        </div>
+      </aside>
     `;
   }
 
@@ -743,15 +802,15 @@
     const pendingPackets = packets.filter(item => String(item.status || "").toUpperCase() === "PENDING");
     
     // Synthesize pending mapping configurations as virtual packets
-    const pendingMappings = mappings.filter(item => item.status === "PENDING_APPROVAL" && !pendingPackets.some(p => p.proposalConfigId === item._id));
+    const pendingMappings = mappings.filter(item => item.status === "PENDING_APPROVAL" && !pendingPackets.some(p => p.draftMappingId === item._id));
     const virtualPackets = pendingMappings.map(m => ({
       _id: m._id,
       partner: m.partner,
       fileName: m.sheetName || "Manual Configuration",
       fileTypeDetected: m.fileType || "SETTLEMENT",
       status: "PENDING",
-      proposalConfigId: m._id,
-      recommendedAction: { actionType: "APPROVE_REQUIRED_BEFORE_RUNTIME", reason: m.configHealth?.reasoning || "Pending mapping config proposal." },
+      draftMappingId: m._id,
+      recommendedAction: { actionType: "APPROVE_REQUIRED_BEFORE_RUNTIME", reason: m.configHealth?.reasoning || "Pending mapping review." },
       parseStrategy: { sheetName: m.sheetName, startRow: m.startRow, fieldMappingCount: (m.fieldMappings || []).length },
       validationGates: [],
       samplePreview: [],
@@ -770,7 +829,7 @@
     const summary = [
       ["Pending Reviews", formatNumber(allPending.length), allPending.length ? "Items waiting for reviewer action" : "Queue is clear"],
       ["Approved Configs", formatNumber(approvedConfigs), "Runtime continues on approved config"],
-      ["Closed Decisions", formatNumber(recentDecisions.length), "Review outcomes are recorded with packet context"],
+      ["Closed Decisions", formatNumber(recentDecisions.length), "Recent reviewer outcomes"],
       ["Current Focus", state.partner, "Filtered partner review workspace"]
     ];
 
@@ -809,7 +868,7 @@
           <span class="material-symbols-outlined">task_alt</span>
           <h3>No reviews waiting</h3>
           <p class="muted">The review queue is clear for ${state.partner}. New format changes will appear here.</p>
-          <button class="button" data-action="go-mapping-studio">Create Proposal</button>
+          <button class="button" data-action="go-mapping-studio">Create Draft</button>
         </div>
       </section>
     `;
@@ -858,7 +917,7 @@
       </div>
     ` : "";
     
-    const proposalConfig = selectedPacket ? (data.mappings || []).find(m => String(m._id) === String(selectedPacket.proposalConfigId)) : null;
+    const proposalConfig = selectedPacket ? (data.mappings || []).find(m => String(m._id) === String(selectedPacket.draftMappingId)) : null;
     let proposalMappingsHtml = "";
     if (proposalConfig && proposalConfig.fieldMappings && proposalConfig.fieldMappings.length) {
       const rows = proposalConfig.fieldMappings.map(fm => {
@@ -899,7 +958,7 @@
         </div>
       `;
     } else {
-      proposalMappingsHtml = `<div class="muted" style="padding: 10px 0;">No proposed mappings available.</div>`;
+      proposalMappingsHtml = `<div class="muted" style="padding: 10px 0;">No draft mapping details available.</div>`;
     }
 
     let previewTableHtml = "";
@@ -982,13 +1041,13 @@
 
       scopeSectionHtml = `
         <section class="drawer-section">
-          <h4>Reconciliation Scope Proposal</h4>
+          <h4>Reconciliation Scope</h4>
           <p class="section-subtitle" style="font-size: 12px; margin: 4px 0 8px; color: var(--text-muted);">
             Define the boundaries of data matching for this file to ensure proper reconciliation flow.
           </p>
           <div class="scope-info-box" style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 12px; margin-bottom: 12px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-              <span style="font-size: 12px;" class="muted">Agent Proposed Scope:</span>
+              <span style="font-size: 12px;" class="muted">Suggested scope:</span>
               <span class="badge ${scopeType === 'UNCONFIRMED' ? 'neutral' : 'matched'}" style="font-weight: 600; font-size: 11px;">
                 ${escapeHtml(scopeType)}
               </span>
@@ -1000,7 +1059,7 @@
               </span>
             </div>
             <div style="margin-top: 8px;">
-              <span style="font-size: 12px; display: block;" class="muted">Reasoning:</span>
+              <span style="font-size: 12px; display: block;" class="muted">Why this scope:</span>
               ${reasonList}
             </div>
             ${signalsHtml}
@@ -1008,7 +1067,7 @@
 
           <div style="margin-top: 10px;">
             <label for="scope-override-select" style="font-size: 12px; font-weight: 500; display: block; margin-bottom: 6px;" class="muted">
-              Approve Proposed Scope or Override:
+              Confirm scope or override:
             </label>
             <select id="scope-override-select" class="input-select" data-packet-id="${escapeHtml(selectedPacket._id)}" style="width: 100%; font-size: 12px; padding: 8px; border-radius: 4px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.12); color: var(--text);">
               <option value="UNCONFIRMED" ${activeScope === 'UNCONFIRMED' ? 'selected' : ''}>UNCONFIRMED (Review required)</option>
@@ -1025,9 +1084,9 @@
       <aside class="review-drawer">
         <div class="review-drawer-header">
           <div>
-            <p class="eyebrow">Approval Packet</p>
+            <p class="eyebrow">Review Item</p>
             <h3>${escapeHtml(selectedPacket.fileName || "-")}</h3>
-            <p class="muted">${escapeHtml(selectedPacket.partner || "-")} · ${escapeHtml(selectedPacket.sourceType || "-")} · ${escapeHtml(selectedPacket.fileTypeDetected || "-")}</p>
+            <p class="muted">${escapeHtml(selectedPacket.partner || "-")} · ${escapeHtml(selectedPacket.fileTypeDetected || "-")}</p>
           </div>
           ${severityBadge(selectedPacket.riskSummary?.severity || "medium")}
         </div>
@@ -1035,16 +1094,16 @@
         <section class="drawer-section">
           <h4>Current Context</h4>
           <div class="drawer-meta-grid">
-            <div><span class="muted">Active runtime</span><strong>${escapeHtml(selectedPacket.activeRuntimeConfigId || "No approved config")}</strong></div>
-            <div><span class="muted">Proposal config</span><strong>${escapeHtml(selectedPacket.proposalConfigId || "-")}</strong></div>
-            <div><span class="muted">Recommended action</span><strong>${escapeHtml(selectedPacket.recommendedAction?.actionType || "-")}</strong></div>
-            <div><span class="muted">Runtime hint</span><strong>${escapeHtml(selectedPacket.runtimeDecisionHint || "-")}</strong></div>
+            <div><span class="muted">Active runtime</span><strong>${selectedPacket.activeRuntimeConfigId ? "Available" : "No approved config"}</strong></div>
+            <div><span class="muted">Draft mapping</span><strong>${selectedPacket.draftMappingId ? "Ready for review" : "-"}</strong></div>
+            <div><span class="muted">Recommended next step</span><strong>${escapeHtml(selectedPacket.recommendedAction?.reason || "-")}</strong></div>
+            <div><span class="muted">Runtime behavior</span><strong>${selectedPacket.runtimeDecisionHint === "KEEP_CURRENT_RUNTIME_UNTIL_APPROVED" ? "Keep current runtime until approved" : selectedPacket.runtimeDecisionHint === "BLOCK_UNTIL_APPROVED" ? "Block until approved" : "-"}</strong></div>
           </div>
         </section>
 
         <section class="drawer-section">
-          <h4>Proposed Field Mappings</h4>
-          <p class="section-subtitle" style="font-size: 12px; margin: 4px 0 8px; color: var(--text-muted);">This rule structure maps the file columns below into database fields.</p>
+          <h4>Draft Mapping Preview</h4>
+          <p class="section-subtitle" style="font-size: 12px; margin: 4px 0 8px; color: var(--text-muted);">This draft mapping shows how the file columns would be interpreted.</p>
           ${proposalMappingsHtml}
         </section>
 
@@ -1064,21 +1123,21 @@
 
         <section class="drawer-section">
           <h4>Decision</h4>
-          <p class="section-subtitle" style="font-size: 12px; margin: 4px 0 8px; color: var(--text-muted);">Choose how to resolve this configuration proposal.</p>
+          <p class="section-subtitle" style="font-size: 12px; margin: 4px 0 8px; color: var(--text-muted);">Choose how to handle this runtime change.</p>
           <div class="review-actions" style="display: flex; flex-direction: column; gap: 8px;">
             <button class="button primary" data-action="approve-packet-activate" data-packet-id="${escapeHtml(selectedPacket._id)}" style="width: 100%; justify-content: center;">
-              Approve & Activate (Apply for future files)
+              Approve and activate for future files
             </button>
             <div style="display: flex; gap: 8px; width: 100%;">
               <button class="button secondary-action" data-action="approve-packet-keep-current" data-packet-id="${escapeHtml(selectedPacket._id)}" style="flex: 1; justify-content: center; font-size: 12px; padding: 0 8px;">
-                Approve for this file only
+                Keep current runtime
               </button>
               <button class="button secondary-action" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}" style="flex: 1; justify-content: center; font-size: 12px; padding: 0 8px;">
-                Reject proposal
+                Reject change
               </button>
             </div>
             <button class="button tertiary-action" data-action="send-packet-to-studio" data-packet-id="${escapeHtml(selectedPacket._id)}" style="width: 100%; justify-content: center; margin-top: 4px;">
-              <span class="material-symbols-outlined" style="font-size: 18px; margin-right: 4px;">edit</span> Adjust Manually in Mapping Studio
+              <span class="material-symbols-outlined" style="font-size: 18px; margin-right: 4px;">edit</span> Adjust in Mapping Studio
             </button>
           </div>
         </section>
@@ -1087,8 +1146,8 @@
       <aside class="review-drawer empty">
         <div class="empty-state actionable">
           <span class="material-symbols-outlined">fact_check</span>
-          <h3>Select a packet</h3>
-          <p class="muted">Choose a review packet to inspect context, gates, parse proposal, and reviewer actions.</p>
+          <h3>Select a review item</h3>
+          <p class="muted">Choose an item to inspect context, validation checks, draft mapping, and reviewer actions.</p>
         </div>
       </aside>
     `;
@@ -1113,7 +1172,7 @@
             <h2 class="section-title">Approval desk with full context</h2>
           </div>
         </div>
-        ${renderApprovalUploadEntry("Upload a new sample or incoming file. The system will analyze the format, generate a proposal, and open the approval drawer if review is required.")}
+        ${renderApprovalUploadEntry("Upload a new sample or incoming file. The system will analyze the format, generate a draft mapping, and open the approval drawer if review is required.")}
         <div class="approval-desk-layout">
           <div class="review-card-grid">
             ${needsReview}
@@ -1125,7 +1184,7 @@
         <div class="panel-header" style="margin-bottom: 16px;">
           <div>
             <h2 style="margin: 0;">Recent Decisions</h2>
-            <p class="section-subtitle">Packet-level reviewer outcomes with decision mode and parse context.</p>
+            <p class="section-subtitle">Recent reviewer outcomes with decision mode and runtime context.</p>
           </div>
         </div>
         ${table(["File", "Decision", "Decision Mode", "Parse Strategy", "Reviewed At"], decisionRows)}
@@ -1138,9 +1197,9 @@
       <section class="panel studio-shell" style="margin-bottom: 24px;">
         <div class="panel-header" style="margin-bottom: 16px;">
           <div>
-            <p class="eyebrow">Proposal Workflow</p>
+            <p class="eyebrow">Draft Workflow</p>
             <h2 style="margin: 0;">Mapping Studio</h2>
-            <p class="section-subtitle">Select sample, review proposal, validate output, then submit for review. Activation never happens here.</p>
+            <p class="section-subtitle">Select sample, review the draft mapping, validate output, then submit for review. Activation never happens here.</p>
           </div>
         </div>
         ${renderSettings(true)}
@@ -1197,7 +1256,7 @@
     return `
       ${metrics([
         ["Enabled Jobs", formatNumber(jobs.filter(job => job.enabled).length), "Scheduler-connected fetch configs"],
-        ["Pending Packets", formatNumber(jobs.reduce((sum, job) => sum + Number(job.pendingReviewPackets || 0), 0)), "Approval packets waiting after automation runs"],
+        ["Pending Review Items", formatNumber(jobs.reduce((sum, job) => sum + Number(job.pendingReviewPackets || 0), 0)), "Review items waiting after automation runs"],
         ["Partners Covered", formatNumber(jobs.length), "Configured partner fetch routes"],
         ["Mode", "Recommend Only", "Automation recommends but does not auto-approve"]
       ])}
@@ -1205,7 +1264,7 @@
         <div class="panel-header with-icon">
           <div>
             <h2 class="section-title">Scheduler Jobs</h2>
-            <p class="section-subtitle">Visibility into configured fetch routes and how many approval packets they are creating.</p>
+            <p class="section-subtitle">Visibility into configured fetch routes and how many review items they are creating.</p>
           </div>
           <span class="material-symbols-outlined panel-header-icon">schedule</span>
         </div>
@@ -1509,13 +1568,13 @@
     const resolutionPlaybook = {
       "AMOUNT_MISMATCH": {
         title: "Inspect amount transformation",
-        detail: "Compare partner amount, internal amount, and fee logic. If the mapping changed, create a new proposal in Mapping Studio.",
+        detail: "Compare partner amount, internal amount, and fee logic. If the mapping changed, create a new draft in Mapping Studio.",
         cta: "Open Mapping Studio",
         action: "go-mapping-studio"
       },
       "STATUS_MISMATCH": {
         title: "Check lifecycle mapping",
-        detail: "Review terminal-state translation and approval rules. If the config is wrong, submit an updated mapping proposal.",
+        detail: "Review terminal-state translation and approval rules. If the config is wrong, submit an updated draft mapping.",
         cta: "Open Mapping Studio",
         action: "go-mapping-studio"
       },
@@ -1532,8 +1591,8 @@
         action: "go-data-intake"
       },
       "UNMAPPED_SKIPPED": {
-        title: "Create reviewable proposal",
-        detail: "These rows were skipped because the format is not mapped yet. Build a proposal, validate it, then send it to Review Queue.",
+        title: "Create reviewable draft",
+        detail: "These rows were skipped because the format is not mapped yet. Build a draft mapping, validate it, then send it to Review Queue.",
         cta: "Open Mapping Studio",
         action: "go-mapping-studio"
       },
@@ -1774,20 +1833,20 @@
       const payload = action.payload || {};
       const confidence = typeof payload.confidence === "number" ? Math.round(payload.confidence * 100) : null;
       const mappingCount = Array.isArray(payload.proposedMappings) ? payload.proposedMappings.length : null;
-      const targetConfigId = action.targetConfigId || "";
+      const targetConfigId = action.draftMappingId || "";
       return `
         <section class="panel review-queue-panel">
           <div class="review-queue-header">
             <div>
               <div class="review-queue-title-row">
-                <h3>Copilot Action: ${escapeHtml(action.type || "UNKNOWN")}</h3>
+                <h3>Review Item: ${escapeHtml(statusLabel(action.type || "UNKNOWN"))}</h3>
                 ${badge(action.status || "PENDING_APPROVAL")}
               </div>
               <p class="muted review-queue-reason">${escapeHtml(action.reason || "Awaiting operator review.")}</p>
             </div>
             <div class="review-queue-actions">
-              ${targetConfigId ? `<button class="button" data-action="approve-config" data-config-id="${escapeHtml(targetConfigId)}">Approve Proposal</button>` : ""}
-              ${targetConfigId ? `<button class="button secondary-action" data-action="reject-config" data-config-id="${escapeHtml(targetConfigId)}">Reject Proposal</button>` : ""}
+              ${targetConfigId ? `<button class="button" data-action="approve-config" data-config-id="${escapeHtml(targetConfigId)}">Approve Draft</button>` : ""}
+              ${targetConfigId ? `<button class="button secondary-action" data-action="reject-config" data-config-id="${escapeHtml(targetConfigId)}">Reject Draft</button>` : ""}
             </div>
           </div>
           <div class="review-queue-meta">
@@ -1805,7 +1864,7 @@
       <section class="panel">
         <div class="empty-state" style="text-align: center; padding: 32px 0;">
           <span class="material-symbols-outlined" style="font-size: 40px; color: var(--text-muted); margin-bottom: 12px;">fact_check</span>
-          <h3>No Pending Copilot Actions</h3>
+          <h3>No Pending Review Items</h3>
           <p class="muted">No human approvals are waiting for ${state.partner}.</p>
         </div>
       </section>
@@ -1823,8 +1882,8 @@
         <section class="panel">
           <div class="empty-state" style="text-align: center; padding: 40px 0;">
             <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted); margin-bottom: 12px;">settings</span>
-            <h3>No Mapping Configurations</h3>
-            <p class="muted">No mapping configs found for ${state.partner}.</p>
+            <h3>No Mapping Versions</h3>
+            <p class="muted">No mapping versions found for ${state.partner}.</p>
           </div>
         </section>
       `;
@@ -1919,7 +1978,7 @@
         </div>
         <div class="studio-step-item ${s.step === 2 ? 'active' : ''} ${s.step >= 2 ? 'enabled' : ''}">
           <span class="studio-step-index">2</span>
-          Review Proposal
+          Review Draft
         </div>
         <div class="studio-step-item ${s.step === 3 ? 'active' : ''} ${s.step >= 3 ? 'enabled' : ''}">
           <span class="studio-step-index">3</span>
@@ -1932,8 +1991,8 @@
     if (s.step === 1) {
       return `
         <section class="panel" style="margin-bottom: 24px;">
-          ${embedded ? "" : `<h2>Create Mapping Proposal</h2>
-          <p class="muted" style="margin-bottom: 24px;">Upload a partner sample, review the proposed mapping, then send it to the review queue for approval.</p>`}
+          ${embedded ? "" : `<h2>Create Draft Mapping</h2>
+          <p class="muted" style="margin-bottom: 24px;">Upload a partner sample, review the draft mapping, then send it to the review queue.</p>`}
           
           ${stepsHeader}
 
@@ -1943,7 +2002,7 @@
               <div>
                 <span class="material-symbols-outlined" style="font-size: 48px; color: var(--brand-primary); margin-bottom: 12px;">psychology</span>
                 <h3 style="margin: 0 0 8px 0;">Upload Partner Sample</h3>
-                <p class="muted" style="font-size: 12px; margin-bottom: 16px;">Upload a spreadsheet (.xlsx, .xls, .csv) to generate a draft mapping proposal.</p>
+                <p class="muted" style="font-size: 12px; margin-bottom: 16px;">Upload a spreadsheet (.xlsx, .xls, .csv) to generate a draft mapping.</p>
                 
                 <div style="margin-bottom: 16px; display: flex; gap: 8px; align-items: center; justify-content: center;">
                   <span style="font-size:11px; font-weight:700; color: var(--text-muted);">PARTNER:</span>
@@ -1958,7 +2017,7 @@
               <div>
                 <input type="file" id="studio-excel-upload" accept=".xlsx,.xls,.csv" style="display: none;">
                 <button class="button primary" style="width: 100%;" onclick="document.getElementById('studio-excel-upload').click()">
-                  <span class="material-symbols-outlined" style="font-size:18px;">upload</span> Generate Proposal
+                  <span class="material-symbols-outlined" style="font-size:18px;">upload</span> Generate Draft
                 </button>
               </div>
             </div>
@@ -2080,15 +2139,15 @@
 
       return `
         <section class="panel" style="margin-bottom: 24px;">
-          <h2>Review Proposed Mapping</h2>
-          <p class="muted" style="margin-bottom: 20px;">Inspect the detected file structure and adjust the proposal before it moves through the review queue.</p>
+          <h2>Review Draft Mapping</h2>
+          <p class="muted" style="margin-bottom: 20px;">Inspect the detected file structure and adjust the draft before it moves through the review queue.</p>
           
           ${stepsHeader}
-          ${s.proposalId ? `
+          ${s.draftMappingId ? `
             <div class="panel" style="margin-bottom: 20px; padding: 12px 16px; display: flex; align-items: center; gap: 12px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.18); border-radius: 6px;">
               <span class="material-symbols-outlined" style="color: var(--brand-accent-blue);">info</span>
               <div style="font-size: 13px; color: var(--text-primary); flex-grow: 1;">
-                Proposal <strong>${escapeHtml(String(s.proposalId))}</strong> is currently pending review. Runtime eligibility: <strong>${s.isRuntimeEligible ? "Yes" : "No"}</strong>.
+                This draft is currently pending review. Runtime eligibility: <strong>${s.isRuntimeEligible ? "Yes" : "No"}</strong>.
               </div>
               <div style="margin-left: auto;">
                 ${badge(s.configStatus || "PENDING_APPROVAL")}
@@ -2217,12 +2276,12 @@
       return `
         <section class="panel" style="margin-bottom: 24px;">
           <h2>Validate & Prepare Review Handoff</h2>
-          <p class="muted" style="margin-bottom: 20px;">Resolve blocking issues, inspect warnings, test the transformed output, and then hand the proposal to the review queue.</p>
-          ${s.proposalId ? `
+          <p class="muted" style="margin-bottom: 20px;">Resolve blocking issues, inspect warnings, test the transformed output, and then hand the draft to the review queue.</p>
+          ${s.draftMappingId ? `
             <div class="panel" style="margin-bottom: 20px; padding: 12px 16px; display: flex; align-items: center; gap: 16px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.18); border-radius: 6px; flex-wrap: wrap;">
               <span class="material-symbols-outlined" style="color: var(--brand-accent-blue);">fact_check</span>
               <div style="font-size: 13px; color: var(--text-primary); flex-grow: 1;">
-                Proposal <strong>${escapeHtml(String(s.proposalId))}</strong> requires approval desk action before activation.
+                This draft requires review queue action before activation.
               </div>
               <div style="display: flex; gap: 8px; align-items: center; margin-left: auto;">
                 ${badge(s.configStatus || "PENDING_APPROVAL")}
@@ -2291,7 +2350,7 @@
 
           <div style="display: flex; gap: 12px;">
             <button class="button" id="studio-back-to-2-btn">Back to Step 2</button>
-            ${!s.proposalId ? `
+            ${!s.draftMappingId ? `
               <button class="button primary" id="studio-confirm-handoff-btn">Mark Ready for Review</button>
             ` : ""}
           </div>
@@ -2576,6 +2635,54 @@
           showToast(`Manual triggers active for partner: ${el.dataset.partner}`);
           return;
         }
+        if (action === "copilot-action") {
+          const actionKey = el.dataset.copilotAction;
+          if (!actionKey) return;
+          const originalText = el.innerHTML;
+          el.disabled = true;
+          el.style.opacity = "0.65";
+          el.innerHTML = `<span class="spinner small"></span> Working...`;
+          executeCopilotAction(actionKey)
+            .then(body => {
+              el.disabled = false;
+              el.style.opacity = "";
+              el.innerHTML = originalText;
+              if (body.context) {
+                state.copilotContext = body.context;
+              }
+              const target = body.target || {};
+              if (target.type === "review_drawer") {
+                if (target.reviewItemId) state.selectedReviewPacketId = target.reviewItemId;
+                showToast("Opening review drawer.");
+                location.hash = "review-queue";
+                return;
+              }
+              if (target.type === "review_queue") {
+                showToast("Opening Review Queue.");
+                location.hash = "review-queue";
+                return;
+              }
+              if (target.type === "mapping_studio") {
+                state.studio.reviewItemId = target.reviewItemId || null;
+                state.studio.draftMappingId = target.draftMappingId || null;
+                showToast("Opening Mapping Studio.");
+                location.hash = "mapping-studio";
+                return;
+              }
+              const runInfo = body.result?.postApproveRun;
+              if (runInfo?.partner) state.partner = runInfo.partner;
+              if (runInfo?.date) state.date = runInfo.date;
+              showToast(actionKey === "refresh_context" ? "Recommendation refreshed." : "Copilot action completed.");
+              render();
+            })
+            .catch(err => {
+              el.disabled = false;
+              el.style.opacity = "";
+              el.innerHTML = originalText;
+              showToast(err.message || "Copilot action failed");
+            });
+          return;
+        }
         if (action === "run-job-now") {
           const partner = el.dataset.partner;
           if (!partner) return;
@@ -2710,7 +2817,7 @@
               if (state.selectedReviewPacketId === configId) {
                 state.selectedReviewPacketId = null;
               }
-              showToast("Mapping proposal rejected.");
+              showToast("Draft mapping rejected.");
               render();
             })
             .catch(err => showToast(err.message || "Reject failed"));
@@ -2745,8 +2852,8 @@
               el.style.opacity = "";
               el.style.cursor = "";
               el.innerHTML = originalText;
-              state.studio.reviewPacketId = null;
-              state.studio.proposalId = packetId;
+              state.studio.reviewItemId = null;
+              state.studio.draftMappingId = packetId;
               state.studio.step = 2;
               location.hash = "mapping-studio";
               return;
@@ -2808,7 +2915,7 @@
               el.innerHTML = originalText;
               if (!ok) throw new Error(body.detail || "Review packet action failed");
               if (action === "send-packet-to-studio") {
-                showToast("Opening Mapping Studio with this approval packet.");
+                showToast("Opening Mapping Studio with this review item.");
                 await openPacketInStudio(packetId);
                 return;
               }
@@ -2882,7 +2989,7 @@
       input.addEventListener("change", (event) => {
         const file = event.target.files && event.target.files[0];
         if (!file) return;
-        showToast("Analyzing uploaded file and preparing approval packet...");
+        showToast("Analyzing uploaded file and preparing a review item...");
         const formData = new FormData();
         formData.append("file", file);
 
@@ -2897,15 +3004,15 @@
             state.studio.headers = body.headers || [];
             state.studio.sampleRows = body.sample_rows || [];
             state.studio.config = body.config;
-            state.studio.proposalId = body.proposalId || null;
-            state.studio.reviewPacketId = body.reviewPacketId || null;
+            state.studio.draftMappingId = body.draftMappingId || null;
+            state.studio.reviewItemId = body.reviewItemId || null;
             state.studio.configStatus = body.configStatus || null;
             state.studio.isRuntimeEligible = body.isRuntimeEligible || false;
             state.studio.handoffConfirmed = false;
-            if (body.reviewPacketId) {
-              state.selectedReviewPacketId = body.reviewPacketId;
+            if (body.reviewItemId) {
+              state.selectedReviewPacketId = body.reviewItemId;
             }
-            showToast("Approval packet created. Opening Review Queue.");
+            showToast("Review item created. Opening Review Queue.");
             location.hash = "review-queue";
             if (input) input.value = "";
           })
@@ -2924,7 +3031,7 @@
         if (!file) return;
         const partner = document.getElementById("studio-partner-select")?.value || "VNPAY";
         
-        showToast("Uploading and generating AI mapping config...");
+        showToast("Uploading sample and generating a draft mapping...");
         const formData = new FormData();
         formData.append("file", file);
         
@@ -2940,20 +3047,20 @@
             state.studio.headers = body.headers || [];
             state.studio.sampleRows = body.sample_rows || [];
             state.studio.config = body.config;
-            state.studio.proposalId = body.proposalId || null;
-            state.studio.reviewPacketId = body.reviewPacketId || null;
+            state.studio.draftMappingId = body.draftMappingId || null;
+            state.studio.reviewItemId = body.reviewItemId || null;
             state.studio.configStatus = body.configStatus || null;
             state.studio.isRuntimeEligible = body.isRuntimeEligible || false;
             state.studio.handoffConfirmed = false;
             state.studio.step = 2;
-            if (body.reviewPacketId) {
-              state.selectedReviewPacketId = body.reviewPacketId;
-              showToast("Proposal created. Opening Review Queue with the approval drawer.");
+            if (body.reviewItemId) {
+              state.selectedReviewPacketId = body.reviewItemId;
+              showToast("Draft created. Opening Review Queue with the review drawer.");
               location.hash = "review-queue";
               return;
             }
 
-            showToast("Proposal created. Review and approval now continue in the Review Queue.");
+            showToast("Draft created. Review now continues in the Review Queue.");
             render();
           })
           .catch(err => showToast("AI Gen failed: " + err.message));
@@ -3189,8 +3296,8 @@
     const openReviewQueueBtn = document.getElementById("studio-open-review-queue-btn");
     if (openReviewQueueBtn) {
       openReviewQueueBtn.addEventListener("click", () => {
-        if (state.studio.reviewPacketId) {
-          state.selectedReviewPacketId = state.studio.reviewPacketId;
+        if (state.studio.reviewItemId) {
+          state.selectedReviewPacketId = state.studio.reviewItemId;
         }
         location.hash = "review-queue";
       });
@@ -3201,7 +3308,7 @@
       confirmHandoffBtn.addEventListener("click", () => {
         state.studio.handoffConfirmed = !state.studio.handoffConfirmed;
         showToast(state.studio.handoffConfirmed
-          ? "Proposal marked ready for reviewer handoff."
+          ? "Draft marked ready for reviewer handoff."
           : "Reviewer handoff mark removed.");
         render();
       });
@@ -3334,6 +3441,21 @@
     });
   }
 
+  function executeCopilotAction(actionKey) {
+    return fetch(`/api/v1/copilot/actions/${encodeURIComponent(actionKey)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        partner: state.partner,
+        date: state.date,
+        reviewedBy: "Administrator",
+      }),
+    }).then(r => r.json().then(body => {
+      if (!r.ok) throw new Error(body.detail || "Copilot action failed");
+      return body;
+    }));
+  }
+
   function metrics(items) {
     return `<div class="grid cols-4">${items.map(([label, value, hint]) => `
       <div class="metric compact">
@@ -3384,7 +3506,12 @@
       "ENABLED": "matched",
       "DISABLED": "critical",
       "PAUSED": "warning",
-      "PENDING": "warning"
+      "PENDING": "warning",
+      "HEALTHY": "matched",
+      "MONITOR": "warning",
+      "LOW": "matched",
+      "MEDIUM": "warning",
+      "HIGH": "critical"
     };
     const tone = toneMap[raw] || "neutral";
     return `<span class="badge ${tone}">${text}</span>`;
@@ -3417,7 +3544,12 @@
       ENABLED: "Enabled",
       DISABLED: "Disabled",
       PAUSED: "Paused",
-      PENDING: "Pending"
+      PENDING: "Pending",
+      HEALTHY: "Healthy",
+      MONITOR: "Monitor",
+      LOW: "Low",
+      MEDIUM: "Medium",
+      HIGH: "High"
     };
     return labels[raw] || raw.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   }

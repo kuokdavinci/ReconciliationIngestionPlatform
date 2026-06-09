@@ -753,7 +753,7 @@
 
         <div class="copilot-status-row">
           ${badge(status)}
-          ${primaryAction ? `<span class="badge neutral">Recommended: ${escapeHtml(primaryAction.label)}</span>` : '<span class="badge matched">No action needed</span>'}
+          ${status === "HEALTHY" ? '<span class="badge matched">No action needed</span>' : primaryAction ? `<span class="badge neutral">Recommended: ${escapeHtml(primaryAction.label)}</span>` : ''}
         </div>
 
         ${summary ? `<p class="copilot-summary">${escapeHtml(summary)}</p>` : ''}

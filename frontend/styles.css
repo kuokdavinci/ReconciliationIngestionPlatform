@@ -811,6 +811,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.mini-row > div:first-child {
+  min-width: 0;
+  flex: 1;
 }
 
 .mini-row-failed {
@@ -2106,6 +2113,19 @@ code {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 24px;
+  margin-top: 24px;
+}
+
+.intake-status-section .panel-header {
+  padding-bottom: 0;
+  border-bottom: none;
+  margin-bottom: 4px;
+}
+
+.intake-status-section .intake-summary-stack,
+.intake-status-section .intake-mini-list,
+.intake-status-section .intake-list-stack {
+  padding: 0 2px;
 }
 
 .intake-copilot-layout {
@@ -2262,6 +2282,8 @@ code {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .intake-summary-row {
@@ -2280,9 +2302,21 @@ code {
 
 .intake-summary-row strong {
   text-align: right;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 60%;
 }
 
-.intake-list-card,
+.intake-list-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.015);
+}
+
 .activity-row {
   display: flex;
   justify-content: space-between;
@@ -2307,6 +2341,8 @@ code {
   align-items: center;
   flex-wrap: wrap;
   margin-bottom: 6px;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .intake-list-main p {
@@ -2317,6 +2353,10 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  margin-top: 2px;
 }
 
 .activity-kind {

@@ -158,7 +158,7 @@ class CopilotContextService:
             latest_file=latest_file,
             latest_file_status=latest_file_status,
         )
-        primary_action, secondary_actions = self._actions(
+        primary_action, secondary_actions, decision_actions = self._actions(
             status=status,
             has_packet=has_packet,
             has_draft=has_draft,
@@ -171,7 +171,16 @@ class CopilotContextService:
             full_actions.append(primary_action)
         full_actions.extend(secondary_actions)
 
+        # step field for 3-step brief flow
+        if status == "healthy" or status == "monitor":
+            step = "brief"
+        elif has_packet or has_draft:
+            step = "decision" if decision_actions else "review"
+        else:
+            step = "brief"
+
         context = {
+            "step": step,
             "status": status,
             "riskLevel": risk_level,
             "headline": headline,
@@ -180,6 +189,7 @@ class CopilotContextService:
             "actions": full_actions,
             "primaryAction": primary_action,
             "secondaryActions": secondary_actions,
+            "decisionActions": decision_actions,
             "summary": self._summary(status=status, has_runtime=has_runtime, has_packet=has_packet, has_draft=has_draft),
             "reasons": self._reasons(
                 status=status,
@@ -344,7 +354,7 @@ class CopilotContextService:
         has_packet: bool,
         has_draft: bool,
         has_runtime: bool,
-    ) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
+    ) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         secondary: list[dict[str, Any]] = [
             {
                 "key": "refresh_context",
@@ -354,9 +364,10 @@ class CopilotContextService:
             }
         ]
         primary: Optional[dict[str, Any]] = None
+        decision: list[dict[str, Any]] = []
 
         if status == "healthy":
-            return None, secondary
+            return None, secondary, decision
 
         if has_packet or has_draft:
             primary = {
@@ -372,7 +383,7 @@ class CopilotContextService:
                 "enabled": True,
             })
             if has_packet:
-                secondary.extend([
+                decision = [
                     {
                         "key": "approve_activate_next_runtime",
                         "label": "Approve activate next runtime",
@@ -391,8 +402,8 @@ class CopilotContextService:
                         "style": "secondary",
                         "enabled": True,
                     },
-                ])
-            return primary, secondary
+                ]
+            return primary, secondary, decision
 
         # monitor or blocked (no pending review, but no runtime or file warnings)
         label = "Open Mapping Studio" if status == "blocked" else "Open mapping details or Open file details"
@@ -402,7 +413,7 @@ class CopilotContextService:
             "style": "primary",
             "enabled": True,
         }
-        return primary, secondary
+        return primary, secondary, decision
 
     def _file_evidence(self, latest_file: Any | None) -> Optional[dict[str, Any]]:
         if latest_file is None:

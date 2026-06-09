@@ -235,7 +235,7 @@ async def test_primary_action_needs_review_packet(needs_review_packet_setup):
     ctx = await needs_review_packet_setup.context(partner="MOMO", date="2026-06-05")
     assert ctx["primaryAction"] is not None
     assert ctx["primaryAction"]["key"] == "review_proposal"
-    assert ctx["primaryAction"]["label"] == "Open Review Queue"
+    assert ctx["primaryAction"]["label"] == "Open Review Center"
 
 
 @pytest.mark.asyncio
@@ -329,6 +329,98 @@ async def test_backward_compatibility_evidence_structure(blocked_setup):
     assert "runtime" in ctx["evidence"]
     assert "proposal" in ctx["evidence"]
     assert "safeChecks" in ctx["evidence"]
+
+
+# --- decisionActions tests ---
+
+@pytest.mark.asyncio
+async def test_decision_actions_empty_when_no_packet():
+    """decisionActions should be empty when no pending packet exists."""
+    mapping_repo = _make_mock_repo([_mapping(status="PENDING_APPROVAL", config_id="cfg-002")])
+    file_repo = _make_mock_repo([_file(status="FAILED")])
+    packet_repo = _make_mock_repo([])
+    service = CopilotContextService(MagicMock())
+    service.mapping_repo = mapping_repo
+    service.file_repo = file_repo
+    service.packet_repo = packet_repo
+    ctx = await service.context(partner="MOMO", date="2026-06-05")
+    assert isinstance(ctx["decisionActions"], list)
+    assert len(ctx["decisionActions"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_decision_actions_populated_when_packet_exists():
+    """decisionActions should contain decision keys when a pending packet exists."""
+    mapping_repo = _make_mock_repo([_mapping(status="PENDING_APPROVAL", config_id="cfg-002")])
+    file_repo = _make_mock_repo([_file(status="FAILED")])
+    packet_repo = _make_mock_repo([_packet()])
+    service = CopilotContextService(MagicMock())
+    service.mapping_repo = mapping_repo
+    service.file_repo = file_repo
+    service.packet_repo = packet_repo
+    ctx = await service.context(partner="MOMO", date="2026-06-05")
+    assert isinstance(ctx["decisionActions"], list)
+    assert len(ctx["decisionActions"]) > 0
+    keys = [a["key"] for a in ctx["decisionActions"]]
+    assert "approve_activate_next_runtime" in keys
+    assert "approve_keep_current" in keys
+    assert "reject_proposal" in keys
+
+
+@pytest.mark.asyncio
+async def test_decision_actions_not_mixed_in_secondary():
+    """Decision keys should NOT appear in secondaryActions when decisionActions is populated."""
+    mapping_repo = _make_mock_repo([_mapping(status="PENDING_APPROVAL", config_id="cfg-002")])
+    file_repo = _make_mock_repo([_file(status="FAILED")])
+    packet_repo = _make_mock_repo([_packet()])
+    service = CopilotContextService(MagicMock())
+    service.mapping_repo = mapping_repo
+    service.file_repo = file_repo
+    service.packet_repo = packet_repo
+    ctx = await service.context(partner="MOMO", date="2026-06-05")
+    decision_keys = {"approve_activate_next_runtime", "approve_keep_current", "reject_proposal"}
+    secondary_keys = {a["key"] for a in ctx["secondaryActions"]}
+    assert not (decision_keys & secondary_keys), "Decision keys leaked into secondaryActions"
+
+
+# --- step field tests ---
+
+@pytest.mark.asyncio
+async def test_step_brief_when_healthy(healthy_setup):
+    ctx = await healthy_setup.context(partner="MOMO", date="2026-06-05")
+    assert ctx["step"] == "brief"
+
+
+@pytest.mark.asyncio
+async def test_step_brief_when_monitor(monitor_setup):
+    ctx = await monitor_setup.context(partner="MOMO", date="2026-06-05")
+    assert ctx["step"] == "brief"
+
+
+@pytest.mark.asyncio
+async def test_step_review_when_draft_only():
+    mapping_repo = _make_mock_repo([_mapping(status="PENDING_APPROVAL", config_id="cfg-002")])
+    file_repo = _make_mock_repo([_file(status="FAILED")])
+    packet_repo = _make_mock_repo([])
+    service = CopilotContextService(MagicMock())
+    service.mapping_repo = mapping_repo
+    service.file_repo = file_repo
+    service.packet_repo = packet_repo
+    ctx = await service.context(partner="MOMO", date="2026-06-05")
+    assert ctx["step"] == "review"
+
+
+@pytest.mark.asyncio
+async def test_step_decision_when_packet_exists():
+    mapping_repo = _make_mock_repo([_mapping(status="PENDING_APPROVAL", config_id="cfg-002")])
+    file_repo = _make_mock_repo([_file(status="FAILED")])
+    packet_repo = _make_mock_repo([_packet()])
+    service = CopilotContextService(MagicMock())
+    service.mapping_repo = mapping_repo
+    service.file_repo = file_repo
+    service.packet_repo = packet_repo
+    ctx = await service.context(partner="MOMO", date="2026-06-05")
+    assert ctx["step"] == "decision"
 
 
 # --- new compact fields in all decision states ---

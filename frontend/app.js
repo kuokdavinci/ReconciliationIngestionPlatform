@@ -2765,6 +2765,9 @@
         if (action === "go-submit-sample" || action === "go-mapping-studio") {
           const partner = el.dataset.partner;
           if (partner) state.partner = partner;
+          // Fresh studio open — clear pre-loaded IDs
+          state.studio.handoffConfirmed = false;
+          state.studio.step = 1;
           location.hash = "mapping-studio";
           return;
         }
@@ -3344,11 +3347,31 @@
     const confirmHandoffBtn = document.getElementById("studio-confirm-handoff-btn");
     if (confirmHandoffBtn) {
       confirmHandoffBtn.addEventListener("click", () => {
-        state.studio.handoffConfirmed = !state.studio.handoffConfirmed;
-        showToast(state.studio.handoffConfirmed
-          ? "Draft marked ready for reviewer handoff."
-          : "Reviewer handoff mark removed.");
-        render();
+        const draftId = state.studio.draftMappingId;
+        if (!draftId) {
+          showToast("No draft mapping to hand off. Save the draft mapping first.");
+          return;
+        }
+        confirmHandoffBtn.disabled = true;
+        confirmHandoffBtn.innerHTML = `<span class="spinner small"></span> Handing off...`;
+        fetch(`/api/v1/review-packets/from-mapping/${encodeURIComponent(draftId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        })
+          .then(r => r.json().then(body => ({ ok: r.ok, body })))
+          .then(({ ok, body }) => {
+            confirmHandoffBtn.disabled = false;
+            confirmHandoffBtn.innerHTML = "Confirm Ready";
+            if (!ok) throw new Error(body.detail || "Handoff failed");
+            showToast("Mapping submitted for review.");
+            state.studio.handoffConfirmed = false;
+            location.hash = "review-queue";
+          })
+          .catch(err => {
+            confirmHandoffBtn.disabled = false;
+            confirmHandoffBtn.innerHTML = "Confirm Ready";
+            showToast(err.message || "Handoff failed");
+          });
       });
     }
 

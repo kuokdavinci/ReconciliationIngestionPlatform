@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from src.models.repository import BaseRepository
 
@@ -22,6 +22,7 @@ class ReviewPacketStatus(str, Enum):
 class ReviewPacketSourceType(str, Enum):
     UPLOAD = "UPLOAD"
     SCHEDULER_JOB = "SCHEDULER_JOB"
+    STUDIO_HANDOFF = "STUDIO_HANDOFF"
 
 
 class ReviewDecisionMode(str, Enum):
@@ -44,7 +45,11 @@ class ReviewPacket(BaseModel):
     file_type_detected: str = Field(alias="fileTypeDetected")
     structure_signature: Optional[dict[str, Any]] = Field(default=None, alias="structureSignature")
     active_runtime_config_id: Optional[str] = Field(default=None, alias="activeRuntimeConfigId")
-    proposal_config_id: Optional[str] = Field(default=None, alias="proposalConfigId")
+    draft_mapping_id: Optional[str] = Field(
+        default=None,
+        alias="draftMappingId",
+        validation_alias=AliasChoices("draftMappingId", "proposalConfigId"),
+    )
     target_action_id: Optional[str] = Field(default=None, alias="targetActionId")
     source_file_id: Optional[str] = Field(default=None, alias="sourceFileId")
     source_file_path: Optional[str] = Field(default=None, alias="sourceFilePath")
@@ -79,7 +84,7 @@ class ReviewPacketRepository(BaseRepository[ReviewPacket]):
 
     async def find_latest_by_proposal(self, proposal_config_id: str) -> Optional[ReviewPacket]:
         raw = await self.collection.find_one(
-            {"proposalConfigId": proposal_config_id},
+            {"$or": [{"draftMappingId": proposal_config_id}, {"proposalConfigId": proposal_config_id}]},
             sort=[("createdAt", -1)],
         )
         if raw is None:

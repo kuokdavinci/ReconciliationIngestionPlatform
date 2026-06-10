@@ -1,91 +1,70 @@
 # Docker Services
 
-## Quick Start
+## Compose Services
+
+`docker-compose.yml` currently defines:
+
+- `mongodb`
+- `sftp`
+- `mongo-express`
+- `api`
+- `scheduler`
+
+## Start
 
 ```bash
-# Start all services
 docker compose up -d
+```
 
-# Check status
-docker compose ps
+Bring up a smaller local set:
 
-# View logs
-docker compose logs -f mongodb
-docker compose logs -f sftp
+```bash
+docker compose up -d mongodb sftp mongo-express
+```
 
-# Stop all services
+## Stop
+
+```bash
 docker compose down
+```
 
-# Stop and remove volumes (clears all data)
+Remove volumes:
+
+```bash
 docker compose down -v
 ```
 
 ## MongoDB
 
-- **Port:** 27017
-- **Credentials:** admin / admin123
-- **Database:** reconciliation
-- **Data volume:** `mongo_data` (persistent)
-- **Init script:** `docker/init-mongo.js` — auto-creates collections and indexes on first run
+- container: `reconciliation-mongo`
+- exposed port: `27017`
+- database: `reconciliation`
+- init script: `docker/init-mongo.js`
 
-### Connect
+Credentials come from `.env`:
 
-```bash
-# MongoDB Shell
-docker exec -it reconciliation-mongo mongosh -u admin -p admin123
-
-# From Python (with uv)
-APP_MONGODB_URL=mongodb://admin:admin123@localhost:27017/reconciliation?authSource=admin \
-  uv run python -c "
-    from motor.motor_asyncio import AsyncIOMotorClient
-    import asyncio
-    async def main():
-        client = AsyncIOMotorClient('mongodb://admin:admin123@localhost:27017/reconciliation?authSource=admin')
-        print(await client.list_database_names())
-    asyncio.run(main())
-  "
-```
+- `MONGO_ROOT_USER`
+- `MONGO_ROOT_PASSWORD`
 
 ## SFTP
 
-- **Port:** 2222
-- **Credentials:** foo / pass
-- **Upload directory:** `./sftp_data` (mapped to `/home/foo/upload`)
-- **Config:** `sftp_conf/users.conf`
+- container: `reconciliation-sftp`
+- exposed port: `2222`
+- user/password from `.env`
+- local folder `./sftp_data` is mounted to `/home/${SFTP_USER}/upload`
 
-### Upload files
+## API Container
 
-```bash
-# Via command line
-sftp -P 2222 foo@localhost
-# Password: pass
-# Then: put m4becomvsp_07072024_combine.xlsx /upload/
+- container: `reconciliation-api`
+- exposed port: `8000`
+- startup command: `uvicorn src.api:create_app --factory --host 0.0.0.0 --port 8000`
 
-# Via script
-scp -P 2222 m4becomvsp_07072024_combine.xlsx foo@localhost:/upload/
-```
+## Scheduler Container
 
-### Add more users
+- container: `reconciliation-scheduler`
+- startup command: `python run.py --start-scheduler`
 
-Edit `sftp_conf/users.conf`:
+## Notes
 
-```
-# username:password:uid:gid:directory
-foo:pass:::upload
-bar:secret123:::upload
-```
-
-Then restart: `docker compose restart sftp`
-
-## Environment Variables
-
-Copy `.env.example` to `.env` and update:
-
-```bash
-APP_MONGODB_URL=mongodb://admin:admin123@localhost:27017/reconciliation?authSource=admin
-APP_DB_NAME=reconciliation
-SFTP_HOST=localhost
-SFTP_PORT=2222
-SFTP_USER=foo
-SFTP_PASS=pass
-```
+- `api` and `scheduler` both receive an `APP_MONGODB_URL` override pointing at the Compose MongoDB service.
+- `scheduler` also overrides `SFTP_HOST=sftp`.

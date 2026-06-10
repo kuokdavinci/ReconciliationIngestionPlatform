@@ -1,866 +1,99 @@
 # Data Flow
 
-## End-to-End Flow
+## Primary Flows
 
-Four main data flows exist in the system:
+The codebase currently centers around four operational flows:
 
-1. **Ingestion Flow** — Partner Excel files are parsed, normalized, validated, and persisted to `data_container`.
-2. **Reconciliation Flow** — Ingestion output (`data_container`) is matched against internal system records (`internal_transaction`) to produce reconciliation reports (`reconciliation_result`).
-3. **Review Packet Flow** — Config proposals (from upload, scheduler, or config health drift) create `ReviewPacket` documents that go through human approval before activation.
-4. **Automation Run Flow** — Scheduled fetch jobs pull files from partners, run ingestion, and trigger config health checks — all results reflected in real-time dashboard.
+1. ingestion
+2. reconciliation
+3. approval-driven mapping review
+4. scheduled automation
 
----
+## 1. Ingestion Flow
 
-## Ingestion Flow
+Main entrypoints:
 
-```
-User calls: pipeline.process_file(
-    file_path="m4becomvsp_07072024_combine.xlsx",
-    partner="MOMO",
-    workflow_type="UPC",
-    file_type=FileType.SETTLEMENT,
-    reconciliation_date=datetime(2024, 7, 7),
-)
-```
+- `run.py`
+- `src/pipeline/ingestion_pipeline.py`
 
-### Step 1: File Hash & Duplicate Check
+Flow:
 
-```
-_compute_file_hash(file_path)
-  → Reads file content in 8KB chunks (async via thread pool)
-  → Returns SHA256 hex string
+1. Accept a local file path or a file retrieved through scheduler/fetch flow.
+2. Compute file hash and check duplicate ingestion.
+3. Create a `reconciliation_file` tracking record.
+4. Load mapping config via `ConfigLoader`.
+5. Read rows through the configured reader.
+6. Normalize rows into canonical transactions.
+7. Validate canonical transactions.
+8. Persist valid rows into `data_container`.
+9. Update file stats and final processing state.
 
-_recon_repo.find_by_file_hash(hash)
-  → Query: {"fileHash": hash}
-  → If found: return existing record + error (duplicate)
-  → If not found: continue
-```
+## 2. Reconciliation Flow
 
-### Step 2: Create Tracking Record
+Main entrypoints:
 
-```
-ReconciliationFile(
-    partner="MOMO",
-    file_name="m4becomvsp_07072024_combine.xlsx",
-    file_hash="<sha256>",
-    file_type=FileType.SETTLEMENT,
-    reconciliation_date=datetime(2024, 7, 7),
-    processing_status=ProcessingStatus.PROCESSING,
-)
-→ _recon_repo.create() → INSERT into reconciliation_file
-→ Logger: emit_file_started(file_id, file_name, partner)
-```
+- `run.py --reconcile ...`
+- `src/reconciliation/engine.py`
+- `/api/v1/reconciliation/*`
 
-### Step 3: Load Mapping Configuration
+Flow:
 
-```
-_config_loader.load_by_partner_type("MOMO", "UPC", FileType.SETTLEMENT)
-  → Cache check: "MOMO:UPC:SETTLEMENT:latest"
-  → If hit: return cached config
-  → If miss:
-    → _repository.find_by_partner_and_type("MOMO", "UPC", "SETTLEMENT")
-    → Query: {"partner": "MOMO", "workflowType": "UPC", "fileType": "SETTLEMENT"}
-    → ConfigValidator.validate(config)
-    → Cache put with TTL 300s
-    → Return config
-```
+1. Load canonical partner-side data from `data_container`.
+2. Load internal transactions from `internal_transaction`.
+3. Match records using reconciliation logic.
+4. Persist classified outcomes into `reconciliation_result`.
+5. Expose results, stats, and analysis through the API.
 
-**Config structure returned:**
-```json
-{
-  "partner": "MOMO",
-  "workflowType": "UPC",
-  "sheetName": "Sheet1",
-  "startRow": 2,
-  "fieldMappings": [
-    { "path": "id", "column": 1, "type": "STRING", "required": true },
-    { "path": "trace", "column": 10, "type": "STRING" },
-    { "path": "amount", "column": 4, "type": "DECIMAL" },
-    { "path": "currency", "constant": "VND", "type": "CONSTANT" },
-    { "path": "status", "column": 17, "type": "MAPPING",
-      "mapping": { "Thành công": "SUCCESS", "others": "FAILED" } },
-    { "path": "transDate", "column": 7, "type": "DATE" }
-  ]
-}
-```
+## 3. Review Packet and Mapping Approval Flow
 
-### Step 4: Create Reader
+Main entrypoints:
 
-```
-ExcelStreamReader.from_mapping_config(file_path, config)
-  → sheet_name=config.sheet_name ("Sheet1")
-  → start_row=config.start_row (2)
-  → skip_empty_rows=True
-  → Opens workbook in read_only=True mode
-```
+- `src/api/mappings.py`
+- `src/api/review_packets.py`
+- `src/config/config_health.py`
 
-### Step 5: Process Each Row
+Flow:
 
-**Example Excel row (row 2, after header):**
+1. A mapping proposal is generated or uploaded.
+2. A `review_packet` and optionally a `copilot_action` are created.
+3. Reviewers inspect packet details through the dashboard or API.
+4. Review action is applied:
+   - approve and activate next runtime
+   - approve and keep current runtime
+   - reject
+   - send to mapping studio
+5. Mapping and review status are synchronized across related documents.
 
-| Col 1 | Col 2 | Col 3 | Col 4 | ... | Col 10 | ... | Col 17 |
-|-------|-------|-------|-------|-----|--------|-----|--------|
-| 61838642196 | 2024-07-05 | | 259200 | ... | 2407055711887385978413624 | ... | Thành công |
+## 4. Automation Flow
 
-#### 5a: Normalize (row tuple passed directly)
+Main entrypoints:
 
-```python
-row_tuple = ("61838642196", "2024-07-05", None, 259200, ..., "2407055711887385978413624", ..., "Thành công")
-normalizer = TransactionNormalizer(config.field_mappings)
-norm_result = normalizer.normalize(row_tuple, row_number=2)
-```
+- `src/scheduler/jobs.py`
+- `src/api/automation.py`
+- `src/fetchers/`
 
-**Processing each FieldMapping (column numbers are 1-based, converted to 0-based index):**
+Flow:
 
-| Mapping | Source (col#) | Conversion | Result |
-|---------|---------------|------------|--------|
-| `id` (STRING, col 1) | `row_tuple[0]` = `"61838642196"` | str() | `"61838642196"` |
-| `trace` (STRING, col 10) | `row_tuple[9]` = `"2407055711887385978413624"` | str() | `"2407055711887385978413624"` |
-| `amount` (DECIMAL, col 4) | `row_tuple[3]` = `259200` | Decimal(259200) | `Decimal('259200')` |
-| `currency` (CONSTANT) | — | constant value | `"VND"` |
-| `status` (MAPPING, col 17) | `row_tuple[16]` = `"Thành công"` | mapping lookup | `"SUCCESS"` |
-| `transDate` (DATE, col 7) | `row_tuple[6]` = `"2024-07-05"` | strptime("%Y-%m-%d") | `datetime(2024, 7, 5)` |
+1. Scheduler loads enabled `fetch_config` records.
+2. The correct fetcher is created for the configured method.
+3. The file is fetched or an error is recorded.
+4. On success, ingestion runs against the fetched file.
+5. Results are surfaced through automation visibility endpoints and the dashboard.
 
-**Result:**
-```python
-NormalizationResult(
-    data={
-        "id": "61838642196",
-        "trace": "2407055711887385978413624",
-        "amount": Decimal("259200"),
-        "currency": "VND",
-        "status": "SUCCESS",
-        "transDate": datetime(2024, 7, 5),
-    },
-    errors=[],
-)
-```
+## Dashboard Context Flow
 
-#### 5c: Build CanonicalTransaction
+Main entrypoints:
 
-```python
-txn, build_errors = TransactionNormalizer.build_canonical(norm_result.data, [], row_number=2)
-```
+- `src/services/copilot_context.py`
+- `src/api/copilot.py`
 
-**Result:**
-```python
-CanonicalTransaction(
-    id="61838642196",
-    trace="2407055711887385978413624",
-    amount=Decimal("259200"),
-    currency="VND",
-    status=TransactionStatus.SUCCESS,
-    transDate=datetime(2024, 7, 5),
-    extra={},
-)
-```
+Flow:
 
-#### 5d: Validate (core validation only — file duplicate already checked at pipeline level)
+1. Dashboard requests Copilot context for a partner, date, screen, or file.
+2. Service aggregates review packet, mapping, file, and automation state.
+3. API returns a context object plus action references.
+4. Dashboard can execute supported Copilot actions against review or mapping flows.
 
-```python
-validator = Validator(data_container_repo=self._data_repo, reconciliation_file_repo=self._recon_repo)
-validation_result = validator.validate(
-    txn,
-    row_number=2,
-    trace="2407055711887385978413624",
-)
-```
+## Practical Note
 
-**Checks performed:**
-1. Required fields: id ✓, currency ✓
-2. Decimal non-negative: 259200 >= 0 ✓
-3. Date type: datetime ✓
-4. Status enum: SUCCESS in TransactionStatus ✓
-
-**Note:** File duplicate check is skipped here — already done at Step 1 of pipeline. Transaction duplicate check is also skipped in `validate()` (requires `validate_with_duplicates()` for that).
-
-**Result:** `ValidationResult(is_valid=True, errors=[])`
-
-#### 5e: Persist
-
-```python
-partner_data = PartnerData(
-    _id="61838642196",
-    trace="2407055711887385978413624",
-    status="SUCCESS",
-    amount=Decimal("259200"),
-    currency="VND",
-    transDate=datetime(2024, 7, 5),
-    extra={},
-)
-data_container = DataContainer(
-    identify="MOMO",
-    workflow_type="UPC",
-    reconciliation_date=datetime(2024, 7, 7),
-    source_file_id=file_record.id,
-    partner_data=partner_data,
-)
-batch_buffer.append(data_container)
-```
-
-**Logger:** `emit_row_success(file_id, row_number=2, trace="2407055711887385978413624")`
-
-#### 5f: Batch Flush
-
-```python
-if len(batch_buffer) >= 100:  # batch_size
-    inserted = await self._flush_batch(batch_buffer)
-    success_rows += inserted  # Uses actual insert count
-    batch_buffer = []
-```
-
-**MongoDB operation (via `_to_mongo()` for type conversion):**
-```python
-# Each DataContainer is converted:
-# - UUID → string
-# - Decimal → Decimal128
-# - Nested partnerData preserved as object
-collection.insert_many([
-    doc._to_mongo()  # via DataContainerRepository.insert_many()
-    for doc in batch_buffer
-])
-```
-
-### Step 6: Final Flush & Stats Update
-
-```python
-# Flush remaining
-if batch_buffer:
-    inserted = await self._flush_batch(batch_buffer)
-    success_rows += inserted
-
-# Update stats
-await _recon_repo.update_processing_stats(file_record.id, total_rows, success_rows, failed_rows)
-await _recon_repo.update_status(file_record.id, ProcessingStatus.COMPLETED)
-
-# Update in-memory record
-file_record.processing_status = ProcessingStatus.COMPLETED
-file_record.total_rows = total_rows
-file_record.success_rows = success_rows
-file_record.failed_rows = failed_rows
-```
-
-### Step 7: Return Result
-
-```python
-duration_ms = (time.monotonic() - start_time) * 1000
-logger.emit_file_completed(file_id, total_rows, success_rows, failed_rows, duration_ms)
-
-return IngestionResult(
-    file_record=file_record,
-    stats=ProcessingStats(total_rows=1000, success_rows=990, failed_rows=10),
-    errors=[
-        {"row": 142, "field": "amount", "reason": "invalid decimal value: 'abc'"},
-        ...
-    ],
-)
-```
-
-## Error Scenarios
-
-### Scenario 1: Invalid Row
-
-**Input:** Row with `amount = "abc"`
-
-```
-normalize() → _convert_decimal("abc") → InvalidOperation
-  → ValidationError(field="amount", reason="invalid decimal value: 'abc'")
-  → norm_result.errors not empty
-  → failed_rows += 1
-  → errors.append({"row": 142, "field": "amount", "reason": "..."})
-  → logger.emit_row_failed(file_id, 142, "", "invalid decimal value: 'abc'")
-  → continue (next row)
-```
-
-### Scenario 2: Duplicate Transaction
-
-**Input:** Row with trace already in data_container
-
-```
-validate_with_duplicates() → _check_transaction_duplicate()
-  → Query returns existing document
-  → ValidationError(field="duplicate", reason="transaction already exists")
-  → failed_rows += 1
-  → continue (next row)
-```
-
-### Scenario 3: Duplicate File
-
-**Input:** Same file re-uploaded
-
-```
-_compute_file_hash() → SHA256 matches existing record
-  → find_by_file_hash() returns existing
-  → emit_file_failed("duplicate", "File already processed")
-  → return IngestionResult(file_record=existing, errors=[{"field": "file_duplicate", ...}])
-```
-
----
-
-## Reconciliation Flow
-
-Reconciliation is triggered via CLI:
-
-```
-uv run python run.py --reconcile 2024-07-07 --partner MOMO
-```
-
-### Step 1: Date Boundaries
-
-```
-reconciliation_date = datetime(2024, 7, 7, tzinfo=UTC)
-start_of_day = datetime(2024, 7, 7, 0, 0, 0, tzinfo=UTC)
-end_of_day   = datetime(2024, 7, 7, 23, 59, 59, 999999, tzinfo=UTC)
-```
-
-### Step 2: Fetch Partner Records (from Ingestion output)
-
-```
-DataContainerRepository.find_many({
-    "identify": "MOMO",
-    "reconciliationDate": {"$gte": start_of_day, "$lte": end_of_day}
-})
-```
-
-**Query:** `data_container` collection with `idx_identify_date` index.
-
-### Step 3: Fetch Internal Records (Mock DB)
-
-```
-InternalTransactionRepository.find_many({
-    "partner": "MOMO",
-    "transactionTime": {"$gte": start_of_day, "$lte": end_of_day}
-})
-```
-
-**Query:** `internal_transaction` collection with `idx_internal_partner_txn_time` index.
-
-### Step 4: Resolve Duplicate Internal Records
-
-```python
-internal_by_key: dict[str, InternalTransaction] = {}
-for record in internal_records:
-    key = record.partner_txn_id.strip()
-    if key not in internal_by_key or record.updated_at > existing.updated_at:
-        internal_by_key[key] = record
-```
-
-**Rule:** If multiple internal records share the same `partnerTxnId`, the one with the latest `updatedAt` wins. This handles correction scenarios where a previous record was updated/fixed.
-
-### Step 5: Process Partner Records
-
-For each `DataContainer` record:
-
-**5a. Resolve partnerTxnId:**
-
-```
-_resolve_partner_txn_id(partner_record):
-  1. Try partnerData.trace
-  2. Try partnerData.extra.vspTransId
-  3. Try partnerData.id
-  4. If none → skip (log warning)
-```
-
-**5b. Look up by partnerTxnId:**
-
-```python
-internal_record = internal_by_key.get(partner_txn_id)
-```
-
-**5c. If found — compare and classify:**
-
-```
-Amounts: partner_amount == internal_amount?  (tolerance = 0)
-Statuses: _normalize_status(partner_status) == _normalize_status(internal_status)?
-
-Classification matrix:
-  amounts_match && statuses_match   → MATCHED
-  !amounts_match && !statuses_match → MULTIPLE_MISMATCH
-  !amounts_match                    → AMOUNT_MISMATCH
-  else                              → STATUS_MISMATCH
-```
-
-**Status normalization (`_normalize_status()`):**
-
-| Input (case-insensitive) | Normalized |
-|--------------------------|------------|
-| `success`, `thành công`, `matched` | `SUCCESS` |
-| `fail`, `failed`, `thất bại` | `FAILED` |
-| `reversed`, `hoàn tiền` | `REVERSED` |
-| anything else | `PENDING` |
-
-**5d. If not found — MISSING_INTERNAL:**
-
-```python
-ReconciliationResult(
-    partnerTxnId=partner_txn_id,
-    partnerAmount=partner_amount,
-    partnerStatus=partner_status,
-    reconciliationStatus=MISSING_INTERNAL,
-    partnerRecordId=str(partner_record.id),
-)
-```
-
-### Step 6: Process Missing Partner Records
-
-For each internal record whose `partnerTxnId` was NOT matched by any partner record:
-
-```python
-ReconciliationResult(
-    partnerTxnId=partner_txn_id,
-    internalTxnId=internal_record.id,
-    internalAmount=internal_record.amount,
-    internalStatus=internal_record.status,
-    reconciliationStatus=MISSING_PARTNER,
-    internalRecordId=str(internal_record.id),
-)
-```
-
-### Step 7: Idempotent Write
-
-```python
-# Delete any existing results for the same keys
-target_ids = [r.id for r in results]
-await result_repo.collection.delete_many({"_id": {"$in": target_ids}})
-
-# Insert new results
-await result_repo.insert_many(results)
-```
-
-**Why delete+insert instead of upsert?** `insert_many` is more performant for batch writes. Keys are deterministic (`partnerTxnId`), so delete+insert is safe and ensures consistency if classification logic changed.
-
-### Step 8: Return Results
-
-Each result contains:
-```
-partnerTxnId, reconciliationStatus,
-partnerAmount vs internalAmount,
-partnerStatus vs internalStatus,
-partnerRecordId, internalRecordId (if applicable)
-```
-
-### Example: Log Output
-
-```
-RECONCILIATION COMPLETED — partner=MOMO, 2024-07-07
-  - Key: 2407055711887385978413624 → MATCHED (Amt: 259200, Int: 259200)
-  - Key: 2407055711887385978413625 → AMOUNT_MISMATCH (Amt: 259200, Int: 100000)
-  - Key: internal_only_txn_999 → MISSING_PARTNER (Amt: None, Int: 15000)
-```
-
----
-
-### Scenario 4: Exception During Processing
-
-**Input:** ConfigLoader fails to connect to MongoDB
-
-```
-process_file() → ConfigLoader.load_by_partner_type() → Exception
-  → except block:
-    → emit_file_failed(file_id, "Connection refused")
-    → update_status(FAILED)  # best effort
-    → return IngestionResult(file_record=file_record, stats=partial_stats, errors=[{"field": "pipeline", ...}])
-```
-
----
-
-## AI Analysis Flow
-
-The AI Analysis Layer consumes `reconciliation_result` documents to generate actionable insights for operators.
-
-### Trigger
-
-```
-GET /api/v1/insights/summary?partner=MOMO&date=2024-07-07
-GET /api/v1/insights/discrepancies?partner=MOMO&date=2024-07-07&focus=operational
-GET /api/v1/reports/daily?date=2024-07-07
-```
-
-Or via CLI: `python run.py serve` then curl the endpoints.
-
-### Step 1: Query Reconciliation Results
-
-```python
-# insights.py queries MongoDB for reconciliation_result documents
-# Support both camelCase (db native) and snake_case (class attribute)
-doc.get("partnerAmount") if "partnerAmount" in doc else doc.get("partner_amount")
-doc.get("reconciliationStatus") if "reconciliationStatus" in doc else doc.get("reconciliation_status")
-```
-
-**Query:** `reconciliation_result` collection filtered by `partner` and `date` fields.
-
-### Step 2: Compute Metrics (Single Source of Truth)
-
-```python
-summary_result = MetricsService.compute_summary(results, partner, date)
-# Returns: total_transactions, matched, mismatch_rate, total_amount_mismatch, by_status
-```
-
-### Step 3: Group Results
-
-```python
-groups = GroupingEngine().group(results, criteria)
-# Groups by: reconciliationStatus, amount_range (0-100k, 100k-1M, 1M+), partner
-```
-
-### Step 4: Build AnalysisInput (Privacy-by-Design)
-
-```python
-analysis_input = build_analysis_input(
-    partner="MOMO",
-    date="2024-07-07",
-    focus="operational",
-    metrics_result=summary_result,
-    grouped_results=groups,
-)
-# NO raw transaction data — only aggregated metrics, grouped stats, pre-processed anomalies
-```
-
-### Step 5: LLM Insight Generation
-
-```python
-# Build prompts
-system_prompt = build_system_prompt()
-user_prompt = build_analysis_prompt(analysis_input)
-
-# Call LLM with retry and timeout
-llm_response = await llm_provider.generate(user_prompt, system_prompt)
-
-# Parse response
-insights = parse_llm_insights(llm_response)
-# If parse fails → fallback to rule-based insights only
-```
-
-**Focus types:**
-
-| Focus | Pre-processing | LLM Task |
-|-------|---------------|----------|
-| `operational` | Filter MISSING_INTERNAL + MISSING_PARTNER, group by partner | Identify operational delays, ingestion lag, scheduler failures |
-| `partner` | Calculate mismatch rate %, trend, volume | Analyze partner behavior patterns, stability over time |
-| `inconsistency` | Filter AMOUNT_MISMATCH + STATUS_MISMATCH, cluster amount differences | Detect data inconsistency patterns, recurring errors |
-
-### Step 6: Return Response
-
-**Summary endpoint:**
-```json
-{
-  "partner": "MOMO",
-  "date": "2024-07-07",
-  "summary": { "total_transactions": 1500, "matched": 1450, "mismatch_rate": 3.33, ... },
-  "groups": [ { "key": "MATCHED", "count": 1450, "percentage": 96.67, ... } ],
-  "key_findings": [ "Tỷ lệ mismatch 3.33% — trong ngưỡng bình thường", ... ],
-  "generated_at": "2024-07-08T01:00:00Z"
-}
-```
-
-**Discrepancies endpoint:**
-```json
-{
-  "partner": "MOMO",
-  "date": "2024-07-07",
-  "focus": "operational",
-  "insights": [
-    {
-      "type": "operational_delay",
-      "severity": "medium",
-      "title": "Phát hiện chậm đối soát",
-      "description": "5 giao dịch MISSING_INTERNAL...",
-      "affected_count": 5,
-      "recommendation": "Kiểm tra pipeline ingestion cho MOMO ngày 2024-07-07"
-    }
-  ]
-}
-```
-
-### Daily Batch Report Flow
-
-```
-1. DailyReporter.generate_report(date)
-2. For each active partner:
-   a. Call insights.get_summary(partner, date)
-   b. Aggregate into report structure
-3. ThresholdAlerter.check_thresholds(summary_result) for each partner
-4. Save report to ./reports/daily/{date}.json
-5. Log alerts if thresholds breached
-```
-
-**Key design:** Reporter only formats — never duplicates MetricsService computation. Alerter only checks — never computes metrics.
-
-### Error Scenarios
-
-**LLM timeout/failure:**
-```
-generate_insights() → LLM call fails → fallback to rule-based insights
-# Returns insights from rule-based pre-processing only, no natural language
-```
-
-**Invalid parameters:**
-```
-GET /api/v1/insights/summary?date=invalid
-→ 400 Bad Request: "Invalid date format. Expected YYYY-MM-DD"
-
-GET /api/v1/insights/discrepancies?partner=MOMO&date=2024-07-07&focus=unknown
-→ 400 Bad Request: "Invalid focus. Must be operational, partner, or inconsistency"
-```
-
----
-
-## Review Packet Flow
-
-The review packet is the central approval document. Every config-change proposal creates one, regardless of trigger source.
-
-### Trigger Sources
-
-| Source | Trigger | `sourceType` |
-|--------|---------|-------------|
-| Direct upload | User uploads a file from Review Queue → API creates proposal + packet | `UPLOAD` |
-| Scheduler job | `run_fetch_config_once()` detects format drift → creates proposal + packet | `SCHEDULER_JOB` |
-| Config health drift | `check_and_refresh_config()` before ingestion detects stale signature → creates proposal + packet | `SCHEDULER_JOB` |
-
-### Upload Flow (from UI)
-
-```
-User clicks "Upload File For Review" in Review Queue
-  → POST /api/v1/mapping/ai-generate?partner=X
-    → compute_signature(file)
-    → generate_config_from_samples() (AI field mapping inference)
-    → Creates MappingConfig with status=PENDING_APPROVAL
-    → Creates CopilotAction with status=PENDING_APPROVAL
-    → Creates ReviewPacket:
-        sourceType=UPLOAD
-        partner=X
-        proposalConfigId=<new config id>
-        recommendedAction={ actionType, confidence }
-        parseStrategy={ sheetName, startRow, fieldMappingCount }
-        validationGates=[ structure, proposal, runtime ]
-        samplePreview=[ first 5 rows ]
-        riskSummary={ severity, summary }
-        status=PENDING
-    → UI auto-routes to Review Queue with packet in drawer
-```
-
-### Scheduler Job Flow
-
-```
-APScheduler triggers daily_partner_fetch_job()
-  → For each enabled fetch_config:
-    → create_fetcher(config.fetch_method)
-    → FetchResult: files downloaded to local dir
-    → For each downloaded file:
-      → IngestionPipeline.process_file()
-        → check_and_refresh_config() before ingestion:
-          → compute_signature(file)
-          → Compare with saved signature in approved config
-          → If stale or no config:
-            → generate_config_from_samples() (AI inference)
-            → Create MappingConfig (PENDING_APPROVAL)
-            → Create CopilotAction (PENDING_APPROVAL)
-            → Create ReviewPacket (SCHEDULER_JOB, PENDING)
-            → If existing pending config found, reuse it
-            → Block ingestion if no runtime config exists
-```
-
-### Approval Flow (via API)
-
-```
-User reviews packet in Review Queue drawer
-
-Option A: Approve & Activate Next Runtime
-  POST /api/v1/review-packets/{id}/approve-activate
-    → Find proposal MappingConfig
-    → Find current APPROVED config → set status=SUPERSEDED
-    → Set proposal status=APPROVED
-    → Set packet status=APPROVED, decisionMode=APPROVE_ACTIVATE_NEXT_RUNTIME
-    → Sync CopilotAction to APPROVED
-    → Intake state recomputed → partner transitions to ACTIVE
-
-Option B: Approve Keep Current
-  POST /api/v1/review-packets/{id}/approve-keep-current
-    → Set packet status=APPROVED, decisionMode=APPROVE_KEEP_CURRENT_FOR_FILE
-    → Current runtime config remains unchanged
-    → Proposal can be used for one-off file processing
-
-Option C: Reject
-  POST /api/v1/review-packets/{id}/reject
-    → Set packet status=REJECTED, decisionMode=REJECT
-    → Proposal remains PENDING_APPROVAL (preserved for auditing)
-
-Option D: Send to Mapping Studio
-  POST /api/v1/review-packets/{id}/send-to-studio
-    → Set decisionMode=SEND_TO_MAPPING_STUDIO
-    → UI loads studio with packet context (headers, sample rows, config ID)
-    → Operator can refine proposal in studio
-    → Return to Review Queue to approve/reject
-```
-
-### Packet Fields (detailed)
-
-```json
-{
-  "_id": "uuid",
-  "sourceType": "UPLOAD | SCHEDULER_JOB",
-  "partner": "MOMO",
-  "fileName": "VNPAY_structure_changed.csv",
-  "fileTypeDetected": "SETTLEMENT",
-  "structureSignature": { "headers": [...], "columnCount": 10, "md5": "..." },
-  "activeRuntimeConfigId": "uuid-of-current-approved-config",
-  "proposalConfigId": "uuid-of-pending-proposal",
-  "targetActionId": "uuid-of-copilot-action",
-  "sourceFileId": "uuid-of-source-file",
-  "recommendedAction": {
-    "actionType": "APPROVE_AND_ACTIVATE_NEXT_RUNTIME",
-    "reason": "Detected stale or changed file structure",
-    "confidence": 0.92
-  },
-  "parseStrategy": {
-    "sheetName": "Sheet1",
-    "startRow": 2,
-    "fieldMappingCount": 12,
-    "strategy": "AI inferred parser from sample"
-  },
-  "validationGates": [
-    { "gateKey": "structure_signature", "label": "Structure drift detected", "status": "warn", "reason": "..." },
-    { "gateKey": "proposal_generated", "label": "Proposal generated", "status": "pass", "reason": "..." },
-    { "gateKey": "runtime_safety", "label": "Runtime safety", "status": "warn", "reason": "..." }
-  ],
-  "samplePreview": [
-    { "rowIndex": 1, "values": ["col1", "col2", ...] }
-  ],
-  "riskSummary": { "severity": "medium", "summary": "..." },
-  "runtimeDecisionHint": "KEEP_CURRENT_RUNTIME_UNTIL_APPROVED | BLOCK_UNTIL_APPROVED",
-  "status": "PENDING | APPROVED | REJECTED | SUPERSEDED",
-  "decisionMode": "APPROVE_ACTIVATE_NEXT_RUNTIME | APPROVE_KEEP_CURRENT_FOR_FILE | REJECT | SEND_TO_MAPPING_STUDIO",
-  "createdAt": "ISO8601",
-  "reviewedAt": "ISO8601",
-  "reviewedBy": "operator-name"
-}
-```
-
----
-
-## Automation Run Flow
-
-### Run Now (from UI)
-
-```
-User clicks "Run Now" for MOMO job in Automation view
-  → POST /api/v1/automation/jobs/MOMO/run
-    → Find FetchConfig for MOMO
-    → Call run_fetch_config_once(config, db, config_loader, ...)
-      → Create fetcher (SFTP/FILEDROP/HTTP)
-      → Fetch partner files to local download dir
-      → For each file:
-        → IngestionPipeline.process_file()
-          → check_and_refresh_config() before processing
-          → If format drift detected:
-            → AI generate proposal → create ReviewPacket
-          → If config valid: ingest file → data_container
-      → Return { success, total, failed, errors, processingStatus }
-    → API returns { ok: true, result: {...} }
-    → UI refreshes Automation view
-      → pendingReviewPackets reflects new count
-      → recentPackets[0] shows latest status
-```
-
-### Job Visibility (GET /api/v1/automation/jobs)
-
-```json
-{
-  "jobs": [
-    {
-      "partner": "MOMO",
-      "fetchMethod": "SFTP",
-      "schedule": "0 2 * * *",
-      "enabled": true,
-      "localDownloadDir": "/downloads/momo",
-      "destination": "/remote/path/momo",
-      "pendingReviewPackets": 1,
-      "updatedAt": "2026-06-04T...",
-      "recentPackets": [
-        {
-          "_id": "uuid",
-          "fileName": "momo-scheduled-fetch",
-          "status": "PENDING",
-          "sourceType": "SCHEDULER_JOB",
-          "recommendedAction": { ... },
-          "riskSummary": { ... },
-          "createdAt": "2026-06-04T..."
-        }
-      ]
-    }
-  ]
-}
-```
-
----
-
-## Data Intake Flow
-
-The Data Intake view computes partner state and activity in real-time.
-
-### Partner State Derivation
-
-```
-GET /api/v1/operations/intake?partner=MOMO&date=2024-07-07
-
-1. Query all collections for partner:
-   - reconciliation_file (files)
-   - reconciliation_mapping_config (mappings)
-   - copilot_action (actions)
-   - review_packet (packets)
-
-2. For each partner, compute state:
-   has_approved = any mapping with status=APPROVED
-   has_pending_proposals = any mapping with status=PENDING_APPROVAL
-   has_pending_packets = any packet with status=PENDING
-   has_latest_file = most recent file record
-
-   if !has_approved && (has_pending_proposals || has_pending_packets):
-     state = BLOCKED
-   elif has_pending_proposals || has_pending_packets:
-     state = NEEDS_REVIEW
-   elif has_approved:
-     state = ACTIVE
-   else:
-     state = NO_ACTIVITY
-
-3. Build activity feed (FILE + CONFIG + ACTION + REVIEW events)
-   → Sorted by timestamp descending, latest 12 items
-
-4. Return:
-   - partners[]: summary for all partners
-   - detail: expanded view for selected partner
-     - statusHeader: { overallState, primaryReason, nextAction }
-     - currentRuntimeConfigSummary
-     - latestFileSummary
-     - pendingItems[]
-     - reviewPackets[]
-     - recentActivity[]
-```
-
-### Error Scenarios
-
-**Review packet creation fails:**
-```
-_create_mapping_proposal() → AI generation fails
-  → ConfigurationApprovalRequiredError raised
-  → Pipeline logs error, continues with existing config if available
-  → No incomplete packet is persisted
-```
-
-**Approve-activate on non-existent proposal:**
-```
-POST /api/v1/review-packets/{id}/approve-activate
-  → proposalConfigId not found
-  → Packet still marked APPROVED, but proposal not activated
-  → Config status left unchanged
-  → Operator notified via dashboard after refresh
-```
-
-**Run Now on disabled job:**
-```
-POST /api/v1/automation/jobs/MOMO/run
-  → fetch_config.enabled == false
-  → 400 Bad Request: "Automation job is disabled."
-  → No execution attempted
-```
+Older docs in this repo tended to mix implemented flows with planned behavior. When updating this file, prefer describing only the path that can be traced through the current modules and routes.

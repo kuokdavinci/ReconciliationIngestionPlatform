@@ -1,385 +1,261 @@
 # Reconciliation Ingestion Platform
 
-Nền tảng ingestion và reconciliation cho dữ liệu giao dịch tài chính, tập trung vào chuẩn hóa dữ liệu partner, đối soát với dữ liệu nội bộ, và hỗ trợ insight/mapping bằng AI theo hướng có kiểm soát.
+Config-driven reconciliation platform for ingesting partner settlement files, normalizing them into a canonical model, reviewing mapping changes with human approval, and exposing operations/reconciliation workflows through FastAPI and a small Vite dashboard.
 
-**Điểm nổi bật**
-- Ingestion pipeline có cấu hình động, không hardcode parser theo từng partner.
-- Hỗ trợ nhận dữ liệu từ `FILEDROP`, `SFTP`, và `API`.
-- Reconciliation engine phân loại rõ `MATCHED`, `MISSING_INTERNAL`, `MISSING_PARTNER`, `AMOUNT_MISMATCH`, `STATUS_MISMATCH`, `MULTIPLE_MISMATCH`.
-- Hỗ trợ scope-aware reconciliation cho `FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT`, `UNCONFIRMED`.
-- Có approval flow cho mapping config và review packet trước khi áp dụng runtime.
-- Có dashboard vận hành, API layer, automation job, và AI insight layer.
-- Có local development stack bằng Docker Compose và test suite cho reconciliation / ingestion / API.
+## What Is In This Repo
 
-**Tech stack ngắn**
-- Backend: `Python 3.14`, `FastAPI`
-- Database: `MongoDB`
-- Data processing: `openpyxl`, custom readers/normalizer/validator
-- Scheduler: `APScheduler`
-- AI integration: OpenAI-compatible provider abstraction
-- Frontend: `HTML/CSS/JavaScript`
-- Infra: `Docker`, `Docker Compose`
-- Testing: `pytest`
+- Python backend under `src/` for ingestion, reconciliation, approvals, automation, and AI-assisted analysis
+- CLI entrypoint in `run.py` for ingestion, reconciliation, scheduler control, and API serving
+- Vanilla JS dashboard in `frontend/`
+- MongoDB-backed persistence for files, mappings, review packets, copilot actions, and reconciliation results
 
-**Quick links**
-- [Tổng quan](#tổng-quan-dự-án)
-- [Kiến trúc](#kiến-trúc-hệ-thống)
-- [API](#api-overview)
-- [Cài đặt](#cài-đặt-và-chạy-dự-án)
-- [Testing](#testing)
-- [Roadmap](#roadmap)
+## Current Architecture
 
-## Tổng quan dự án
+- `src/pipeline/`: file ingestion orchestration
+- `src/reconciliation/`: deterministic reconciliation engine
+- `src/api/`: FastAPI routers under `/api/v1/*`
+- `src/config/`: runtime settings, mapping validation/loading, config health
+- `src/models/`: MongoDB models, repositories, indexes
+- `src/scheduler/` and `src/fetchers/`: scheduled partner fetch and automation jobs
+- `src/analysis/`: AI-assisted insights layer
+- `src/services/copilot_context.py`: dashboard Copilot context assembly
 
-Bài toán chính của dự án là đối soát dữ liệu giao dịch tài chính giữa nhiều payment partner và hệ thống nội bộ. Mỗi partner có thể gửi file hoặc dữ liệu theo format khác nhau, tên cột khác nhau, quy ước status khác nhau, và tần suất gửi khác nhau. Nếu parser bị hardcode theo từng partner, mỗi lần format thay đổi sẽ kéo theo chi phí sửa code và redeploy.
+More detail:
 
-Hệ thống này được thiết kế để xử lý bài toán đó theo hướng cấu hình:
-- nhận dữ liệu/file từ partner qua `local filedrop`, `SFTP`, hoặc `API`
-- dùng `mapping config` để map cột partner sang schema nội bộ
-- normalize và validate dữ liệu trước khi lưu
-- lưu trữ dữ liệu canonical trong MongoDB
-- chạy reconciliation với dữ liệu nội bộ
-- phân loại mismatch và missing records
-- expose kết quả qua API và dashboard
-- bổ sung lớp AI để hỗ trợ insight và mapping proposal, không thay thế logic deterministic
+- [Architecture](docs/ARCHITECTURE.md)
+- [Configuration](docs/CONFIGURATION.md)
+- [Data Flow](docs/DATA_FLOW.md)
+- [Development](docs/DEVELOPMENT.md)
+- [Module Map](docs/MODULES.md)
 
-Mục tiêu chính:
-- chuẩn hóa dữ liệu partner về một schema thống nhất
-- validate dữ liệu và business rules trước khi downstream sử dụng
-- lưu trữ dữ liệu phục vụ truy vết và đối soát
-- chạy reconciliation có thể mở rộng theo nhiều partner
-- hiển thị metrics / anomaly / operational status qua dashboard
-- hỗ trợ AI cho mapping config proposal và insight generation
+## Prerequisites
 
-## Điểm nổi bật
+- Python `3.14+` for local development via `uv`
+- `uv`
+- Docker and Docker Compose for MongoDB/SFTP and optional full local stack
+- Node.js for the dashboard
 
-### Data Ingestion
-- Ingestion pipeline xử lý file partner theo mapping config động thay vì hardcode parser.
-- Hỗ trợ nhiều fetch method: `FILEDROP`, `SFTP`, `API`.
-- Có duplicate detection bằng file hash.
-- Có processing stats theo file: `totalRows`, `successRows`, `failedRows`, `processingStatus`.
+## Quick Start
 
-### Dynamic Mapping Configuration
-- Mapping config được lưu trong MongoDB và load theo `partner + workflow + fileType`.
-- Có approval flow qua `review_packet` trước khi activate mapping mới.
-- Có runtime validation gate để test mapping trên file thực trước khi approve.
-- Có AI-generated mapping proposal nhưng vẫn qua validation/review trước khi áp dụng.
-
-### Reconciliation Engine
-- Đối soát deterministic giữa partner records và internal transactions.
-- Phân loại rõ nhiều loại kết quả mismatch.
-- Có lọc internal transactions theo trạng thái finalized (`SUCCESS`, `FAILED`, `REVERSED`).
-- Có scope-aware reconciliation:
-  - `FULL_SNAPSHOT`
-  - `INCREMENTAL_APPEND`
-  - `REPLACEMENT`
-  - `UNCONFIRMED`
-
-### API Layer
-- FastAPI app factory, OpenAPI docs, router tách theo domain.
-- Có nhóm endpoint cho reconciliation, data explorer, mappings, review packets, automation, AI insights.
-- API phục vụ cả dashboard vận hành và kiểm thử thủ công.
-
-### Dashboard / Operations UI
-- Dashboard local cho vận hành với các màn chính:
-  - Command Center
-  - Data Intake
-  - Review Queue
-  - Reconciliation
-  - Mapping Studio
-- Review Queue hỗ trợ duyệt mapping config và scope proposal.
-
-### AI-assisted Insights / Mapping
-- AI dùng để sinh insight từ dữ liệu aggregate và anomaly đã được deterministic pre-process.
-- AI cũng hỗ trợ generate mapping proposal từ sample file.
-- Có cache, fallback, và structured output trong insight flow.
-
-### Observability / Logging
-- Structured logging cho fetch / ingest / reconcile / analysis flow.
-- Có processing stats theo file và runtime status theo từng bước.
-
-### Dockerized Local Development
-- Có Docker Compose cho MongoDB, API, scheduler, SFTP, mongo-express.
-- Thuận tiện để dựng local environment và test end-to-end.
-
-### Testing
-- Có test cho reconciliation core, ingestion flow, API behavior, AI analysis orchestration, seed/tooling.
-- Hiện tại test tập trung mạnh hơn ở core logic so với UI.
-
-## Tech Stack
-
-- **Backend:** Python, FastAPI, Uvicorn
-- **Database:** MongoDB, Motor
-- **Data Processing:** openpyxl, custom streaming readers, normalizer, validator
-- **Scheduling / Automation:** APScheduler
-- **AI:** OpenAI-compatible provider abstraction trong `src/analysis/providers`
-- **Frontend / Dashboard:** HTML, CSS, JavaScript (`frontend/`)
-- **Infra:** Docker, Docker Compose
-- **Testing:** pytest, pytest-asyncio
-
-## Kiến trúc hệ thống
-
-```mermaid
-flowchart LR
-    A[Partner Data Sources\nFILEDROP / SFTP / API] --> B[Fetch Layer]
-    B --> C[Ingestion Pipeline]
-    C --> D[Mapping Config Loader]
-    D --> E[Normalization / Validation]
-    E --> F[(MongoDB)]
-    F --> G[Reconciliation Engine]
-    G --> H[FastAPI API Layer]
-    H --> I[Dashboard / Operations UI]
-    G --> J[AI Insight Layer]
-    J --> H
-```
-
-**Giải thích nhanh**
-- **Fetch Layer:** lấy file hoặc payload từ partner.
-- **Ingestion Pipeline:** tạo file record, load config, parse, normalize, validate, persist.
-- **Mapping Config Loader:** cung cấp mapping config runtime theo partner/workflow/fileType.
-- **MongoDB:** lưu file metadata, data canonical, internal transactions, reconciliation results, review packets.
-- **Reconciliation Engine:** so khớp deterministic giữa partner data và internal data.
-- **API Layer:** expose data cho dashboard, automation, review, insights.
-- **AI Insight Layer:** tạo insight và proposal dựa trên dữ liệu aggregate / sample.
-
-## Luồng xử lý chính
-
-1. Nhận dữ liệu/file từ partner qua `FILEDROP`, `SFTP`, hoặc `API`.
-2. Tạo `reconciliation_file` record và load `mapping config` tương ứng.
-3. Parse file và normalize từng transaction về schema canonical.
-4. Validate schema và business rules ở mức row.
-5. Lưu normalized records vào `data_container`.
-6. Chạy reconciliation với `internal_transaction`.
-7. Phân loại kết quả thành matched / missing / mismatched.
-8. Tạo metrics, grouped stats, anomalies, AI insights nếu cần.
-9. Expose kết quả qua FastAPI và dashboard.
-
-## AI Integration
-
-AI trong dự án này là **enhancement layer**, không thay thế deterministic reconciliation.
-
-AI hiện được dùng cho:
-- sinh insight từ aggregated metrics và anomaly đã được pre-process
-- generate hoặc gợi ý `mapping config` từ sample file
-- tóm tắt các discrepancy patterns cho dashboard / operator
-
-Guardrail hiện có trong codebase:
-- reconciliation vẫn là deterministic, không phụ thuộc vào LLM
-- insight flow có fallback/rule-based khi provider fail
-- có structured output / parsing trong analysis flow
-- mapping do AI generate vẫn phải qua validation và review packet trước khi activate
-
-Điểm cần lưu ý:
-- README này không claim rằng toàn bộ raw financial data được gửi nguyên trạng lên LLM
-- theo thiết kế hiện tại, layer insight chủ yếu dùng metrics, grouped stats, và anomaly summaries
-- nếu mở rộng AI sâu hơn trong tương lai, nên duy trì nguyên tắc deterministic-first và review-before-apply
-
-## API Overview
-
-Các nhóm endpoint chính:
-
-- **Reconciliation APIs**
-  - tra cứu kết quả reconciliation
-  - thống kê theo status
-- **Data Explorer APIs**
-  - xem transaction đã ingest
-  - xem file processing status
-- **Mapping Config APIs**
-  - list/create/approve mapping
-  - AI generate proposal
-  - validate/test mapping
-- **Review Packet APIs**
-  - list packet chờ duyệt
-  - approve / reject / keep current / activate
-- **Automation APIs**
-  - run scheduler job thủ công
-  - xem trạng thái job
-- **AI Insight APIs**
-  - summary
-  - discrepancies
-  - partner-level report
-
-Swagger / OpenAPI local:
-- `http://localhost:8000/docs`
-
-## Cài đặt và chạy dự án
-
-### 1. Clone repo
-
-```bash
-git clone <repo-url>
-cd AdapterService
-```
-
-### 2. Tạo `.env`
-
-```bash
-cp .env.example .env
-```
-
-Điền tối thiểu các biến quan trọng:
-- `MONGO_ROOT_USER`
-- `MONGO_ROOT_PASSWORD`
-- `APP_MONGODB_URL`
-- `SFTP_USER`
-- `SFTP_PASS`
-
-Nếu muốn bật AI provider ngoài local config mặc định, bổ sung:
-- `AI_PROVIDER`
-- `AI_MODEL`
-- `AI_ENDPOINT`
-- `AI_API_KEY`
-
-### 3. Cài dependencies local
+1. Install Python dependencies:
 
 ```bash
 uv sync --all-extras
 ```
 
-### 4. Chạy stack bằng Docker Compose
+2. Create environment file:
 
 ```bash
-docker compose up -d --build
-docker compose ps
+cp .env.example .env
 ```
 
-Services chính:
-- MongoDB: `localhost:27017`
-- API: `http://localhost:8000`
-- Swagger: `http://localhost:8000/docs`
-- mongo-express: `http://localhost:8081`
-
-### 5. Chạy dashboard local
+3. Start supporting services:
 
 ```bash
-python frontend/server.py --port 5173 --api http://localhost:8000
+docker compose up -d mongodb sftp mongo-express
 ```
 
-Mở:
-- `http://localhost:5173`
-
-### 6. Trigger một automation job thủ công
+4. Start the backend API:
 
 ```bash
-curl -s -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .
+uv run python run.py --serve --port 8000
 ```
 
-### 7. Chạy MOMO E2E flow nhanh
+5. Start the frontend:
 
 ```bash
-make momo-e2e-reset
-make momo-e2e-run
-make momo-e2e-phase2
-make momo-e2e-run
+cd frontend
+npm install
+npm run dev
 ```
 
-Chi tiết flow:
-- xem [momo_e2e_test_guide.md](/home/kuokdavinci/AdapterService/momo_e2e_test_guide.md)
+6. Open:
 
-## Cấu trúc thư mục
+- Dashboard: `http://localhost:5173`
+- API docs: `http://localhost:8000/docs`
+- OpenAPI JSON: `http://localhost:8000/openapi.json`
+- Mongo Express: `http://localhost:8081`
 
-```text
-.
-├── src/
-│   ├── api/              # FastAPI routers
-│   ├── analysis/         # AI insights, prompts, provider abstraction
-│   ├── config/           # mapping config, signature, config health
-│   ├── fetchers/         # FILEDROP / SFTP / API fetchers
-│   ├── models/           # Pydantic models + Mongo repositories
-│   ├── normalizer/       # normalize partner rows -> canonical transactions
-│   ├── pipeline/         # ingestion pipeline
-│   ├── readers/          # file readers
-│   ├── reconciliation/   # reconciliation engine + scope logic
-│   ├── scheduler/        # APScheduler jobs
-│   └── validators/       # schema / business validation
-├── frontend/             # dashboard local (HTML/CSS/JS)
-├── tests/                # unit / integration / API tests
-├── scratch/              # seed scripts, debug helpers
-├── docker-compose.yml    # local stack
-├── Makefile              # test + MOMO E2E shortcuts
-└── run.py                # local entrypoint helpers
+## CLI Workflows
+
+The executable surface is defined by `run.py`.
+
+Serve the API:
+
+```bash
+uv run python run.py --serve --port 8000
 ```
+
+List scheduler jobs:
+
+```bash
+uv run python run.py --list-jobs
+```
+
+Start the scheduler daemon:
+
+```bash
+uv run python run.py --start-scheduler
+```
+
+Trigger the daily fetch job immediately:
+
+```bash
+uv run python run.py --run-job-now
+```
+
+Run ingestion against a local file:
+
+```bash
+uv run python run.py --data ./path/to/file.xlsx --partner MOMO --date 2024-07-07
+```
+
+Upload mapping config from an Excel template and ingest with SFTP/local fallback flow:
+
+```bash
+uv run python run.py --config ./path/to/RequestTemplate.xlsx
+```
+
+Run reconciliation:
+
+```bash
+uv run python run.py --reconcile 2024-07-07 --partner MOMO
+```
+
+Run reconciliation with seeded mock internal transactions:
+
+```bash
+uv run python run.py --reconcile 2024-07-07 --partner MOMO --seed-mock
+```
+
+## API Surface
+
+The FastAPI app is created by `src.api:create_app` and currently includes these router groups:
+
+- `/api/v1/insights/*`
+- `/api/v1/reports/*`
+- `/api/v1/reconciliation/*`
+- `/api/v1/data/*`
+- `/api/v1/mappings/*`
+- `/api/v1/mapping/*`
+- `/api/v1/copilot/*`
+- `/api/v1/operations/*`
+- `/api/v1/review-packets/*`
+- `/api/v1/automation/*`
+
+Representative endpoints:
+
+- `GET /api/v1/insights/summary`
+- `GET /api/v1/insights/discrepancies`
+- `GET /api/v1/reports/daily`
+- `GET /api/v1/reconciliation/results`
+- `GET /api/v1/reconciliation/stats`
+- `GET /api/v1/reconciliation/insights`
+- `GET /api/v1/data/transactions`
+- `GET /api/v1/data/files`
+- `GET /api/v1/mappings`
+- `POST /api/v1/mapping/ai-generate`
+- `GET /api/v1/copilot/context`
+- `GET /api/v1/operations/intake`
+- `GET /api/v1/review-packets`
+- `POST /api/v1/review-packets/{packet_id}/approve-activate`
+- `POST /api/v1/review-packets/{packet_id}/approve-keep-current`
+- `POST /api/v1/review-packets/{packet_id}/reject`
+- `GET /api/v1/automation/jobs`
+- `POST /api/v1/automation/jobs/{partner}/run`
+
+Use `/docs` for the current request/response schema.
+
+## Dashboard
+
+`frontend/` is a Vite-served Vanilla JS SPA that proxies `/api` to `http://localhost:8000`.
+
+Current views reflected in `frontend/app.js`:
+
+- `#command-center`
+- `#data-intake`
+- `#review-center`
+- `#reconciliation`
+- `#mapping-studio`
+- `#automation`
+
+See [frontend/README.md](frontend/README.md).
+
+## Configuration
+
+Application settings are loaded from:
+
+- `src/config/settings.py` with `APP_` prefix
+- `src/analysis/config.py` with `AI_` prefix
+- `.env`
+
+Important variables:
+
+- `APP_MONGODB_URL`
+- `APP_DB_NAME`
+- `APP_LOG_LEVEL`
+- `APP_LOG_FORMAT`
+- `APP_APP_NAME`
+- `APP_STRICT_MAPPING_APPROVAL_ENABLED`
+- `AI_PROVIDER`
+- `AI_MODEL`
+- `AI_ENDPOINT`
+- `AI_API_KEY`
+- `AI_FALLBACK_PROVIDER`
+- `AI_FALLBACK_MODEL`
+- `AI_TIMEOUT`
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Testing
 
-Chạy toàn bộ test chính:
+Run the main suite:
 
 ```bash
-make test
+uv run python -m pytest -v
 ```
 
-Chạy nhanh:
+Run a focused module:
 
 ```bash
-make test-quick
+uv run python -m pytest tests/test_api_review_packets.py -v
 ```
 
-Chạy nhóm analysis:
+Run with coverage:
 
 ```bash
-make test-analysis
+uv run python -m pytest --cov=src --cov-report=html
 ```
 
-Chạy reconciliation core:
+The repo currently includes tests for:
 
-```bash
-uv run pytest tests/test_reconciliation.py -v
-```
+- ingestion pipeline and readers
+- reconciliation
+- API routers
+- review packet flows
+- automation run-now flows
+- Copilot context
+- analysis/insights modules
 
-Chạy seed/tooling test:
+## Docker
 
-```bash
-uv run pytest tests/test_seed_momo_e2e.py -v
-```
+`docker-compose.yml` currently defines:
 
-Phân loại test hiện tại:
-- **Unit tests:** model, config, reconciliation, analysis services
-- **Integration tests:** ingestion flow, scheduler/job flow, seed/tooling
-- **API tests:** reconciliation, mappings, review packets, automation, insights
+- `mongodb`
+- `sftp`
+- `mongo-express`
+- `api`
+- `scheduler`
 
-Ghi chú trung thực:
-- hiện tại test tập trung mạnh vào core reconciliation và ingestion logic
-- UI test automation chưa phải phần mạnh nhất của repo
+See [docker/README.md](docker/README.md).
 
-## Ví dụ use case
+## Documentation Contract
 
-Một payment partner gửi file giao dịch hằng ngày. Hệ thống đọc file, map các cột dữ liệu đặc thù của partner sang schema nội bộ, validate dữ liệu, lưu vào MongoDB, chạy đối soát với dữ liệu nội bộ, phân loại mismatch và hiển thị kết quả qua API/dashboard. Nếu format file thay đổi, hệ thống có thể tạo mapping proposal mới và yêu cầu reviewer phê duyệt trước khi tiếp tục runtime.
+This repo has historically drifted between docs and code. Treat code as source of truth:
 
-## Ảnh minh họa / Demo
+- CLI behavior must match `run.py`
+- env vars must match `src/config/settings.py`, `src/analysis/config.py`, and `.env.example`
+- API route docs must match `src/api/`
+- dashboard route descriptions must match `frontend/app.js`
 
-Hiện tại README chưa có screenshot. Các ảnh minh họa sẽ được bổ sung sau để giúp người xem nắm nhanh giao diện và luồng xử lý.
-
-- [ ] Dashboard tổng quan
-- [ ] Kết quả đối soát
-- [ ] Mapping Config UI
-- [ ] AI Insight Panel
-- [ ] Swagger/OpenAPI docs
-
-## Vai trò của tôi trong dự án
-
-Tôi thiết kế và triển khai các thành phần chính của hệ thống, bao gồm:
-- ingestion pipeline cho dữ liệu partner
-- mapping config engine và approval flow
-- reconciliation logic và scope-aware behavior
-- API layer bằng FastAPI
-- AI insight / mapping support theo hướng deterministic-first
-- dashboard integration cho vận hành nội bộ
-- Docker Compose setup, local tooling, và test setup
-
-## Giới hạn hiện tại
-
-- Dự án hiện tối ưu trước cho local/demo environment và portfolio use case.
-- AI-generated mapping vẫn cần validation/review trước khi áp dụng.
-- Chưa thấy bằng chứng benchmark đầy đủ với dataset rất lớn trong README hiện tại.
-- Authentication/authorization chưa phải trọng tâm chính của codebase hiện tại.
-- `REPLACEMENT` đã có semantics thực dụng theo key overlap, nhưng vẫn có thể mở rộng thêm bằng `scopeKey/batchKey` nếu nghiệp vụ phức tạp hơn.
-
-## Roadmap
-
-- Bổ sung authentication / authorization cho dashboard và API
-- Thêm persistent job queue cho reconciliation job lớn
-- Tăng test coverage cho UI flow và cross-module integration
-- Bổ sung CI quality gate
-- Bổ sung screenshot / demo video
-- Mở rộng audit trail cho mapping config approval và scope override
-- Benchmark hiệu năng với dataset lớn hơn
+If docs and code disagree, update docs or fix code in the same change.

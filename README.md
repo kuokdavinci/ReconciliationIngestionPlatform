@@ -366,7 +366,77 @@ Tôi thiết kế và triển khai các thành phần chính của hệ thống,
 - dashboard integration cho vận hành nội bộ
 - Docker Compose setup, local tooling, và test setup
 
-## Giới hạn hiện tại
+```
+src/
+├── core/           # Canonical types, enums, constants (incl. ReconciliationStatus)
+├── config/         # Settings, ConfigCache, ConfigValidator, ConfigLoader,
+│                   # ConfigHealthService, StructureSignature, AI config generator
+├── services/       # CopilotContextService for dashboard recommendations
+│   └── copilot_context.py  # Context building, screen-aware recommendations
+├── readers/        # ExcelStreamReader (openpyxl read-only), CSV reader, JSON reader
+├── normalizer/     # TransactionNormalizer (dynamic field mapping)
+├── validators/     # Validator (business rules + duplicate detection)
+├── pipeline/       # IngestionPipeline (full orchestration)
+├── reconciliation/ # ReconciliationEngine (match + classify, status normalization)
+├── analysis/       # AI Analysis Layer (metrics, grouping, LLM prompts, insights)
+│   ├── config.py       # AnalysisConfig (AI_ env prefix)
+│   ├── provider.py     # LLMProvider Protocol + factory
+│   ├── providers/      # OpenAICompatProvider, OllamaProvider (deferred)
+│   ├── schemas.py      # Pydantic contracts (AnalysisInput, AnalysisResult, etc.)
+│   ├── metrics.py      # MetricsService (single source of truth)
+│   ├── grouping.py     # GroupingEngine (status, amount range, partner)
+│   ├── prompts.py      # System + analysis prompt builders
+│   ├── services.py     # Helpers (build_analysis_input, parse_llm_insights)
+│   ├── insights.py     # Orchestration (get_summary, get_discrepancies)
+│   ├── reporter.py     # DailyReporter (format only)
+│   └── alerter.py      # ThresholdAlerter (check only)
+├── api/            # FastAPI server (all endpoints)
+│   ├── __init__.py     # App factory + lifespan
+│   ├── insights.py     # AI insights endpoints (summary, discrepancies, reports)
+│   ├── reconciliation.py  # Reconciliation results API (results, stats)
+│   ├── data_explorer.py   # Data Explorer API (transactions, files, stats)
+│   ├── mappings.py        # Mapping config API v1 & v2 (list, approve, save,
+│   │                      # ai-generate, validate, test, publish, versions)
+│   ├── review_packets.py  # Review packet approval endpoints
+│   ├── copilot.py         # Copilot API (context, actions, approve/reject)
+│   ├── automation.py      # Automation job visibility + Run Now
+│   └── operations.py      # Data Intake partner state + activity feed
+├── scheduler/      # APScheduler daemon (SFTP fetch, cron jobs)
+│   └── jobs.py          # daily_partner_fetch_job, run_fetch_config_once
+├── fetchers/       # SFTP, filedrop, API fetchers (base protocol + implementations)
+├── logging/        # StructuredLogger (JSON/text formatters)
+└── models/         # MongoDB models, repositories, indexes
+    ├── repository.py         # Generic BaseRepository
+    ├── indexes.py            # Index definitions + apply_indexes()
+    ├── reconciliation_file.py  # File tracking model
+    ├── mapping_config.py       # MappingConfig + MappingConfigStatus enum
+    ├── data_container.py       # Canonical transaction model
+    ├── internal_transaction.py # Internal records for reconciliation
+    ├── reconciliation_result.py# Reconciliation output model
+    ├── review_packet.py        # ReviewPacket + ReviewPacketRepository
+    ├── copilot_action.py       # CopilotAction (audit trail for AI proposals)
+    └── fetch_config.py         # FetchConfig for scheduler automation routes
+frontend/           # Operations Dashboard (vanilla JS SPA + proxy)
+├── index.html      # App shell
+├── app.js          # Routing, rendering, filters (4800+ lines)
+├── styles.css      # Responsive admin UI styles
+├── vite.config.js  # Vite dev server config with /api proxy to FastAPI
+├── server.py       # Legacy static file server (for reference)
+└── README.md       # Frontend documentation
+backend/            # Backend entry surface
+├── app.py          # FastAPI app import surface for uvicorn
+└── README.md       # Backend run notes
+tests/              # 600+ unit/integration tests
+├── test_api_review_packets.py   # Review packet approval endpoints
+├── test_api_automation.py       # Automation job listing
+├── test_api_automation_run.py   # Run Now real execution
+├── test_api_mappings.py         # Mappings API v1
+├── test_api_mapping_v2.py       # Mappings API v2 (ai-generate, validate, etc.)
+├── test_api_insights.py         # AI insights endpoints
+├── test_api_data_explorer.py    # Data explorer API
+├── test_api_reconciliation.py   # Reconciliation results API
+├── test_*.py                    # Core, config, readers, normalizer, pipeline, etc.
+```
 
 - Dự án hiện tối ưu trước cho local/demo environment và portfolio use case.
 - AI-generated mapping vẫn cần validation/review trước khi áp dụng.

@@ -75,6 +75,36 @@ async def test_list_review_packets():
 
     assert len(data["packets"]) == 1
     assert data["packets"][0]["partner"] == "MOMO"
+    assert data["packets"][0]["reviewItemId"] == "pkt-001"
+    assert data["packets"][0]["draftMappingId"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_review_packets_exposes_draft_mapping_alias():
+    review_collection = MagicMock()
+    review_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "pkt-002",
+            "sourceType": "UPLOAD",
+            "partner": "MOMO",
+            "fileName": "momo.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "proposalConfigId": "cfg-002",
+            "recommendedAction": {"actionType": "APPROVE_REQUIRED_BEFORE_RUNTIME"},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "PENDING",
+            "createdAt": "2024-01-01T00:00:00+00:00",
+        }
+    ]))
+    request = _make_request(_make_db(review_collection=review_collection))
+
+    data = await list_review_packets(request, partner="MOMO")
+
+    assert data["packets"][0]["reviewItemId"] == "pkt-002"
+    assert data["packets"][0]["draftMappingId"] == "cfg-002"
 
 
 @pytest.mark.asyncio

@@ -51,6 +51,7 @@ def _config_loader(request: Request) -> ConfigLoader:
 def _serialize(packet) -> dict:
     data = packet.model_dump(by_alias=True)
     data["_id"] = str(data["_id"])
+    data["reviewItemId"] = data["_id"]
     return data
 
 
@@ -327,13 +328,13 @@ async def validate_runtime_packet(request: Request, packet_id: str):
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
         raise HTTPException(status_code=404, detail="Review packet not found.")
-    if not packet.proposal_config_id:
-        raise HTTPException(status_code=400, detail="Review packet has no proposal config.")
+    if not packet.draft_mapping_id:
+        raise HTTPException(status_code=400, detail="Review item has no draft mapping.")
 
     mapping_repo = MappingConfigRepository(_get_db(request))
-    config = await mapping_repo.find_one({"_id": packet.proposal_config_id})
+    config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
     if config is None:
-        raise HTTPException(status_code=404, detail="Proposal config not found.")
+        raise HTTPException(status_code=404, detail="Draft mapping not found.")
 
     gate = await _run_runtime_validation(request, packet, config)
     ok = gate["status"] == "pass"
@@ -370,9 +371,9 @@ async def approve_activate_packet(
             )
 
     post_approve_run = None
-    if packet.proposal_config_id:
+    if packet.draft_mapping_id:
         mapping_repo = MappingConfigRepository(_get_db(request))
-        config = await mapping_repo.find_one({"_id": packet.proposal_config_id})
+        config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
         if config is not None and config.status == MappingConfigStatus.PENDING_APPROVAL:
             now = datetime.now(timezone.utc)
             current_approved = await mapping_repo.find_by_partner_and_type(
@@ -395,7 +396,7 @@ async def approve_activate_packet(
                 "reasoning": (health.get("reasoning") or "Approved from review packet."),
             })
             await mapping_repo.collection.update_one(
-                {"_id": packet.proposal_config_id},
+                {"_id": packet.draft_mapping_id},
                 {"$set": {
                     "status": MappingConfigStatus.APPROVED.value,
                     "approvedAt": now,
@@ -497,3 +498,40 @@ async def send_packet_to_studio(
     packet.reviewed_at = now
     packet.reviewed_by = payload.reviewed_by
     return {"ok": True, "packet": _serialize(packet)}
+
+
+@router.post("/from-mapping/{mapping_id}")
+async def create_review_packet_from_mapping(
+    request: Request,
+    mapping_id: str,
+):
+    """Create a pending review packet from a completed mapping config (Studio handoff)."""
+    mapping_repo = MappingConfigRepository(_get_db(request))
+    mapping = await mapping_repo.find_one({"_id": mapping_id})
+    if mapping is None:
+        raise HTTPException(status_code=404, detail="Mapping config not found.")
+
+    packet = ReviewPacket(
+        source_type=ReviewPacketSourceType.STUDIO_HANDOFF,
+        partner=mapping.partner,
+        file_name=mapping.sheet_name or "Manual Configuration",
+        file_type_detected=mapping.file_type or "SETTLEMENT",
+        structure_signature=mapping.structure_signature,
+        draft_mapping_id=mapping_id,
+        parse_strategy={
+            "sheetName": mapping.sheet_name,
+            "startRow": mapping.start_row,
+            "fieldMappingCount": len(mapping.field_mappings or []),
+        },
+        risk_summary={
+            "severity": "medium",
+            "summary": "Draft mapping handed off from Mapping Studio for review.",
+        },
+        recommended_action={
+            "actionType": "APPROVE_REQUIRED_BEFORE_RUNTIME",
+            "reason": "Draft mapping ready for review and approval.",
+        },
+    )
+    repo = _repo(request)
+    created = await repo.create(packet)
+    return {"ok": True, "packet": _serialize(created)}

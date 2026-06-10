@@ -10,7 +10,9 @@ from src.api.review_packets import (
     approve_activate_packet,
     approve_keep_current_packet,
     list_review_packets,
+    save_draft_mapping_for_packet,
     validate_runtime_packet,
+    SaveDraftMappingPayload,
 )
 
 
@@ -75,6 +77,36 @@ async def test_list_review_packets():
 
     assert len(data["packets"]) == 1
     assert data["packets"][0]["partner"] == "MOMO"
+    assert data["packets"][0]["reviewItemId"] == "pkt-001"
+    assert data["packets"][0]["draftMappingId"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_review_packets_exposes_draft_mapping_alias():
+    review_collection = MagicMock()
+    review_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "pkt-002",
+            "sourceType": "UPLOAD",
+            "partner": "MOMO",
+            "fileName": "momo.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "proposalConfigId": "cfg-002",
+            "recommendedAction": {"actionType": "APPROVE_REQUIRED_BEFORE_RUNTIME"},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "PENDING",
+            "createdAt": "2024-01-01T00:00:00+00:00",
+        }
+    ]))
+    request = _make_request(_make_db(review_collection=review_collection))
+
+    data = await list_review_packets(request, partner="MOMO")
+
+    assert data["packets"][0]["reviewItemId"] == "pkt-002"
+    assert data["packets"][0]["draftMappingId"] == "cfg-002"
 
 
 @pytest.mark.asyncio
@@ -239,6 +271,134 @@ async def test_validate_runtime_packet_updates_gate():
         "details": {"sampledRows": 20, "successRows": 20, "failedRows": 0},
     })):
         data = await validate_runtime_packet(request, "pkt-003")
+
+    assert data["ok"] is True
+    assert data["gate"]["status"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_save_draft_mapping_for_packet_attaches_real_draft_id():
+    review_collection = MagicMock()
+    mapping_collection = MagicMock()
+    review_collection.find_one = AsyncMock(return_value={
+        "_id": "pkt-004",
+        "sourceType": "SCHEDULER_JOB",
+        "partner": "MOMO",
+        "fileName": "momo.xlsx",
+        "fileTypeDetected": "SETTLEMENT",
+        "structureSignature": {"headers": ["txn_id", "amount", "date"]},
+        "validationGates": [],
+        "parseStrategy": {},
+        "status": "PENDING",
+        "createdAt": "2024-01-01T00:00:00+00:00",
+    })
+    review_collection.update_one = AsyncMock()
+    mapping_collection.find_one = AsyncMock(return_value=None)
+    mapping_collection.count_documents = AsyncMock(return_value=3)
+    mapping_collection.insert_one = AsyncMock()
+    request = _make_request(_make_db(
+        review_collection=review_collection,
+        mapping_collection=mapping_collection,
+    ))
+
+    payload = SaveDraftMappingPayload.model_validate({
+        "sheetName": "Sheet1",
+        "startRow": 2,
+        "fieldMappings": [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
+            {"path": "transDate", "column": 3, "type": "DATE", "required": True},
+            {"path": "status", "constant": "SUCCESS", "type": "CONSTANT", "required": True},
+        ],
+    })
+
+    data = await save_draft_mapping_for_packet(request, "pkt-004", payload)
+
+    assert data["ok"] is True
+    assert data["draftMappingId"]
+    assert data["fieldMappingCount"] == 5
+    assert data["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_save_draft_mapping_for_packet_rejects_missing_status():
+    review_collection = MagicMock()
+    mapping_collection = MagicMock()
+    review_collection.find_one = AsyncMock(return_value={
+        "_id": "pkt-006",
+        "sourceType": "SCHEDULER_JOB",
+        "partner": "MOMO",
+        "fileName": "momo.xlsx",
+        "fileTypeDetected": "SETTLEMENT",
+        "structureSignature": {"headers": ["txn_id", "amount", "date"]},
+        "validationGates": [],
+        "parseStrategy": {},
+        "status": "PENDING",
+        "createdAt": "2024-01-01T00:00:00+00:00",
+    })
+    mapping_collection.find_one = AsyncMock(return_value=None)
+    mapping_collection.count_documents = AsyncMock(return_value=3)
+    request = _make_request(_make_db(
+        review_collection=review_collection,
+        mapping_collection=mapping_collection,
+    ))
+
+    payload = SaveDraftMappingPayload.model_validate({
+        "sheetName": "Sheet1",
+        "startRow": 2,
+        "fieldMappings": [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
+        ],
+    })
+
+    with pytest.raises(Exception) as exc:
+        await save_draft_mapping_for_packet(request, "pkt-006", payload)
+
+    assert "status" in str(exc.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_validate_runtime_packet_uses_sample_preview_when_source_file_missing():
+    review_collection = MagicMock()
+    mapping_collection = MagicMock()
+    review_collection.find_one = AsyncMock(return_value={
+        "_id": "pkt-005",
+        "sourceType": "STUDIO_HANDOFF",
+        "partner": "MOMO",
+        "fileName": "manual.xlsx",
+        "fileTypeDetected": "SETTLEMENT",
+        "draftMappingId": "cfg-005",
+        "samplePreview": [
+            {"rowIndex": 2, "values": ["TXN001", "1000", "2024-06-05"]},
+            {"rowIndex": 3, "values": ["TXN002", "2500", "2024-06-05"]},
+        ],
+        "validationGates": [],
+        "status": "PENDING",
+        "createdAt": "2024-01-01T00:00:00+00:00",
+    })
+    review_collection.update_one = AsyncMock()
+    mapping_collection.find_one = AsyncMock(return_value={
+        "_id": "cfg-005",
+        "partner": "MOMO",
+        "workflowType": "UPC",
+        "fileType": "SETTLEMENT",
+        "sheetName": "Sheet1",
+        "startRow": 2,
+        "fieldMappings": [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
+            {"path": "transDate", "column": 3, "type": "DATE", "required": True},
+            {"path": "currency", "constant": "VND", "type": "CONSTANT", "required": True},
+            {"path": "status", "constant": "SUCCESS", "type": "CONSTANT", "required": True},
+        ],
+        "status": "PENDING_APPROVAL",
+        "configHealth": {},
+        "createdAt": "2024-01-01T00:00:00+00:00",
+    })
+    request = _make_request(_make_db(review_collection=review_collection, mapping_collection=mapping_collection))
+
+    data = await validate_runtime_packet(request, "pkt-005")
 
     assert data["ok"] is True
     assert data["gate"]["status"] == "pass"

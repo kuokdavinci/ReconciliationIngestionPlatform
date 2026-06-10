@@ -34,12 +34,19 @@ Routes reflected in `frontend/app.js`:
 
 | Route | View |
 |-------|------|
-| `#command-center` | Command Center |
-| `#data-intake` | Data Intake |
 | `#review-center` | Review Center |
 | `#reconciliation` | Reconciliation |
 | `#mapping-studio` | Mapping Studio |
 | `#automation` | Automation |
+
+`#review-queue` is still normalized to `#review-center` for backward compatibility with older links.
+
+## Current UX Notes
+
+- `Review Center` is the default operational entry and loads the `pending` tab first.
+- `Decision History` is loaded lazily when the user opens that tab.
+- `Guided Review` is a single review panel with summary, AI draft mapping status, and decision actions.
+- `Mapping Studio` remains the place to create or adjust draft mappings before approval.
 
 ## API Groups Used
 

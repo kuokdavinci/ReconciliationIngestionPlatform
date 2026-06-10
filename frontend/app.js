@@ -33,7 +33,9 @@
     copilotContext: null,
     selectedReviewPacketId: null,
     reviewPackets: [],
-    utilityRoute: "submit-sample",
+    reviewTab: "pending",
+    reviewHistoryCache: null,
+    reviewHistoryLoading: false,
     preservedScrollTop: null,
     briefOpen: false,
     localDraftMappingIds: {},
@@ -172,6 +174,38 @@
     state.evidenceHistory = evidenceHistory;
     state.reviewedRecords = reviewedRecords;
     state.resolvedReconStatuses = resolvedReconStatuses;
+  }
+
+  async function loadReviewHistoryData(force = false) {
+    const cacheKey = `${state.partner}:${state.date}`;
+    if (!force && state.reviewHistoryCache && state.reviewHistoryCache.key === cacheKey) {
+      return state.reviewHistoryCache;
+    }
+
+    state.reviewHistoryLoading = true;
+    render();
+    try {
+      await loadReconciliationReviewRecords();
+      const decisions = (state.reviewPackets || [])
+        .filter(item => ["APPROVED", "REJECTED", "SUPERSEDED"].includes(String(item.status || "").toUpperCase()))
+        .slice(0, 20);
+      const reconNotes = [];
+      Object.entries(state.evidenceHistory || {}).forEach(([rowId, historyList]) => {
+        historyList.forEach(entry => {
+          reconNotes.push({
+            rowId,
+            time: entry.time,
+            event: entry.event
+          });
+        });
+      });
+      reconNotes.sort((a, b) => new Date(String(b.time || "").replace(/-/g, "/")) - new Date(String(a.time || "").replace(/-/g, "/")));
+      state.reviewHistoryCache = { key: cacheKey, decisions, reconNotes };
+      return state.reviewHistoryCache;
+    } finally {
+      state.reviewHistoryLoading = false;
+      render();
+    }
   }
 
   async function saveReviewNote(rowId, noteText) {
@@ -458,13 +492,10 @@
   function onRouteChange() {
     const key = location.hash.replace("#", "") || "review-center";
     const aliases = {
-      overview: "review-center",
-      "command-center": "review-center",
-      intake: "review-center",
-      "data-intake": "review-center",
-      approvals: "review-center",
       "review-queue": "review-center",
-      "submit-sample": "mapping-studio"
+      "reconcilliation": "reconciliation",
+      "reconcillation": "reconciliation",
+      "reconcilation": "reconciliation"
     };
     const normalized = aliases[key] || key;
     state.route = (routes.some(([route]) => route === normalized) || utilityRoutes[normalized]) ? normalized : "review-center";
@@ -481,6 +512,143 @@
     render();
   }
 
+  async function renderReviewCenterPage(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    const cachedReviewCenter = state.reviewCenterCache
+      && state.reviewCenterCache.partner === state.partner
+      && state.reviewCenterCache.date === state.date;
+
+    const applyReviewCenterData = (data, copilot = state.copilotContext) => {
+      state.copilotContext = copilot;
+      state.reviewPackets = data.packets || [];
+      const historyKey = `${state.partner}:${state.date}`;
+      if (!state.reviewHistoryCache || state.reviewHistoryCache.key !== historyKey) {
+        state.reviewHistoryCache = null;
+      }
+      const pendingPacketIds = (data.packets || [])
+        .filter(packet => String(packet.status || "").toUpperCase() === "PENDING")
+        .map(packet => packet._id);
+      const pendingMappingIds = (data.mappings || [])
+        .filter(mapping => String(mapping.status || "").toUpperCase() === "PENDING_APPROVAL")
+        .map(mapping => mapping._id);
+      const selectableIds = [...pendingPacketIds, ...pendingMappingIds];
+      if (!state.selectedReviewPacketId && selectableIds.length) {
+        state.selectedReviewPacketId = selectableIds[0];
+      }
+      if (state.selectedReviewPacketId && !selectableIds.includes(state.selectedReviewPacketId)) {
+        state.selectedReviewPacketId = selectableIds[0] || null;
+      }
+      view.innerHTML = renderApprovals(data);
+      if (typeof state.preservedScrollTop === "number") {
+        const viewport = document.scrollingElement || document.documentElement;
+        viewport.scrollTop = state.preservedScrollTop;
+        state.preservedScrollTop = null;
+      }
+    };
+
+    if (!cachedReviewCenter) {
+      view.innerHTML = loadingPanel("Loading review center...");
+      const [packets, mappings, intake, copilot] = await Promise.all([
+        fetchJson(`/api/v1/review-packets?partner=${encodeURIComponent(state.partner)}`),
+        fetchJson(`/api/v1/mappings?partner=${encodeURIComponent(state.partner)}`),
+        fetchJson(`/api/v1/operations/intake?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`),
+        fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&screen=review`).catch(() => null)
+      ]);
+      if (
+        renderToken !== activeRenderToken ||
+        state.route !== routeAtStart ||
+        state.partner !== partnerAtStart ||
+        state.date !== dateAtStart
+      ) return;
+      const data = {
+        packets: packets.packets || [],
+        mappings: mappings.mappings || [],
+        intake: intake
+      };
+      state.reviewCenterCache = {
+        partner: state.partner,
+        date: state.date,
+        data
+      };
+      applyReviewCenterData(data, copilot);
+      return;
+    }
+
+    applyReviewCenterData(state.reviewCenterCache.data, state.copilotContext);
+  }
+
+  async function renderReconciliationPage(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    const isAlreadyOnRecon = view.querySelector(".summary-strip") !== null;
+    if (!isAlreadyOnRecon) {
+      view.innerHTML = loadingPanel("Loading reconciliation results...");
+    } else {
+      state.preservedScrollTop = (document.scrollingElement || document.documentElement).scrollTop;
+    }
+
+    let url = `/api/v1/reconciliation/results?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&limit=100`;
+    if (state.reconStatus) {
+      url += `&status=${encodeURIComponent(state.reconStatus)}`;
+    }
+    const ef = state.explorerFilters || {};
+    if (ef.amountMin) url += `&amountMin=${encodeURIComponent(ef.amountMin)}`;
+    if (ef.amountMax) url += `&amountMax=${encodeURIComponent(ef.amountMax)}`;
+    if (ef.dateFrom) url += `&dateFrom=${encodeURIComponent(ef.dateFrom)}`;
+    if (ef.dateTo) url += `&dateTo=${encodeURIComponent(ef.dateTo)}`;
+    const data = await fetchJson(url);
+    await loadReconciliationReviewRecords();
+    if (data && data.results) {
+      data.results.forEach(item => {
+        const key = item.partnerTxnId || item.internalTxnId || item.id;
+        if (state.resolvedReconStatuses && state.resolvedReconStatuses[key]) {
+          item.reconciliationStatus = state.resolvedReconStatuses[key];
+        }
+      });
+    }
+    const [insightsSummary, anomalies, patterns, recommendations, copilot] = await Promise.all([
+      fetchJson(`/api/v1/reconciliation/insights?type=summary&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
+      fetchJson(`/api/v1/reconciliation/insights?type=anomalies&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
+      fetchJson(`/api/v1/reconciliation/insights?type=patterns&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
+      fetchJson(`/api/v1/reconciliation/insights?type=recommendations&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
+      fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&screen=reconciliation`).catch(() => null)
+    ]);
+    if (
+      renderToken !== activeRenderToken ||
+      state.route !== routeAtStart ||
+      state.partner !== partnerAtStart ||
+      state.date !== dateAtStart
+    ) return;
+    state.insightsSummary = insightsSummary;
+    state.insightsData = { anomalies, patterns, recommendations };
+    state.copilotContext = copilot;
+    if (!state.activeReconData || state.lastPartner !== state.partner || state.lastDate !== state.date) {
+      state.activeReconData = data;
+      state.lastPartner = state.partner;
+      state.lastDate = state.date;
+    }
+    view.innerHTML = renderReconciliation(state.activeReconData);
+    if (typeof state.preservedScrollTop === "number") {
+      const viewport = document.scrollingElement || document.documentElement;
+      viewport.scrollTop = state.preservedScrollTop;
+      state.preservedScrollTop = null;
+    }
+  }
+
+  function renderMappingStudioPage() {
+    view.innerHTML = renderSubmitSamplePage();
+    bindViewActions();
+  }
+
+  async function renderAutomationPage(renderToken, routeAtStart) {
+    view.innerHTML = loadingPanel("Loading automation visibility...");
+    const [data, copilot] = await Promise.all([
+      fetchJson(`/api/v1/automation/jobs`),
+      fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&screen=automation`).catch(() => null)
+    ]);
+    if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
+    state.copilotContext = copilot;
+    view.innerHTML = renderAutomation(data);
+    bindViewActions();
+  }
+
   async function render() {
     const modalContainer = document.getElementById("modal-root");
     if (modalContainer) {
@@ -494,7 +662,6 @@
     const utility = utilityRoutes[state.route];
     title.textContent = route ? route[1] : utility ? utility.title : "Command Center";
     const routeSubtitle = {
-      "data-intake": `Track arrivals, processing state, and runtime readiness for ${state.partner}`,
       "review-center": `Review pending runtime changes for ${state.partner}`,
       reconciliation: `Deterministic reconciliation outcomes for ${state.partner} on ${formatDisplayDate(state.date)}`,
       automation: `Scheduler, job visibility, and automation context`,
@@ -507,79 +674,9 @@
     void view.offsetWidth;
     view.classList.add("fade-in");
 
-    if (state.route === "command-center") {
-      view.innerHTML = loadingPanel("Loading command center...");
-      try {
-        const [summary, operational, partner, inconsistency] = await Promise.all([
-          fetchJson(`/api/v1/insights/summary?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`),
-          fetchJson(`/api/v1/insights/discrepancies?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&focus=operational`),
-          fetchJson(`/api/v1/insights/discrepancies?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&focus=partner`),
-          fetchJson(`/api/v1/insights/discrepancies?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&focus=inconsistency`),
-        ]);
-        if (
-          renderToken !== activeRenderToken ||
-          state.route !== routeAtStart ||
-          state.partner !== partnerAtStart ||
-          state.date !== dateAtStart
-        ) return;
-        state.insightsData = { summary, operational, partner, inconsistency };
-        view.innerHTML = renderCommandCenter();
-      } catch (err) {
-        if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
-        view.innerHTML = renderError(err);
-      }
-      fetchPartners();
-      bindFilters();
-      bindViewActions();
-      return;
-    }
-
     if (state.route === "review-center") {
-      view.innerHTML = loadingPanel("Loading review center...");
       try {
-        const [packets, mappings, intake, copilot] = await Promise.all([
-          fetchJson(`/api/v1/review-packets?partner=${encodeURIComponent(state.partner)}`),
-          fetchJson(`/api/v1/mappings?partner=${encodeURIComponent(state.partner)}`),
-          fetchJson(`/api/v1/operations/intake?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`),
-          fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&screen=review`).catch(() => null)
-        ]);
-        if (
-          renderToken !== activeRenderToken ||
-          state.route !== routeAtStart ||
-          state.partner !== partnerAtStart ||
-          state.date !== dateAtStart
-        ) return;
-        state.copilotContext = copilot;
-        const data = {
-          packets: packets.packets || [],
-          mappings: mappings.mappings || [],
-          intake: intake
-        };
-        state.reviewPackets = data.packets;
-        state.reviewCenterCache = {
-          partner: state.partner,
-          date: state.date,
-          data: data
-        };
-        const pendingPacketIds = (data.packets || [])
-          .filter(packet => String(packet.status || "").toUpperCase() === "PENDING")
-          .map(packet => packet._id);
-        const pendingMappingIds = (data.mappings || [])
-          .filter(mapping => String(mapping.status || "").toUpperCase() === "PENDING_APPROVAL")
-          .map(mapping => mapping._id);
-        const selectableIds = [...pendingPacketIds, ...pendingMappingIds];
-        if (!state.selectedReviewPacketId && selectableIds.length) {
-          state.selectedReviewPacketId = selectableIds[0];
-        }
-        if (state.selectedReviewPacketId && !selectableIds.includes(state.selectedReviewPacketId)) {
-          state.selectedReviewPacketId = selectableIds[0] || null;
-        }
-        view.innerHTML = renderApprovals(data);
-        if (typeof state.preservedScrollTop === "number") {
-          const viewport = document.scrollingElement || document.documentElement;
-          viewport.scrollTop = state.preservedScrollTop;
-          state.preservedScrollTop = null;
-        }
+        await renderReviewCenterPage(renderToken, routeAtStart, partnerAtStart, dateAtStart);
       } catch (err) {
         if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
         view.innerHTML = renderError(err);
@@ -591,59 +688,8 @@
     }
 
     if (state.route === "reconciliation") {
-      const isAlreadyOnRecon = view.querySelector(".summary-strip") !== null;
-      if (!isAlreadyOnRecon) {
-        view.innerHTML = loadingPanel("Loading reconciliation results...");
-      } else {
-        state.preservedScrollTop = (document.scrollingElement || document.documentElement).scrollTop;
-      }
       try {
-        let url = `/api/v1/reconciliation/results?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&limit=100`;
-        if (state.reconStatus) {
-          url += `&status=${encodeURIComponent(state.reconStatus)}`;
-        }
-        const ef = state.explorerFilters || {};
-        if (ef.amountMin) url += `&amountMin=${encodeURIComponent(ef.amountMin)}`;
-        if (ef.amountMax) url += `&amountMax=${encodeURIComponent(ef.amountMax)}`;
-        if (ef.dateFrom) url += `&dateFrom=${encodeURIComponent(ef.dateFrom)}`;
-        if (ef.dateTo) url += `&dateTo=${encodeURIComponent(ef.dateTo)}`;
-        const data = await fetchJson(url);
-        await loadReconciliationReviewRecords();
-        if (data && data.results) {
-          data.results.forEach(item => {
-            const key = item.partnerTxnId || item.internalTxnId || item.id;
-            if (state.resolvedReconStatuses && state.resolvedReconStatuses[key]) {
-              item.reconciliationStatus = state.resolvedReconStatuses[key];
-            }
-          });
-        }
-        const [insightsSummary, anomalies, patterns, recommendations, copilot] = await Promise.all([
-          fetchJson(`/api/v1/reconciliation/insights?type=summary&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-          fetchJson(`/api/v1/reconciliation/insights?type=anomalies&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-          fetchJson(`/api/v1/reconciliation/insights?type=patterns&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-          fetchJson(`/api/v1/reconciliation/insights?type=recommendations&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-          fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&screen=reconciliation`).catch(() => null)
-        ]);
-        if (
-          renderToken !== activeRenderToken ||
-          state.route !== routeAtStart ||
-          state.partner !== partnerAtStart ||
-          state.date !== dateAtStart
-        ) return;
-        state.insightsSummary = insightsSummary;
-        state.insightsData = { anomalies, patterns, recommendations };
-        state.copilotContext = copilot;
-        if (!state.activeReconData || state.lastPartner !== state.partner || state.lastDate !== state.date) {
-          state.activeReconData = data;
-          state.lastPartner = state.partner;
-          state.lastDate = state.date;
-        }
-        view.innerHTML = renderReconciliation(state.activeReconData);
-        if (typeof state.preservedScrollTop === "number") {
-          const viewport = document.scrollingElement || document.documentElement;
-          viewport.scrollTop = state.preservedScrollTop;
-          state.preservedScrollTop = null;
-        }
+        await renderReconciliationPage(renderToken, routeAtStart, partnerAtStart, dateAtStart);
       } catch (err) {
         if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
         view.innerHTML = renderError(err);
@@ -655,26 +701,17 @@
     }
 
     if (state.route === "mapping-studio") {
-      view.innerHTML = renderSubmitSamplePage();
-      bindViewActions();
+      renderMappingStudioPage();
       return;
     }
 
     if (state.route === "automation") {
-      view.innerHTML = loadingPanel("Loading automation visibility...");
       try {
-        const [data, copilot] = await Promise.all([
-          fetchJson(`/api/v1/automation/jobs`),
-          fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&screen=automation`).catch(() => null)
-        ]);
-        if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
-        state.copilotContext = copilot;
-        view.innerHTML = renderAutomation(data);
+        await renderAutomationPage(renderToken, routeAtStart);
       } catch (err) {
         if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
         view.innerHTML = renderError(err);
       }
-      bindViewActions();
       return;
     }
 
@@ -842,46 +879,28 @@
       </div>`;
   }
 
-  function renderApprovals(data) {
-    function middleTruncate(str, maxLen = 30) {
-      if (!str) return "";
-      if (str.length <= maxLen) return str;
-      const half = Math.floor((maxLen - 3) / 2);
-      return str.substring(0, half) + "..." + str.substring(str.length - half);
-    }
-
-    if (!state.reviewTab) {
-      state.reviewTab = "pending";
-    }
-
+  function getReviewCenterPendingItems(data) {
     const packets = (data.packets || []).filter(packet => !state.partner || packet.partner === state.partner);
     const mappings = (data.mappings || []).filter(item => item.partner === state.partner);
     const pendingPackets = packets.filter(item => String(item.status || "").toUpperCase() === "PENDING");
-
-    // Intake info
-    const intake = data.intake || {};
-    const partners = intake.partners || [];
-    const activePartnerInfo = partners.find(p => p.partner === state.partner) || {};
-
-    // Synthesize pending mapping configurations as virtual packets
     const pendingMappings = mappings.filter(item => item.status === "PENDING_APPROVAL" && !pendingPackets.some(p => p.draftMappingId === item._id));
-    const virtualPackets = pendingMappings.map(m => ({
-      _id: m._id,
-      partner: m.partner,
-      fileName: m.sheetName || "Manual Configuration",
-      fileTypeDetected: m.fileType || "SETTLEMENT",
+    const virtualPackets = pendingMappings.map(mapping => ({
+      _id: mapping._id,
+      partner: mapping.partner,
+      fileName: mapping.sheetName || "Manual Configuration",
+      fileTypeDetected: mapping.fileType || "SETTLEMENT",
       status: "PENDING",
-      draftMappingId: m._id,
-      recommendedAction: { actionType: "APPROVE_REQUIRED_BEFORE_RUNTIME", reason: m.configHealth?.reasoning || "Pending mapping review." },
-      parseStrategy: { sheetName: m.sheetName, startRow: m.startRow, fieldMappingCount: (m.fieldMappings || []).length },
-      validationGates: m.validationGates || [],
+      draftMappingId: mapping._id,
+      recommendedAction: { actionType: "APPROVE_REQUIRED_BEFORE_RUNTIME", reason: mapping.configHealth?.reasoning || "Pending mapping review." },
+      parseStrategy: { sheetName: mapping.sheetName, startRow: mapping.startRow, fieldMappingCount: (mapping.fieldMappings || []).length },
+      validationGates: mapping.validationGates || [],
       samplePreview: [],
       riskSummary: { severity: "medium" },
-      createdAt: m.createdAt,
+      createdAt: mapping.createdAt,
       isVirtual: true
     }));
 
-    const allPending = [...pendingPackets, ...virtualPackets].map(packet => {
+    return [...pendingPackets, ...virtualPackets].map(packet => {
       const localDraftMappingId = state.localDraftMappingIds ? state.localDraftMappingIds[packet._id] : null;
       if (state.localValidationGates && state.localValidationGates[packet._id]) {
         return {
@@ -898,7 +917,366 @@
       }
       return packet;
     });
-    const selectedPacket = allPending.find(packet => packet._id === state.selectedReviewPacketId) || allPending[0] || null;
+  }
+
+  function getSelectedReviewPacket(items) {
+    return items.find(packet => packet._id === state.selectedReviewPacketId) || items[0] || null;
+  }
+
+  function summarizeReviewPacket(packet) {
+    const gateSummary = (packet.validationGates || []).reduce((acc, gate) => {
+      const status = String(gate.status || "").toLowerCase();
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {});
+    const hasFailedGates = !!((gateSummary.fail || 0) + (gateSummary.failed || 0));
+    const runtimeGate = (packet.validationGates || []).find(gate => gate.gateKey === "runtime_validation");
+    const runtimeValidated = String(runtimeGate?.status || "").toLowerCase() === "pass";
+    const mappingReady = !!packet.draftMappingId;
+    return {
+      gateSummary,
+      hasFailedGates,
+      runtimeGate,
+      runtimeValidated,
+      mappingReady,
+      readyToActivate: mappingReady && runtimeValidated && !hasFailedGates
+    };
+  }
+
+  function renderReviewCenterSummary(selectedPacket) {
+    if (!selectedPacket) {
+      return `
+        <aside class="review-drawer empty">
+          <div class="empty-state">
+            <span class="material-symbols-outlined">smart_toy</span>
+            <h3>No item selected</h3>
+            <p class="muted">Select a pending item to view its review summary.</p>
+          </div>
+        </aside>
+      `;
+    }
+
+    const reviewSummary = summarizeReviewPacket(selectedPacket);
+    const shortTitle = selectedPacket.isVirtual ? "Draft mapping update" : "Format verification required";
+    const shortReason = selectedPacket.recommendedAction?.reason || "Awaiting reviewer decision.";
+    const risk = selectedPacket.riskSummary?.severity || "medium";
+
+    return `
+      <aside class="review-drawer review-summary-drawer" style="padding: 20px;">
+        <div class="brief-section" style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;">
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <span class="badge ${risk === 'critical' || risk === 'high' ? 'failed' : 'warning'}">${escapeHtml(risk.toUpperCase())} RISK</span>
+            ${reviewSummary.runtimeValidated ? '<span class="badge matched">Runtime validated</span>' : '<span class="badge warning">Runtime validate pending</span>'}
+          </div>
+          <h3 class="brief-title" style="font-size: 16px; margin: 10px 0 6px 0;">${escapeHtml(shortTitle)}</h3>
+          <p class="brief-subtitle" style="font-size: 13px; margin-bottom: 12px;">${escapeHtml(shortReason)}</p>
+        </div>
+        <div class="review-summary-list">
+          <div><strong>File:</strong> ${escapeHtml(selectedPacket.fileName || "-")}</div>
+          <div><strong>Runtime:</strong> ${selectedPacket.activeRuntimeConfigId ? "Current runtime available" : "No active runtime"}</div>
+          <div><strong>Draft mapping:</strong> ${reviewSummary.mappingReady ? "Ready" : "Missing"}</div>
+        </div>
+        <div style="margin-top: 16px; display:flex; gap:10px; flex-direction:column;">
+          <button class="button primary" data-action="open-guided-review" style="width: 100%; justify-content: center;">
+            <span class="material-symbols-outlined" style="font-size:18px; margin-right:4px;">quickreply</span> Open Review Panel
+          </button>
+          <button class="button secondary-action" data-action="go-mapping-studio" style="width: 100%; justify-content: center;">
+            <span class="material-symbols-outlined" style="font-size:18px; margin-right:4px;">schema</span> Open Mapping Studio
+          </button>
+        </div>
+      </aside>
+    `;
+  }
+
+  function renderReviewHistoryTab() {
+    if (state.reviewHistoryLoading) {
+      return loadingPanel("Loading decision history...");
+    }
+    const history = state.reviewHistoryCache || { decisions: [], reconNotes: [] };
+    const decisionRows = history.decisions.length ? history.decisions.map(item => `
+      <tr>
+        <td><strong>${escapeHtml(item.fileName || "-")}</strong></td>
+        <td>${badge(item.status || "-")}</td>
+        <td>${escapeHtml(item.decisionMode || "-")}</td>
+        <td>${escapeHtml(item.parseStrategy?.strategy || "-")}</td>
+        <td>${escapeHtml(formatDisplayDateTime(item.reviewedAt || item.createdAt || "-"))}</td>
+      </tr>
+    `).join("") : `<tr><td colspan="5" style="text-align:center; padding: 24px 0;">No recent packet decisions for this partner.</td></tr>`;
+
+    const noteRows = history.reconNotes.length ? history.reconNotes.map(item => `
+      <tr>
+        <td><code>${escapeHtml(item.rowId)}</code></td>
+        <td><strong>${escapeHtml(item.event)}</strong></td>
+        <td style="font-variant-numeric: tabular-nums;">${escapeHtml(item.time)}</td>
+      </tr>
+    `).join("") : `<tr><td colspan="3" style="text-align:center; padding: 24px 0; color: var(--text-muted);">No reconciliation reviews recorded yet.</td></tr>`;
+
+    return `
+      <section class="panel">
+        <div class="panel-header" style="margin-bottom: 16px;">
+          <div>
+            <h2 style="margin: 0; font-size: 18px;">Recent Decisions</h2>
+            <p class="section-subtitle">Outcomes of recently processed review packets.</p>
+          </div>
+        </div>
+        ${table(["File", "Decision", "Decision Mode", "Parse Strategy", "Reviewed At"], decisionRows)}
+      </section>
+      <section class="panel" style="margin-top: 24px;">
+        <div class="panel-header" style="margin-bottom: 16px;">
+          <div>
+            <h2 style="margin: 0; font-size: 18px;">Reconciliation Review History</h2>
+            <p class="section-subtitle">Persisted notes and resolution events for reconciled records.</p>
+          </div>
+        </div>
+        ${table(["Transaction ID", "Review Event / Note", "Recorded At"], noteRows)}
+      </section>
+    `;
+  }
+
+  function renderReviewConfigsTab(mappings) {
+    const approvedConfigs = mappings.filter(item => item.status === "APPROVED");
+    const configRows = approvedConfigs.length ? approvedConfigs.map(config => `
+      <tr>
+        <td><strong>v${escapeHtml(String(config.configVersion || "1.0"))}</strong></td>
+        <td><code>${escapeHtml(config.sheetName || "Sheet1")}</code></td>
+        <td>Row ${formatNumber(config.startRow || 1)}</td>
+        <td>${formatNumber((config.fieldMappings || []).length)} fields</td>
+        <td><span class="badge matched">Active</span></td>
+        <td>${escapeHtml(formatDisplayDateTime(config.approvedAt || config.createdAt || "-"))}</td>
+      </tr>
+    `).join("") : `<tr><td colspan="6" style="text-align:center; padding: 24px 0;">No approved runtime configurations found for this partner.</td></tr>`;
+
+    return `
+      <section class="panel">
+        <div class="panel-header" style="margin-bottom: 16px;">
+          <div>
+            <h2 style="margin: 0; font-size: 18px;">Active Runtime Configurations</h2>
+            <p class="section-subtitle">Approved configurations currently available to the parser.</p>
+          </div>
+        </div>
+        ${table(["Version", "Sheet / Target", "Start Row", "Mappings", "Status", "Approved At"], configRows)}
+      </section>
+    `;
+  }
+
+  function renderGuidedReviewModal(selectedPacket) {
+    if (!state.guidedReviewOpen || !selectedPacket) {
+      return "";
+    }
+
+    const summary = summarizeReviewPacket(selectedPacket);
+    const sigHeaders = selectedPacket.structureSignature?.headers || [];
+    const aiMapping = state.guidedReviewAI.mapping;
+    const aiReasoning = aiMapping?.configHealth?.reasoning || "";
+    const aiConfidence = aiMapping?.configHealth?.confidence;
+    const rawDraftFieldMappings = (aiMapping?.fieldMappings || []).filter(fm => fm.path !== "currency");
+    const idMapping = rawDraftFieldMappings.find(mapping => mapping.path === "id");
+    const draftFieldMappings = rawDraftFieldMappings.filter(mapping => {
+      if (mapping.path !== "trace") return true;
+      if (!idMapping) return true;
+      return Number(mapping.column || 0) !== Number(idMapping.column || 0);
+    });
+
+    const editableMappingRows = !state.guidedReviewAI.loading && !state.guidedReviewAI.error && aiMapping
+      ? draftFieldMappings.map((mapping, index) => {
+        const sourceColumn = Number(mapping.column || 0);
+        const headerLabel = sourceColumn > 0 && sigHeaders[sourceColumn - 1] ? sigHeaders[sourceColumn - 1] : (mapping.sourceField || `Column ${sourceColumn || "?"}`);
+        const currentMap = mapping.path || "";
+        const hasKnownOption = ["", "id", "amount", "transDate", "status", "trace", "currency", "description"].includes(currentMap);
+        const confidence = typeof aiConfidence === "number" ? Math.round(aiConfidence * 100) : Math.max(70, 95 - (index * 3));
+        const transformLabel =
+          mapping.type === "DATE" ? "Date fmt" :
+          mapping.type === "MAPPING" ? "Value map" :
+          mapping.type === "CONSTANT" ? "Constant" :
+          "None";
+        const noteLabel =
+          currentMap === "id" ? "Primary key" :
+          currentMap === "amount" ? "Required" :
+          currentMap === "status" ? "Needs normalize" :
+          "-";
+        return `
+          <tr>
+            <td>
+              <div style="display:flex; flex-direction:column; gap:4px;">
+                <code>${escapeHtml(headerLabel)}</code>
+                <span class="muted" style="font-size:11px;">Column ${sourceColumn || "?"}</span>
+              </div>
+            </td>
+            <td>
+              <select
+                class="inline-field-select"
+                data-source-header="${escapeHtml(headerLabel)}"
+                data-source-column="${sourceColumn || ""}"
+                data-original-path="${escapeHtml(currentMap)}"
+                data-original-type="${escapeHtml(mapping.type || "")}"
+                data-original-required="${mapping.required ? "true" : "false"}"
+                data-original-constant="${escapeHtml(mapping.constant || "")}"
+                data-original-mapping="${escapeHtml(JSON.stringify(mapping.mapping || {}))}"
+                style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: var(--font-mono); width: 100%;">
+                <option value="" ${currentMap === "" ? "selected" : ""}>unmapped</option>
+                <option value="id" ${currentMap === "id" ? "selected" : ""}>partner_txn_id</option>
+                <option value="amount" ${currentMap === "amount" ? "selected" : ""}>amount</option>
+                <option value="transDate" ${currentMap === "transDate" ? "selected" : ""}>transaction_time</option>
+                <option value="status" ${currentMap === "status" ? "selected" : ""}>transaction_status</option>
+                <option value="trace" ${currentMap === "trace" ? "selected" : ""}>trace</option>
+                <option value="currency" ${currentMap === "currency" ? "selected" : ""}>currency</option>
+                <option value="description" ${currentMap === "description" ? "selected" : ""}>description</option>
+                ${!hasKnownOption && currentMap ? `<option value="${escapeHtml(currentMap)}" selected>${escapeHtml(currentMap)}</option>` : ""}
+              </select>
+            </td>
+            <td style="text-align: center;">${confidence}%</td>
+            <td><span class="badge neutral" style="font-size: 11px;">${escapeHtml(transformLabel)}</span></td>
+            <td style="font-size: 11px;" class="muted">${escapeHtml(noteLabel)}</td>
+          </tr>
+        `;
+      }).join("")
+      : "";
+
+    const suggestionHtml = state.guidedReviewAI.loading ? `
+      <div class="empty-state" style="padding: 36px 12px;">
+        <span class="spinner"></span>
+        <h3 style="margin-top: 14px;">AI is preparing the mapping proposal</h3>
+        <p class="muted">Loading the partner-specific draft mapping and confidence signals.</p>
+      </div>
+    ` : state.guidedReviewAI.error ? `
+      <div class="empty-state" style="padding: 36px 12px;">
+        <span class="material-symbols-outlined">psychology_alt</span>
+        <h3>AI mapping unavailable</h3>
+        <p class="muted">${escapeHtml(state.guidedReviewAI.error)}</p>
+      </div>
+    ` : `
+      ${aiReasoning ? `
+        <div style="margin-bottom: 14px; padding: 12px 14px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;">
+          <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+            <div>
+              <strong style="font-size:12px; text-transform:uppercase; color: var(--brand-accent-blue);">AI proposal reasoning</strong>
+              <p style="margin:6px 0 0 0; font-size:12.5px; line-height:1.6; color: var(--text-muted);">${escapeHtml(aiReasoning)}</p>
+            </div>
+            ${typeof aiConfidence === "number" ? `<span class="badge neutral">${Math.round(aiConfidence * 100)}% confidence</span>` : ""}
+          </div>
+        </div>
+      ` : ""}
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom: 12px;">
+        <span class="muted" style="font-size:12px;">${draftFieldMappings.length} AI field suggestions loaded</span>
+        <span class="badge matched">AI proposal ready</span>
+      </div>
+      <div class="table-wrap guided-mapping-table">
+        <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
+          <thead>
+            <tr style="background: rgba(255,255,255,0.02);">
+              <th style="width: 22%;">Partner field</th>
+              <th style="width: 28%;">Internal field</th>
+              <th style="width: 12%; text-align: center;">Confidence</th>
+              <th style="width: 16%;">Transform</th>
+              <th style="width: 22%;">Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${editableMappingRows || `<tr><td colspan="5" style="padding: 24px; text-align:center;" class="muted">AI draft mapping has no editable field suggestions.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    const recommendation = summary.readyToActivate
+      ? "Validation has passed. The packet can be approved and activated immediately."
+      : "Keep the current runtime or adjust the draft mapping until runtime validation passes.";
+
+    return `
+      <div class="guided-review-backdrop" id="guided-review-backdrop">
+        <div class="guided-review-modal">
+          <div class="guided-review-header">
+            <div>
+              <p class="eyebrow guided-review-eyebrow">Guided Review</p>
+              <h3 class="guided-review-title">${escapeHtml(selectedPacket.fileName || "Review item")}</h3>
+            </div>
+            <button class="button-link guided-review-close" data-action="close-guided-review">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+
+          <div class="guided-review-body" style="display:grid; gap:16px;">
+            <section class="panel" style="margin:0;">
+              <div class="guided-section-header">
+                <h4>Summary</h4>
+                <p>${escapeHtml(selectedPacket.recommendedAction?.reason || "Review the proposed runtime change before approving it.")}</p>
+              </div>
+              <div class="review-summary-list">
+                <div><strong>Partner:</strong> ${escapeHtml(selectedPacket.partner || "-")}</div>
+                <div><strong>Draft mapping:</strong> ${summary.mappingReady ? "Ready" : "Missing"}</div>
+                <div><strong>Runtime validation:</strong> ${summary.runtimeValidated ? "Passed" : "Pending"}</div>
+                <div><strong>Risk:</strong> ${escapeHtml((selectedPacket.riskSummary?.severity || "medium").toUpperCase())}</div>
+              </div>
+            </section>
+
+            <section class="panel" style="margin:0;">
+              <div class="guided-section-header">
+                <h4>AI Suggestion / Draft Mapping</h4>
+                <p>Use the AI draft if it is good enough, or open Mapping Studio for a full edit.</p>
+              </div>
+              ${suggestionHtml}
+              <div class="guided-action-bar">
+                <button class="button-link" data-action="go-mapping-studio">
+                  <span class="material-symbols-outlined">open_in_new</span>Open full Mapping Studio
+                </button>
+                <button class="button secondary-action" data-action="validate-runtime-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">
+                  <span class="material-symbols-outlined">verified</span> Run runtime validate
+                </button>
+                <button class="button primary" data-action="save-inline-mapping" data-packet-id="${escapeHtml(selectedPacket._id)}" ${state.guidedReviewAI.loading || state.guidedReviewAI.error ? "disabled" : ""}>
+                  <span class="material-symbols-outlined">play_arrow</span> Save draft mapping
+                </button>
+              </div>
+            </section>
+
+            <section class="panel" style="margin:0;">
+              <div class="guided-section-header">
+                <h4>Actions</h4>
+                <p>${escapeHtml(recommendation)}</p>
+              </div>
+              <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="button primary ${summary.readyToActivate ? "success-cta" : "disabled-cta"}" data-action="approve-packet-activate" data-packet-id="${escapeHtml(selectedPacket._id)}" ${summary.readyToActivate ? "" : "disabled"}>
+                  Approve & Activate
+                </button>
+                <button class="button secondary-action" data-action="approve-packet-keep-current" data-packet-id="${escapeHtml(selectedPacket._id)}">
+                  Keep current runtime
+                </button>
+                <button class="button secondary-action" data-action="send-packet-to-studio" data-packet-id="${escapeHtml(selectedPacket._id)}">
+                  Open Mapping Studio
+                </button>
+                <button class="button secondary-action destructive" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">
+                  Reject change
+                </button>
+                <button class="button" data-action="close-guided-review">Close</button>
+              </div>
+              ${summary.readyToActivate ? "" : `<p class="decision-help-text" style="color: var(--danger); font-size: 12px; margin: 10px 0 0 0;">Approve & Activate stays disabled until runtime validation passes.</p>`}
+            </section>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderApprovals(data) {
+    function middleTruncate(str, maxLen = 30) {
+      if (!str) return "";
+      if (str.length <= maxLen) return str;
+      const half = Math.floor((maxLen - 3) / 2);
+      return str.substring(0, half) + "..." + str.substring(str.length - half);
+    }
+
+    if (!state.reviewTab) {
+      state.reviewTab = "pending";
+    }
+
+    const packets = (data.packets || []).filter(packet => !state.partner || packet.partner === state.partner);
+    const mappings = (data.mappings || []).filter(item => item.partner === state.partner);
+    const allPending = getReviewCenterPendingItems(data);
+    const selectedPacket = getSelectedReviewPacket(allPending);
+
+    // Intake info
+    const intake = data.intake || {};
+    const partners = intake.partners || [];
+    const activePartnerInfo = partners.find(p => p.partner === state.partner) || {};
 
     // Header info computation
     const pendingCount = allPending.length;
@@ -965,567 +1343,25 @@
       `;
 
       // Right Column: Agent Brief Summary card
-      let briefSummaryHtml = "";
-      if (selectedPacket) {
-        const gateSummary = (selectedPacket.validationGates || []).reduce((acc, gate) => {
-          const status = String(gate.status || "").toLowerCase();
-          acc[status] = (acc[status] || 0) + 1;
-          return acc;
-        }, {});
-        const hasFailedGates = (gateSummary.fail || 0) > 0;
-        const validationStateText = hasFailedGates ? "failed" : "passed";
-
-        let copilotVerdict = "";
-        let copilotSummaryText = "";
-        if (selectedPacket.isVirtual) {
-          copilotVerdict = "Mapping needs adjustment";
-          copilotSummaryText = "Copilot detected a draft mapping created in Mapping Studio that has not been validated against incoming settlement records.";
-        } else {
-          copilotVerdict = "Format verification required";
-          copilotSummaryText = "Copilot found a possible column shift in transaction status values for the latest incoming file.";
-        }
-
-        briefSummaryHtml = `
-          <aside class="review-drawer" style="padding: 20px;">
-            <h4 style="margin: 0 0 10px 0; font-size: 11px; text-transform: uppercase; color: var(--brand-accent-blue);">Agent Brief Summary</h4>
-            <div class="brief-section" style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;">
-              <span class="badge ${selectedPacket.riskSummary?.severity === 'critical' || selectedPacket.riskSummary?.severity === 'high' ? 'failed' : 'warning'}">${selectedPacket.riskSummary?.severity?.toUpperCase()} RISK</span>
-              <h3 class="brief-title" style="font-size: 16px; margin: 8px 0 6px 0;">${escapeHtml(copilotVerdict)}</h3>
-              <p class="brief-subtitle" style="font-size: 13px; margin-bottom: 16px;">${escapeHtml(copilotSummaryText)}</p>
-            </div>
-            
-            <div class="brief-section" style="padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06);">
-              <h4 style="font-size: 10px; margin-bottom: 8px;">Readiness</h4>
-              <ul class="evidence-list" style="padding-left: 16px; font-size: 12.5px;">
-                <li><strong>Runtime:</strong> ${selectedPacket.activeRuntimeConfigId ? 'Approved configuration is available' : 'No approved runtime is available'}</li>
-                <li><strong>Draft mapping:</strong> ${selectedPacket.draftMappingId ? 'Draft mapping is ready' : 'Draft mapping is not ready'}</li>
-                <li><strong>Validation:</strong> <span style="color: ${hasFailedGates ? 'var(--danger)' : '#22c55e'}; font-weight: 600;">${validationStateText}</span></li>
-              </ul>
-            </div>
-
-            <div style="margin-top: 16px;">
-              <button class="button primary" data-action="open-guided-review" style="width: 100%; justify-content: center;">
-                <span class="material-symbols-outlined" style="font-size:18px; margin-right:4px;">quickreply</span> Open Guided Review
-              </button>
-            </div>
-          </aside>
-        `;
-      } else {
-        briefSummaryHtml = `
-          <aside class="review-drawer empty">
-            <div class="empty-state">
-              <span class="material-symbols-outlined">smart_toy</span>
-              <h3>No item selected</h3>
-              <p class="muted">Select a pending item to view its Agent Brief.</p>
-            </div>
-          </aside>
-        `;
-      }
-
       tabContentHtml = `
         <div class="approval-desk-layout">
           <div class="review-card-grid">
             ${needsReview}
           </div>
-          ${briefSummaryHtml}
+          ${renderReviewCenterSummary(selectedPacket)}
         </div>
       `;
     } else if (state.reviewTab === "history") {
-      const recentDecisions = packets
-        .filter(item => ["APPROVED", "REJECTED", "SUPERSEDED"].includes(String(item.status || "").toUpperCase()))
-        .slice(0, 20);
-      const decisionRows = recentDecisions.length ? recentDecisions.map(item => `
-        <tr>
-          <td><strong>${escapeHtml(item.fileName || "-")}</strong></td>
-          <td>${badge(item.status || "-")}</td>
-          <td>${escapeHtml(item.decisionMode || "-")}</td>
-          <td>${escapeHtml(item.parseStrategy?.strategy || "-")}</td>
-          <td>${escapeHtml(formatDisplayDateTime(item.reviewedAt || item.createdAt || "-"))}</td>
-        </tr>
-      `).join("") : `<tr><td colspan="5" style="text-align:center; padding: 24px 0;">No recent packet decisions for this partner.</td></tr>`;
-
-      const reconNotes = [];
-      if (state.evidenceHistory) {
-        Object.entries(state.evidenceHistory).forEach(([rowId, historyList]) => {
-          historyList.forEach(entry => {
-            reconNotes.push({
-              rowId,
-              time: entry.time,
-              event: entry.event
-            });
-          });
-        });
-      }
-
-      // Sort by time descending so newest notes show up first
-      reconNotes.sort((a, b) => new Date(b.time.replace(/-/g, "/")) - new Date(a.time.replace(/-/g, "/")));
-
-      const reconNotesRows = reconNotes.length ? reconNotes.map(item => `
-        <tr>
-          <td><code>${escapeHtml(item.rowId)}</code></td>
-          <td><strong>${escapeHtml(item.event)}</strong></td>
-          <td style="font-variant-numeric: tabular-nums;">${escapeHtml(item.time)}</td>
-        </tr>
-      `).join("") : `<tr><td colspan="3" style="text-align:center; padding: 24px 0; color: var(--text-muted);">No reconciliation reviews recorded yet.</td></tr>`;
-
-      const reconHistoryTableHtml = `
-        <section class="panel" style="margin-top: 24px;">
-          <div class="panel-header" style="margin-bottom: 16px;">
-            <div>
-              <h2 style="margin: 0; font-size: 18px;">Reconciliation Review History</h2>
-              <p class="section-subtitle">Persisted investigation notes and comments for mismatched records.</p>
-            </div>
-          </div>
-          ${table(["Transaction ID", "Review Event / Note", "Recorded At"], reconNotesRows)}
-        </section>
-      `;
-
-      tabContentHtml = `
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 16px;">
-            <div>
-              <h2 style="margin: 0; font-size: 18px;">Recent Decisions</h2>
-              <p class="section-subtitle">Outcomes of recently processed and reviewed ingestion flows.</p>
-            </div>
-          </div>
-          ${table(["File", "Decision", "Decision Mode", "Parse Strategy", "Reviewed At"], decisionRows)}
-        </section>
-        ${reconHistoryTableHtml}
-      `;
+      tabContentHtml = renderReviewHistoryTab();
     } else if (state.reviewTab === "configs") {
-      const approvedConfigs = mappings.filter(item => item.status === "APPROVED");
-      const configRows = approvedConfigs.length ? approvedConfigs.map(c => `
-        <tr>
-          <td><strong>v${escapeHtml(String(c.configVersion || "1.0"))}</strong></td>
-          <td><code>${escapeHtml(c.sheetName || "Sheet1")}</code></td>
-          <td>Row ${formatNumber(c.startRow || 1)}</td>
-          <td>${formatNumber((c.fieldMappings || []).length)} fields</td>
-          <td><span class="badge matched">Active</span></td>
-          <td>${escapeHtml(formatDisplayDateTime(c.approvedAt || c.createdAt || "-"))}</td>
-        </tr>
-      `).join("") : `<tr><td colspan="6" style="text-align:center; padding: 24px 0;">No approved runtime configurations found for this partner.</td></tr>`;
-
-      tabContentHtml = `
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 16px;">
-            <div>
-              <h2 style="margin: 0; font-size: 18px;">Active Runtime Configurations</h2>
-              <p class="section-subtitle">Configurations approved for file parsing on the active engine.</p>
-            </div>
-          </div>
-          ${table(["Version", "Sheet / Target", "Start Row", "Mappings", "Status", "Approved At"], configRows)}
-        </section>
-      `;
-    }
-
-    // 6. Guided Review Modal Popup
-    let modalHtml = "";
-    if (state.guidedReviewOpen && selectedPacket) {
-      if (typeof state.guidedReviewStep !== "number") {
-        state.guidedReviewStep = 0;
-      }
-
-      const step = state.guidedReviewStep;
-      const stepsList = ["Brief", "Mapping", "Validation", "Decision"];
-      const packetGates = selectedPacket.validationGates || [];
-      function getGateStatus(gateKey, defaultStatus = "pending") {
-        const gate = packetGates.find(item => item.gateKey === gateKey || (item.name && item.name.toLowerCase().includes(gateKey.replace("_", " "))));
-        if (gate) {
-          return String(gate.status || "").toLowerCase();
-        }
-        return defaultStatus;
-      }
-      const progressSteps = stepsList.map((s, i) => `
-        <div class="brief-step ${i === step ? 'active' : i < step ? 'done' : ''}">
-          <span class="brief-step-dot">${i < step ? '✓' : i + 1}</span>
-          <span class="brief-step-name" style="font-size: 11px;">${s}</span>
-        </div>
-      `).join("");
-
-      let stepBodyHtml = "";
-      if (step === 0) {
-        // Step 1: Brief
-        let copilotVerdict = selectedPacket.isVirtual ? "Draft mapping update" : "Format verification required";
-        let copilotAnalysisText = selectedPacket.isVirtual 
-          ? `A draft mapping configuration was manually created or modified in Mapping Studio and requires formal activation. Activating this draft will update the runtime engine parsing rules for ${selectedPacket.partner} to ensure transaction alignment.`
-          : `The latest settlement file uploaded for ${selectedPacket.partner} uses a different column structure than the current active configuration. This structure mismatch may prevent accurate transaction status extraction and lead to incorrect reconciliation outcomes if processed without format updates.`;
-
-        stepBodyHtml = `
-          <div class="guided-step-content">
-            <span class="badge ${selectedPacket.riskSummary?.severity === 'critical' || selectedPacket.riskSummary?.severity === 'high' ? 'failed' : 'warning'}" style="margin-bottom: 8px;">${selectedPacket.riskSummary?.severity?.toUpperCase()} RISK</span>
-            <h3 style="margin: 0 0 12px 0; font-size: 18px;">${escapeHtml(copilotVerdict)}</h3>
-            
-            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); padding: 16px; border-radius: 8px; margin-bottom: 20px; line-height: 1.6;">
-              <strong>Copilot explanation:</strong>
-              <p style="margin: 8px 0 0 0; font-size: 13.5px; color: var(--text-muted);">${escapeHtml(copilotAnalysisText)}</p>
-            </div>
-
-            <h4 style="font-size: 12px; text-transform: uppercase; color: var(--brand-accent-blue); margin-bottom: 8px;">Key Facts</h4>
-            <table style="width: 100%; border-collapse: collapse; font-size: 13px; line-height: 2;">
-              <tr><td style="color: var(--text-muted); width: 150px;">Partner:</td><td><strong>${escapeHtml(selectedPacket.partner)}</strong></td></tr>
-              <tr><td style="color: var(--text-muted);">File reference:</td><td><code>${escapeHtml(selectedPacket.fileName)}</code></td></tr>
-              <tr><td style="color: var(--text-muted);">Current runtime:</td><td>${selectedPacket.activeRuntimeConfigId ? 'Approved configuration is available' : 'No approved runtime is available'}</td></tr>
-              <tr><td style="color: var(--text-muted);">Draft mapping:</td><td>${selectedPacket.draftMappingId ? 'Draft mapping is ready' : 'Draft mapping is not ready'}</td></tr>
-            </table>
-          </div>
-        `;
-      } else if (step === 1) {
-        // Step 2: Mapping
-        // Show the AI proposal directly instead of reconstructing mappings heuristically in the frontend.
-        const sigHeaders = selectedPacket.structureSignature?.headers || [];
-        const aiMapping = state.guidedReviewAI.mapping;
-        const aiReasoning = aiMapping?.configHealth?.reasoning || "";
-        const aiConfidence = aiMapping?.configHealth?.confidence;
-        const rawDraftFieldMappings = (aiMapping?.fieldMappings || []).filter(fm => fm.path !== "currency");
-        const idMapping = rawDraftFieldMappings.find(mapping => mapping.path === "id");
-        const draftFieldMappings = rawDraftFieldMappings.filter(mapping => {
-          if (mapping.path !== "trace") return true;
-          if (!idMapping) return true;
-          return Number(mapping.column || 0) !== Number(idMapping.column || 0);
-        });
-
-        let editableMappingRows = "";
-        if (!state.guidedReviewAI.loading && !state.guidedReviewAI.error && aiMapping) {
-          editableMappingRows = draftFieldMappings.map((mapping, i) => {
-            const sourceColumn = Number(mapping.column || 0);
-            const headerLabel = sourceColumn > 0 && sigHeaders[sourceColumn - 1] ? sigHeaders[sourceColumn - 1] : (mapping.sourceField || `Column ${sourceColumn || "?"}`);
-            const currentMap = mapping.path || "";
-            const hasKnownOption = ["", "id", "amount", "transDate", "status", "trace", "currency", "description"].includes(currentMap);
-            const conf = typeof aiConfidence === "number" ? Math.round(aiConfidence * 100) : Math.max(70, 95 - (i * 3));
-            const transformLabel =
-              mapping.type === "DATE" ? "Date fmt" :
-              mapping.type === "MAPPING" ? "Value map" :
-              mapping.type === "CONSTANT" ? "Constant" :
-              "None";
-            const noteLabel =
-              currentMap === "id" ? "Primary key" :
-              currentMap === "amount" ? "Required" :
-              currentMap === "status" ? "Needs normalize" :
-              "-";
-            return `
-              <tr>
-                <td>
-                  <div style="display:flex; flex-direction:column; gap:4px;">
-                    <code>${escapeHtml(headerLabel)}</code>
-                    <span class="muted" style="font-size:11px;">Column ${sourceColumn || "?"}</span>
-                  </div>
-                </td>
-                <td>
-                  <select
-                    class="inline-field-select"
-                    data-source-header="${escapeHtml(headerLabel)}"
-                    data-source-column="${sourceColumn || ""}"
-                    data-original-path="${escapeHtml(currentMap)}"
-                    data-original-type="${escapeHtml(mapping.type || "")}"
-                    data-original-required="${mapping.required ? "true" : "false"}"
-                    data-original-constant="${escapeHtml(mapping.constant || "")}"
-                    data-original-mapping="${escapeHtml(JSON.stringify(mapping.mapping || {}))}"
-                    style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: var(--font-mono); width: 100%;">
-                    <option value="" ${currentMap === "" ? "selected" : ""}>unmapped</option>
-                    <option value="id" ${currentMap === "id" ? "selected" : ""}>partner_txn_id</option>
-                    <option value="amount" ${currentMap === "amount" ? "selected" : ""}>amount</option>
-                    <option value="transDate" ${currentMap === "transDate" ? "selected" : ""}>transaction_time</option>
-                    <option value="status" ${currentMap === "status" ? "selected" : ""}>transaction_status</option>
-                    <option value="trace" ${currentMap === "trace" ? "selected" : ""}>trace</option>
-                    <option value="currency" ${currentMap === "currency" ? "selected" : ""}>currency</option>
-                    <option value="description" ${currentMap === "description" ? "selected" : ""}>description</option>
-                    ${!hasKnownOption && currentMap ? `<option value="${escapeHtml(currentMap)}" selected>${escapeHtml(currentMap)}</option>` : ""}
-                  </select>
-                </td>
-                <td style="text-align: center;">${conf}%</td>
-                <td><span class="badge neutral" style="font-size: 11px;">${escapeHtml(transformLabel)}</span></td>
-                <td style="font-size: 11px;" class="muted">${escapeHtml(noteLabel)}</td>
-              </tr>
-            `;
-          }).join("");
-        }
-
-        const mappingContent = state.guidedReviewAI.loading ? `
-          <div class="empty-state" style="padding: 36px 12px;">
-            <span class="spinner"></span>
-            <h3 style="margin-top: 14px;">AI is preparing the mapping proposal</h3>
-            <p class="muted">Loading the partner-specific draft mapping and confidence signals.</p>
-          </div>
-        ` : state.guidedReviewAI.error ? `
-          <div class="empty-state" style="padding: 36px 12px;">
-            <span class="material-symbols-outlined">psychology_alt</span>
-            <h3>AI mapping unavailable</h3>
-            <p class="muted">${escapeHtml(state.guidedReviewAI.error)}</p>
-          </div>
-        ` : `
-          ${aiReasoning ? `
-            <div style="margin-bottom: 14px; padding: 12px 14px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;">
-              <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
-                <div>
-                  <strong style="font-size:12px; text-transform:uppercase; color: var(--brand-accent-blue);">AI proposal reasoning</strong>
-                  <p style="margin:6px 0 0 0; font-size:12.5px; line-height:1.6; color: var(--text-muted);">${escapeHtml(aiReasoning)}</p>
-                </div>
-                ${typeof aiConfidence === "number" ? `<span class="badge neutral">${Math.round(aiConfidence * 100)}% confidence</span>` : ""}
-              </div>
-            </div>
-          ` : ""}
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom: 12px;">
-            <span class="muted" style="font-size:12px;">${draftFieldMappings.length} AI field suggestions loaded</span>
-            <span class="badge matched">AI proposal ready</span>
-          </div>
-          <div class="table-wrap guided-mapping-table">
-            <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
-              <thead>
-                <tr style="background: rgba(255,255,255,0.02);">
-                  <th style="width: 22%;">Partner field</th>
-                  <th style="width: 28%;">Internal field</th>
-                  <th style="width: 12%; text-align: center;">Confidence</th>
-                  <th style="width: 16%;">Transform</th>
-                  <th style="width: 22%;">Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${editableMappingRows || `<tr><td colspan="5" style="padding: 24px; text-align:center;" class="muted">AI draft mapping has no editable field suggestions.</td></tr>`}
-              </tbody>
-            </table>
-          </div>
-        `;
-
-        stepBodyHtml = `
-          <div class="guided-step-content">
-            <div class="guided-section-header">
-              <h4>Field Mapping Configuration</h4>
-              <p>Review the AI-generated mapping proposal directly. Adjust internal field assignments only after the AI draft has loaded.</p>
-            </div>
-            ${mappingContent}
-            <div class="guided-action-bar">
-              <button class="button-link" data-action="go-mapping-studio">
-                <span class="material-symbols-outlined">open_in_new</span>Open full Mapping Studio
-              </button>
-              <button class="button primary" data-action="save-inline-mapping" data-packet-id="${escapeHtml(selectedPacket._id)}" ${state.guidedReviewAI.loading || state.guidedReviewAI.error ? "disabled" : ""}>
-                <span class="material-symbols-outlined">play_arrow</span> Apply mapping
-              </button>
-            </div>
-          </div>
-        `;
-      } else if (step === 2) {
-        // Step 3: Validation
-        const gates = packetGates;
-        const runtimeGate = gates.find(g => g.gateKey === "runtime_validation");
-        const runtimeGateStatus = runtimeGate ? String(runtimeGate.status || "").toLowerCase() : "pending";
-        const hasFailedGates = gates.some(g => String(g.status || "").toLowerCase() === "fail" || String(g.status || "").toLowerCase() === "failed");
-        const allGatesPassed = gates.length > 0 && !hasFailedGates && gates.every(g => String(g.status || "").toLowerCase() === "pass");
-
-        function getStatusCard(label, desc, status) {
-          let tone = "fail";
-          let badgeClass = "failed";
-          let badgeText = "FAILED";
-          if (status === "pass" || status === "success" || status === "passed") {
-            tone = "pass";
-            badgeClass = "matched";
-            badgeText = "PASSED";
-          } else if (status === "pending") {
-            tone = "pending";
-            badgeClass = "warning";
-            badgeText = "PENDING";
-          } else if (status === "warn" || status === "warning") {
-            tone = "pending";
-            badgeClass = "warning";
-            badgeText = "WARNING";
-          }
-          return `
-            <div class="validation-gate-card ${tone}">
-              <div>
-                <strong>${label}</strong>
-                <p>${desc}</p>
-              </div>
-              <span class="badge ${badgeClass}">${badgeText}</span>
-            </div>
-          `;
-        }
-
-        const gateLabelMap = {
-          format_signature: {
-            label: "Format signature",
-            desc: "Header shape matches the expected partner file layout."
-          },
-          datatype_check: {
-            label: "Data type check",
-            desc: "Sample values can be parsed into the expected types."
-          },
-          runtime_validation: {
-            label: "Runtime validation",
-            desc: "The proposed mapping can normalize sampled rows successfully."
-          },
-          required_fields: {
-            label: "Required fields",
-            desc: "Required canonical fields are present in the proposal."
-          },
-          type_checks: {
-            label: "Type conversion",
-            desc: "Parsed values align with storage types."
-          },
-          status_normalization: {
-            label: "Status normalization",
-            desc: "Partner status values translate to internal statuses."
-          },
-          sample_dryrun: {
-            label: "Dry-run test",
-            desc: "Sample rows run through the parser successfully."
-          },
-          output_schema: {
-            label: "Output schema",
-            desc: "Normalized output satisfies canonical engine requirements."
-          }
-        };
-        const renderedGates = gates.map(gate => {
-          const meta = gateLabelMap[gate.gateKey] || {
-            label: gate.label || gate.gateKey,
-            desc: gate.reason || "Validation gate result."
-          };
-          return getStatusCard(meta.label, gate.reason || meta.desc, String(gate.status || "").toLowerCase());
-        }).join("");
-
-        stepBodyHtml = `
-          <div class="guided-step-content">
-            <div class="guided-section-header">
-              <h4>Validation Results</h4>
-              <p>Review parser readiness separately from mapping edits. This step shows whether the current configuration can move to activation safely.</p>
-            </div>
-            <div class="runtime-validation-panel">
-              <div class="runtime-validation-copy">
-                <strong>Runtime validation</strong>
-                <p>${escapeHtml(runtimeGate?.reason || "Run a live runtime validation on the current review packet before activation.")}</p>
-              </div>
-              <div class="runtime-validation-actions">
-                <span class="badge ${runtimeGateStatus === "pass" ? "matched" : runtimeGateStatus === "fail" ? "failed" : "warning"}">
-                  ${escapeHtml((runtimeGateStatus || "pending").toUpperCase())}
-                </span>
-                <button class="button primary" data-action="validate-runtime-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">
-                  <span class="material-symbols-outlined">verified</span> Run runtime validate
-                </button>
-              </div>
-            </div>
-            ${allGatesPassed ? `
-              <div class="validation-summary pass">
-                <span class="material-symbols-outlined">check_circle</span>
-                <span>All checks passed. This configuration is ready for activation.</span>
-              </div>
-            ` : `
-              <div class="validation-summary pending">
-                <span class="material-symbols-outlined">info</span>
-                <span>Validation is still incomplete or has failures. Fix mapping first, then rerun validation before activation.</span>
-              </div>
-            `}
-            <div class="validation-gates-list">
-              ${renderedGates || getStatusCard("Runtime validation", "Run runtime validation to verify the proposal against sample rows.", runtimeGateStatus)}
-            </div>
-          </div>
-        `;
-      } else if (step === 3) {
-        // Step 4: Decision
-        const gateSummary = (selectedPacket.validationGates || []).reduce((acc, gate) => {
-          const status = String(gate.status || "").toLowerCase();
-          acc[status] = (acc[status] || 0) + 1;
-          return acc;
-        }, {});
-        const hasFailedGates = (gateSummary.fail || 0) > 0;
-        const isMappingReady = !!selectedPacket.draftMappingId;
-        const runtimeGate = (selectedPacket.validationGates || []).find(gate => gate.gateKey === "runtime_validation");
-        const runtimeValidated = String(runtimeGate?.status || "").toLowerCase() === "pass";
-        const isReady = isMappingReady && runtimeValidated && !hasFailedGates;
-
-        let copilotRecommendation = "";
-        let actionButtonsHtml = "";
-
-        if (!isReady) {
-          copilotRecommendation = "Copilot recommends adjusting the mapping configuration in Mapping Studio. Current sample row tests contain structural errors that will block active operations.";
-          actionButtonsHtml = `
-            <div style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
-              <button class="button primary" data-action="toggle-inline-edit" data-packet-id="${escapeHtml(selectedPacket._id)}" style="justify-content: center; height: 38px;">
-                <span class="material-symbols-outlined" style="font-size:16px; margin-right:4px;">edit</span> Adjust mapping
-              </button>
-              <div style="display: flex; gap: 8px; width: 100%;">
-                <button class="button secondary-action" data-action="approve-packet-keep-current" data-packet-id="${escapeHtml(selectedPacket._id)}" style="flex: 1; justify-content: center;">
-                  Keep current runtime
-                </button>
-                <button class="button secondary-action destructive" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}" style="flex: 1; justify-content: center;">
-                  Reject change
-                </button>
-              </div>
-              <button class="button primary disabled-cta" disabled style="opacity: 0.4; cursor: not-allowed; width: 100%; justify-content: center; height: 38px;">
-                Approve & Activate Config
-              </button>
-              <p class="decision-help-text" style="color: var(--danger); text-align: center; font-size: 12px; margin-top: 4px;">
-                Runtime validate must pass before activation.
-              </p>
-            </div>
-          `;
-        } else {
-          copilotRecommendation = "All validation checks passed successfully. Copilot recommends approving and activating this configuration to update the runtime engine parsing rules immediately.";
-          actionButtonsHtml = `
-            <div style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
-              <button class="button primary success-cta" data-action="approve-packet-activate" data-packet-id="${escapeHtml(selectedPacket._id)}" style="justify-content: center; height: 40px; font-weight: 600;">
-                Approve & Activate Config
-              </button>
-              <div style="display: flex; gap: 8px; width: 100%;">
-                <button class="button secondary-action" data-action="approve-packet-keep-current" data-packet-id="${escapeHtml(selectedPacket._id)}" style="flex: 1; justify-content: center;">
-                  Keep current runtime
-                </button>
-                <button class="button secondary-action destructive" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}" style="flex: 1; justify-content: center;">
-                  Reject change
-                </button>
-              </div>
-            </div>
-          `;
-        }
-
-        stepBodyHtml = `
-          <div class="guided-step-content">
-            <h4 style="font-size: 12px; text-transform: uppercase; color: var(--brand-accent-blue); margin-bottom: 8px;">Copilot Recommendation</h4>
-            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); padding: 16px; border-radius: 8px; margin-bottom: 24px; line-height: 1.6;">
-              <p style="margin: 0; font-size: 13.5px; color: var(--text-muted);">${escapeHtml(copilotRecommendation)}</p>
-            </div>
-
-            <h4 style="font-size: 12px; text-transform: uppercase; color: var(--brand-accent-blue); margin-bottom: 12px;">Decision Actions</h4>
-            ${actionButtonsHtml}
-          </div>
-        `;
-      }
-
-      modalHtml = `
-        <div class="guided-review-backdrop" id="guided-review-backdrop">
-          <div class="guided-review-modal">
-            <div class="guided-review-header">
-              <div>
-                <p class="eyebrow guided-review-eyebrow">Guided Review</p>
-                <h3 class="guided-review-title">${escapeHtml(selectedPacket.fileName)}</h3>
-              </div>
-              <button class="button-link guided-review-close" data-action="close-guided-review">
-                <span class="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <div class="brief-steps-row guided-review-steps">
-              ${progressSteps}
-            </div>
-
-            <div class="guided-review-body">
-              ${stepBodyHtml}
-            </div>
-
-            <div class="guided-review-footer">
-              <button class="button" data-action="guided-prev" ${step === 0 ? 'disabled' : ''}>Back</button>
-              ${step < stepsList.length - 1 
-                ? `<button class="button primary" data-action="guided-next">Next</button>` 
-                : `<span class="muted guided-review-footer-note">Decision Step</span>`
-              }
-            </div>
-          </div>
-        </div>
-      `;
+      tabContentHtml = renderReviewConfigsTab(mappings);
     }
 
     return `
       ${headerHtml}
       ${tabsNavHtml}
       ${tabContentHtml}
-      ${modalHtml}
+      ${renderGuidedReviewModal(selectedPacket)}
     `;
   }
 
@@ -3406,7 +3242,7 @@
           renderPreserveScroll();
           return;
         }
-        if (action === "go-approvals" || action === "go-review-queue" || action === "go-review-center") {
+        if (action === "go-review-center") {
           const partner = el.dataset.partner;
           if (partner) state.partner = partner;
           location.hash = "review-center";
@@ -3427,7 +3263,7 @@
           uploadInput?.click();
           return;
         }
-        if (action === "go-submit-sample" || action === "go-mapping-studio") {
+        if (action === "go-mapping-studio") {
           const partner = el.dataset.partner;
           if (partner) state.partner = partner;
           // Fresh studio open — clear pre-loaded IDs
@@ -3444,12 +3280,6 @@
         }
         if (action === "go-reconciliation") {
           location.hash = "reconciliation";
-          return;
-        }
-        if (action === "go-data-intake") {
-          const partner = el.dataset.partner;
-          if (partner) state.partner = partner;
-          location.hash = "review-center";
           return;
         }
         if (action === "set-recon-status") {
@@ -3712,44 +3542,20 @@
           if (tab) {
             state.reviewTab = tab;
             render();
+            if (tab === "history" && (!state.reviewHistoryCache || state.reviewHistoryCache.key !== `${state.partner}:${state.date}`)) {
+              loadReviewHistoryData().catch(() => {
+                showToast("Failed to load review history.");
+              });
+            }
           }
           return;
         }
         if (action === "open-guided-review") {
           state.guidedReviewOpen = true;
-          state.guidedReviewStep = 0;
-          state.inlineEditing = true;
           state.guidedReviewAI = { loading: false, error: "", mapping: null, packetId: null };
           render();
-          return;
-        }
-        if (action === "guided-next") {
-          if (typeof state.guidedReviewStep !== "number") {
-            state.guidedReviewStep = 0;
-          }
-          const nextStep = state.guidedReviewStep + 1;
-          state.guidedReviewStep = nextStep;
-          render();
-          if (nextStep === 1) {
-            const packets = [
-              ...(state.reviewPackets || []),
-              ...((state.reviewCenterCache && state.reviewCenterCache.data && state.reviewCenterCache.data.mappings) || [])
-                .filter(item => item && item.status === "PENDING_APPROVAL")
-                .map(item => ({
-                  _id: item._id,
-                  partner: item.partner,
-                  fileName: item.sheetName || "Manual Configuration",
-                  fileTypeDetected: item.fileType || "SETTLEMENT",
-                  draftMappingId: item._id,
-                  parseStrategy: { sheetName: item.sheetName, startRow: item.startRow, fieldMappingCount: (item.fieldMappings || []).length },
-                  structureSignature: item.structureSignature || null,
-                  validationGates: item.validationGates || [],
-                  riskSummary: { severity: "medium" },
-                  status: "PENDING",
-                  isVirtual: true
-                }))
-            ];
-            const packet = packets.find(item => String(item._id) === String(state.selectedReviewPacketId)) || packets[0] || null;
+          const packet = getSelectedReviewPacket(getReviewCenterPendingItems(state.reviewCenterCache?.data || { packets: state.reviewPackets, mappings: [], intake: {} }));
+          if (packet) {
             loadGuidedReviewAIMapping(packet);
           }
           return;
@@ -3757,24 +3563,6 @@
         if (action === "close-guided-review") {
           state.guidedReviewOpen = false;
           state.guidedReviewAI = { loading: false, error: "", mapping: null, packetId: null };
-          render();
-          return;
-        }
-        if (action === "guided-prev") {
-          if (typeof state.guidedReviewStep !== "number") {
-            state.guidedReviewStep = 0;
-          }
-          if (state.guidedReviewStep > 0) {
-            state.guidedReviewStep--;
-          }
-          render();
-          return;
-        }
-        if (action === "toggle-inline-edit") {
-          state.inlineEditing = !state.inlineEditing;
-          if (state.inlineEditing) {
-            state.guidedReviewStep = 1;
-          }
           render();
           return;
         }
@@ -3887,10 +3675,6 @@
                 }
               });
               state.reviewCenterCache = null;
-              state.inlineEditing = false;
-              if (typeof state.guidedReviewStep === "number" && state.guidedReviewStep < 2) {
-                state.guidedReviewStep = 2;
-              }
               showToast("Draft mapping saved. Run runtime validate before activation.");
               render();
             })
@@ -4381,7 +4165,7 @@
             if (!ok) throw new Error(body.detail || "Handoff failed");
             showToast("Mapping submitted for review.");
             state.studio.handoffConfirmed = false;
-            location.hash = "review-queue";
+            location.hash = "review-center";
           })
           .catch(err => {
             confirmHandoffBtn.disabled = false;

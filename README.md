@@ -172,8 +172,6 @@ Use `/docs` for the current request/response schema.
 
 Current views reflected in `frontend/app.js`:
 
-- `#command-center`
-- `#data-intake`
 - `#review-center`
 - `#reconciliation`
 - `#mapping-studio`

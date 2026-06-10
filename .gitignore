@@ -38,3 +38,11 @@ scratch/
 # Generated reports
 report.md
 reports/
+
+#ag-kit
+.agents/
+
+# frontend npm node_modules
+frontend/node_modules/
+node_modules/
+dist/

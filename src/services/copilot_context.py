@@ -11,6 +11,8 @@ from fastapi import HTTPException
 from src.models.mapping_config import MappingConfigRepository, MappingConfigStatus
 from src.models.reconciliation_file import ReconciliationFileRepository
 from src.models.review_packet import ReviewPacketRepository, ReviewPacketStatus
+from src.models.reconciliation_result import ReconciliationResultRepository
+from src.models.fetch_config import FetchConfigRepository
 
 
 def _enum_value(value: Any) -> str:
@@ -82,6 +84,7 @@ class CopilotContextService:
     """Builds a dashboard-facing Copilot recommendation without exposing raw queues."""
 
     def __init__(self, db):
+        self.db = db
         self.mapping_repo = MappingConfigRepository(db)
         self.file_repo = ReconciliationFileRepository(db)
         self.packet_repo = ReviewPacketRepository(db)
@@ -92,10 +95,14 @@ class CopilotContextService:
         partner: str,
         date: Optional[str] = None,
         file_id: Optional[str] = None,
+        screen: Optional[str] = None,
     ) -> CopilotResolution:
         if not partner or not partner.strip():
             raise HTTPException(status_code=400, detail="Partner is required.")
         partner = partner.strip()
+
+        if not screen or screen not in {"intake", "review", "reconciliation", "automation"}:
+            screen = "intake"
 
         file_query: dict[str, Any] = {"partner": partner}
         if file_id:
@@ -139,31 +146,142 @@ class CopilotContextService:
             )
         )
 
-        if not has_runtime and not has_usable_draft:
-            status = "blocked"
-        elif has_packet or has_draft:
-            status = "needs_review"
-        elif latest_file_has_warnings:
-            status = "monitor"
-        else:
-            status = "healthy"
+        # Build screen-specific contexts
+        if screen == "review":
+            pending_packet_count = len([p for p in packets if _enum_value(p.status) == ReviewPacketStatus.PENDING.value])
+            pending_config_count = len(pending_proposals)
+            total_pending = pending_packet_count + pending_config_count
 
-        risk_level = self._risk_level(status, has_runtime, latest_file_status)
-        headline = self._headline(partner, status, has_runtime, has_packet, has_draft, latest_file_status)
-        explanation = self._explanation(
-            status=status,
-            has_runtime=has_runtime,
-            has_packet=has_packet,
-            has_draft=has_draft,
-            latest_file=latest_file,
-            latest_file_status=latest_file_status,
-        )
-        primary_action, secondary_actions, decision_actions = self._actions(
-            status=status,
-            has_packet=has_packet,
-            has_draft=has_draft,
-            has_runtime=has_runtime,
-        )
+            if total_pending > 0:
+                status = "needs_review"
+                risk_level = "high" if total_pending > 2 else "medium"
+                headline = f"Review Center: {total_pending} pending item(s) require attention"
+                summary = f"There are {total_pending} pending configurations/packets waiting for review. Please evaluate and approve to update the runtime."
+                reasons = [
+                    f"{pending_packet_count} file structures pending approval.",
+                    f"{pending_config_count} mapping draft configs pending review."
+                ]
+            else:
+                status = "healthy"
+                risk_level = "low"
+                headline = "Review Center: No pending reviews"
+                summary = "All configurations and file structures are up to date. No pending reviews."
+                reasons = ["No pending items in the review queue."]
+
+            explanation = [headline, summary]
+            primary_action = {
+                "key": "review_proposal",
+                "label": "Open Review Center",
+                "style": "primary",
+                "enabled": total_pending > 0
+            }
+            secondary_actions = [{
+                "key": "refresh_context",
+                "label": "Refresh",
+                "style": "secondary",
+                "enabled": True
+            }]
+            decision_actions = []
+
+        elif screen == "reconciliation":
+            recon_repo = ReconciliationResultRepository(self.db)
+            by_status = await recon_repo.count_by_status(partner, date) if date else {}
+            total = sum(by_status.values())
+            matched = by_status.get("MATCHED", 0)
+            mismatch_rate = round((total - matched) / total * 100, 2) if total else 0
+            anomaly_count = total - matched
+
+            if anomaly_count > 0:
+                status = "monitor"
+                risk_level = "high" if mismatch_rate > 5 else "medium"
+                headline = f"Reconciliation: {anomaly_count} anomalies detected ({mismatch_rate}% mismatch rate)"
+                summary = f"Reconciliation completed with {anomaly_count} mismatched transactions out of {total} total records. High priority mismatches require manual intervention."
+                reasons = [
+                    f"{by_status.get('AMOUNT_MISMATCH', 0)} amount mismatches detected.",
+                    f"{by_status.get('MISSING_INTERNAL', 0)} missing internal records."
+                ]
+            else:
+                status = "healthy"
+                risk_level = "low"
+                headline = "Reconciliation: All matched successfully"
+                summary = "Reconciliation completed with 100% success rate. No anomalies detected."
+                reasons = ["All transactions matched successfully."]
+
+            explanation = [headline, summary]
+            primary_action = {
+                "key": "refresh_context",
+                "label": "Refresh results",
+                "style": "primary",
+                "enabled": True
+            }
+            secondary_actions = []
+            decision_actions = []
+
+        elif screen == "automation":
+            fetch_repo = FetchConfigRepository(self.db)
+            config = await fetch_repo.find_by_partner(partner)
+
+            if config and config.enabled:
+                status = "healthy"
+                risk_level = "low"
+                headline = f"Automation: {partner} fetch scheduler is active"
+                summary = f"The fetch scheduler for {partner} is enabled and configured to run on schedule: {config.schedule}."
+                reasons = [
+                    f"Scheduler method: {config.fetch_method.value}",
+                    f"Download destination: {config.local_download_dir}"
+                ]
+            else:
+                status = "monitor"
+                risk_level = "medium"
+                headline = f"Automation: {partner} fetch scheduler is disabled"
+                summary = f"No active automation schedule is currently running for {partner}."
+                reasons = ["Fetch job is disabled or not configured."]
+
+            explanation = [headline, summary]
+            primary_action = {
+                "key": "refresh_context",
+                "label": "Refresh scheduler",
+                "style": "primary",
+                "enabled": True
+            }
+            secondary_actions = []
+            decision_actions = []
+
+        else: # intake (default)
+            if not has_runtime and not has_usable_draft:
+                status = "blocked"
+            elif has_packet or has_draft:
+                status = "needs_review"
+            elif latest_file_has_warnings:
+                status = "monitor"
+            else:
+                status = "healthy"
+
+            risk_level = self._risk_level(status, has_runtime, latest_file_status)
+            headline = self._headline(partner, status, has_runtime, has_packet, has_draft, latest_file_status)
+            explanation = self._explanation(
+                status=status,
+                has_runtime=has_runtime,
+                has_packet=has_packet,
+                has_draft=has_draft,
+                latest_file=latest_file,
+                latest_file_status=latest_file_status,
+            )
+            primary_action, secondary_actions, decision_actions = self._actions(
+                status=status,
+                has_packet=has_packet,
+                has_draft=has_draft,
+                has_runtime=has_runtime,
+            )
+            summary = self._summary(status=status, has_runtime=has_runtime, has_packet=has_packet, has_draft=has_draft)
+            reasons = self._reasons(
+                status=status,
+                has_runtime=has_runtime,
+                has_packet=has_packet,
+                has_draft=has_draft,
+                latest_file=latest_file,
+                latest_file_status=latest_file_status,
+            )
 
         # Backward-compatible flat actions list (primary + all secondary)
         full_actions: list[dict[str, Any]] = []
@@ -190,15 +308,8 @@ class CopilotContextService:
             "primaryAction": primary_action,
             "secondaryActions": secondary_actions,
             "decisionActions": decision_actions,
-            "summary": self._summary(status=status, has_runtime=has_runtime, has_packet=has_packet, has_draft=has_draft),
-            "reasons": self._reasons(
-                status=status,
-                has_runtime=has_runtime,
-                has_packet=has_packet,
-                has_draft=has_draft,
-                latest_file=latest_file,
-                latest_file_status=latest_file_status,
-            ),
+            "summary": summary if screen == "intake" else headline,
+            "reasons": reasons,
             "evidence": {
                 "latestFile": self._file_evidence(latest_file),
                 "runtime": {
@@ -227,8 +338,10 @@ class CopilotContextService:
         partner: str,
         date: Optional[str] = None,
         file_id: Optional[str] = None,
+        screen: Optional[str] = None,
     ) -> dict[str, Any]:
-        return (await self.resolve(partner=partner, date=date, file_id=file_id)).context
+        return (await self.resolve(partner=partner, date=date, file_id=file_id, screen=screen)).context
+
 
     def _risk_level(self, status: str, has_runtime: bool, latest_file_status: str) -> str:
         if status == "blocked" or (status == "needs_review" and not has_runtime):

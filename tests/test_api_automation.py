@@ -48,19 +48,19 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
     app, fetch_collection, packet_collection = _create_test_app()
     fetch_collection.find = MagicMock(return_value=_AsyncCursor([
         {
-            "_id": "job-001",
+            "_id": "ed7dcff9-f1e7-4b95-a459-6e1e0a210513",
             "partner": "ZALOPAY",
             "fetchMethod": "FILEDROP",
             "schedule": "0 0 * * *",
             "enabled": True,
             "localDownloadDir": "./downloads",
-            "methodConfig": {"directory": "sftp_data/zalopay_weird"},
+            "filedrop": {"directory": "sftp_data/zalopay_weird"},
             "updatedAt": "2026-06-02T10:24:34.686000",
         }
     ]))
     packet_collection.find = MagicMock(return_value=_AsyncCursor([
         {
-            "_id": "pkt-scheduler-1",
+            "_id": "ec7ad694-4fb5-423e-91ac-10c3087d2610",
             "sourceType": "SCHEDULER_JOB",
             "partner": "ZALOPAY",
             "fileName": "scheduled.csv",
@@ -74,7 +74,7 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
             "createdAt": "2026-06-04T03:00:00",
         },
         {
-            "_id": "pkt-upload-1",
+            "_id": "c28a7274-601d-4413-bc91-c0190c4a4870",
             "sourceType": "UPLOAD",
             "partner": "ZALOPAY",
             "fileName": "manual.csv",
@@ -88,7 +88,7 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
             "createdAt": "2026-06-04T04:00:00",
         },
         {
-            "_id": "pkt-scheduler-2",
+            "_id": "496a5161-53fb-444b-9980-3babd03c069b",
             "sourceType": "SCHEDULER_JOB",
             "partner": "ZALOPAY",
             "fileName": "scheduled-reviewed.csv",

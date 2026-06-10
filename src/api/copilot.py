@@ -6,12 +6,16 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from src.api.mappings import MappingReviewPayload, approve_mapping_config, reject_mapping_config
+from src.api.mappings import (
+    MappingReviewPayload,
+    approve_mapping_config_action,
+    reject_mapping_config_action,
+)
 from src.api.review_packets import (
     ReviewDecisionPayload,
-    approve_activate_packet,
-    approve_keep_current_packet,
-    reject_packet,
+    approve_activate_packet_action,
+    approve_keep_current_packet_action,
+    reject_packet_action,
 )
 from src.models.copilot_action import CopilotActionRepository, CopilotActionStatus
 from src.services.copilot_context import CopilotContextService
@@ -106,7 +110,7 @@ async def execute_copilot_action(
     if action_key == "approve_keep_current":
         if not review_item_id:
             raise HTTPException(status_code=400, detail="No review packet is available for this action.")
-        result = await approve_keep_current_packet(
+        result = await approve_keep_current_packet_action(
             request,
             review_item_id,
             ReviewDecisionPayload(reviewed_by=payload.reviewed_by, scopeType=payload.scope_type),
@@ -116,13 +120,13 @@ async def execute_copilot_action(
 
     if action_key == "approve_activate_next_runtime":
         if review_item_id:
-            result = await approve_activate_packet(
+            result = await approve_activate_packet_action(
                 request,
                 review_item_id,
                 ReviewDecisionPayload(reviewed_by=payload.reviewed_by, scopeType=payload.scope_type),
             )
         elif draft_mapping_id:
-            result = await approve_mapping_config(
+            result = await approve_mapping_config_action(
                 request,
                 draft_mapping_id,
                 MappingReviewPayload(reviewed_by=payload.reviewed_by),
@@ -134,13 +138,13 @@ async def execute_copilot_action(
 
     if action_key == "reject_proposal":
         if review_item_id:
-            result = await reject_packet(
+            result = await reject_packet_action(
                 request,
                 review_item_id,
                 ReviewDecisionPayload(reviewed_by=payload.reviewed_by),
             )
         elif draft_mapping_id:
-            result = await reject_mapping_config(
+            result = await reject_mapping_config_action(
                 request,
                 draft_mapping_id,
                 MappingReviewPayload(reviewed_by=payload.reviewed_by),

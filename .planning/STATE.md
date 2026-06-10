@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_phase: 20
-status: planning
-last_updated: "2026-06-09T09:00:00.000Z"
-last_activity: 2026-06-09
+status: executing
+last_updated: "2026-06-10T08:37:46.000Z"
+last_activity: 2026-06-10
 progress:
   total_phases: 20
-  completed_phases: 12
-  total_plans: 33
-  completed_plans: 29
-  percent: 88
+  completed_phases: 10
+  total_plans: 27
+  completed_plans: 21
+  percent: 78
 ---
 
 # State
@@ -19,7 +19,7 @@ progress:
 ## Position
 
 - **Current Phase:** 20
-- **Status:** Planning Phase 20
+- **Status:** Executing Phase 20
 - **Last Updated:** 2026-06-09
 
 ## Decisions
@@ -75,5 +75,6 @@ progress:
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260605-ji5 | MOMO E2E canonical seed + Quick Start + 3 regression tests | 2026-06-05 | f0d15b9 | [260605-ji5-c-p-nh-t-e2e-tooling-fixture-momo-cho-sc](./quick/260605-ji5-c-p-nh-t-e2e-tooling-fixture-momo-cho-sc/) |
+| 260610-lku | Sync README docs with latest code (reconciliation insights, copilot API, frontend endpoints) | 2026-06-10 | f40bf23, 9b1fc1b | [260610-lku-c-p-nh-t-docs-readme-theo-code-m-i-nh-t-](./quick/260610-lku-c-p-nh-t-docs-readme-theo-code-m-i-nh-t-/) |
 
-Last activity: 2026-06-09
+Last activity: 2026-06-10

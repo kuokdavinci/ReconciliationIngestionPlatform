@@ -157,4 +157,70 @@ async def reconciliation_stats(
         raise HTTPException(status_code=500, detail=f"Failed to fetch stats: {str(exc)}")
 
 
+@router.get("/insights")
+async def reconciliation_insights(
+    request: Request,
+    partner: Optional[str] = Query(default=None, description="Partner identifier"),
+    date: Optional[str] = Query(default=None, description="Date (YYYY-MM-DD)"),
+    type: Optional[str] = Query(default="summary", description="Insight type: summary | anomalies | patterns | recommendations"),
+):
+    """Get reconciliation insights (Summary, Anomalies, Patterns, Recommendations)."""
+    try:
+        partner = _validate_partner(partner)
+        date = _validate_date(date)
+    except HTTPException:
+        raise
+
+    valid_types = ("summary", "anomalies", "patterns", "recommendations")
+    if type not in valid_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid insight type: '{type}'. Must be one of: {', '.join(valid_types)}.",
+        )
+
+    try:
+        db = getattr(request.app.state, "db", None)
+        if db is None:
+            raise HTTPException(status_code=503, detail="Database connection not available.")
+        collection = db["reconciliation_result"]
+
+        from src.analysis.config import AnalysisConfig
+        from src.analysis.provider import create_provider
+        llm_provider = create_provider(AnalysisConfig())
+
+        if type == "summary":
+            from src.analysis.insights import get_summary
+            result = await get_summary(
+                partner=partner,
+                date=date,
+                collection=collection,
+                llm_provider=llm_provider,
+            )
+            result["generated_at"] = datetime.now().isoformat()
+            return result
+        else:
+            from src.analysis.insights import get_discrepancies
+            focus_map = {
+                "anomalies": "inconsistency",
+                "patterns": "partner",
+                "recommendations": "operational",
+            }
+            focus = focus_map[type]
+            results = await get_discrepancies(
+                partner=partner,
+                date=date,
+                focus=focus,
+                collection=collection,
+                llm_provider=llm_provider,
+            )
+            return [r.model_dump() for r in results]
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error generating reconciliation insights: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate reconciliation insights: {str(exc)}")
+
+
+
 

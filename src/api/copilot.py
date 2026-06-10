@@ -51,8 +51,9 @@ async def get_context(
     request: Request,
     partner: str = Query(...),
     date: Optional[str] = Query(default=None),
+    screen: Optional[str] = Query(default=None),
 ):
-    return await CopilotContextService(_get_db(request)).context(partner=partner, date=date)
+    return await CopilotContextService(_get_db(request)).context(partner=partner, date=date, screen=screen)
 
 
 @router.get("/context/file/{file_id}")
@@ -60,8 +61,9 @@ async def get_file_context(
     request: Request,
     file_id: str,
     partner: str = Query(...),
+    screen: Optional[str] = Query(default=None),
 ):
-    return await CopilotContextService(_get_db(request)).context(partner=partner, file_id=file_id)
+    return await CopilotContextService(_get_db(request)).context(partner=partner, file_id=file_id, screen=screen)
 
 
 @router.post("/actions/{action_key}")

@@ -8,12 +8,15 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.analysis.insights import invalidate_insight_cache
+from src.config.ai_generator import generate_config_from_samples
 from src.config.cache import ConfigCache
 from src.config.loader import ConfigLoader
 from src.config.validator import ConfigValidator
+from src.core.constants import DEFAULT_CURRENCY
 from src.core.enums import ProcessingStatus
+from src.core.enums import FileType
 from src.models.copilot_action import CopilotActionRepository, CopilotActionStatus
-from src.models.mapping_config import MappingConfigRepository, MappingConfigStatus
+from src.models.mapping_config import MappingConfig, MappingConfigRepository, MappingConfigStatus
 from src.models.reconciliation_file import ReconciliationFileRepository
 from src.models.review_packet import (
     ReviewDecisionMode,
@@ -58,6 +61,22 @@ def _serialize(packet) -> dict:
 class ReviewDecisionPayload(BaseModel):
     reviewed_by: Optional[str] = None
     scope_type: Optional[str] = Field(default=None, alias="scopeType")
+
+
+class DraftFieldMappingPayload(BaseModel):
+    path: str
+    column: Optional[int | str] = None
+    type: str
+    required: bool = False
+    constant: Optional[str] = None
+    sourceField: Optional[str] = None
+    mapping: Optional[dict[str, str]] = None
+
+
+class SaveDraftMappingPayload(BaseModel):
+    sheet_name: str = Field(default="Sheet1", alias="sheetName")
+    start_row: int = Field(default=2, alias="startRow")
+    field_mappings: list[DraftFieldMappingPayload] = Field(alias="fieldMappings")
 
 
 def _upsert_validation_gate(packet, gate: dict) -> list[dict]:
@@ -139,6 +158,113 @@ async def _mark_packet(
     packet.reviewed_at = now
     packet.reviewed_by = reviewed_by
     return {"ok": True, "packet": _serialize(packet)}
+
+
+async def _next_pending_version(request: Request, partner: str) -> str:
+    mapping_repo = MappingConfigRepository(_get_db(request))
+    count = await mapping_repo.collection.count_documents({"partner": partner})
+    return f"{partner}_v{count + 1:02d}"
+
+
+def _canonicalize_guided_field_mappings(
+    raw_mappings: list[dict],
+) -> tuple[list[dict], list[str]]:
+    normalized = [dict(item) for item in raw_mappings]
+    warnings: list[str] = []
+    paths = {item.get("path") for item in normalized if item.get("path")}
+
+    if "currency" not in paths:
+        normalized.append({
+            "path": "currency",
+            "type": "CONSTANT",
+            "constant": DEFAULT_CURRENCY,
+            "required": True,
+        })
+        warnings.append(f"Currency was not mapped, so a CONSTANT '{DEFAULT_CURRENCY}' mapping was added.")
+
+    for item in normalized:
+        if item.get("path") == "status" and str(item.get("type", "")).upper() == "STRING":
+            item["type"] = "MAPPING"
+            item["mapping"] = {
+                "SUCCESS": "SUCCESS",
+                "FAILED": "FAILED",
+                "PENDING": "PENDING",
+                "REVERSED": "REVERSED",
+            }
+            warnings.append("Status mapping was upgraded from STRING to MAPPING. Adjust status normalization if partner values differ.")
+
+    return normalized, warnings
+
+
+def _validate_guided_mapping_contract(config: MappingConfig) -> list[str]:
+    errors = [err.reason for err in ConfigValidator.validate(config)]
+    errors.extend(
+        err.reason
+        for err in ConfigValidator.validate_required_coverage(
+            config, {"id", "amount", "status"} # currency is implicitly VND and not required
+        )
+    )
+    return errors
+
+
+def _serialize_mapping(config: MappingConfig) -> dict:
+    data = config.model_dump(by_alias=True)
+    data["_id"] = str(data["_id"])
+    data["draftMappingId"] = data["_id"]
+    if data.get("fileType") is not None:
+        data["fileType"] = str(data["fileType"])
+    return data
+
+
+async def _resolve_ai_generation_context(request: Request, packet, existing_draft: MappingConfig | None):
+    headers = []
+    sample_rows = []
+    header_row_index = None
+    first_data_row_index = None
+
+    packet_signature = getattr(packet, "structure_signature", None) or {}
+    if packet_signature:
+        headers = list(packet_signature.get("headers") or [])
+        sample_rows = list(packet_signature.get("sampleRows") or [])
+        header_row_index = packet_signature.get("headerRowIndex")
+        first_data_row_index = packet_signature.get("firstDataRowIndex")
+
+    if existing_draft is not None and not headers:
+        draft_signature = getattr(existing_draft, "structure_signature", None) or {}
+        headers = list(draft_signature.get("headers") or [])
+        sample_rows = sample_rows or list(draft_signature.get("sampleRows") or [])
+        header_row_index = header_row_index if header_row_index is not None else draft_signature.get("headerRowIndex")
+        first_data_row_index = first_data_row_index if first_data_row_index is not None else draft_signature.get("firstDataRowIndex")
+
+    if not headers:
+        mapping_repo = MappingConfigRepository(_get_db(request))
+        file_type_value = getattr(packet, "file_type_detected", None) or FileType.SETTLEMENT.value
+        try:
+            file_type = FileType(file_type_value)
+        except ValueError:
+            file_type = FileType.SETTLEMENT
+        approved = await mapping_repo.find_by_partner_and_type(packet.partner, "UPC", file_type)
+        if approved is not None:
+            approved_signature = getattr(approved, "structure_signature", None) or {}
+            headers = list(approved_signature.get("headers") or [])
+            sample_rows = sample_rows or list(approved_signature.get("sampleRows") or [])
+            header_row_index = header_row_index if header_row_index is not None else approved_signature.get("headerRowIndex")
+            first_data_row_index = first_data_row_index if first_data_row_index is not None else approved_signature.get("firstDataRowIndex")
+
+    if not sample_rows:
+        packet_preview = getattr(packet, "sample_preview", None) or []
+        sample_rows = [
+            list(item.get("values") or [])
+            for item in packet_preview
+            if isinstance(item, dict) and isinstance(item.get("values"), list)
+        ]
+
+    return {
+        "headers": headers,
+        "sample_rows": sample_rows,
+        "header_row_index": header_row_index,
+        "first_data_row_index": first_data_row_index,
+    }
 
 
 async def _reprocess_and_reconcile(request: Request, packet, config) -> dict | None:
@@ -232,58 +358,71 @@ async def _reprocess_and_reconcile(request: Request, packet, config) -> dict | N
 
 async def _run_runtime_validation(request: Request, packet, config) -> dict:
     source_file_path = getattr(packet, "source_file_path", None)
-    if not source_file_path:
-        return {
-            "gateKey": "runtime_validation",
-            "label": "Runtime validation",
-            "status": "fail",
-            "reason": "No source file path is attached to this review packet.",
-            "details": {"successRows": 0, "failedRows": 0, "sampledRows": 0},
-        }
-
-    path = Path(source_file_path)
-    if not path.exists():
-        return {
-            "gateKey": "runtime_validation",
-            "label": "Runtime validation",
-            "status": "fail",
-            "reason": f"Source file is not available at {source_file_path}.",
-            "details": {"successRows": 0, "failedRows": 0, "sampledRows": 0},
-        }
-
     sampled_rows = 0
     success_rows = 0
     failed_rows = 0
     failed_examples: list[dict] = []
+    normalizer = TransactionNormalizer(config.field_mappings)
 
-    with create_reader(source_file_path, config) as reader:
-        normalizer = TransactionNormalizer(config.field_mappings)
-        for row in reader.iter_rows():
-            sampled_rows += 1
-            row_number = config.start_row + sampled_rows - 1
-            norm_result = normalizer.normalize(row, row_number)
-            if norm_result.errors:
-                failed_rows += 1
-                failed_examples.append({
-                    "row": row_number,
-                    "reason": norm_result.errors[0].reason,
-                    "field": norm_result.errors[0].field,
-                })
-            else:
-                txn, build_errors = TransactionNormalizer.build_canonical(
-                    norm_result.data, [], row_number
-                )
-                if txn is None:
-                    failed_rows += 1
-                    failed_examples.append({
-                        "row": row_number,
-                        "reason": build_errors[0].reason,
-                        "field": build_errors[0].field,
-                    })
-                else:
-                    success_rows += 1
-            if sampled_rows >= 20:
-                break
+    def _consume_row(row: list, row_number: int) -> None:
+        nonlocal sampled_rows, success_rows, failed_rows, failed_examples
+        sampled_rows += 1
+        norm_result = normalizer.normalize(row, row_number)
+        if norm_result.errors:
+            failed_rows += 1
+            failed_examples.append({
+                "row": row_number,
+                "reason": norm_result.errors[0].reason,
+                "field": norm_result.errors[0].field,
+            })
+            return
+        txn, build_errors = TransactionNormalizer.build_canonical(
+            norm_result.data, [], row_number
+        )
+        if txn is None:
+            failed_rows += 1
+            failed_examples.append({
+                "row": row_number,
+                "reason": build_errors[0].reason,
+                "field": build_errors[0].field,
+            })
+        else:
+            success_rows += 1
+
+    if source_file_path:
+        path = Path(source_file_path)
+        if path.exists():
+            with create_reader(source_file_path, config) as reader:
+                for row in reader.iter_rows():
+                    row_number = config.start_row + sampled_rows
+                    _consume_row(row, row_number)
+                    if sampled_rows >= 20:
+                        break
+        else:
+            return {
+                "gateKey": "runtime_validation",
+                "label": "Runtime validation",
+                "status": "fail",
+                "reason": f"Source file is not available at {source_file_path}.",
+                "details": {"successRows": 0, "failedRows": 0, "sampledRows": 0},
+            }
+    else:
+        sample_preview = getattr(packet, "sample_preview", None) or []
+        for idx, sample in enumerate(sample_preview[:20]):
+            row = sample.get("values") if isinstance(sample, dict) else None
+            if not isinstance(row, list):
+                continue
+            row_number = int(sample.get("rowIndex") or (config.start_row + idx)) if isinstance(sample, dict) else (config.start_row + idx)
+            _consume_row(row, row_number)
+
+        if sampled_rows == 0:
+            return {
+                "gateKey": "runtime_validation",
+                "label": "Runtime validation",
+                "status": "fail",
+                "reason": "No source file path or sample preview is attached to this review packet.",
+                "details": {"successRows": 0, "failedRows": 0, "sampledRows": 0},
+            }
 
     if sampled_rows == 0:
         status = "fail"
@@ -339,6 +478,248 @@ async def validate_runtime_packet(request: Request, packet_id: str):
     gate = await _run_runtime_validation(request, packet, config)
     ok = gate["status"] == "pass"
     return {"ok": ok, "gate": gate}
+
+
+@router.post("/{packet_id}/generate-ai-mapping")
+async def generate_ai_mapping_for_packet(request: Request, packet_id: str):
+    repo = _repo(request)
+    packet = await repo.find_one({"_id": packet_id})
+    if packet is None:
+        raise HTTPException(status_code=404, detail="Review packet not found.")
+    if packet.status != ReviewPacketStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Only pending review packets can be regenerated.")
+
+    mapping_repo = MappingConfigRepository(_get_db(request))
+    existing = None
+    if packet.draft_mapping_id:
+        existing = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
+
+    context = await _resolve_ai_generation_context(request, packet, existing)
+    headers = context["headers"]
+    sample_rows = context["sample_rows"]
+    if not headers:
+        raise HTTPException(status_code=400, detail="No header signature is attached to this review packet.")
+    if not sample_rows:
+        raise HTTPException(status_code=400, detail="No sample rows are attached to this review packet.")
+
+    config_dict, error = await generate_config_from_samples(
+        partner=packet.partner,
+        headers=headers,
+        sample_rows=sample_rows,
+        known_constants={"provider": packet.partner},
+        header_row_index=context["header_row_index"],
+        first_data_row_index=context["first_data_row_index"] or packet.parse_strategy.get("startRow") or 2,
+    )
+    if error or config_dict is None:
+        raise HTTPException(status_code=500, detail=f"AI mapping generation failed: {error}")
+
+    field_mappings, mapping_warnings = _canonicalize_guided_field_mappings(
+        [
+            item.model_dump(by_alias=True) if hasattr(item, "model_dump") else dict(item)
+            for item in (config_dict.get("fieldMappings") or [])
+        ]
+    )
+
+    file_type_value = getattr(packet, "file_type_detected", None) or FileType.SETTLEMENT.value
+    try:
+        file_type = FileType(file_type_value)
+    except ValueError:
+        file_type = FileType.SETTLEMENT
+    workflow_type = getattr(existing, "workflow_type", None) or packet.parse_strategy.get("workflowType") or "UPC"
+    structure_signature = {
+        "headers": headers,
+        "sampleRows": sample_rows[:10],
+        "headerRowIndex": context["header_row_index"],
+        "firstDataRowIndex": context["first_data_row_index"] or packet.parse_strategy.get("startRow") or 2,
+        "columnCount": len(headers),
+    }
+    now = datetime.now(timezone.utc)
+    config_health = {
+        "stale": False,
+        "status": MappingConfigStatus.PENDING_APPROVAL.value,
+        "source": "ai_generated",
+        "confidence": config_dict.get("confidence") or 0.85,
+        "reasoning": config_dict.get("reasoning") or "Automatically generated by AI from review packet samples.",
+        "updatedAt": now,
+    }
+
+    if existing is not None and existing.status == MappingConfigStatus.PENDING_APPROVAL:
+        await mapping_repo.collection.update_one(
+            {"_id": str(existing.id)},
+            {"$set": {
+                "sheetName": config_dict.get("sheetName") or existing.sheet_name or "Sheet1",
+                "startRow": config_dict.get("startRow") or existing.start_row or packet.parse_strategy.get("startRow") or 2,
+                "fieldMappings": field_mappings,
+                "structureSignature": structure_signature,
+                "configHealth": config_health,
+                "status": MappingConfigStatus.PENDING_APPROVAL.value,
+                "fileType": file_type.value,
+                "workflowType": workflow_type,
+            }},
+        )
+        draft_id = str(existing.id)
+        updated = await mapping_repo.find_one({"_id": draft_id})
+        mapping = updated or existing
+    else:
+        mapping = MappingConfig(
+            partner=packet.partner,
+            workflowType=workflow_type,
+            fileType=file_type,
+            sheetName=config_dict.get("sheetName") or "Sheet1",
+            startRow=config_dict.get("startRow") or packet.parse_strategy.get("startRow") or 2,
+            fieldMappings=field_mappings,
+            configVersion=getattr(existing, "config_version", None) if existing is not None else await _next_pending_version(request, packet.partner),
+            structureSignature=structure_signature,
+            status=MappingConfigStatus.PENDING_APPROVAL,
+            configHealth=config_health,
+        )
+        await mapping_repo.create(mapping)
+        draft_id = str(mapping.id)
+        await repo.collection.update_one({"_id": packet_id}, {"$set": {"draftMappingId": draft_id}})
+
+    validation_gates = [
+        dict(gate) for gate in (packet.validation_gates or [])
+        if gate.get("gateKey") != "runtime_validation"
+    ]
+    await repo.collection.update_one(
+        {"_id": packet_id},
+        {"$set": {
+            "draftMappingId": draft_id,
+            "parseStrategy": {
+                **(packet.parse_strategy or {}),
+                "sheetName": config_dict.get("sheetName") or packet.parse_strategy.get("sheetName") or "Sheet1",
+                "startRow": config_dict.get("startRow") or packet.parse_strategy.get("startRow") or 2,
+                "fieldMappingCount": len(field_mappings),
+                "strategy": "AI regenerated draft mapping from review packet samples",
+            },
+            "validationGates": validation_gates,
+        }},
+    )
+
+    mapping_payload = _serialize_mapping(mapping if isinstance(mapping, MappingConfig) else updated)
+    return {
+        "ok": True,
+        "draftMappingId": draft_id,
+        "mapping": mapping_payload,
+        "warnings": mapping_warnings,
+        "validationGates": validation_gates,
+    }
+
+
+@router.post("/{packet_id}/save-draft-mapping")
+async def save_draft_mapping_for_packet(
+    request: Request,
+    packet_id: str,
+    payload: SaveDraftMappingPayload,
+):
+    repo = _repo(request)
+    packet = await repo.find_one({"_id": packet_id})
+    if packet is None:
+        raise HTTPException(status_code=404, detail="Review packet not found.")
+    if packet.status != ReviewPacketStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Only pending review packets can be edited.")
+
+    mapping_repo = MappingConfigRepository(_get_db(request))
+    existing = None
+    if packet.draft_mapping_id:
+        existing = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
+
+    file_type_value = getattr(packet, "file_type_detected", None) or FileType.SETTLEMENT.value
+    try:
+        file_type = FileType(file_type_value)
+    except ValueError:
+        file_type = FileType.SETTLEMENT
+    workflow_type = None
+    if existing is not None:
+        workflow_type = existing.workflow_type
+    workflow_type = workflow_type or packet.parse_strategy.get("workflowType") or "UPC"
+
+    field_mappings, mapping_warnings = _canonicalize_guided_field_mappings(
+        [item.model_dump(by_alias=True) for item in payload.field_mappings]
+    )
+    now = datetime.now(timezone.utc)
+    config_health = {
+        "stale": False,
+        "status": MappingConfigStatus.PENDING_APPROVAL.value,
+        "confidence": 0.95,
+        "reasoning": "Updated from Guided Review inline mapping edits.",
+        "updatedAt": now,
+    }
+
+    candidate_config = MappingConfig(
+        partner=packet.partner,
+        workflowType=workflow_type,
+        fileType=file_type,
+        sheetName=payload.sheet_name,
+        startRow=payload.start_row,
+        fieldMappings=field_mappings,
+        configVersion=getattr(existing, "config_version", None) if existing is not None else None,
+        structureSignature=packet.structure_signature,
+        status=MappingConfigStatus.PENDING_APPROVAL,
+        configHealth=config_health,
+    )
+    validation_errors = _validate_guided_mapping_contract(candidate_config)
+    if validation_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Draft mapping is incomplete or invalid.",
+                "errors": validation_errors,
+                "warnings": mapping_warnings,
+            },
+        )
+
+    if existing is not None:
+        await mapping_repo.collection.update_one(
+            {"_id": str(existing.id)},
+            {"$set": {
+                "sheetName": payload.sheet_name,
+                "startRow": payload.start_row,
+                "fieldMappings": field_mappings,
+                "status": MappingConfigStatus.PENDING_APPROVAL.value,
+                "configHealth": config_health,
+                "structureSignature": packet.structure_signature,
+                "workflowType": workflow_type,
+                "fileType": file_type.value,
+            }},
+        )
+        draft_mapping_id = str(existing.id)
+    else:
+        proposal = MappingConfig(
+            partner=packet.partner,
+            workflowType=workflow_type,
+            fileType=file_type,
+            sheetName=payload.sheet_name,
+            startRow=payload.start_row,
+            fieldMappings=field_mappings,
+            configVersion=await _next_pending_version(request, packet.partner),
+            structureSignature=packet.structure_signature,
+            status=MappingConfigStatus.PENDING_APPROVAL,
+            configHealth=config_health,
+        )
+        await mapping_repo.create(proposal)
+        draft_mapping_id = str(proposal.id)
+
+    validation_gates = [dict(gate) for gate in (packet.validation_gates or []) if gate.get("gateKey") != "runtime_validation"]
+    await repo.collection.update_one(
+        {"_id": packet_id},
+        {"$set": {
+            "draftMappingId": draft_mapping_id,
+            "parseStrategy.sheetName": payload.sheet_name,
+            "parseStrategy.startRow": payload.start_row,
+            "parseStrategy.fieldMappingCount": len(field_mappings),
+            "validationGates": validation_gates,
+        }},
+    )
+    return {
+        "ok": True,
+        "draftMappingId": draft_mapping_id,
+        "fieldMappingCount": len(field_mappings),
+        "sheetName": payload.sheet_name,
+        "startRow": payload.start_row,
+        "warnings": mapping_warnings,
+        "validationGates": validation_gates,
+    }
 
 
 @router.post("/{packet_id}/approve-activate")

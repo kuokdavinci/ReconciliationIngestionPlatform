@@ -59,8 +59,14 @@ from src.models.reconciliation_file import (
 def mock_db() -> MagicMock:
     """AsyncMock for AsyncIOMotorDatabase with collection mocks."""
     db = MagicMock()
-    # Make db[name] return a mock collection for any collection name
-    db.__getitem__ = MagicMock(side_effect=lambda name: MagicMock())
+    # Make db[name] return a mock collection for any collection name.
+    # classify_scope calls await db["reconciliation_file"].count_documents(...)
+    # so every mock collection must have an AsyncMock count_documents.
+    def _mock_collection(name):
+        coll = MagicMock()
+        coll.count_documents = AsyncMock(return_value=0)
+        return coll
+    db.__getitem__ = MagicMock(side_effect=_mock_collection)
     return db
 
 

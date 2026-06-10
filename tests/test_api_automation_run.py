@@ -34,7 +34,7 @@ def _create_test_app():
 def test_run_automation_job_now():
     app, fetch_collection = _create_test_app()
     fetch_collection.find_one = AsyncMock(return_value={
-        "_id": "job-001",
+        "_id": "ed7dcff9-f1e7-4b95-a459-6e1e0a210513",
         "partner": "ZALOPAY",
         "fetchMethod": "FILEDROP",
         "enabled": True,

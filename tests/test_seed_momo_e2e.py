@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import openpyxl
 import pytest
 
-from scratch.seed_momo_e2e import (
+from scripts.seeding.seed_momo_e2e import (
     MISSING_PARTNER_KEY,
     WAVE1_KEYS,
     WAVE2_KEYS,

@@ -1,367 +1,370 @@
 # Reconciliation Ingestion Platform
 
-A configurable reconciliation ingestion platform with a human-in-the-loop approval model. It reads partner settlement reports, normalizes heterogeneous transaction data into a canonical model, and persists them into MongoDB — all driven by dynamic configuration with zero hardcoded parsing logic. The platform features a full Operations Dashboard with Command Center, Data Intake, Review Queue, Reconciliation, and Mapping Studio — all sharing a central `review_packet` approval model.
+Nền tảng ingestion và reconciliation cho dữ liệu giao dịch tài chính, tập trung vào chuẩn hóa dữ liệu partner, đối soát với dữ liệu nội bộ, và hỗ trợ insight/mapping bằng AI theo hướng có kiểm soát.
 
-## Quick Start & Flow
+**Điểm nổi bật**
+- Ingestion pipeline có cấu hình động, không hardcode parser theo từng partner.
+- Hỗ trợ nhận dữ liệu từ `FILEDROP`, `SFTP`, và `API`.
+- Reconciliation engine phân loại rõ `MATCHED`, `MISSING_INTERNAL`, `MISSING_PARTNER`, `AMOUNT_MISMATCH`, `STATUS_MISMATCH`, `MULTIPLE_MISMATCH`.
+- Hỗ trợ scope-aware reconciliation cho `FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT`, `UNCONFIRMED`.
+- Có approval flow cho mapping config và review packet trước khi áp dụng runtime.
+- Có dashboard vận hành, API layer, automation job, và AI insight layer.
+- Có local development stack bằng Docker Compose và test suite cho reconciliation / ingestion / API.
 
-This platform processes reconciliation files via SFTP or local simulation, parses them dynamically using MappingConfigs, normalizes/validates, and saves them to MongoDB.
+**Tech stack ngắn**
+- Backend: `Python 3.14`, `FastAPI`
+- Database: `MongoDB`
+- Data processing: `openpyxl`, custom readers/normalizer/validator
+- Scheduler: `APScheduler`
+- AI integration: OpenAI-compatible provider abstraction
+- Frontend: `HTML/CSS/JavaScript`
+- Infra: `Docker`, `Docker Compose`
+- Testing: `pytest`
 
-### 1. Setup Environment
-```bash
-# Install dependencies
-uv sync --all-extras
+**Quick links**
+- [Tổng quan](#tổng-quan-dự-án)
+- [Kiến trúc](#kiến-trúc-hệ-thống)
+- [API](#api-overview)
+- [Cài đặt](#cài-đặt-và-chạy-dự-án)
+- [Testing](#testing)
+- [Roadmap](#roadmap)
 
-# Configure environment variables
-cp .env.example .env
-```
+## Tổng quan dự án
 
-### 2. Run the Services (MongoDB & SFTP)
-Using Docker Compose:
-```bash
-docker compose up -d
-```
-*Note: Seeding configuration templates (like MOMO template) runs on Mongo initialization. If you need a clean db refresh, run `docker compose down -v && docker compose up -d`.*
+Bài toán chính của dự án là đối soát dữ liệu giao dịch tài chính giữa nhiều payment partner và hệ thống nội bộ. Mỗi partner có thể gửi file hoặc dữ liệu theo format khác nhau, tên cột khác nhau, quy ước status khác nhau, và tần suất gửi khác nhau. Nếu parser bị hardcode theo từng partner, mỗi lần format thay đổi sẽ kéo theo chi phí sửa code và redeploy.
 
-### 3. Run Pipeline Ingestion & Scheduler CLI
-You can execute the pipeline or start the automated scheduler daemon using `run.py`. When run, it connects to MongoDB, **automatically applies index recommendations**, and executes the requested command:
-```bash
-# A. MANUAL INGESTION
-# Run with a dynamic Excel configuration template (e.g. RequestTemplate.xlsx)
-uv run python run.py --config /path/to/RequestTemplate.xlsx
+Hệ thống này được thiết kế để xử lý bài toán đó theo hướng cấu hình:
+- nhận dữ liệu/file từ partner qua `local filedrop`, `SFTP`, hoặc `API`
+- dùng `mapping config` để map cột partner sang schema nội bộ
+- normalize và validate dữ liệu trước khi lưu
+- lưu trữ dữ liệu canonical trong MongoDB
+- chạy reconciliation với dữ liệu nội bộ
+- phân loại mismatch và missing records
+- expose kết quả qua API và dashboard
+- bổ sung lớp AI để hỗ trợ insight và mapping proposal, không thay thế logic deterministic
 
-# Run with existing config seed in MongoDB (uses default MOMO config)
-uv run python run.py
+Mục tiêu chính:
+- chuẩn hóa dữ liệu partner về một schema thống nhất
+- validate dữ liệu và business rules trước khi downstream sử dụng
+- lưu trữ dữ liệu phục vụ truy vết và đối soát
+- chạy reconciliation có thể mở rộng theo nhiều partner
+- hiển thị metrics / anomaly / operational status qua dashboard
+- hỗ trợ AI cho mapping config proposal và insight generation
 
-# B. SCHEDULER DAEMON & AUTOMATED JOBS
-# Start the background scheduler daemon (processes cron jobs in real-time)
-uv run python run.py --start-scheduler
+## Điểm nổi bật
 
-# List all scheduled jobs and their next run times
-uv run python run.py --list-jobs
+### Data Ingestion
+- Ingestion pipeline xử lý file partner theo mapping config động thay vì hardcode parser.
+- Hỗ trợ nhiều fetch method: `FILEDROP`, `SFTP`, `API`.
+- Có duplicate detection bằng file hash.
+- Có processing stats theo file: `totalRows`, `successRows`, `failedRows`, `processingStatus`.
 
-# Manually trigger the daily fetch job immediately
-uv run python run.py --run-job-now
-```
+### Dynamic Mapping Configuration
+- Mapping config được lưu trong MongoDB và load theo `partner + workflow + fileType`.
+- Có approval flow qua `review_packet` trước khi activate mapping mới.
+- Có runtime validation gate để test mapping trên file thực trước khi approve.
+- Có AI-generated mapping proposal nhưng vẫn qua validation/review trước khi áp dụng.
 
-### 3.1 Run Scheduler via Docker Compose
-To run the scheduler in the background as a Docker container (highly recommended for local/production):
-```bash
-# Build and start all services (including the scheduler daemon)
-docker compose up -d --build
+### Reconciliation Engine
+- Đối soát deterministic giữa partner records và internal transactions.
+- Phân loại rõ nhiều loại kết quả mismatch.
+- Có lọc internal transactions theo trạng thái finalized (`SUCCESS`, `FAILED`, `REVERSED`).
+- Có scope-aware reconciliation:
+  - `FULL_SNAPSHOT`
+  - `INCREMENTAL_APPEND`
+  - `REPLACEMENT`
+  - `UNCONFIRMED`
 
-# View real-time logs of the scheduler
-docker logs -f reconciliation-scheduler
-```
+### API Layer
+- FastAPI app factory, OpenAPI docs, router tách theo domain.
+- Có nhóm endpoint cho reconciliation, data explorer, mappings, review packets, automation, AI insights.
+- API phục vụ cả dashboard vận hành và kiểm thử thủ công.
 
-### 4. Transaction Reconciliation
+### Dashboard / Operations UI
+- Dashboard local cho vận hành với các màn chính:
+  - Command Center
+  - Data Intake
+  - Review Queue
+  - Reconciliation
+  - Mapping Studio
+- Review Queue hỗ trợ duyệt mapping config và scope proposal.
 
-Run the deterministic reconciliation engine to compare ingested partner data against internal system transactions:
+### AI-assisted Insights / Mapping
+- AI dùng để sinh insight từ dữ liệu aggregate và anomaly đã được deterministic pre-process.
+- AI cũng hỗ trợ generate mapping proposal từ sample file.
+- Có cache, fallback, và structured output trong insight flow.
 
-```bash
-# Seed mock internal transactions for testing
-uv run python run.py --reconcile 2024-07-07 --partner MOMO --seed-mock
+### Observability / Logging
+- Structured logging cho fetch / ingest / reconcile / analysis flow.
+- Có processing stats theo file và runtime status theo từng bước.
 
-# Run reconciliation without seeding (uses existing internal_transaction data)
-uv run python run.py --reconcile 2024-07-07 --partner MOMO
+### Dockerized Local Development
+- Có Docker Compose cho MongoDB, API, scheduler, SFTP, mongo-express.
+- Thuận tiện để dựng local environment và test end-to-end.
 
-# Alternative syntax using subcommand style
-uv run python run.py reconcile --date 2024-07-07 --partner MOMO
-```
-
-Results are stored in the `reconciliation_result` collection with statuses: `MATCHED`, `AMOUNT_MISMATCH`, `STATUS_MISMATCH`, `MULTIPLE_MISMATCH`, `MISSING_INTERNAL`, `MISSING_PARTNER`, `UNMAPPED_SKIPPED` (records skipped due to invalid normalized data).
-
-### 5. AI Analysis Layer
-
-Run the AI-powered analysis engine to generate actionable insights from reconciliation results. The layer uses OpenAI-compatible LLMs (GPT-4o default) to analyze mismatch patterns, detect operational issues, and produce daily reports — **without exposing raw transaction data** to the LLM.
-
-```bash
-# Start the FastAPI API server (default port 8000)
-uv run python run.py serve
-
-# Query AI insights via API
-curl "http://localhost:8000/api/v1/insights/summary?partner=MOMO&date=2024-07-07"
-curl "http://localhost:8000/api/v1/insights/discrepancies?partner=MOMO&date=2024-07-07&focus=operational"
-curl "http://localhost:8000/api/v1/reports/daily?date=2024-07-07"
-```
-
-**Analysis Focus Types:**
-
-| Focus | Use Case | Detects |
-|-------|----------|---------|
-| `operational` | Pipeline health | Missing internal/partner records, ingestion delays |
-| `partner` | Partner behavior | Mismatch rate trends, volume anomalies, stability |
-| `inconsistency` | Data quality | Amount mismatch clusters, status mismatch patterns |
-
-**Design Principles:**
-- **No raw data to LLM** — only aggregated metrics, grouped stats, and pre-processed anomalies
-- **LLM fallback** — if LLM fails, returns rule-based insights only
-- **Provider abstraction** — OpenAI-compatible (GPT-4o) default, Ollama deferred
-
-### 6. Reconciliation & Data Explorer API
-
-Read-only FastAPI endpoints for querying reconciliation results and browsing raw transaction data:
-
-```bash
-# Start the FastAPI server
-uv run python run.py serve
-```
-
-**Reconciliation API** (`/api/v1/reconciliation`):
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /results?partner=X&date=Y&status=Z&limit=N&offset=M` | Query reconciliation results with optional status filter and pagination |
-| `GET /results/{id}` | Get single reconciliation result by partner transaction ID |
-| `GET /insights?partner=X&date=Y&type=summary|anomalies|patterns|recommendations` | AI-powered reconciliation insights with 4 analysis focus types |
-| `GET /stats?partner=X&date=Y` | Aggregated counts by status + total amounts |
-
-**Data Explorer API** (`/api/v1/data`):
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /transactions?partner=X&date=Y&trace=Z&status=W&amountMin=N&amountMax=M&dateFrom=D&dateTo=T` | Browse DataContainer records with optional filters (amount range, date range) and pagination |
-| `GET /transactions/{id}` | Get single transaction by UUID |
-| `GET /files?partner=X&date=Y&status=Z` | List reconciliation files with optional filters |
-| `GET /files/{id}` | Get file detail with associated transaction count |
-| `GET /stats?partner=X&date=Y` | Aggregate data volume statistics |
-
-**Mapping Config API v2** (`/api/v1/mapping`):
-
-| Endpoint | Description |
-|----------|-------------|
-| `POST /ai-generate?partner=X` | Upload sample spreadsheet — AI generates field mappings automatically |
-| `POST /validate` | Validate mapping config rules (required fields, duplicate columns, empty sources) |
-| `POST /test` | Test transformation of a sample row against a mapping config |
-| `POST /publish` | Publish mapping config to MongoDB with version history snapshot |
-| `GET /versions?partner=X` | List published config versions for a partner, sorted by date |
-| `GET /version/{id}` | Get a specific version by ID from history collection |
-
-### 6.1 Copilot API (/api/v1/copilot)
-
-Embedded recommendation engine for the dashboard, providing contextual status, actions, and decision support per screen:
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /context?partner=X&date=Y&screen=intake|review|reconciliation|automation` | Get contextual Copilot recommendation |
-| `GET /context/file/{file_id}?partner=X&screen=...` | Get Copilot context for a specific file |
-| `POST /actions/{action_key}` | Execute Copilot action |
-| `GET /actions?status=X&partner=Y` | List Copilot action audit trail |
-| `POST /actions/{action_id}/approve` | Legacy: Approve a Copilot action |
-| `POST /actions/{action_id}/reject` | Legacy: Reject a Copilot action |
-
-### 7. Operations Dashboard (Web UI)
-
-A browser-based dashboard for monitoring and managing the platform:
-
-```bash
-# Terminal 1 — Start the FastAPI backend
-uv run python run.py serve --port 8000
-
-# Terminal 2 — Start the Vite frontend dev server
-cd frontend
-npm run dev
-```
-
-Then open `http://localhost:5173`.
-
-**Dashboard Features:**
-
-- **Command Center** — Top-level metrics, AI risk insight tabs (Operational / Partner Trends / Data Inconsistencies), action queue with severity-sorted anomalies, date/partner filtering
-- **Data Intake** — Partner-level summary cards (ACTIVE / NEEDS_REVIEW / BLOCKED / NO_ACTIVITY), real-time file and config activity feed, pending review items with direct links to Review Queue / Approval Desk, active runtime config inspection
-- **Review Queue** — Approval desk with full packet context: right-side drawer showing current runtime, parse strategy, validation gates (pass/warn/fail), sample preview rows. Three decision buttons: Approve & Activate Next Runtime, Approve Keep Current, Reject. Upload button to submit a file directly for review (creates proposal + packet + auto-routes here)
-- **Reconciliation** — Deterministic mismatch review with status filter and pagination
-- **Mapping Studio** — 3-step guided proposal workflow:
-  1. **Choose Source** — Upload a partner sample spreadsheet (`.xlsx/.xls/.csv`) for AI auto-generation, upload an existing JSON schema, or paste a JSON template
-  2. **Data Preview & AI Mapping** — Inspect detected file structure, tweak AI-proposed column mappings in the visual mapper or raw JSON editor, accept AI-suggested constants
-  3. **Validation & Test** — Quality score with checklist (required fields, duplicate mappings, empty sources), run transformation tests on sample rows, browse version history. Proposal is saved as `PENDING_APPROVAL` and handed off to Review Queue
-- **Automation** — Visibility into scheduled fetch configs, pending review packets per partner, Run Now (real execution — no fake toast), recent automation review output cards
-- **AI Insights** — LLM-generated insights, discrepancy analysis, daily reports (accessible via API)
-- **Settings** — Configure partner mappings and system settings
-
-### 8. Running Tests
-To run unit and integration tests:
-```bash
-uv run python -m pytest -v
-```
-
-To run end-to-end tests with real MongoDB and OpenAI API:
-```bash
-# Set environment variables (fish shell)
-set -x E2E_MONGODB_URL "mongodb://admin:admin123@localhost:27017/reconciliation?authSource=admin"
-set -x E2E_AI_API_KEY "sk-xxx"
-set -x E2E_AI_MODEL "gpt-4o-mini"
-set -x E2E_AI_ENDPOINT "https://api.openai.com/v1"
-set -x E2E_DB_NAME "reconciliation"
-uv run python -m pytest tests/test_analysis_e2e.py -v --e2e
-
-# Or via bash
-bash -c 'source .env && export E2E_MONGODB_URL="$APP_MONGODB_URL" E2E_AI_API_KEY="$AI_API_KEY" E2E_AI_MODEL="$AI_MODEL" E2E_AI_ENDPOINT="$AI_ENDPOINT" E2E_DB_NAME="$APP_DB_NAME" && uv run python -m pytest tests/test_analysis_e2e.py -v --e2e'
-```
-
-E2E tests verify: AI actually analyzes real data, detects operational issues, identifies amount mismatch patterns, handles clean data, follows JSON schema, differentiates focus types, respects privacy contract, and handles 1000+ transactions.
-
----
-
-## MongoDB Indexes & Their Purpose
-
-MongoDB indexes are defined in [indexes.py](file:///home/kuokdavinci/AdapterService/src/models/indexes.py) and applied **automatically on startup** in `run.py`.
-
-* **`idx_file_hash_unique` (Unique index on `fileHash` in `reconciliation_file`)**:
-  - *Purpose*: Prevents processing/ingesting the exact same file twice (idempotency/duplicate file prevention).
-* **`idx_partner_date` (Compound index on `partner + reconciliationDate` in `reconciliation_file`)**:
-  - *Purpose*: Optimizes lookups when querying reconciliation history/status by partner on a specific date.
-* **`idx_partner_workflow_type` (Compound index on `partner + workflowType + fileType` in `reconciliation_mapping_config`)**:
-  - *Purpose*: Ensures ultra-fast loading of mapping configurations for a specific partner's flow.
-* **`idx_trace` (Index on `partnerData.trace` in `data_container`)**:
-  - *Purpose*: Speeds up transaction reconciliation (matching transactions by transaction trace/ID).
-* **`idx_identify_date` (Compound index on `identify + reconciliationDate` in `data_container`)**:
-  - *Purpose*: Optimizes queries fetching all normalized transactions of a partner on a specific date.
-* **`idx_operation_status` (Index on `operationStatus` in `data_container`)**:
-  - *Purpose*: Facilitates filtering transactions based on validation status (`SUCCESS`, `FAILED`, etc.).
-* **`idx_partner_status` (Index on `partnerData.status` in `data_container`)**:
-  - *Purpose*: Speeds up queries searching by partner's original transaction status.
-* **`idx_source_file` (Index on `sourceFileId` in `data_container`)**:
-  - *Purpose*: Associates transaction rows back to their parent import file record (auditing/cleanups).
-* **`idx_internal_partner_txn_id` (Index on `partnerTxnId` in `internal_transaction`)**:
-  - *Purpose*: Speeds up reconciliation matching by reconciliation key lookup.
-* **`idx_internal_partner_txn_time` (Compound index on `partner + transactionTime` in `internal_transaction`)**:
-  - *Purpose*: Optimizes fetching internal records by partner and date range during reconciliation.
-* **`idx_recon_partner_txn_id` (Index on `partnerTxnId` in `reconciliation_result`)**:
-  - *Purpose*: Fast lookup for idempotent result writes (delete existing + re-insert).
-* **`idx_recon_status` (Index on `reconciliationStatus` in `reconciliation_result`)**:
-  - *Purpose*: Enables filtering/summarization by reconciliation status (MATCHED, MISMATCH, etc.).
-
-## Architecture
-
-```
-                         ┌────────────────────────────────────────────┐
-                         │           Operations Dashboard            │
-                         │  (frontend/ — Vanilla JS SPA + Proxy)     │
-                         │                                            │
-                         │  Command Center · Data Intake              │
-                         │  Review Queue · Reconciliation             │
-                         │  Mapping Studio · Automation               │
-                         └──────┬─────────────────────────────────────┘
-                                │ HTTP /api/*
-                                ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                     FastAPI Server (src/api/)                       │
-│                                                                    │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
-│  │  operations  │  │ review_      │  │  automation              │  │
-│  │  /intake     │  │ packets/*    │  │  /jobs • /jobs/{p}/run   │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────────┘  │
-│         │                 │                      │                  │
-│  ┌──────┴───────┐  ┌──────┴───────┐  ┌──────────┴───────────────┐  │
-│  │  mappings    │  │  insights    │  │  reconciliation          │  │
-│  │  /mappings   │  │  /insights   │  │  /reconciliation/results │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────────┘  │
-│         │                 │                      │                  │
-│         └────────┬────────┘                      │                  │
-│                  ▼                                ▼                  │
-│         ┌────────────────┐           ┌──────────────────────┐      │
-│         │  AI Analysis   │           │  ReconciliationEng   │      │
-│         │  (insights)    │           │  (deterministic)     │      │
-│         └───────┬────────┘           └──────────┬───────────┘      │
-└─────────────────┼───────────────────────────────┼──────────────────┘
-                  │                               │
-                  ▼                               ▼
-     ┌──────────────────────────────────────────────────────┐
-     │                      MongoDB                          │
-     │                                                        │
-     │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-     │  │ data_        │  │ internal_    │  │reconciliation_│  │
-     │  │ container    │  │ transaction  │  │  result      │  │
-     │  ├──────────────┤  ├──────────────┤  ├──────────────┤  │
-     │  │reconciliation│  │reconciliation│  │ mapping_config│  │
-     │  │  _file       │  │_mapping_    │  │  (APPROVED /  │  │
-     │  │              │  │ config      │  │  PENDING_     │  │
-     │  │              │  │              │  │  APPROVAL)    │  │
-     │  ├──────────────┤  ├──────────────┤  ├──────────────┤  │
-     │  │ review_      │  │ copilot_    │  │ fetch_config  │  │
-     │  │ packet       │  │ action      │  │              │  │
-     │  └──────────────┘  └──────────────┘  └──────────────┘  │
-     └────────────────────────────────────────────────────────┘
-                           ▲
-                           │
-              ┌────────────┴─────────────────┐
-              │        Config Health          │
-              │  (src/config/config_health.py)│
-              │                               │
-              │  1. compute_signature()        │
-              │  2. Detect stale config         │
-              │  3. AI generate proposal        │
-              │  4. Create ReviewPacket         │
-              │  5. Pending approval            │
-              └────────────────────────────────┘
-                           ▲
-                           │
-              ┌────────────┴─────────────────┐
-              │  Scheduler (APScheduler)      │
-              │  (src/scheduler/jobs.py)      │
-              │                               │
-              │  • daily_partner_fetch_job    │
-              │  • run_fetch_config_once      │
-              │  • Triggers Config Health     │
-              │    → creates ReviewPacket     │
-              └────────────────────────────────┘
-
-Ingestion Pipeline (existing, unchanged):
-  ExcelStreamReader → TransactionNormalizer → Validator → DataContainerRepo
-                    ↕
-              ConfigLoader → MappingConfig (cached)
-```
+### Testing
+- Có test cho reconciliation core, ingestion flow, API behavior, AI analysis orchestration, seed/tooling.
+- Hiện tại test tập trung mạnh hơn ở core logic so với UI.
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|------------|
-| Language | Python 3.14 |
-| Database | MongoDB + motor (async driver) |
-| Excel | openpyxl (read-only/streaming mode) |
-| Validation | pydantic v2 |
-| Config | pydantic-settings (env prefix `APP_`) |
-| Decimal | `Decimal` (never float for money) |
-| Logging | Python stdlib `logging` with JSON formatter |
-| Testing | pytest + pytest-asyncio |
-| AI/LLM | httpx (OpenAI-compatible API), GPT-4o default |
-| API | FastAPI + uvicorn |
-| Scheduler | APScheduler (persistent, MongoDB-backed) |
-| Frontend | Vanilla JS SPA (no build step) — served via `frontend/server.py` proxy |
-| Proxy | Python `http.server` with `/api` reverse proxy to FastAPI |
+- **Backend:** Python, FastAPI, Uvicorn
+- **Database:** MongoDB, Motor
+- **Data Processing:** openpyxl, custom streaming readers, normalizer, validator
+- **Scheduling / Automation:** APScheduler
+- **AI:** OpenAI-compatible provider abstraction trong `src/analysis/providers`
+- **Frontend / Dashboard:** HTML, CSS, JavaScript (`frontend/`)
+- **Infra:** Docker, Docker Compose
+- **Testing:** pytest, pytest-asyncio
 
-## Key Features
+## Kiến trúc hệ thống
 
-- **Zero hardcoded parsers** — all column mapping, transformations, and status normalization are defined in MongoDB `MappingConfig` documents
-- **Memory-efficient** — openpyxl read-only mode streams rows, constant memory regardless of file size
-- **Duplicate prevention** — SHA256 file hash + composite key (identify + reconciliationDate + trace)
-- **Batch insertion** — configurable batch size (default 100) for efficient MongoDB writes
-- **Structured logging** — JSON output with 5 event types (FILE_STARTED, FILE_COMPLETED, FILE_FAILED, ROW_SUCCESS, ROW_FAILED)
-- **Deterministic reconciliation** — matches partner transactions to internal records by `partnerTxnId`, classifies results into MATCHED / mismatch variants / MISSING, stores in `reconciliation_result`
-- **Status normalization** — Vietnamese status strings (Thành công, Thất bại, Hoàn tiền) normalized to standard enums
-- **Duplicate resolution** — latest `updatedAt` wins for multiple internal records with same `partnerTxnId`
-- **Audit trail** — every record includes createdBy, createdDate, lastModifiedBy, lastModifiedDate
-- **AI-powered analysis** — LLM generates actionable insights from reconciliation results (mismatch patterns, operational issues, daily reports) with privacy-by-design (no raw data sent to LLM)
-- **Automated scheduling** — APScheduler daemon fetches partner files via SFTP on cron schedules, with persistent job state in MongoDB
-- **FastAPI REST API** — serves AI insights, reconciliation results, data explorer, mapping config endpoints, and Mapping Studio v2
-- **Operations Dashboard** — browser-based UI with Overview, Reconciliation, Mapping Configs, AI Insights, Mapping Studio tabs
-- **Data flow guard** — ReconciliationEngine pre-checks each partner record for valid normalized data before processing; invalid records are skipped with structured warning logs and tracked in stats
-- **AI config auto-generation** — upload partner sample files; AI infers field mappings, data types, constants, and status normalization rules automatically
-- **Config health auto-detection** — file structure signatures (MD5 of headers + column count) detect stale configs; error rate > 20% triggers AI re-generation; low-confidence outputs are saved as `PENDING_REVIEW` for manual approval
-- **Self-healing pipeline** — `IngestionPipeline` calls `check_and_refresh_config()` before each run and `record_config_run_health()` after, enabling automatic recovery from partner file format changes
-- **Config version history** — every publish snapshots to `reconciliation_mapping_config_history` with version restore support from the dashboard
-- **Multi-format raw signature reader** — `compute_signature()` reads CSV, TSV, XLSX, and JSON without a MappingConfig, enabling structure fingerprinting for any partner file
-- **Graceful sheet fallback** — `ExcelStreamReader` falls back to the active/first sheet when the configured sheet name is missing, with a structured warning log
-- **Central approval model** — `review_packet` collection is the single source of truth for all config-change approvals. Every config proposal creates a packet, whether triggered by upload, scheduler job, or config health drift
-- **Right-side approval drawer** — Review Queue displays a detailed packet drawer with current context, parse strategy, validation gates, sample preview, and two distinct approve actions (activate-next-runtime vs keep-current-for-file)
-- **Direct intake upload** — Uploading a file from Review Queue creates a `MappingConfig` proposal + `ReviewPacket` + `CopilotAction` atomically in a single transaction
-- **Mapping Studio handoff** — "Open in Mapping Studio" sends packet/proposal context (headers, sample rows, config ID) so the operator can refine the AI-generated proposal before returning to approve
-- **Automation visibility** — `GET /api/v1/automation/jobs` returns all enabled fetch configs with pending packet counts and recent packet status per partner
-- **Automation Run Now** — triggers real `run_fetch_config_once()` execution; creates a `SCHEDULER_JOB`-source `ReviewPacket` if format drift is detected; results reflected immediately in automation and review queue views
-- **`MappingConfigStatus` lifecycle** — configs transition through `PENDING_APPROVAL` → `APPROVED` (or `REJECTED`) → `SUPERSEDED` (when a newer config is approved). Superseded configs are preserved for audit
-- **Data Intake partner state** — Each partner is computed as `ACTIVE`, `NEEDS_REVIEW`, `BLOCKED`, or `NO_ACTIVITY` based on approved configs, pending packets, and recent files
+```mermaid
+flowchart LR
+    A[Partner Data Sources\nFILEDROP / SFTP / API] --> B[Fetch Layer]
+    B --> C[Ingestion Pipeline]
+    C --> D[Mapping Config Loader]
+    D --> E[Normalization / Validation]
+    E --> F[(MongoDB)]
+    F --> G[Reconciliation Engine]
+    G --> H[FastAPI API Layer]
+    H --> I[Dashboard / Operations UI]
+    G --> J[AI Insight Layer]
+    J --> H
+```
 
-## Project Structure
+**Giải thích nhanh**
+- **Fetch Layer:** lấy file hoặc payload từ partner.
+- **Ingestion Pipeline:** tạo file record, load config, parse, normalize, validate, persist.
+- **Mapping Config Loader:** cung cấp mapping config runtime theo partner/workflow/fileType.
+- **MongoDB:** lưu file metadata, data canonical, internal transactions, reconciliation results, review packets.
+- **Reconciliation Engine:** so khớp deterministic giữa partner data và internal data.
+- **API Layer:** expose data cho dashboard, automation, review, insights.
+- **AI Insight Layer:** tạo insight và proposal dựa trên dữ liệu aggregate / sample.
+
+## Luồng xử lý chính
+
+1. Nhận dữ liệu/file từ partner qua `FILEDROP`, `SFTP`, hoặc `API`.
+2. Tạo `reconciliation_file` record và load `mapping config` tương ứng.
+3. Parse file và normalize từng transaction về schema canonical.
+4. Validate schema và business rules ở mức row.
+5. Lưu normalized records vào `data_container`.
+6. Chạy reconciliation với `internal_transaction`.
+7. Phân loại kết quả thành matched / missing / mismatched.
+8. Tạo metrics, grouped stats, anomalies, AI insights nếu cần.
+9. Expose kết quả qua FastAPI và dashboard.
+
+## AI Integration
+
+AI trong dự án này là **enhancement layer**, không thay thế deterministic reconciliation.
+
+AI hiện được dùng cho:
+- sinh insight từ aggregated metrics và anomaly đã được pre-process
+- generate hoặc gợi ý `mapping config` từ sample file
+- tóm tắt các discrepancy patterns cho dashboard / operator
+
+Guardrail hiện có trong codebase:
+- reconciliation vẫn là deterministic, không phụ thuộc vào LLM
+- insight flow có fallback/rule-based khi provider fail
+- có structured output / parsing trong analysis flow
+- mapping do AI generate vẫn phải qua validation và review packet trước khi activate
+
+Điểm cần lưu ý:
+- README này không claim rằng toàn bộ raw financial data được gửi nguyên trạng lên LLM
+- theo thiết kế hiện tại, layer insight chủ yếu dùng metrics, grouped stats, và anomaly summaries
+- nếu mở rộng AI sâu hơn trong tương lai, nên duy trì nguyên tắc deterministic-first và review-before-apply
+
+## API Overview
+
+Các nhóm endpoint chính:
+
+- **Reconciliation APIs**
+  - tra cứu kết quả reconciliation
+  - thống kê theo status
+- **Data Explorer APIs**
+  - xem transaction đã ingest
+  - xem file processing status
+- **Mapping Config APIs**
+  - list/create/approve mapping
+  - AI generate proposal
+  - validate/test mapping
+- **Review Packet APIs**
+  - list packet chờ duyệt
+  - approve / reject / keep current / activate
+- **Automation APIs**
+  - run scheduler job thủ công
+  - xem trạng thái job
+- **AI Insight APIs**
+  - summary
+  - discrepancies
+  - partner-level report
+
+Swagger / OpenAPI local:
+- `http://localhost:8000/docs`
+
+## Cài đặt và chạy dự án
+
+### 1. Clone repo
+
+```bash
+git clone <repo-url>
+cd AdapterService
+```
+
+### 2. Tạo `.env`
+
+```bash
+cp .env.example .env
+```
+
+Điền tối thiểu các biến quan trọng:
+- `MONGO_ROOT_USER`
+- `MONGO_ROOT_PASSWORD`
+- `APP_MONGODB_URL`
+- `SFTP_USER`
+- `SFTP_PASS`
+
+Nếu muốn bật AI provider ngoài local config mặc định, bổ sung:
+- `AI_PROVIDER`
+- `AI_MODEL`
+- `AI_ENDPOINT`
+- `AI_API_KEY`
+
+### 3. Cài dependencies local
+
+```bash
+uv sync --all-extras
+```
+
+### 4. Chạy stack bằng Docker Compose
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+Services chính:
+- MongoDB: `localhost:27017`
+- API: `http://localhost:8000`
+- Swagger: `http://localhost:8000/docs`
+- mongo-express: `http://localhost:8081`
+
+### 5. Chạy dashboard local
+
+```bash
+python frontend/server.py --port 5173 --api http://localhost:8000
+```
+
+Mở:
+- `http://localhost:5173`
+
+### 6. Trigger một automation job thủ công
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .
+```
+
+### 7. Chạy MOMO E2E flow nhanh
+
+```bash
+make momo-e2e-reset
+make momo-e2e-run
+make momo-e2e-phase2
+make momo-e2e-run
+```
+
+Chi tiết flow:
+- xem [momo_e2e_test_guide.md](/home/kuokdavinci/AdapterService/momo_e2e_test_guide.md)
+
+## Cấu trúc thư mục
+
+```text
+.
+├── src/
+│   ├── api/              # FastAPI routers
+│   ├── analysis/         # AI insights, prompts, provider abstraction
+│   ├── config/           # mapping config, signature, config health
+│   ├── fetchers/         # FILEDROP / SFTP / API fetchers
+│   ├── models/           # Pydantic models + Mongo repositories
+│   ├── normalizer/       # normalize partner rows -> canonical transactions
+│   ├── pipeline/         # ingestion pipeline
+│   ├── readers/          # file readers
+│   ├── reconciliation/   # reconciliation engine + scope logic
+│   ├── scheduler/        # APScheduler jobs
+│   └── validators/       # schema / business validation
+├── frontend/             # dashboard local (HTML/CSS/JS)
+├── tests/                # unit / integration / API tests
+├── scratch/              # seed scripts, debug helpers
+├── docker-compose.yml    # local stack
+├── Makefile              # test + MOMO E2E shortcuts
+└── run.py                # local entrypoint helpers
+```
+
+## Testing
+
+Chạy toàn bộ test chính:
+
+```bash
+make test
+```
+
+Chạy nhanh:
+
+```bash
+make test-quick
+```
+
+Chạy nhóm analysis:
+
+```bash
+make test-analysis
+```
+
+Chạy reconciliation core:
+
+```bash
+uv run pytest tests/test_reconciliation.py -v
+```
+
+Chạy seed/tooling test:
+
+```bash
+uv run pytest tests/test_seed_momo_e2e.py -v
+```
+
+Phân loại test hiện tại:
+- **Unit tests:** model, config, reconciliation, analysis services
+- **Integration tests:** ingestion flow, scheduler/job flow, seed/tooling
+- **API tests:** reconciliation, mappings, review packets, automation, insights
+
+Ghi chú trung thực:
+- hiện tại test tập trung mạnh vào core reconciliation và ingestion logic
+- UI test automation chưa phải phần mạnh nhất của repo
+
+## Ví dụ use case
+
+Một payment partner gửi file giao dịch hằng ngày. Hệ thống đọc file, map các cột dữ liệu đặc thù của partner sang schema nội bộ, validate dữ liệu, lưu vào MongoDB, chạy đối soát với dữ liệu nội bộ, phân loại mismatch và hiển thị kết quả qua API/dashboard. Nếu format file thay đổi, hệ thống có thể tạo mapping proposal mới và yêu cầu reviewer phê duyệt trước khi tiếp tục runtime.
+
+## Ảnh minh họa / Demo
+
+Hiện tại README chưa có screenshot. Các ảnh minh họa sẽ được bổ sung sau để giúp người xem nắm nhanh giao diện và luồng xử lý.
+
+- [ ] Dashboard tổng quan
+- [ ] Kết quả đối soát
+- [ ] Mapping Config UI
+- [ ] AI Insight Panel
+- [ ] Swagger/OpenAPI docs
+
+## Vai trò của tôi trong dự án
+
+Tôi thiết kế và triển khai các thành phần chính của hệ thống, bao gồm:
+- ingestion pipeline cho dữ liệu partner
+- mapping config engine và approval flow
+- reconciliation logic và scope-aware behavior
+- API layer bằng FastAPI
+- AI insight / mapping support theo hướng deterministic-first
+- dashboard integration cho vận hành nội bộ
+- Docker Compose setup, local tooling, và test setup
 
 ```
 src/
@@ -435,101 +438,18 @@ tests/              # 600+ unit/integration tests
 ├── test_*.py                    # Core, config, readers, normalizer, pipeline, etc.
 ```
 
-## MongoDB Collections
+- Dự án hiện tối ưu trước cho local/demo environment và portfolio use case.
+- AI-generated mapping vẫn cần validation/review trước khi áp dụng.
+- Chưa thấy bằng chứng benchmark đầy đủ với dataset rất lớn trong README hiện tại.
+- Authentication/authorization chưa phải trọng tâm chính của codebase hiện tại.
+- `REPLACEMENT` đã có semantics thực dụng theo key overlap, nhưng vẫn có thể mở rộng thêm bằng `scopeKey/batchKey` nếu nghiệp vụ phức tạp hơn.
 
-| Collection | Purpose | Key Indexes |
-|------------|---------|-------------|
-| `reconciliation_file` | Track uploaded files, processing stats | `fileHash` (unique), `partner + reconciliationDate` |
-| `reconciliation_mapping_config` | Dynamic parsing configuration per partner | `partner + workflowType + fileType` |
-| `data_container` | Canonical normalized transactions | `partnerData.trace`, `identify + reconciliationDate`, `operationStatus` |
-| `internal_transaction` | Internal system records (Source of Truth) for reconciliation matching | `partnerTxnId`, `partner + transactionTime` |
-| `reconciliation_result` | Reconciliation matching output with discrepancy reports | `partnerTxnId`, `reconciliationStatus`, `partner + date` (for AI queries) |
-| `review_packet` | Central approval desk — every config proposal creates a packet. Status lifecycle: PENDING → APPROVED/REJECTED → SUPERSEDED | `status`, `partner`, `proposalConfigId` |
-| `copilot_action` | Audit trail for AI-generated proposals (proposed mappings, confidence, reasoning) | `status`, `partner`, `targetConfigId` |
-| `fetch_config` | Scheduler/automation route configuration per partner (fetch method, schedule, credentials) | `partner` |
-| `apscheduler_jobs` | Persistent job scheduler state | `_id` |
+## Roadmap
 
-## Configuration
-
-All settings use `APP_` prefix environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `APP_MONGODB_URL` | `mongodb://localhost:27017` | MongoDB connection string |
-| `APP_DB_NAME` | `reconciliation` | Database name |
-| `APP_LOG_LEVEL` | `INFO` | Log level (DEBUG/INFO/WARNING/ERROR) |
-| `APP_LOG_FORMAT` | `json` | Log format (json/text) |
-| `APP_APP_NAME` | `reconciliation-ingestion` | Application name |
-| `ENCRYPTION_KEY` | None | Encryption/decryption key for sensitive partner credentials |
-
-### AI Analysis Layer Configuration
-
-All settings use `AI_` prefix environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AI_PROVIDER` | `openai` | LLM provider type: `openai` \| `ollama` |
-| `AI_MODEL` | `gpt-4o-mini` | Model name for the selected provider |
-| `AI_ENDPOINT` | `https://api.openai.com/v1` | API endpoint URL (OpenAI-compatible) |
-| `AI_API_KEY` | — | API key for the LLM provider |
-| `AI_TIMEOUT` | `30` | HTTP timeout in seconds for LLM calls |
-| `AI_MAX_RETRIES` | `2` | Maximum retry attempts on failure |
-| `AI_ALERT_MISMATCH_RATE_THRESHOLD` | `5.0` | Mismatch rate % threshold for alerts |
-| `AI_ALERT_MISSING_COUNT_THRESHOLD` | `10` | Missing transaction count threshold for alerts |
-
-## Onboarding a New Partner
-
-1. Insert a `MappingConfig` document into `reconciliation_mapping_config` with field mappings
-2. No code changes needed — the platform reads config dynamically
-
-Example MappingConfig:
-```json
-{
-  "partner": "MOMO",
-  "workflowType": "UPC",
-  "fileType": "SETTLEMENT",
-  "sheetName": "Sheet1",
-  "startRow": 2,
-  "fieldMappings": [
-    { "path": "id", "column": "A", "type": "STRING", "required": true },
-    { "path": "amount", "column": "D", "type": "DECIMAL" },
-    { "path": "currency", "constant": "VND", "type": "CONSTANT" },
-    { "path": "status", "column": "Q", "type": "MAPPING", "mapping": { "Thành công": "SUCCESS", "others": "FAILED" } }
-  ]
-}
-```
-
-## Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| Decimal, never float | Prevent floating-point precision errors in financial calculations |
-| partnerData as nested object | Easier MongoDB querying, indexing, aggregation |
-| camelCase aliases in MongoDB | Matches requirement.md schema, industry standard |
-| Error collection (not fail-fast) | Full audit trail — every row error is recorded |
-| openpyxl read-only mode | Constant memory for large files (100K+ rows) |
-| Reconciliation: deterministic by partnerTxnId | Same input always produces same classification output |
-| Reconciliation: delete+re-insert pattern | Idempotent — safe to re-run without accumulating duplicates |
-| Status normalization for Vietnamese | Matches Thành công / Thất bại / Hoàn tiền to standard TransactionStatus |
-| AI: no raw data to LLM | Privacy-by-design — only aggregated metrics, grouped stats, pre-processed anomalies |
-| AI: LLM fallback to rule-based | Graceful degradation — insights still available when LLM is unavailable |
-| AI: provider abstraction | Swappable LLM backends (OpenAI-compatible, Ollama deferred) |
-| Reconciliation: pre-check guard | Skip unnormalized records with warning log + `UNMAPPED_SKIPPED` status before processing — prevents silent errors and tracks in stats |
-| Config health: structure signature fingerprint | MD5 of headers + column count provides cheap staleness detection before AI generation |
-| Config health: error rate threshold (20%) | Failed-row ratio detects semantic drift (wrong columns, status values, date formats) even when header structure matches |
-| Config health: PENDING_REVIEW for low confidence | AI-generated configs below 85% confidence require human approval before auto-application — prevents silent misconfiguration |
-| Config health: self-healing pipeline | `check_and_refresh_config` runs before each ingestion; `record_config_run_health` runs after — ensures automatic recovery without manual intervention |
-| Config health: PENDING_APPROVAL with review_packet | AI-generated proposals go through `ReviewPacket` before activation — no silent config switch |
-| Approval model: review_packet as single source of truth | Every config-change attempt creates a packet (upload, scheduler, health drift). Operators approve/reject in one place |
-| Approval: two distinct approve actions | "Approve & Activate Next Runtime" supersedes current config; "Approve Keep Current" uses config for this file only without replacing runtime |
-| Mapping Studio: proposal handoff | "Open In Mapping Studio" passes full packet context (proposal config ID, sample rows, headers) — operator refines then returns to approve |
-| Mapping Studio: 3-step guided flow | Upload → Preview/Tweak → Validate/Handoff reduces partner onboarding friction |
-| Mapping Studio: version history on publish | Every publish snapshots the full config to a history collection — enables rollback and audit trail |
-| Automation Run Now: real execution | Triggers actual `run_fetch_config_once()` — not a mock toast. Results appear immediately in packets and job status |
-| Data Intake: computed partner state | `_compute_partner_state()` derives ACTIVE/BLOCKED/NEEDS_REVIEW/NO_ACTIVITY from configs, packets, and files — no hardcoded logic |
-| Excel reader: fallback_on_missing_sheet | Graceful degradation when partner renames a sheet — logs warning instead of crashing the pipeline |
-| UI: vanilla JS SPA | No build step, no framework dependency — serve `index.html` directly or via proxy server |
-
-## License
-
-Private — internal use only.
+- Bổ sung authentication / authorization cho dashboard và API
+- Thêm persistent job queue cho reconciliation job lớn
+- Tăng test coverage cho UI flow và cross-module integration
+- Bổ sung CI quality gate
+- Bổ sung screenshot / demo video
+- Mở rộng audit trail cho mapping config approval và scope override
+- Benchmark hiệu năng với dataset lớn hơn

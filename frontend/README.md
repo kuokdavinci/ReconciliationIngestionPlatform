@@ -19,8 +19,9 @@ Vanilla JS Single-Page Application for the Reconciliation Ingestion Platform.
 # Terminal 1 — Start the FastAPI backend
 uv run python run.py serve --port 8000
 
-# Terminal 2 — Start the frontend proxy server
-python frontend/server.py --port 5173 --api http://localhost:8000
+# Terminal 2 — Start the Vite frontend dev server
+cd frontend
+npm run dev
 ```
 
 Then open `http://localhost:5173`.
@@ -29,8 +30,9 @@ Then open `http://localhost:5173`.
 
 - `index.html` — App shell with nav, header, viewport
 - `styles.css` — Responsive admin UI (dark sidebar, panels, review drawer, gate indicators)
-- `app.js` — Vanilla JS SPA (~3200 lines): routing, rendering, filters, fetch, action bindings
-- `server.py` — Static file server with `/api` reverse proxy to FastAPI
+- `app.js` — Vanilla JS SPA (~4800 lines): routing, rendering, filters, fetch, action bindings
+- `vite.config.js` — Vite configuration containing the `/api` reverse proxy to FastAPI backend
+- `server.py` — Legacy static file server (for reference)
 
 ## API Endpoints Used
 
@@ -54,3 +56,9 @@ Then open `http://localhost:5173`.
 | `GET /api/v1/automation/jobs` | Automation | Job visibility with packet counts |
 | `POST /api/v1/automation/jobs/{partner}/run` | Automation | Run Now real execution |
 | `POST /api/v1/mapping/ai-generate` | Studio / Review Center | AI field mapping from sample |
+| `GET /api/v1/copilot/context?partner=X&date=Y&screen=Z` | All views | Contextual Copilot recommendation per screen |
+| `GET /api/v1/copilot/context/file/{file_id}` | All views | Copilot context for specific file |
+| `POST /api/v1/copilot/actions/{action_key}` | All views | Execute Copilot action |
+| `POST /api/v1/review-packets/{id}/generate-ai-mapping` | Review Center | AI-generate mapping from packet samples |
+| `POST /api/v1/review-packets/{id}/save-draft-mapping` | Review Center | Save inline draft mapping edits |
+| `GET /api/v1/reconciliation/insights` | Reconciliation | AI-powered reconciliation insights (summary/anomalies/patterns/recommendations) |

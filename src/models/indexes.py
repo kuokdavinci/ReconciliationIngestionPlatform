@@ -98,6 +98,13 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_recon_status",
         ),
     ],
+    "reconciliation_review_record": [
+        IndexModel(
+            [("partner", ASCENDING), ("date", ASCENDING), ("recordKey", ASCENDING)],
+            unique=True,
+            name="idx_recon_review_partner_date_key",
+        ),
+    ],
 }
 
 

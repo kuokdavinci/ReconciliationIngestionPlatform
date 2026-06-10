@@ -1,19 +1,33 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 from src.models.reconciliation_result import (
     ReconciliationResult,
     ReconciliationResultRepository,
 )
+from src.models.reconciliation_review_record import ReconciliationReviewRecordRepository
 from src.core.enums import ReconciliationStatus
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/reconciliation")
+
+
+class ReviewNotePayload(BaseModel):
+    partner: str
+    date: str
+    note: str
+
+
+class ResolveReviewPayload(BaseModel):
+    partner: str
+    date: str
+    resolved_status: str = Field(alias="resolvedStatus")
 
 
 def _validate_date(date_str: Optional[str]) -> str:
@@ -54,6 +68,13 @@ def _get_repo(request: Request) -> ReconciliationResultRepository:
         raise HTTPException(status_code=500, detail="Failed to initialize repository.")
 
 
+def _get_review_repo(request: Request) -> ReconciliationReviewRecordRepository:
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database connection not available.")
+    return ReconciliationReviewRecordRepository(db)
+
+
 def _serialize(obj):
     if isinstance(obj, ReconciliationResult):
         d = obj.model_dump(by_alias=True)
@@ -65,6 +86,93 @@ def _serialize(obj):
     if isinstance(obj, dict):
         return {k: str(v) if hasattr(v, "to_decimal") else v for k, v in obj.items()}
     return obj
+
+
+def _serialize_review_record(obj) -> dict:
+    data = obj.model_dump(by_alias=True)
+    data["_id"] = str(data["_id"])
+    return data
+
+
+def _review_note_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+@router.get("/review-records")
+async def list_review_records(
+    request: Request,
+    partner: Optional[str] = Query(default=None, description="Partner identifier"),
+    date: Optional[str] = Query(default=None, description="Date (YYYY-MM-DD)"),
+):
+    partner = _validate_partner(partner)
+    date = _validate_date(date)
+    records = await _get_review_repo(request).find_by_partner_and_date(partner, date)
+    return {"records": [_serialize_review_record(record) for record in records]}
+
+
+@router.post("/review-records/{record_key}/note")
+async def add_review_note(request: Request, record_key: str, payload: ReviewNotePayload):
+    partner = _validate_partner(payload.partner)
+    date = _validate_date(payload.date)
+    note = (payload.note or "").strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="Review note cannot be empty.")
+
+    now = datetime.now(timezone.utc)
+    repo = _get_review_repo(request)
+    await repo.collection.update_one(
+        {"partner": partner, "date": date, "recordKey": record_key},
+        {
+            "$setOnInsert": {
+                "_id": record_key,
+                "partner": partner,
+                "date": date,
+                "recordKey": record_key,
+                "createdAt": now,
+            },
+            "$set": {
+                "reviewed": True,
+                "updatedAt": now,
+            },
+            "$push": {
+                "notes": {
+                    "time": _review_note_timestamp(),
+                    "event": f"User Review Note: {note}",
+                }
+            },
+        },
+        upsert=True,
+    )
+    record = await repo.find_one({"partner": partner, "date": date, "recordKey": record_key})
+    return {"ok": True, "record": _serialize_review_record(record)}
+
+
+@router.post("/review-records/{record_key}/resolve")
+async def resolve_review_record(request: Request, record_key: str, payload: ResolveReviewPayload):
+    partner = _validate_partner(payload.partner)
+    date = _validate_date(payload.date)
+    now = datetime.now(timezone.utc)
+    repo = _get_review_repo(request)
+    await repo.collection.update_one(
+        {"partner": partner, "date": date, "recordKey": record_key},
+        {
+            "$setOnInsert": {
+                "_id": record_key,
+                "partner": partner,
+                "date": date,
+                "recordKey": record_key,
+                "createdAt": now,
+            },
+            "$set": {
+                "reviewed": True,
+                "resolvedStatus": payload.resolved_status,
+                "updatedAt": now,
+            },
+        },
+        upsert=True,
+    )
+    record = await repo.find_one({"partner": partner, "date": date, "recordKey": record_key})
+    return {"ok": True, "record": _serialize_review_record(record)}
 
 
 @router.get("/results")
@@ -220,7 +328,5 @@ async def reconciliation_insights(
     except Exception as exc:
         logger.error(f"Error generating reconciliation insights: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate reconciliation insights: {str(exc)}")
-
-
 
 

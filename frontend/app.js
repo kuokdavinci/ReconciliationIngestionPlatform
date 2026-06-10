@@ -7,9 +7,9 @@
     focus: "operational",
     reconStatus: "",
     explorerFilters: { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" },
-    evidenceHistory: JSON.parse(localStorage.getItem("recon_evidence_history") || "{}"),
-    reviewedRecords: JSON.parse(localStorage.getItem("recon_reviewed_records") || "{}"),
-    resolvedReconStatuses: JSON.parse(localStorage.getItem("recon_resolved_statuses") || "{}"),
+    evidenceHistory: {},
+    reviewedRecords: {},
+    resolvedReconStatuses: {},
     studio: {
       step: 1,
       sourceType: null,
@@ -141,32 +141,69 @@
             showToast("Please type a note first.");
             return;
           }
-          if (!state.evidenceHistory) {
-            state.evidenceHistory = {};
-          }
-          if (!state.evidenceHistory[rowId]) {
-            state.evidenceHistory[rowId] = [];
-          }
-          const time = new Date().toLocaleDateString("sv") + " " + new Date().toTimeString().split(" ")[0].substring(0, 5);
-          state.evidenceHistory[rowId].push({
-            time: time,
-            event: `User Review Note: ${noteText}`
-          });
-          if (!state.reviewedRecords) {
-            state.reviewedRecords = {};
-          }
-          state.reviewedRecords[rowId] = true;
-          
-          localStorage.setItem("recon_evidence_history", JSON.stringify(state.evidenceHistory));
-          localStorage.setItem("recon_reviewed_records", JSON.stringify(state.reviewedRecords));
-
-          showToast("Note saved and record marked as reviewed.");
-          state.selectedEvidenceRowId = null;
-          render();
+          saveReviewNote(rowId, noteText.trim())
+            .then(async () => {
+              await loadReconciliationReviewRecords();
+              showToast("Note saved and record marked as reviewed.");
+              state.selectedEvidenceRowId = null;
+              render();
+            })
+            .catch(() => {
+              showToast("Failed to save review note.");
+            });
           return;
         }
       }
     });
+  }
+
+  async function loadReconciliationReviewRecords() {
+    const data = await fetchJson(`/api/v1/reconciliation/review-records?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`);
+    const evidenceHistory = {};
+    const reviewedRecords = {};
+    const resolvedReconStatuses = {};
+    (data.records || []).forEach(record => {
+      const key = record.recordKey;
+      if (!key) return;
+      evidenceHistory[key] = Array.isArray(record.notes) ? record.notes : [];
+      if (record.reviewed) reviewedRecords[key] = true;
+      if (record.resolvedStatus) resolvedReconStatuses[key] = record.resolvedStatus;
+    });
+    state.evidenceHistory = evidenceHistory;
+    state.reviewedRecords = reviewedRecords;
+    state.resolvedReconStatuses = resolvedReconStatuses;
+  }
+
+  async function saveReviewNote(rowId, noteText) {
+    const response = await fetch(`/api/v1/reconciliation/review-records/${encodeURIComponent(rowId)}/note`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        partner: state.partner,
+        date: state.date,
+        note: noteText
+      })
+    });
+    if (!response.ok) {
+      throw new Error("Failed to save review note.");
+    }
+    return response.json();
+  }
+
+  async function resolveReviewRecord(rowId, resolvedStatus = "MATCHED") {
+    const response = await fetch(`/api/v1/reconciliation/review-records/${encodeURIComponent(rowId)}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        partner: state.partner,
+        date: state.date,
+        resolvedStatus
+      })
+    });
+    if (!response.ok) {
+      throw new Error("Failed to persist resolved status.");
+    }
+    return response.json();
   }
 
   async function openPacketInStudio(packetId) {
@@ -571,6 +608,7 @@
         if (ef.dateFrom) url += `&dateFrom=${encodeURIComponent(ef.dateFrom)}`;
         if (ef.dateTo) url += `&dateTo=${encodeURIComponent(ef.dateTo)}`;
         const data = await fetchJson(url);
+        await loadReconciliationReviewRecords();
         if (data && data.results) {
           data.results.forEach(item => {
             const key = item.partnerTxnId || item.internalTxnId || item.id;
@@ -3913,31 +3951,40 @@
         }
         if (action === "resolve-single-anomaly") {
           const rowId = el.dataset.rowId;
-          if (state.activeReconData && state.activeReconData.results) {
-            const item = state.activeReconData.results.find(r => (r.partnerTxnId || r.internalTxnId || r.id) === rowId);
-            if (item) {
-              item.reconciliationStatus = "MATCHED";
-              state.resolvedReconStatuses[rowId] = "MATCHED";
-              localStorage.setItem("recon_resolved_statuses", JSON.stringify(state.resolvedReconStatuses));
-            }
-          }
-          showToast(`Record ${rowId} marked as resolved.`);
-          state.selectedEvidenceRowId = null;
-          render();
+          resolveReviewRecord(rowId, "MATCHED")
+            .then(async () => {
+              if (state.activeReconData && state.activeReconData.results) {
+                const item = state.activeReconData.results.find(r => (r.partnerTxnId || r.internalTxnId || r.id) === rowId);
+                if (item) {
+                  item.reconciliationStatus = "MATCHED";
+                }
+              }
+              await loadReconciliationReviewRecords();
+              showToast(`Record ${rowId} marked as resolved.`);
+              state.selectedEvidenceRowId = null;
+              render();
+            })
+            .catch(() => {
+              showToast("Failed to persist resolved record.");
+            });
           return;
         }
         if (action === "approve-all-recon") {
-          if (state.activeReconData && state.activeReconData.results) {
-            state.activeReconData.results.forEach(item => {
-              const key = item.partnerTxnId || item.internalTxnId || item.id;
-              item.reconciliationStatus = "MATCHED";
-              state.resolvedReconStatuses[key] = "MATCHED";
+          const results = (state.activeReconData && state.activeReconData.results) || [];
+          Promise.all(results.map(item => {
+            const key = item.partnerTxnId || item.internalTxnId || item.id;
+            item.reconciliationStatus = "MATCHED";
+            return resolveReviewRecord(key, "MATCHED");
+          }))
+            .then(async () => {
+              await loadReconciliationReviewRecords();
+              showToast("Reconciliation run approved. All anomalies marked as resolved.");
+              state.selectedEvidenceRowId = null;
+              render();
+            })
+            .catch(() => {
+              showToast("Failed to persist one or more resolved records.");
             });
-            localStorage.setItem("recon_resolved_statuses", JSON.stringify(state.resolvedReconStatuses));
-          }
-          showToast("Reconciliation run approved. All anomalies marked as resolved.");
-          state.selectedEvidenceRowId = null;
-          render();
           return;
         }
         if (action === "mark-exception") {

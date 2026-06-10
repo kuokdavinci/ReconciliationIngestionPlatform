@@ -112,6 +112,7 @@ uv run python run.py serve
 |----------|-------------|
 | `GET /results?partner=X&date=Y&status=Z&limit=N&offset=M` | Query reconciliation results with optional status filter and pagination |
 | `GET /results/{id}` | Get single reconciliation result by partner transaction ID |
+| `GET /insights?partner=X&date=Y&type=summary|anomalies|patterns|recommendations` | AI-powered reconciliation insights with 4 analysis focus types |
 | `GET /stats?partner=X&date=Y` | Aggregated counts by status + total amounts |
 
 **Data Explorer API** (`/api/v1/data`):
@@ -135,6 +136,19 @@ uv run python run.py serve
 | `GET /versions?partner=X` | List published config versions for a partner, sorted by date |
 | `GET /version/{id}` | Get a specific version by ID from history collection |
 
+### 6.1 Copilot API (/api/v1/copilot)
+
+Embedded recommendation engine for the dashboard, providing contextual status, actions, and decision support per screen:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /context?partner=X&date=Y&screen=intake|review|reconciliation|automation` | Get contextual Copilot recommendation |
+| `GET /context/file/{file_id}?partner=X&screen=...` | Get Copilot context for a specific file |
+| `POST /actions/{action_key}` | Execute Copilot action |
+| `GET /actions?status=X&partner=Y` | List Copilot action audit trail |
+| `POST /actions/{action_id}/approve` | Legacy: Approve a Copilot action |
+| `POST /actions/{action_id}/reject` | Legacy: Reject a Copilot action |
+
 ### 7. Operations Dashboard (Web UI)
 
 A browser-based dashboard for monitoring and managing the platform:
@@ -143,8 +157,9 @@ A browser-based dashboard for monitoring and managing the platform:
 # Terminal 1 — Start the FastAPI backend
 uv run python run.py serve --port 8000
 
-# Terminal 2 — Start the frontend proxy server (supports POST proxying)
-python frontend/server.py --port 5173 --api http://localhost:8000
+# Terminal 2 — Start the Vite frontend dev server
+cd frontend
+npm run dev
 ```
 
 Then open `http://localhost:5173`.
@@ -353,6 +368,8 @@ src/
 ├── core/           # Canonical types, enums, constants (incl. ReconciliationStatus)
 ├── config/         # Settings, ConfigCache, ConfigValidator, ConfigLoader,
 │                   # ConfigHealthService, StructureSignature, AI config generator
+├── services/       # CopilotContextService for dashboard recommendations
+│   └── copilot_context.py  # Context building, screen-aware recommendations
 ├── readers/        # ExcelStreamReader (openpyxl read-only), CSV reader, JSON reader
 ├── normalizer/     # TransactionNormalizer (dynamic field mapping)
 ├── validators/     # Validator (business rules + duplicate detection)
@@ -378,6 +395,7 @@ src/
 │   ├── mappings.py        # Mapping config API v1 & v2 (list, approve, save,
 │   │                      # ai-generate, validate, test, publish, versions)
 │   ├── review_packets.py  # Review packet approval endpoints
+│   ├── copilot.py         # Copilot API (context, actions, approve/reject)
 │   ├── automation.py      # Automation job visibility + Run Now
 │   └── operations.py      # Data Intake partner state + activity feed
 ├── scheduler/      # APScheduler daemon (SFTP fetch, cron jobs)
@@ -397,9 +415,10 @@ src/
     └── fetch_config.py         # FetchConfig for scheduler automation routes
 frontend/           # Operations Dashboard (vanilla JS SPA + proxy)
 ├── index.html      # App shell
-├── app.js          # Routing, rendering, filters (3200+ lines)
+├── app.js          # Routing, rendering, filters (4800+ lines)
 ├── styles.css      # Responsive admin UI styles
-├── server.py       # Static server with /api proxy to FastAPI
+├── vite.config.js  # Vite dev server config with /api proxy to FastAPI
+├── server.py       # Legacy static file server (for reference)
 └── README.md       # Frontend documentation
 backend/            # Backend entry surface
 ├── app.py          # FastAPI app import surface for uvicorn

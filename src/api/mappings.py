@@ -35,6 +35,7 @@ from src.reconciliation.scope import classify_scope
 logger = logging.getLogger(__name__)
 
 from src.analysis.insights import invalidate_insight_cache
+from src.core.constants import DEFAULT_CURRENCY
 
 router = APIRouter(prefix="/api/v1/mappings")
 router_v2 = APIRouter(prefix="/api/v1/mapping")
@@ -394,7 +395,7 @@ async def _create_mapping_proposal_from_source_file(
         {
             "gateKey": "runtime_impact",
             "label": "Runtime impact assessed",
-            "status": "warn" if active_runtime else "fail",
+            "status": "warn" if active_runtime else "warn",
             "reason": "Approved runtime config will be kept until reviewer decides." if active_runtime else "No approved runtime config exists yet.",
         },
     ]
@@ -528,12 +529,21 @@ async def validate_mapping(payload: dict):
     warnings = []
     mappings = payload.get("fieldMappings", [])
     mapped_paths = {m.get("path") for m in mappings if m.get("path")}
+
+    status_mapping = next((m for m in mappings if m.get("path") == "status"), None)
+    if status_mapping and str(status_mapping.get("type", "")).upper() == "STRING":
+        warnings.append("Status is mapped as STRING. Runtime validation expects normalized values SUCCESS, FAILED, PENDING, or REVERSED; use MAPPING when partner values differ.")
+
     if not ("id" in mapped_paths or "transaction_id" in mapped_paths):
         errors.append("Missing required field mapping: transaction_id (or id)")
     if "amount" not in mapped_paths:
         errors.append("Missing required field mapping: amount")
-    if not ("transDate" in mapped_paths or "transaction_time" in mapped_paths):
-        errors.append("Missing required field mapping: transaction_time (or transDate)")
+    
+    # Currency is not required to be mapped explicitly; pipeline defaults to VND.
+    # We only issue an informative warning if it's missing, not a blocking error.
+    if "currency" not in mapped_paths:
+        warnings.append("No currency mapping specified. Defaulting transaction currency to VND.")
+
     source_cols = {}
     for mapping in mappings:
         col = mapping.get("column")

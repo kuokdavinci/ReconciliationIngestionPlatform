@@ -255,6 +255,33 @@ async def _add_missing_partner_demo(db, partner_file_path: str | Path) -> int:
     return 1
 
 
+async def _add_mismatch_demo(db, partner_file_path: str | Path) -> int:
+    """Wipe MOMO internal rows, then seed Wave 1 internal rows with:
+    - 1 amount mismatch row (MOMO_TXN_9005 has amount 999999)
+    - 1 missing internal row (MOMO_TXN_9019 is skipped from internal DB)
+    - 1 missing partner row (MOMO_TXN_90_MISSING_PARTNER is inserted in internal DB)
+    Also writes the 20 Wave 1 partner transactions to the partner file.
+    """
+    day = _today_utc()
+    collection = db["internal_transaction"]
+    await collection.delete_many({"partner": PARTNER})
+    
+    for txn_id in _wave1_keys():
+        if txn_id == "MOMO_TXN_9019":
+            continue
+        if txn_id == "MOMO_TXN_9005":
+            doc = _build_internal_doc(txn_id, day, amount=Decimal("999999"))
+        else:
+            doc = _build_internal_doc(txn_id, day)
+        await collection.insert_one(doc)
+        
+    doc = _build_internal_doc(MISSING_PARTNER_KEY, day, amount=MISSING_PARTNER_AMOUNT)
+    await collection.insert_one(doc)
+    
+    _write_partner_file(partner_file_path, _wave1_keys(), day=day)
+    return 20
+
+
 # ── CLI-only helpers (not part of the testable surface) ──────────────────────
 
 
@@ -320,10 +347,17 @@ async def main(mode: str) -> None:
             print(f"Missing-partner demo prepared for {PARTNER} on {_date_str(day)}")
             print(f"Inserted MISSING_PARTNER internal row: {inserted}")
             print(f"Wrote partner file (wave1 only, 20 keys): {partner_file_path}")
+        elif mode == "mismatch_demo":
+            await _full_wipe(db)
+            inserted = await _add_mismatch_demo(db, partner_file_path)
+            await _ensure_fetch_config(db)
+            print(f"Mismatch demo prepared for {PARTNER} on {_date_str(day)}")
+            print(f"Seeded internal rows (including mismatch/anomaly): {inserted}")
+            print(f"Wrote partner file (wave1 only, 20 keys): {partner_file_path}")
         else:
             raise ValueError(
                 f"Unsupported mode: {mode!r}. "
-                f"Expected one of: reset, phase2, missing_partner_demo"
+                f"Expected one of: reset, phase2, missing_partner_demo, mismatch_demo"
             )
     finally:
         client.close()
@@ -335,8 +369,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "mode",
-        choices=["reset", "phase2", "missing_partner_demo"],
-        help="reset=clean Phase 1; phase2=add Wave 2; missing_partner_demo=inject MISSING_PARTNER row",
+        choices=["reset", "phase2", "missing_partner_demo", "mismatch_demo"],
+        help="reset=clean Phase 1; phase2=add Wave 2; missing_partner_demo=inject MISSING_PARTNER row; mismatch_demo=seed mismatch/failed cases",
     )
     args = parser.parse_args()
     asyncio.run(main(args.mode))

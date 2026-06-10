@@ -359,7 +359,7 @@ async def _create_mapping_proposal(
         {
             "gateKey": "structure_signature",
             "label": "Structure drift detected",
-            "status": "fail" if active_runtime is None else "warn",
+            "status": "warn" if active_runtime is None else "warn",
             "reason": reason,
         },
         {

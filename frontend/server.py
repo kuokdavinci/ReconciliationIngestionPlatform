@@ -82,8 +82,8 @@ def main() -> None:
         def __init__(self, *handler_args, **handler_kwargs):
             super().__init__(*handler_args, directory=str(web_dir), **handler_kwargs)
 
-    server = ThreadingHTTPServer(("localhost", args.port), Handler)
-    print(f"Dashboard: http://localhost:{args.port}")
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
+    print(f"Dashboard: http://0.0.0.0:{args.port}")
     print(f"API proxy:  /api -> {args.api}")
     server.serve_forever()
 

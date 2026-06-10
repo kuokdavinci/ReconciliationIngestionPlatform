@@ -1,20 +1,22 @@
 # Backend
 
-Backend entry surface for the AdapterService API.
+This directory is a lightweight backend boundary marker. The active FastAPI application and domain logic still live under `src/`.
 
-## Run
+## Local Run
+
+Preferred command:
 
 ```bash
-uv run python run.py serve --port 8000
+uv run python run.py --serve --port 8000
 ```
 
-Or directly through Uvicorn:
+Direct Uvicorn:
 
 ```bash
-uv run uvicorn backend.app:create_app --factory --host 0.0.0.0 --port 8000
+uv run uvicorn src.api:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
 ## Notes
 
-- Core FastAPI routers and domain logic still live under `src/`.
-- This directory exists to give the project a clear backend boundary next to `frontend/`.
+- The FastAPI app factory is `src.api:create_app`.
+- Do not document `backend.app:create_app`; that target does not exist in this repo.

@@ -1,7 +1,188 @@
 # TODO List
 
-- [ ] **Kiểm tra lại cơ chế tính độ tin cậy đối soát (Confidence Calculation)**:
-  - Cần đánh giá kỹ lưỡng các hệ số tin cậy (như `0.8` và `0.88`) dựa trên tên file và sự tồn tại của các file cùng ngày trong hàm `classify_scope` thuộc file `src/reconciliation/scope.py`.
+- [ ] **Refactor UI với mục tiêu giữ nguyên luồng hiện tại nhưng giảm độ phình của `frontend/app.js`**:
+  - Phạm vi:
+    - Không đổi nghiệp vụ, không đổi endpoint, không đổi thứ tự thao tác chính của người dùng.
+    - Chỉ lược bỏ UI chồng lớp, giảm duplication, và đơn giản hóa cách tổ chức code.
+  - File chính:
+    - `frontend/app.js`
+    - `frontend/styles.css` nếu cần dọn class không còn dùng
 
-- [ ] **Cải tiến giao diện card Intake sau khi filedrop (Hiển thị Timestamp)**:
-  - Thêm hiển thị thời gian nạp file (`timestamp` / `uploadedAt`) dưới tiêu đề của mỗi file trong các thẻ danh sách **Incoming Files** và **Blocked Or Failed** ở giao diện Data Intake.
+- [ ] **Pha 1: Thu gọn Guided Review mà không đổi flow**:
+  - Mục tiêu:
+    - Giữ nguyên flow review packet hiện tại.
+    - Bỏ wizard nhiều bước trong guided review nếu không thật sự cần cho decision path.
+  - Việc cần làm:
+    - Xóa `guidedReviewStep` và logic back/next nếu cùng một quyết định có thể thể hiện trên một panel duy nhất.
+    - Giữ một guided review panel đơn với 3 vùng:
+      - summary
+      - AI suggestion / draft mapping status
+      - actions
+    - Giữ các action chính:
+      - approve / keep current nếu có
+      - open mapping studio
+      - close
+    - Không giữ thêm lớp giải thích lặp lại nếu đã có trong brief.
+  - Kết quả mong muốn:
+    - Ít nhánh render hơn.
+    - Ít state UI hơn.
+    - Luồng người dùng không đổi.
+
+- [ ] **Pha 2: Hợp nhất Copilot Brief và Guided Review để bỏ duplication**:
+  - Mục tiêu:
+    - Không để cùng một thông tin bị render theo hai cách khác nhau.
+  - Việc cần làm:
+    - Rà lại `renderCopilotBrief()` và phần guided review content.
+    - Tạo một data model/render helper dùng chung cho:
+      - lý do cần review
+      - tác động dự kiến
+      - recommended action
+      - CTA mở mapping studio
+    - Nếu hai khối đang hiển thị cùng insight, chỉ giữ một phiên bản “full”, phiên bản còn lại chỉ là summary ngắn.
+  - Kết quả mong muốn:
+    - Bỏ render lặp.
+    - Người dùng không phải đọc hai lần cùng một nội dung.
+
+- [ ] **Pha 3: Tối giản Review Center nhưng không đổi workflow**:
+  - Mục tiêu:
+    - Review Center vẫn là trung tâm xử lý pending approvals, nhưng không tải mọi thứ ngay từ đầu.
+  - Việc cần làm:
+    - Giữ `pending` là tab mặc định và là phần render đầu tiên.
+    - Chuyển `history` và `configs` sang lazy render / lazy fetch:
+      - chỉ fetch khi user mở tab
+      - không render sẵn toàn bộ khi vào trang
+    - Kiểm tra xem có phần intro/copy nào đang dài quá mức mà không hỗ trợ quyết định, thì rút gọn.
+  - Kết quả mong muốn:
+    - Màn hình đầu nhẹ hơn.
+    - Code render ngắn hơn.
+    - Luồng approve/review không đổi.
+
+- [ ] **Pha 4: Tối giản Reconciliation screen theo hướng “worklist first”**:
+  - Mục tiêu:
+    - Giữ nguyên khả năng review note, resolve status, approve all, xem anomaly.
+    - Giảm bớt phần “storytelling UI” không ảnh hưởng thao tác chính.
+  - Việc cần làm:
+    - Giữ các phần cốt lõi:
+      - summary counts
+      - anomaly/worklist table
+      - review note history
+      - resolve status
+    - Chuyển các phần phụ như:
+      - patterns
+      - recommendations
+      - AI explanation
+      thành khối collapse hoặc secondary section
+    - Kiểm tra xem preview cards có đang lặp lại thông tin đã có trong table không; nếu có, rút bớt.
+  - Kết quả mong muốn:
+    - Reconciliation vẫn đầy đủ hành động.
+    - Bớt chiều dài màn hình và bớt render phụ.
+
+- [ ] **Pha 5: Bỏ route alias cũ nếu không còn cần backward compatibility**:
+  - Mục tiêu:
+    - Giảm logic điều hướng và giảm số tên route lịch sử đang đổ dồn về cùng một màn.
+  - Việc cần làm:
+    - Rà các alias hiện có:
+      - `command-center`
+      - `data-intake`
+      - `review-queue`
+      - `approvals`
+      - `overview`
+      - `submit-sample`
+    - Chỉ giữ alias nào còn được dùng từ:
+      - sidebar hiện tại
+      - deep link thật
+      - docs hiện tại
+    - Xóa alias thừa và dọn các CTA tương ứng nếu đã obsolete.
+  - Kết quả mong muốn:
+    - `render()` và hash normalization đơn giản hơn.
+    - Đỡ cảm giác app có nhiều màn “ảo”.
+
+- [ ] **Pha 6: Tách `render()` theo route để giảm monolith**:
+  - Mục tiêu:
+    - Không đổi hành vi, chỉ đổi cấu trúc code.
+  - Việc cần làm:
+    - Tách `render()` thành các hàm rõ ràng:
+      - `renderReviewCenterPage()`
+      - `renderReconciliationPage()`
+      - `renderMappingStudioPage()`
+      - các utility route nếu còn cần
+    - Mỗi route tự load data của nó thay vì dồn toàn bộ branching vào một hàm lớn.
+  - Kết quả mong muốn:
+    - Dễ đọc hơn.
+    - Dễ cắt scope về sau.
+    - Giảm rủi ro sửa một màn làm vỡ màn khác.
+
+- [ ] **Pha 7: Tách `bindViewActions()` theo màn**:
+  - Mục tiêu:
+    - Giảm action bus khổng lồ đang ôm toàn bộ app.
+  - Việc cần làm:
+    - Tách thành:
+      - `bindReviewCenterActions(root)`
+      - `bindReconciliationActions(root)`
+      - `bindMappingStudioActions(root)`
+    - Giữ một lớp dispatcher mỏng nếu cần, nhưng không để toàn bộ `if (action === "...")` ở cùng một nơi.
+  - Kết quả mong muốn:
+    - Dễ lần theo event hơn.
+    - Giảm coupling giữa các màn.
+
+- [ ] **Pha 8: Gom state theo domain thay vì để phẳng ở root**:
+  - Mục tiêu:
+    - Giảm số field UI tạm nằm trực tiếp trong `state`.
+  - Việc cần làm:
+    - Tạo các nhóm:
+      - `state.reviewCenter`
+      - `state.reconciliation`
+      - `state.mappingStudio`
+    - Di chuyển các field như:
+      - `briefOpen`
+      - `guidedReviewOpen`
+      - `guidedReviewAI`
+      - `localDraftMappingIds`
+      - `evidenceHistory`
+      - `reviewedRecords`
+      - `resolvedReconStatuses`
+    - Chuẩn hóa helper lấy key record/review để không lặp `partnerTxnId || internalTxnId || id` ở nhiều nơi.
+  - Kết quả mong muốn:
+    - State dễ hiểu hơn.
+    - Dễ xóa feature/UI phụ sau này.
+
+- [ ] **Pha 9: Dọn CSS song song với refactor UI**:
+  - Mục tiêu:
+    - Không để CSS tiếp tục phình sau khi UI đã cắt bớt.
+  - Việc cần làm:
+    - Xóa class/style block không còn được dùng sau khi thu gọn guided review và review center.
+    - Ưu tiên bỏ inline style lặp nếu đang xuất hiện nhiều lần trong cùng một loại panel/card.
+    - Không redesign visual ở pha này; chỉ dọn phần thừa.
+  - Kết quả mong muốn:
+    - CSS gọn hơn.
+    - Ít style chết.
+
+- [ ] **Những phần không cắt trong đợt này**:
+  - `reconciliation` review records persistence qua DB
+  - `mapping-studio` như flow nghiệp vụ chính
+  - approve / activate / keep-current actions
+  - pending approvals flow
+  - backend API hiện có
+
+- [ ] **Thứ tự triển khai khuyến nghị**:
+  - 1. Thu gọn guided review
+  - 2. Hợp nhất brief + guided review
+  - 3. Lazy render `history` và `configs`
+  - 4. Tách `render()` theo route
+  - 5. Tách `bindViewActions()` theo màn
+  - 6. Gom state theo domain
+  - 7. Dọn route alias cũ
+  - 8. Dọn CSS còn dư
+
+- [ ] **Tiêu chí hoàn tất**:
+  - Luồng hiện tại vẫn chạy như cũ:
+    - mở review center
+    - xem pending item
+    - xem lý do / đề xuất
+    - mở mapping studio khi cần
+    - approve / keep-current / activate theo flow hiện tại
+    - review reconciliation records và lưu note / resolve status
+  - `frontend/app.js` giảm đáng kể branching và state tạm
+  - `bindViewActions()` không còn là một khối quá lớn
+  - các route cũ không còn tồn tại nếu không còn được dùng thật
+  - không phát sinh regression ở API contract hiện có

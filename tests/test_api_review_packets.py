@@ -7,6 +7,7 @@ import pytest
 
 from src.api.review_packets import (
     ReviewDecisionPayload,
+    _run_runtime_validation,
     approve_activate_packet,
     approve_keep_current_packet,
     list_review_packets,
@@ -14,6 +15,7 @@ from src.api.review_packets import (
     validate_runtime_packet,
     SaveDraftMappingPayload,
 )
+from src.models.mapping_config import MappingConfig
 
 
 def _make_request(db: MagicMock):
@@ -268,7 +270,15 @@ async def test_validate_runtime_packet_updates_gate():
         "label": "Runtime validation",
         "status": "pass",
         "reason": "Validated successfully on 20/20 sampled rows.",
-        "details": {"sampledRows": 20, "successRows": 20, "failedRows": 0},
+        "details": {
+            "sampledRows": 20,
+            "successRows": 20,
+            "failedRows": 0,
+            "validatedAt": "2024-01-01T00:00:00+00:00",
+            "validatedMappingVersion": "MOMO_v01",
+            "successRate": 1.0,
+            "riskLevel": "LOW",
+        },
     })):
         data = await validate_runtime_packet(request, "pkt-003")
 
@@ -406,8 +416,114 @@ async def test_validate_runtime_packet_uses_sample_preview_when_source_file_miss
 
     assert data["ok"] is True
     assert data["gate"]["status"] == "pass"
+    assert data["gate"]["details"]["validatedAt"]
+    assert data["gate"]["details"]["validatedMappingVersion"] == "cfg-005"
+    assert data["gate"]["details"]["successRate"] == 1
+    assert data["gate"]["details"]["riskLevel"] == "LOW"
     trace_samples = data["gate"]["details"]["traceSamples"]
     assert len(trace_samples) == 2
     assert trace_samples[0]["row"] == 2
-    assert any(item["path"] == "id" and item["sourceValue"] == "TXN001" and item["outputValue"] == "TXN001" for item in trace_samples[0]["fieldTraces"])
-    assert any(item["path"] == "currency" and item["sourceValue"] == "VND" and item["outputValue"] == "VND" for item in trace_samples[0]["fieldTraces"])
+    assert any(
+        item["path"] == "id"
+        and item["sourceValue"] == "TXN001"
+        and item["outputValue"] == "TXN001"
+        and item["status"] == "ok"
+        and item["errorCode"] is None
+        and item["errorMessage"] is None
+        for item in trace_samples[0]["fieldTraces"]
+    )
+    assert any(
+        item["path"] == "currency"
+        and item["sourceValue"] == "VND"
+        and item["outputValue"] == "VND"
+        and item["status"] == "ok"
+        for item in trace_samples[0]["fieldTraces"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_runtime_validation_returns_medium_risk_for_partial_pass():
+    review_collection = MagicMock()
+    review_collection.update_one = AsyncMock()
+    packet = SimpleNamespace(
+        id="pkt-007",
+        source_file_path=None,
+        sample_preview=[
+            {"rowIndex": 2, "values": ["TXN001", "1000", "2024-06-05"]},
+            {"rowIndex": 3, "values": ["TXN002", "2500", "2024-06-05"]},
+            {"rowIndex": 4, "values": ["TXN003", "3750", "2024-06-05"]},
+            {"rowIndex": 5, "values": ["TXN004", "4100", "2024-06-05"]},
+            {"rowIndex": 6, "values": ["TXN005", "bad-amount", "2024-06-05"]},
+        ],
+        validation_gates=[],
+    )
+    config = MappingConfig.model_validate({
+        "_id": "cfg-007",
+        "partner": "MOMO",
+        "workflowType": "UPC",
+        "fileType": "SETTLEMENT",
+        "sheetName": "Sheet1",
+        "startRow": 2,
+        "configVersion": "MOMO_v07",
+        "fieldMappings": [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
+            {"path": "transDate", "column": 3, "type": "DATE", "required": True},
+            {"path": "currency", "type": "CONSTANT", "constant": "VND", "required": True},
+            {"path": "status", "type": "CONSTANT", "constant": "SUCCESS", "required": True},
+        ],
+        "status": "PENDING_APPROVAL",
+        "configHealth": {},
+    })
+    request = _make_request(_make_db(review_collection=review_collection))
+
+    gate = await _run_runtime_validation(request, packet, config)
+
+    assert gate["status"] == "pass"
+    assert gate["details"]["riskLevel"] == "MEDIUM"
+    assert gate["details"]["validatedMappingVersion"] == "MOMO_v07"
+    amount_trace = next(item for item in gate["details"]["traceSamples"][4]["fieldTraces"] if item["path"] == "amount")
+    assert amount_trace["status"] == "error"
+    assert amount_trace["errorCode"] == "INVALID_DECIMAL"
+    assert amount_trace["errorMessage"]
+
+
+@pytest.mark.asyncio
+async def test_run_runtime_validation_returns_high_risk_for_failed_validation():
+    review_collection = MagicMock()
+    review_collection.update_one = AsyncMock()
+    packet = SimpleNamespace(
+        id="pkt-008",
+        source_file_path=None,
+        sample_preview=[
+            {"rowIndex": 2, "values": ["TXN001", "1000", "bad-date"]},
+        ],
+        validation_gates=[],
+    )
+    config = MappingConfig.model_validate({
+        "_id": "cfg-008",
+        "partner": "MOMO",
+        "workflowType": "UPC",
+        "fileType": "SETTLEMENT",
+        "sheetName": "Sheet1",
+        "startRow": 2,
+        "configVersion": "MOMO_v08",
+        "fieldMappings": [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
+            {"path": "transDate", "column": 3, "type": "DATE", "required": True},
+            {"path": "currency", "type": "CONSTANT", "constant": "VND", "required": True},
+            {"path": "status", "type": "CONSTANT", "required": True},
+        ],
+        "status": "PENDING_APPROVAL",
+        "configHealth": {},
+    })
+    request = _make_request(_make_db(review_collection=review_collection))
+
+    gate = await _run_runtime_validation(request, packet, config)
+
+    assert gate["status"] == "fail"
+    assert gate["details"]["riskLevel"] == "HIGH"
+    codes = {item["errorCode"] for item in gate["details"]["traceSamples"][0]["fieldTraces"] if item["errorCode"]}
+    assert "INVALID_DATE" in codes
+    assert "MAPPING_RULE_MISSING" in codes

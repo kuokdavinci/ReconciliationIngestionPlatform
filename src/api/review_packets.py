@@ -1,6 +1,8 @@
 """Approval desk review packet endpoints."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -54,6 +56,48 @@ def _serialize(packet) -> dict:
     data["_id"] = str(data["_id"])
     data["reviewItemId"] = data["_id"]
     return data
+
+
+def _serialize_runtime_value(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    return value
+
+
+def _serialize_runtime_trace(row_number: int, traces: list, normalized_data: dict, build_errors: list | None = None) -> dict:
+    return {
+        "row": row_number,
+        "normalizedData": {
+            key: _serialize_runtime_value(val)
+            for key, val in normalized_data.items()
+        },
+        "fieldTraces": [
+            {
+                "path": trace.path,
+                "type": trace.mapping_type,
+                "column": trace.column,
+                "sourceField": trace.source_field,
+                "sourceValue": _serialize_runtime_value(trace.source_value),
+                "outputValue": _serialize_runtime_value(trace.output_value),
+                "error": None if trace.error is None else {
+                    "field": trace.error.field,
+                    "reason": trace.error.reason,
+                    "row": trace.error.row,
+                },
+            }
+            for trace in traces
+        ],
+        "buildErrors": [
+            {
+                "field": err.field,
+                "reason": err.reason,
+                "row": err.row,
+            }
+            for err in (build_errors or [])
+        ],
+    }
 
 
 class ReviewDecisionPayload(BaseModel):
@@ -185,12 +229,13 @@ async def _run_runtime_validation(request: Request, packet, config) -> dict:
     success_rows = 0
     failed_rows = 0
     failed_examples: list[dict] = []
+    trace_samples: list[dict] = []
     normalizer = TransactionNormalizer(config.field_mappings)
 
     def _consume_row(row: list, row_number: int) -> None:
-        nonlocal sampled_rows, success_rows, failed_rows, failed_examples
+        nonlocal sampled_rows, success_rows, failed_rows, failed_examples, trace_samples
         sampled_rows += 1
-        norm_result = normalizer.normalize(row, row_number)
+        norm_result, field_traces = normalizer.normalize_with_trace(row, row_number)
         if norm_result.errors:
             failed_rows += 1
             failed_examples.append({
@@ -198,6 +243,10 @@ async def _run_runtime_validation(request: Request, packet, config) -> dict:
                 "reason": norm_result.errors[0].reason,
                 "field": norm_result.errors[0].field,
             })
+            if len(trace_samples) < 5:
+                trace_samples.append(
+                    _serialize_runtime_trace(row_number, field_traces, norm_result.data)
+                )
             return
         txn, build_errors = TransactionNormalizer.build_canonical(
             norm_result.data, [], row_number
@@ -209,8 +258,16 @@ async def _run_runtime_validation(request: Request, packet, config) -> dict:
                 "reason": build_errors[0].reason,
                 "field": build_errors[0].field,
             })
+            if len(trace_samples) < 5:
+                trace_samples.append(
+                    _serialize_runtime_trace(row_number, field_traces, norm_result.data, build_errors)
+                )
         else:
             success_rows += 1
+            if len(trace_samples) < 5:
+                trace_samples.append(
+                    _serialize_runtime_trace(row_number, field_traces, norm_result.data)
+                )
 
     if source_file_path:
         path = Path(source_file_path)
@@ -275,6 +332,7 @@ async def _run_runtime_validation(request: Request, packet, config) -> dict:
             "successRows": success_rows,
             "failedRows": failed_rows,
             "failedExamples": failed_examples[:3],
+            "traceSamples": trace_samples,
         },
     }
     await _repo(request).collection.update_one(
@@ -712,3 +770,148 @@ async def create_review_packet_from_mapping(
     repo = _repo(request)
     created = await repo.create(packet)
     return {"ok": True, "packet": _serialize(created)}
+
+
+@router.post("/{packet_id}/classify-scope-llm")
+async def classify_scope_llm_for_packet(request: Request, packet_id: str):
+    import re
+    import os
+    import json
+    import logging
+    from datetime import datetime, time as datetime_time
+    from src.analysis.config import AnalysisConfig
+    from src.analysis.provider import create_provider
+    from src.readers import create_reader
+    from src.models.mapping_config import MappingConfigRepository
+    
+    logger = logging.getLogger(__name__)
+    repo = _repo(request)
+    packet = await repo.find_one({"_id": packet_id})
+    if packet is None:
+        raise HTTPException(status_code=404, detail="Review packet not found.")
+        
+    db = _get_db(request)
+    
+    # 1. Determine date
+    recon_date = getattr(packet, "reconciliation_date", None)
+    if not recon_date:
+        match = re.search(r'(\d{4})[-_]?(\d{2})[-_]?(\d{2})', packet.file_name)
+        if match:
+            try:
+                recon_date = datetime.strptime(f"{match.group(1)}-{match.group(2)}-{match.group(3)}", "%Y-%m-%d")
+            except ValueError:
+                recon_date = datetime.utcnow()
+        else:
+            recon_date = datetime.utcnow()
+            
+    # 2. Count internal transactions
+    start_of_day = datetime.combine(recon_date, datetime_time.min)
+    end_of_day = datetime.combine(recon_date, datetime_time.max)
+    
+    internal_count = await db["internal_transaction"].count_documents({
+        "partner": packet.partner,
+        "transactionTime": {
+            "$gte": start_of_day,
+            "$lte": end_of_day
+        }
+    })
+    
+    # 3. Count received records
+    received_count = 0
+    source_file_path = getattr(packet, "source_file_path", None)
+    if source_file_path and os.path.exists(source_file_path):
+        try:
+            mapping_repo = MappingConfigRepository(db)
+            config = None
+            if packet.draft_mapping_id:
+                config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
+            with create_reader(source_file_path, config) as reader:
+                received_count = sum(1 for _ in reader.iter_rows())
+        except Exception as exc:
+            logger.error(f"Error counting rows in file: {exc}")
+            received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
+    else:
+        received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
+        
+    # 4. Invoke LLM for classification probabilities
+    llm_provider = create_provider(AnalysisConfig())
+    system_prompt = (
+        "You are an expert reconciliation assistant. Your task is to analyze the file metadata and database status "
+        "and classify the reconciliation file scope. You must respond ONLY with a valid JSON object."
+    )
+    
+    prompt = f"""Classify the reconciliation file's scope into one of these types:
+1. FULL_SNAPSHOT: The file contains the full set of transactions for the day, replacing the existing state. Usually if internal DB has 0 records, or matches the file count.
+2. INCREMENTAL_APPEND: The file contains a new batch/wave of transactions for the day, to be appended to existing ones. Usually if internal DB already has records and this file adds more.
+3. REPLACEMENT: The file contains corrections/retry records for transactions that already exist, which should overwrite them.
+
+Metadata:
+- Partner: {packet.partner}
+- File Name: {packet.file_name}
+- Received Record Count: {received_count}
+- Internal DB Record Count (same day): {internal_count}
+
+Analyze the filename hints (e.g., words like 'append', 'snapshot', 'replace', 'delta', 'correction', 'retry') and compare Received Record Count vs Internal DB Record Count.
+Return a JSON object containing:
+- probabilities: a dictionary with keys "FULL_SNAPSHOT", "INCREMENTAL_APPEND", "REPLACEMENT" and float values (probabilities summing to 1.0 or 100%)
+- suggested_scope: one of the three category strings
+- reasoning: a brief explanation in English
+
+JSON format:
+{{
+  "probabilities": {{
+    "FULL_SNAPSHOT": 0.8,
+    "INCREMENTAL_APPEND": 0.15,
+    "REPLACEMENT": 0.05
+  }},
+  "suggested_scope": "FULL_SNAPSHOT",
+  "reasoning": "<explanation>"
+}}
+"""
+    try:
+        response_text = await llm_provider.generate(prompt=prompt, system_prompt=system_prompt)
+        clean_text = response_text.strip()
+        if clean_text.startswith("```"):
+            parts = clean_text.split("```")
+            if len(parts) >= 3:
+                clean_text = parts[1]
+                if clean_text.startswith("json"):
+                    clean_text = clean_text[4:]
+        clean_text = clean_text.strip()
+        result = json.loads(clean_text)
+    except Exception as exc:
+        logger.error(f"LLM classification failed: {exc}")
+        result = {
+            "probabilities": {
+                "FULL_SNAPSHOT": 0.34,
+                "INCREMENTAL_APPEND": 0.33,
+                "REPLACEMENT": 0.33
+            },
+            "suggested_scope": "FULL_SNAPSHOT",
+            "reasoning": f"Fallback suggestion due to LLM error: {str(exc)}"
+        }
+        
+    return {
+        "ok": True,
+        "internalDbRecordCount": internal_count,
+        "receivedRecordCount": received_count,
+        "probabilities": result.get("probabilities", {}),
+        "suggestedScope": result.get("suggested_scope", "FULL_SNAPSHOT"),
+        "reasoning": result.get("reasoning", "")
+    }
+
+
+class ScopeUpdatePayload(BaseModel):
+    scope_type: str = Field(alias="scopeType")
+
+
+@router.post("/{packet_id}/scope")
+async def update_packet_scope_endpoint(request: Request, packet_id: str, payload: ScopeUpdatePayload):
+    from src.services.review_packet_actions import update_packet_scope
+    repo = _repo(request)
+    packet = await repo.find_one({"_id": packet_id})
+    if packet is None:
+        raise HTTPException(status_code=404, detail="Review packet not found.")
+        
+    await update_packet_scope(request, packet_id, packet, payload.scope_type)
+    return {"ok": True, "scopeType": payload.scope_type}

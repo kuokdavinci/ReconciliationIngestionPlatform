@@ -136,6 +136,8 @@ def _write_partner_file(
 
     for index, txn_id in enumerate(keys, start=1):
         amount = _amount_for_key(txn_id)
+        if txn_id in ("MOMO_TXN_9000", "MOMO_TXN_9001"):
+            amount += Decimal("5000")
         row = [""] * 30
         row[0] = str(index)
         row[1] = txn_id

@@ -12,6 +12,10 @@ STATUS_MAPPING_DEFAULTS = {
     "FAILED": "FAILED",
     "PENDING": "PENDING",
     "REVERSED": "REVERSED",
+    "Thành công": "SUCCESS",
+    "Thất bại": "FAILED",
+    "Đang xử lý": "PENDING",
+    "Đã hoàn tác": "REVERSED",
 }
 
 

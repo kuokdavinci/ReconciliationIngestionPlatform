@@ -53,6 +53,7 @@ class ReviewPacket(BaseModel):
     target_action_id: Optional[str] = Field(default=None, alias="targetActionId")
     source_file_id: Optional[str] = Field(default=None, alias="sourceFileId")
     source_file_path: Optional[str] = Field(default=None, alias="sourceFilePath")
+    reconciliation_date: Optional[datetime] = Field(default=None, alias="reconciliationDate")
     scope_type: Optional[str] = Field(default=None, alias="scopeType")
     scope_confidence: Optional[float] = Field(default=None, alias="scopeConfidence")
     scope_reason: list[str] = Field(default_factory=list, alias="scopeReason")

@@ -988,6 +988,156 @@
     `;
   }
 
+  function renderRuntimeTraceSamples(runtimeGate) {
+    if (!runtimeGate?.details || !Array.isArray(runtimeGate.details.traceSamples) || runtimeGate.details.traceSamples.length === 0) {
+      return "";
+    }
+
+    const sampledRows = Number(runtimeGate.details.sampledRows || 0);
+    const successRows = Number(runtimeGate.details.successRows || 0);
+    const failedRows = Number(runtimeGate.details.failedRows || 0);
+    const remappedCount = runtimeGate.details.traceSamples.reduce((count, sample) => {
+      return count + (sample.fieldTraces || []).filter(trace => !trace.error && trace.sourceValue !== trace.outputValue).length;
+    }, 0);
+    const issueCount = runtimeGate.details.traceSamples.reduce((count, sample) => {
+      return count + (sample.fieldTraces || []).filter(trace => !!trace.error).length + (sample.buildErrors || []).length;
+    }, 0);
+
+    const metrics = [
+      { label: "Sampled Rows", value: sampledRows, tone: "neutral", tag: "info" },
+      { label: "Passed", value: successRows, tone: "matched", tag: "ok" },
+      { label: "Failed", value: failedRows, tone: failedRows > 0 ? "critical" : "neutral", tag: failedRows > 0 ? "issue" : "info" },
+      { label: "Remapped", value: remappedCount, tone: remappedCount > 0 ? "warning" : "neutral", tag: remappedCount > 0 ? "review" : "info" },
+      { label: "Field Issues", value: issueCount, tone: issueCount > 0 ? "critical" : "neutral", tag: issueCount > 0 ? "issue" : "info" },
+    ];
+
+    const metricsHtml = metrics.map(metric => `
+      <div style="padding: 10px 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; background: rgba(255,255,255,0.02); min-width: 126px;">
+        <div style="font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">${escapeHtml(metric.label)}</div>
+        <div style="margin-top: 6px; display:flex; align-items:center; gap:8px;">
+          <strong style="font-size: 20px; line-height: 1;">${escapeHtml(String(metric.value))}</strong>
+          <span class="badge ${metric.tone}">${metric.tag}</span>
+        </div>
+      </div>
+    `).join("");
+
+    const rowsHtml = runtimeGate.details.traceSamples.map((sample, index) => {
+      const fieldTraces = Array.isArray(sample.fieldTraces) ? sample.fieldTraces : [];
+      const buildErrors = Array.isArray(sample.buildErrors) ? sample.buildErrors : [];
+      const rowIssues = fieldTraces.filter(trace => !!trace.error).length + buildErrors.length;
+      const rowRemaps = fieldTraces.filter(trace => !trace.error && trace.sourceValue !== trace.outputValue).length;
+      const tone = rowIssues > 0 ? "critical" : rowRemaps > 0 ? "warning" : "matched";
+
+      const sourcePreview = fieldTraces.map(trace => {
+        const sourceLabel = trace.type === "CONSTANT"
+          ? "constant"
+          : (trace.column ? `col ${trace.column}` : (trace.sourceField || "-"));
+        return `
+          <div style="display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+            <div style="min-width: 96px; font-family: monospace; color: var(--text-muted);">${escapeHtml(String(sourceLabel))}</div>
+            <div style="flex:1; font-family: monospace; color: var(--brand-accent-blue); text-align:right; word-break: break-word;">${escapeHtml(String(trace.sourceValue ?? "-"))}</div>
+          </div>
+        `;
+      }).join("");
+
+      const normalizedPreview = Object.entries(sample.normalizedData || {}).map(([key, value]) => `
+        <div style="display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+          <div style="min-width: 96px; font-family: monospace;">${escapeHtml(String(key))}</div>
+          <div style="flex:1; font-family: monospace; text-align:right; word-break: break-word;">${escapeHtml(String(value ?? "-"))}</div>
+        </div>
+      `).join("");
+
+      const traceRows = fieldTraces.map(trace => {
+        const sourceLabel = trace.type === "CONSTANT"
+          ? "constant"
+          : (trace.column ? `col ${trace.column}` : (trace.sourceField || "-"));
+        const statusLabel = trace.error
+          ? trace.error.reason
+          : (trace.sourceValue !== trace.outputValue ? "remapped" : "ok");
+        const statusColor = trace.error ? "#ef4444" : (trace.sourceValue !== trace.outputValue ? "#f59e0b" : "#10B981");
+        return `
+          <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
+            <td style="padding: 8px; font-family: monospace;">${escapeHtml(trace.path || "-")}</td>
+            <td style="padding: 8px; color: var(--text-muted);">${escapeHtml(String(sourceLabel))}</td>
+            <td style="padding: 8px; font-family: monospace; color: var(--brand-accent-blue);">${escapeHtml(String(trace.sourceValue ?? "-"))}</td>
+            <td style="padding: 8px; color: var(--text-muted);">${escapeHtml(String(trace.type || "-"))}</td>
+            <td style="padding: 8px; font-family: monospace;">${escapeHtml(String(trace.outputValue ?? "-"))}</td>
+            <td style="padding: 8px; color: ${statusColor};">${escapeHtml(String(statusLabel))}</td>
+          </tr>
+        `;
+      }).join("");
+
+      return `
+        <details ${index === 0 ? "open" : ""} style="border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; background: rgba(255,255,255,0.02); overflow: hidden;">
+          <summary style="list-style: none; cursor: pointer; padding: 14px 16px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <strong>Row ${escapeHtml(String(sample.row || "-"))}</strong>
+              <span class="badge ${tone}">${rowIssues > 0 ? `${rowIssues} issue${rowIssues > 1 ? "s" : ""}` : rowRemaps > 0 ? `${rowRemaps} remap` : "clean"}</span>
+              <span class="badge neutral">${escapeHtml(String(fieldTraces.length))} fields</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; color: var(--text-muted); font-size: 12px;">
+              <span>${buildErrors.length > 0 ? "canonical build issue" : "inspect mapping path"}</span>
+              <span class="material-symbols-outlined" style="font-size:18px;">expand_more</span>
+            </div>
+          </summary>
+          <div style="padding: 0 16px 16px 16px; border-top: 1px solid rgba(255,255,255,0.06);">
+            <div style="display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px; margin-top: 14px;">
+              <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(255,255,255,0.015);">
+                <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">Raw Source Snapshot</div>
+                <div>${sourcePreview || `<span class="muted">No source values</span>`}</div>
+              </div>
+              <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(255,255,255,0.015);">
+                <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">Normalized Output</div>
+                <div>${normalizedPreview || `<span class="muted">No normalized fields</span>`}</div>
+              </div>
+            </div>
+            <div style="margin-top: 12px;">
+              <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">Field-Level Trace</div>
+              <div class="table-wrap">
+                <table style="width: 100%; text-align: left; font-size: 11.5px; border-collapse: collapse;">
+                  <thead>
+                    <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.08); font-weight: 700;">
+                      <th style="padding: 6px 8px;">Field</th>
+                      <th style="padding: 6px 8px;">Source</th>
+                      <th style="padding: 6px 8px;">Raw</th>
+                      <th style="padding: 6px 8px;">Transform</th>
+                      <th style="padding: 6px 8px;">Mapped</th>
+                      <th style="padding: 6px 8px;">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${traceRows}
+                  </tbody>
+                </table>
+              </div>
+              ${buildErrors.length > 0 ? `
+                <div style="margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(239,68,68,0.2); border-radius: 8px; background: rgba(239,68,68,0.04);">
+                  <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; margin-bottom: 6px;">Canonical Build Errors</div>
+                  <div style="font-size: 11.5px; color: #fca5a5;">${escapeHtml(buildErrors.map(err => `${err.field}: ${err.reason}`).join(" | "))}</div>
+                </div>
+              ` : ""}
+            </div>
+          </div>
+        </details>
+      `;
+    }).join("");
+
+    return `
+      <div style="margin-top: 16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom: 10px; flex-wrap: wrap;">
+          <div style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Runtime Mapping Trace</div>
+          <div class="muted" style="font-size: 12px;">Summary first, then drill down by sample row.</div>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap: wrap; margin-bottom: 12px;">
+          ${metricsHtml}
+        </div>
+        <div style="display:flex; flex-direction: column; gap: 10px;">
+          ${rowsHtml}
+        </div>
+      </div>
+    `;
+  }
+
   function renderReviewHistoryTab() {
     if (state.reviewHistoryLoading) {
       return loadingPanel("Loading decision history...");
@@ -1064,192 +1214,308 @@
       return "";
     }
 
-    const summary = summarizeReviewPacket(selectedPacket);
-    const sigHeaders = selectedPacket.structureSignature?.headers || [];
-    const aiMapping = state.guidedReviewAI.mapping;
-    const aiReasoning = aiMapping?.configHealth?.reasoning || "";
-    const aiConfidence = aiMapping?.configHealth?.confidence;
-    const rawDraftFieldMappings = (aiMapping?.fieldMappings || []).filter(fm => fm.path !== "currency");
-    const idMapping = rawDraftFieldMappings.find(mapping => mapping.path === "id");
-    const draftFieldMappings = rawDraftFieldMappings.filter(mapping => {
-      if (mapping.path !== "trace") return true;
-      if (!idMapping) return true;
-      return Number(mapping.column || 0) !== Number(idMapping.column || 0);
-    });
+    if (!state.guidedReviewStep) {
+      state.guidedReviewStep = 1;
+    }
 
-    const editableMappingRows = !state.guidedReviewAI.loading && !state.guidedReviewAI.error && aiMapping
-      ? draftFieldMappings.map((mapping, index) => {
-        const sourceColumn = Number(mapping.column || 0);
-        const headerLabel = sourceColumn > 0 && sigHeaders[sourceColumn - 1] ? sigHeaders[sourceColumn - 1] : (mapping.sourceField || `Column ${sourceColumn || "?"}`);
-        const currentMap = mapping.path || "";
-        const hasKnownOption = ["", "id", "amount", "transDate", "status", "trace", "currency", "description"].includes(currentMap);
-        const confidence = typeof aiConfidence === "number" ? Math.round(aiConfidence * 100) : Math.max(70, 95 - (index * 3));
-        const transformLabel =
-          mapping.type === "DATE" ? "Date fmt" :
-          mapping.type === "MAPPING" ? "Value map" :
-          mapping.type === "CONSTANT" ? "Constant" :
-          "None";
-        const noteLabel =
-          currentMap === "id" ? "Primary key" :
-          currentMap === "amount" ? "Required" :
-          currentMap === "status" ? "Needs normalize" :
-          "-";
-        return `
-          <tr>
-            <td>
-              <div style="display:flex; flex-direction:column; gap:4px;">
-                <code>${escapeHtml(headerLabel)}</code>
-                <span class="muted" style="font-size:11px;">Column ${sourceColumn || "?"}</span>
-              </div>
-            </td>
-            <td>
-              <select
-                class="inline-field-select"
-                data-source-header="${escapeHtml(headerLabel)}"
-                data-source-column="${sourceColumn || ""}"
-                data-original-path="${escapeHtml(currentMap)}"
-                data-original-type="${escapeHtml(mapping.type || "")}"
-                data-original-required="${mapping.required ? "true" : "false"}"
-                data-original-constant="${escapeHtml(mapping.constant || "")}"
-                data-original-mapping="${escapeHtml(JSON.stringify(mapping.mapping || {}))}"
-                style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: var(--font-mono); width: 100%;">
-                <option value="" ${currentMap === "" ? "selected" : ""}>unmapped</option>
-                <option value="id" ${currentMap === "id" ? "selected" : ""}>partner_txn_id</option>
-                <option value="amount" ${currentMap === "amount" ? "selected" : ""}>amount</option>
-                <option value="transDate" ${currentMap === "transDate" ? "selected" : ""}>transaction_time</option>
-                <option value="status" ${currentMap === "status" ? "selected" : ""}>transaction_status</option>
-                <option value="trace" ${currentMap === "trace" ? "selected" : ""}>trace</option>
-                <option value="currency" ${currentMap === "currency" ? "selected" : ""}>currency</option>
-                <option value="description" ${currentMap === "description" ? "selected" : ""}>description</option>
-                ${!hasKnownOption && currentMap ? `<option value="${escapeHtml(currentMap)}" selected>${escapeHtml(currentMap)}</option>` : ""}
-              </select>
-            </td>
-            <td style="text-align: center;">${confidence}%</td>
-            <td><span class="badge neutral" style="font-size: 11px;">${escapeHtml(transformLabel)}</span></td>
-            <td style="font-size: 11px;" class="muted">${escapeHtml(noteLabel)}</td>
-          </tr>
+    const step = state.guidedReviewStep;
+    const stepsList = ["Scope", "Mapping", "Validation", "Decision"];
+
+    const progressSteps = stepsList.map((s, i) => {
+      const stepIdx = i + 1;
+      const isActive = stepIdx === step;
+      const isDone = stepIdx < step;
+      return `
+        <div class="brief-step ${isActive ? 'active' : isDone ? 'done' : ''}" style="flex: 1; text-align: center; padding: 10px;">
+          <span class="brief-step-dot" style="display: block; margin: 0 auto 8px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: ${isDone ? '#10B981' : isActive ? 'var(--brand-accent-blue)' : 'rgba(255,255,255,0.1)'}; color: #000; font-weight: 700;">${isDone ? '✓' : stepIdx}</span>
+          <span class="brief-step-name" style="font-size: 11px; display: block; color: ${isActive ? '#FFF' : 'var(--text-muted)'};">${s}</span>
+        </div>
+      `;
+    }).join("");
+
+    let stepBodyHtml = "";
+
+    if (step === 1) {
+      if (!state.guidedReviewScope || state.guidedReviewScope.packetId !== selectedPacket._id) {
+        loadGuidedReviewScopeLLM(selectedPacket);
+      }
+      const scopeState = state.guidedReviewScope || { loading: true, error: "", data: null };
+      
+      if (scopeState.loading) {
+        stepBodyHtml = `
+          <div class="empty-state" style="padding: 48px 12px;">
+            <span class="spinner" style="display:inline-block; width:36px; height:36px; border:3px solid rgba(255,255,255,0.1); border-top:3px solid var(--brand-accent-blue); border-radius:50%; animation:spin 1s linear infinite;"></span>
+            <h3 style="margin-top: 16px;">Running LLM Scope Analysis</h3>
+            <p class="muted">Analyzing file name hints, received record counts, and database status...</p>
+          </div>
         `;
-      }).join("")
-      : "";
-
-    const suggestionHtml = state.guidedReviewAI.loading ? `
-      <div class="empty-state" style="padding: 36px 12px;">
-        <span class="spinner"></span>
-        <h3 style="margin-top: 14px;">AI is preparing the mapping proposal</h3>
-        <p class="muted">Loading the partner-specific draft mapping and confidence signals.</p>
-      </div>
-    ` : state.guidedReviewAI.error ? `
-      <div class="empty-state" style="padding: 36px 12px;">
-        <span class="material-symbols-outlined">psychology_alt</span>
-        <h3>AI mapping unavailable</h3>
-        <p class="muted">${escapeHtml(state.guidedReviewAI.error)}</p>
-      </div>
-    ` : `
-      ${aiReasoning ? `
-        <div style="margin-bottom: 14px; padding: 12px 14px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;">
-          <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
-            <div>
-              <strong style="font-size:12px; text-transform:uppercase; color: var(--brand-accent-blue);">AI proposal reasoning</strong>
-              <p style="margin:6px 0 0 0; font-size:12.5px; line-height:1.6; color: var(--text-muted);">${escapeHtml(aiReasoning)}</p>
+      } else if (scopeState.error) {
+        stepBodyHtml = `
+          <div class="empty-state" style="padding: 48px 12px;">
+            <span class="material-symbols-outlined" style="color:var(--status-failed); font-size:48px;">error</span>
+            <h3 style="margin-top: 16px;">LLM Scope Analysis Failed</h3>
+            <p class="muted">${escapeHtml(scopeState.error)}</p>
+            <button class="button" onclick="location.reload()" style="margin-top:16px;">Retry</button>
+          </div>
+        `;
+      } else if (scopeState.data) {
+        const scopeData = scopeState.data;
+        const currentScope = selectedPacket.scopeType || scopeData.suggestedScope || "FULL_SNAPSHOT";
+        stepBodyHtml = `
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:16px;">
+            <div class="panel" style="margin:0; padding:16px; text-align:center; background:rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.06); border-radius:10px;">
+              <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">Internal DB Records</div>
+              <div style="font-size:32px; font-weight:800; color:#FFF; margin-top:8px; font-family:var(--font-mono);">${formatNumber(scopeData.internalDbRecordCount)}</div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Transactions stored in system for same day</div>
             </div>
-            ${typeof aiConfidence === "number" ? `<span class="badge neutral">${Math.round(aiConfidence * 100)}% confidence</span>` : ""}
+            <div class="panel" style="margin:0; padding:16px; text-align:center; background:rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.06); border-radius:10px;">
+              <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">Received Records</div>
+              <div style="font-size:32px; font-weight:800; color:#FFF; margin-top:8px; font-family:var(--font-mono);">${formatNumber(scopeData.receivedRecordCount)}</div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Records read from the uploaded file</div>
+            </div>
+          </div>
+          <section class="panel" style="margin:0; padding:20px; border-radius:10px;">
+            <h4 style="margin:0 0 16px 0; font-size:15px; border-bottom:1px solid rgba(255,255,255,0.06); padding-bottom:8px; color:var(--brand-accent-blue);">AI Scope Classification Prediction</h4>
+            <div style="display:flex; flex-direction:column; gap:14px; margin-bottom:20px;">
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
+                  <span><strong>Full Snapshot</strong> (Wipe old & load new for entire day)</span>
+                  <span style="font-family:var(--font-mono); font-weight:700;">${Math.round((scopeData.probabilities.FULL_SNAPSHOT || 0) * 100)}%</span>
+                </div>
+                <div style="height:8px; border-radius:4px; background:rgba(255,255,255,0.06); overflow:hidden;">
+                  <div style="width:${Math.round((scopeData.probabilities.FULL_SNAPSHOT || 0) * 100)}%; height:100%; background:var(--brand-accent-blue); border-radius:4px;"></div>
+                </div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
+                  <span><strong>Incremental Append</strong> (Add/append new records cumulatively)</span>
+                  <span style="font-family:var(--font-mono); font-weight:700;">${Math.round((scopeData.probabilities.INCREMENTAL_APPEND || 0) * 100)}%</span>
+                </div>
+                <div style="height:8px; border-radius:4px; background:rgba(255,255,255,0.06); overflow:hidden;">
+                  <div style="width:${Math.round((scopeData.probabilities.INCREMENTAL_APPEND || 0) * 100)}%; height:100%; background:#F59E0B; border-radius:4px;"></div>
+                </div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
+                  <span><strong>Replacement</strong> (Modify/update matching records)</span>
+                  <span style="font-family:var(--font-mono); font-weight:700;">${Math.round((scopeData.probabilities.REPLACEMENT || 0) * 100)}%</span>
+                </div>
+                <div style="height:8px; border-radius:4px; background:rgba(255,255,255,0.06); overflow:hidden;">
+                  <div style="width:${Math.round((scopeData.probabilities.REPLACEMENT || 0) * 100)}%; height:100%; background:#EF4444; border-radius:4px;"></div>
+                </div>
+              </div>
+            </div>
+            <div style="padding:12px 14px; background:rgba(255,255,255,0.02); border-left:3px solid var(--brand-accent-blue); border-radius:4px; font-size:13px; line-height:1.5; margin-bottom:20px; color:#E2E8F0;">
+              <strong style="font-size:10px; text-transform:uppercase; color:var(--brand-accent-blue); display:block; margin-bottom:4px;">AI Reasoning</strong>
+              ${escapeHtml(scopeData.reasoning)}
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:16px;">
+              <h4 style="margin:0 0 12px 0; font-size:14px;">Confirm your reconciliation file scope:</h4>
+              <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:20px;">
+                <label class="scope-select-card" style="display:flex; flex-direction:column; gap:6px; padding:12px; border:1px solid rgba(255,255,255,0.1); border-radius:8px; background:rgba(255,255,255,0.02); cursor:pointer; text-align:center;">
+                  <input type="radio" name="guided-scope-choice" value="FULL_SNAPSHOT" ${currentScope === 'FULL_SNAPSHOT' ? 'checked' : ''} style="margin:0 auto 6px auto;">
+                  <strong style="font-size:12.5px; color:#FFF;">Full Snapshot</strong>
+                  <span class="muted" style="font-size:11px;">Overwrite/wipe old and retrieve new for the whole day</span>
+                </label>
+                <label class="scope-select-card" style="display:flex; flex-direction:column; gap:6px; padding:12px; border:1px solid rgba(255,255,255,0.1); border-radius:8px; background:rgba(255,255,255,0.02); cursor:pointer; text-align:center;">
+                  <input type="radio" name="guided-scope-choice" value="INCREMENTAL_APPEND" ${currentScope === 'INCREMENTAL_APPEND' ? 'checked' : ''} style="margin:0 auto 6px auto;">
+                  <strong style="font-size:12.5px; color:#FFF;">Incremental Append</strong>
+                  <span class="muted" style="font-size:11px;">Cumulative/Add additional records</span>
+                </label>
+                <label class="scope-select-card" style="display:flex; flex-direction:column; gap:6px; padding:12px; border:1px solid rgba(255,255,255,0.1); border-radius:8px; background:rgba(255,255,255,0.02); cursor:pointer; text-align:center;">
+                  <input type="radio" name="guided-scope-choice" value="REPLACEMENT" ${currentScope === 'REPLACEMENT' ? 'checked' : ''} style="margin:0 auto 6px auto;">
+                  <strong style="font-size:12.5px; color:#FFF;">Replacement</strong>
+                  <span class="muted" style="font-size:11px;">Modify/Update records with matching key</span>
+                </label>
+              </div>
+            </div>
+          </section>
+        `;
+      }
+    } else if (step === 2) {
+      const sigHeaders = selectedPacket.structureSignature?.headers || [];
+      const aiMapping = state.guidedReviewAI.mapping;
+      const aiReasoning = aiMapping?.configHealth?.reasoning || "";
+      const aiConfidence = aiMapping?.configHealth?.confidence;
+      const rawDraftFieldMappings = (aiMapping?.fieldMappings || []).filter(fm => fm.path !== "currency");
+      const idMapping = rawDraftFieldMappings.find(mapping => mapping.path === "id");
+      const draftFieldMappings = rawDraftFieldMappings.filter(mapping => {
+        if (mapping.path !== "trace") return true;
+        if (!idMapping) return true;
+        return Number(mapping.column || 0) !== Number(idMapping.column || 0);
+      });
+      const editableMappingRows = !state.guidedReviewAI.loading && !state.guidedReviewAI.error && aiMapping ? draftFieldMappings.map((mapping, index) => {
+          const sourceColumn = Number(mapping.column || 0);
+          const headerLabel = sourceColumn > 0 && sigHeaders[sourceColumn - 1] ? sigHeaders[sourceColumn - 1] : (mapping.sourceField || `Column ${sourceColumn || "?"}`);
+          const currentMap = mapping.path || "";
+          const confidence = typeof aiConfidence === "number" ? Math.round(aiConfidence * 100) : Math.max(70, 95 - (index * 3));
+          
+          const mappingStr = mapping.mapping ? escapeHtml(JSON.stringify(mapping.mapping)) : "";
+          const originalRequired = mapping.required ? "true" : "false";
+          const originalConstant = mapping.constant || "";
+
+          return `
+            <tr>
+              <td><code style="font-size:11px;">${escapeHtml(headerLabel)}</code></td>
+              <td>
+                <select class="inline-field-select" 
+                        data-source-column="${sourceColumn}" 
+                        data-source-header="${escapeHtml(headerLabel)}" 
+                        data-original-path="${escapeHtml(mapping.path || "")}"
+                        data-original-type="${escapeHtml(mapping.type || "")}"
+                        data-original-required="${originalRequired}"
+                        data-original-constant="${escapeHtml(originalConstant)}"
+                        data-original-mapping="${mappingStr}"
+                        style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid #444; color: #fff; border-radius: 4px;">
+                  <option value="" ${currentMap === "" ? "selected" : ""}>unmapped</option>
+                  <option value="id" ${currentMap === "id" ? "selected" : ""}>partner_txn_id</option>
+                  <option value="amount" ${currentMap === "amount" ? "selected" : ""}>amount</option>
+                  <option value="status" ${currentMap === "status" ? "selected" : ""}>status</option>
+                  <option value="transDate" ${currentMap === "transDate" ? "selected" : ""}>transaction_time</option>
+                </select>
+              </td>
+              <td style="text-align: center;">${confidence}%</td>
+            </tr>
+          `;
+      }).join("") : "";
+      const suggestionHtml = state.guidedReviewAI.loading ? `<div>Loading...</div>` : `
+        <div class="table-wrap"><table style="width:100%; border-collapse:collapse; font-size: 12px;">
+          <thead><tr style="background:rgba(255,255,255,0.05)"><th>Field</th><th>Target</th><th>AI Conf</th></tr></thead>
+          <tbody>${editableMappingRows}</tbody>
+        </table></div>`;
+      stepBodyHtml = `
+        <div class="guided-step-content">
+          <div class="guided-section-header" style="margin-bottom: 16px;">
+            <h4>AI Suggestion / Draft Mapping</h4>
+            <p>Use the AI draft if it is good enough, or open Mapping Studio for a full edit.</p>
+          </div>
+          ${suggestionHtml}
+          <div class="guided-action-bar" style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
+            <button class="button-link" data-action="go-mapping-studio"><span class="material-symbols-outlined">open_in_new</span>Open full Mapping Studio</button>
+            <button class="button primary" data-action="save-inline-mapping" data-packet-id="${escapeHtml(selectedPacket._id)}" ${state.guidedReviewAI.loading || state.guidedReviewAI.error ? "disabled" : ""}><span class="material-symbols-outlined">save</span> Save draft mapping</button>
           </div>
         </div>
-      ` : ""}
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom: 12px;">
-        <span class="muted" style="font-size:12px;">${draftFieldMappings.length} AI field suggestions loaded</span>
-        <span class="badge matched">AI proposal ready</span>
-      </div>
-      <div class="table-wrap guided-mapping-table">
-        <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
-          <thead>
-            <tr style="background: rgba(255,255,255,0.02);">
-              <th style="width: 22%;">Partner field</th>
-              <th style="width: 28%;">Internal field</th>
-              <th style="width: 12%; text-align: center;">Confidence</th>
-              <th style="width: 16%;">Transform</th>
-              <th style="width: 22%;">Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${editableMappingRows || `<tr><td colspan="5" style="padding: 24px; text-align:center;" class="muted">AI draft mapping has no editable field suggestions.</td></tr>`}
-          </tbody>
-        </table>
+      `;
+    } else if (step === 3) {
+      const packetGates = selectedPacket.validationGates || [];
+      const runtimeGate = packetGates.find(item => item.gateKey === "runtime_validation");
+      const runtimeGateStatus = runtimeGate ? String(runtimeGate.status || "").toLowerCase() : "pending";
+      const allGatesPassed = packetGates.every(gate => String(gate.status || "").toLowerCase() === "pass");
+      const renderedGates = packetGates.map(gate => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; margin-bottom:10px; background:rgba(255,255,255,0.01);">
+          <div><strong>${escapeHtml(gate.label || gate.gateKey)}</strong></div>
+          <span class="material-symbols-outlined" style="color:${gate.status === 'pass' ? '#10B981' : '#EF4444'}">${gate.status === 'pass' ? 'check_circle' : 'cancel'}</span>
+        </div>
+      `).join("");
+      let validationDetailsHtml = "";
+      if (runtimeGate) {
+        const traceSamplesHtml = renderRuntimeTraceSamples(runtimeGate);
+        if (runtimeGate.status === "pass") {
+          validationDetailsHtml = `
+            <div style="margin-top: 16px; border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; background: rgba(16, 185, 129, 0.02); padding: 12px; font-size: 13px; color: #E2E8F0; display:flex; align-items:center; gap:8px;">
+              <span class="material-symbols-outlined" style="color:#10B981; font-size:20px;">check_circle</span>
+              <div>
+                <strong>Validation Passed:</strong> Normalized ${runtimeGate.details?.successRows || 0} of ${runtimeGate.details?.sampledRows || 0} rows successfully.
+              </div>
+            </div>
+            ${traceSamplesHtml}
+          `;
+        } else {
+          let errorRows = "";
+          if (runtimeGate.details && Array.isArray(runtimeGate.details.failedExamples) && runtimeGate.details.failedExamples.length > 0) {
+            errorRows = runtimeGate.details.failedExamples.map(err => `
+              <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
+                <td style="padding: 8px; font-family: monospace; color: var(--brand-accent-blue);">Row ${err.row}</td>
+                <td style="padding: 8px; font-family: monospace; color: #ef4444;">${escapeHtml(err.field || "N/A")}</td>
+                <td style="padding: 8px; color: var(--text-muted); font-size: 11.5px;">${escapeHtml(err.reason)}</td>
+              </tr>
+            `).join("");
+          }
+          validationDetailsHtml = `
+            <div style="margin-top: 16px; border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; background: rgba(239, 68, 68, 0.02); padding: 12px;">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                <span class="material-symbols-outlined" style="color:#EF4444; font-size:20px;">cancel</span>
+                <div>
+                  <strong style="color: #ef4444;">Validation Failed:</strong> Normalized only ${runtimeGate.details?.successRows || 0} of ${runtimeGate.details?.sampledRows || 0} rows.
+                </div>
+              </div>
+              ${errorRows ? `
+                <div class="table-wrap">
+                  <table style="width: 100%; text-align: left; font-size: 12px; border-collapse: collapse;">
+                    <thead>
+                      <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.08); font-weight: 700;">
+                        <th style="padding: 6px 8px;">Location</th>
+                        <th style="padding: 6px 8px;">Field</th>
+                        <th style="padding: 6px 8px;">Error Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${errorRows}
+                    </tbody>
+                  </table>
+                </div>
+              ` : ""}
+            </div>
+            ${traceSamplesHtml}
+          `;
+        }
+      }
+
+      stepBodyHtml = `
+        <div class="guided-step-content">
+          <h4>Validation Results</h4>
+          <div class="runtime-validation-panel" style="padding:16px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02); margin-bottom:20px;">
+            <strong>Runtime validation</strong>
+            <p style="font-size:12px; color:var(--text-muted);">${escapeHtml(runtimeGate?.reason || "Run a live runtime validation on the current review packet before activation.")}</p>
+            <button class="button primary" data-action="validate-runtime-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">Run runtime validate</button>
+          </div>
+          <div class="validation-gates-list">${renderedGates}</div>
+          ${validationDetailsHtml}
+        </div>
+      `;
+    } else if (step === 4) {
+      const gateSummary = (selectedPacket.validationGates || []).reduce((acc, gate) => {
+        const status = String(gate.status || "").toLowerCase();
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+      }, {});
+      const hasFailedGates = (gateSummary.fail || 0) > 0;
+      const isMappingReady = !!selectedPacket.draftMappingId;
+      const runtimeGate = (selectedPacket.validationGates || []).find(gate => gate.gateKey === "runtime_validation");
+      const runtimeValidated = String(runtimeGate?.status || "").toLowerCase() === "pass";
+      const isReady = isMappingReady && runtimeValidated && !hasFailedGates;
+      stepBodyHtml = `
+        <div class="guided-step-content">
+          <h4>Copilot Recommendation</h4>
+          <div style="background: rgba(255,255,255,0.02); padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+            <p>${isReady ? "All validation checks passed successfully. Copilot recommends approving and activating this configuration." : "Copilot recommends adjusting the mapping configuration in Mapping Studio. Current sample row tests contain structural errors."}</p>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <button class="button primary ${isReady ? 'success-cta' : ''}" data-action="approve-packet-activate" data-packet-id="${escapeHtml(selectedPacket._id)}" ${isReady ? "" : "disabled"}>Approve & Activate</button>
+            <button class="button secondary-action" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">Reject change</button>
+          </div>
+        </div>
+      `;
+    }
+
+    const footerHtml = `
+      <div class="guided-review-footer" style="display:flex; justify-content:space-between; margin-top:20px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 16px;">
+        <button class="button" data-action="guided-prev" ${step === 1 ? 'disabled' : ''}>Back</button>
+        ${step < 4 ? `<button class="button primary" data-action="guided-next" data-packet-id="${escapeHtml(selectedPacket._id)}">Next</button>` : ""}
       </div>
     `;
 
-    const recommendation = summary.readyToActivate
-      ? "Validation has passed. The packet can be approved and activated immediately."
-      : "Keep the current runtime or adjust the draft mapping until runtime validation passes.";
-
     return `
       <div class="guided-review-backdrop" id="guided-review-backdrop">
-        <div class="guided-review-modal">
-          <div class="guided-review-header">
-            <div>
-              <p class="eyebrow guided-review-eyebrow">Guided Review</p>
-              <h3 class="guided-review-title">${escapeHtml(selectedPacket.fileName || "Review item")}</h3>
-            </div>
-            <button class="button-link guided-review-close" data-action="close-guided-review">
-              <span class="material-symbols-outlined">close</span>
-            </button>
+        <div class="guided-review-modal" style="max-width: 800px; width: 100%; background: #111; padding: 24px; border-radius: 12px;">
+          <div class="guided-review-header" style="display:flex; justify-content:space-between; margin-bottom:20px;">
+            <div><h3 style="margin:0;">Guided Review</h3></div>
+            <button class="button-link" data-action="close-guided-review"><span class="material-symbols-outlined">close</span></button>
           </div>
-
-          <div class="guided-review-body" style="display:grid; gap:16px;">
-            <section class="panel" style="margin:0;">
-              <div class="guided-section-header">
-                <h4>Summary</h4>
-                <p>${escapeHtml(selectedPacket.recommendedAction?.reason || "Review the proposed runtime change before approving it.")}</p>
-              </div>
-              <div class="review-summary-list">
-                <div><strong>Partner:</strong> ${escapeHtml(selectedPacket.partner || "-")}</div>
-                <div><strong>Draft mapping:</strong> ${summary.mappingReady ? "Ready" : "Missing"}</div>
-                <div><strong>Runtime validation:</strong> ${summary.runtimeValidated ? "Passed" : "Pending"}</div>
-                <div><strong>Risk:</strong> ${escapeHtml((selectedPacket.riskSummary?.severity || "medium").toUpperCase())}</div>
-              </div>
-            </section>
-
-            <section class="panel" style="margin:0;">
-              <div class="guided-section-header">
-                <h4>AI Suggestion / Draft Mapping</h4>
-                <p>Use the AI draft if it is good enough, or open Mapping Studio for a full edit.</p>
-              </div>
-              ${suggestionHtml}
-              <div class="guided-action-bar">
-                <button class="button-link" data-action="go-mapping-studio">
-                  <span class="material-symbols-outlined">open_in_new</span>Open full Mapping Studio
-                </button>
-                <button class="button secondary-action" data-action="validate-runtime-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">
-                  <span class="material-symbols-outlined">verified</span> Run runtime validate
-                </button>
-                <button class="button primary" data-action="save-inline-mapping" data-packet-id="${escapeHtml(selectedPacket._id)}" ${state.guidedReviewAI.loading || state.guidedReviewAI.error ? "disabled" : ""}>
-                  <span class="material-symbols-outlined">play_arrow</span> Save draft mapping
-                </button>
-              </div>
-            </section>
-
-            <section class="panel" style="margin:0;">
-              <div class="guided-section-header">
-                <h4>Actions</h4>
-                <p>${escapeHtml(recommendation)}</p>
-              </div>
-              <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                <button class="button primary ${summary.readyToActivate ? "success-cta" : "disabled-cta"}" data-action="approve-packet-activate" data-packet-id="${escapeHtml(selectedPacket._id)}" ${summary.readyToActivate ? "" : "disabled"}>
-                  Approve & Activate
-                </button>
-                <button class="button secondary-action" data-action="approve-packet-keep-current" data-packet-id="${escapeHtml(selectedPacket._id)}">
-                  Keep current runtime
-                </button>
-                <button class="button secondary-action" data-action="send-packet-to-studio" data-packet-id="${escapeHtml(selectedPacket._id)}">
-                  Open Mapping Studio
-                </button>
-                <button class="button secondary-action destructive" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">
-                  Reject change
-                </button>
-                <button class="button" data-action="close-guided-review">Close</button>
-              </div>
-              ${summary.readyToActivate ? "" : `<p class="decision-help-text" style="color: var(--danger); font-size: 12px; margin: 10px 0 0 0;">Approve & Activate stays disabled until runtime validation passes.</p>`}
-            </section>
+          <div class="guided-review-body">
+            <div style="display:flex; margin-bottom:24px;">${progressSteps}</div>
+            ${stepBodyHtml}
+            ${footerHtml}
           </div>
         </div>
       </div>
@@ -3552,12 +3818,202 @@
         }
         if (action === "open-guided-review") {
           state.guidedReviewOpen = true;
+          state.guidedReviewStep = 1;
+          state.guidedReviewScope = { loading: false, error: "", data: null, packetId: null };
           state.guidedReviewAI = { loading: false, error: "", mapping: null, packetId: null };
           render();
           const packet = getSelectedReviewPacket(getReviewCenterPendingItems(state.reviewCenterCache?.data || { packets: state.reviewPackets, mappings: [], intake: {} }));
           if (packet) {
-            loadGuidedReviewAIMapping(packet);
+            loadGuidedReviewScopeLLM(packet);
           }
+          return;
+        }
+        if (action === "guided-next") {
+          const packetId = el.dataset.packetId;
+          if (!packetId) return;
+
+          const step = state.guidedReviewStep || 1;
+          if (step === 1) {
+            const choice = document.querySelector('input[name="guided-scope-choice"]:checked');
+            if (!choice) {
+              showToast("Please select a file scope.");
+              return;
+            }
+            const scopeType = choice.value;
+            const originalText = el.innerHTML;
+            el.disabled = true;
+            el.style.opacity = "0.6";
+            el.innerHTML = "Saving...";
+            
+            fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/scope`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ scopeType }),
+            })
+              .then(r => r.json().then(body => ({ ok: r.ok, body })))
+              .then(({ ok, body }) => {
+                el.disabled = false;
+                el.style.opacity = "";
+                el.innerHTML = originalText;
+                if (!ok) throw new Error(body.detail || "Failed to update scope.");
+                
+                updateReviewPacketLocally(packetId, currentPacket => {
+                  currentPacket.scopeType = scopeType;
+                });
+                
+                state.guidedReviewStep = 2;
+                render();
+                
+                const currentPacket = [
+                  ...(state.reviewPackets || []),
+                  ...((state.reviewCenterCache && state.reviewCenterCache.data && state.reviewCenterCache.data.packets) || [])
+                ].find(packet => String(packet._id) === String(packetId)) || null;
+                if (currentPacket) {
+                  loadGuidedReviewAIMapping(currentPacket);
+                }
+              })
+              .catch(err => {
+                el.disabled = false;
+                el.style.opacity = "";
+                el.innerHTML = originalText;
+                showToast(err.message || "Failed to save scope.");
+              });
+            return;
+          } else if (step === 2) {
+            if (state.guidedReviewAI.loading || state.guidedReviewAI.error) {
+              showToast("Wait for the AI mapping proposal to finish loading before saving.");
+              return;
+            }
+            const originalText = el.innerHTML;
+            const currentPacket = [
+              ...(state.reviewPackets || []),
+              ...((state.reviewCenterCache && state.reviewCenterCache.data && state.reviewCenterCache.data.packets) || [])
+            ].find(packet => String(packet._id) === String(packetId)) || null;
+            const rows = Array.from(document.querySelectorAll(".inline-field-select"));
+            const fieldMappings = rows.map((select, index) => {
+              const path = select.value;
+              if (!path) return null;
+              const sourceHeader = select.dataset.sourceHeader || `Column ${index + 1}`;
+              const rawSourceColumn = select.dataset.sourceColumn;
+              const sourceColumn = rawSourceColumn ? Number(rawSourceColumn) : null;
+              const originalPath = select.dataset.originalPath || "";
+              const originalType = select.dataset.originalType || "";
+              const originalRequired = select.dataset.originalRequired === "true";
+              const originalConstant = select.dataset.originalConstant || null;
+              let originalMapping = null;
+              if (select.dataset.originalMapping) {
+                try {
+                  originalMapping = JSON.parse(select.dataset.originalMapping);
+                } catch (err) {
+                  originalMapping = null;
+                }
+              }
+
+              if (path === originalPath) {
+                return {
+                  path,
+                  column: sourceColumn,
+                  sourceField: sourceHeader,
+                  type: originalType || INLINE_FIELD_TYPES[path] || "STRING",
+                  required: originalRequired,
+                  constant: originalConstant,
+                  mapping: originalMapping
+                };
+              }
+
+              return {
+                path,
+                column: sourceColumn,
+                sourceField: sourceHeader,
+                type: INLINE_FIELD_TYPES[path] || "STRING",
+                required: ["id", "amount", "transDate"].includes(path)
+              };
+            }).filter(Boolean);
+
+            el.disabled = true;
+            el.style.opacity = "0.65";
+            el.innerHTML = `<span class="spinner-mini" style="display:inline-block; width:12px; height:12px; border:2px solid #fff; border-top:2px solid transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:6px; vertical-align:middle;"></span>Saving...`;
+            fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/save-draft-mapping`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sheetName: currentPacket?.parseStrategy?.sheetName || "Sheet1",
+                startRow: currentPacket?.parseStrategy?.startRow || 2,
+                fieldMappings
+              }),
+            })
+              .then(r => r.json().then(body => ({ ok: r.ok, body })))
+              .then(({ ok, body }) => {
+                el.disabled = false;
+                el.style.opacity = "";
+                el.innerHTML = originalText;
+                if (!ok) {
+                  const detail = body.detail;
+                  if (detail && typeof detail === "object") {
+                    const msg = [detail.message, ...(detail.errors || []), ...(detail.warnings || [])]
+                      .filter(Boolean)
+                      .join(" ");
+                    throw new Error(msg || "Save mapping failed");
+                  }
+                  throw new Error(detail || "Save mapping failed");
+                }
+                
+                if (!state.localDraftMappingIds) {
+                  state.localDraftMappingIds = {};
+                }
+                state.localDraftMappingIds[packetId] = body.draftMappingId;
+                state.guidedReviewAI = {
+                  loading: false,
+                  error: "",
+                  mapping: {
+                    ...(state.guidedReviewAI.mapping || {}),
+                    _id: body.draftMappingId,
+                    fieldMappings,
+                    sheetName: body.sheetName,
+                    startRow: body.startRow,
+                  },
+                  packetId
+                };
+                updateReviewPacketLocally(packetId, packet => {
+                  packet.draftMappingId = body.draftMappingId;
+                  packet.parseStrategy = {
+                    ...(packet.parseStrategy || {}),
+                    sheetName: body.sheetName,
+                    startRow: body.startRow,
+                    fieldMappingCount: body.fieldMappingCount
+                  };
+                  if (Array.isArray(body.validationGates)) {
+                    packet.validationGates = body.validationGates;
+                  }
+                });
+                state.reviewCenterCache = null;
+                showToast("Draft mapping saved.");
+                state.guidedReviewStep = 3;
+                render();
+              })
+              .catch(err => {
+                el.disabled = false;
+                el.style.opacity = "";
+                el.innerHTML = originalText;
+                showToast(err.message || "Save mapping failed");
+              });
+            return;
+          } else if (step === 3) {
+            state.guidedReviewStep = 4;
+            render();
+            return;
+          }
+        }
+        if (action === "guided-prev") {
+          if (state.guidedReviewStep && state.guidedReviewStep > 1) {
+            state.guidedReviewStep -= 1;
+            render();
+          }
+          return;
+        }
+        if (action === "back-to-guided-step-1") {
+          state.guidedReviewStep = 1;
+          render();
           return;
         }
         if (action === "close-guided-review") {
@@ -3675,7 +4131,8 @@
                 }
               });
               state.reviewCenterCache = null;
-              showToast("Draft mapping saved. Run runtime validate before activation.");
+              showToast("Draft mapping saved.");
+              state.guidedReviewStep = 3;
               render();
             })
             .catch(err => {
@@ -4596,6 +5053,38 @@
           packetId: packet._id
         };
         render();
+      });
+  }
+
+  function loadGuidedReviewScopeLLM(packet) {
+    if (!packet || !packet._id) return;
+    if (state.guidedReviewScope && state.guidedReviewScope.packetId === packet._id && (state.guidedReviewScope.loading || state.guidedReviewScope.data)) {
+      return;
+    }
+    state.guidedReviewScope = {
+      loading: true,
+      error: "",
+      data: null,
+      packetId: packet._id
+    };
+    renderPreserveScroll();
+    fetch(`/api/v1/review-packets/${encodeURIComponent(packet._id)}/classify-scope-llm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    })
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        if (!ok) {
+          throw new Error(body.detail || "Failed to classify scope.");
+        }
+        state.guidedReviewScope.loading = false;
+        state.guidedReviewScope.data = body;
+        renderPreserveScroll();
+      })
+      .catch(err => {
+        state.guidedReviewScope.loading = false;
+        state.guidedReviewScope.error = err.message || "Failed to load scope classification.";
+        renderPreserveScroll();
       });
   }
 

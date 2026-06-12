@@ -185,7 +185,7 @@ async def test_approve_activate_packet_triggers_post_approve_processing():
     ))
 
     with patch(
-        "src.api.review_packets._reprocess_and_reconcile",
+        "src.api.review_packets.approve_packet_mapping_and_reprocess",
         new=AsyncMock(return_value={
             "ok": True,
             "stage": "reconciliation",
@@ -312,7 +312,11 @@ async def test_save_draft_mapping_for_packet_attaches_real_draft_id():
         ],
     })
 
-    data = await save_draft_mapping_for_packet(request, "pkt-004", payload)
+    with patch(
+        "src.api.review_packets._next_pending_version",
+        new=AsyncMock(return_value="MOMO-V004"),
+    ):
+        data = await save_draft_mapping_for_packet(request, "pkt-004", payload)
 
     assert data["ok"] is True
     assert data["draftMappingId"]
@@ -402,3 +406,8 @@ async def test_validate_runtime_packet_uses_sample_preview_when_source_file_miss
 
     assert data["ok"] is True
     assert data["gate"]["status"] == "pass"
+    trace_samples = data["gate"]["details"]["traceSamples"]
+    assert len(trace_samples) == 2
+    assert trace_samples[0]["row"] == 2
+    assert any(item["path"] == "id" and item["sourceValue"] == "TXN001" and item["outputValue"] == "TXN001" for item in trace_samples[0]["fieldTraces"])
+    assert any(item["path"] == "currency" and item["sourceValue"] == "VND" and item["outputValue"] == "VND" for item in trace_samples[0]["fieldTraces"])

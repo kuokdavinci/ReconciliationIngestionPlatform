@@ -66,6 +66,44 @@ def _serialize_runtime_value(value):
     return value
 
 
+def _runtime_error_code(field: str | None, reason: str | None) -> str:
+    text = str(reason or "").lower()
+    field_name = str(field or "").lower()
+    if "sourcefield '" in text and "not found" in text:
+        return "SOURCE_FIELD_NOT_FOUND"
+    if text.startswith("column ") and " not found" in text:
+        return "COLUMN_NOT_FOUND"
+    if "out of range" in text or "invalid column letter" in text:
+        return "COLUMN_OUT_OF_RANGE"
+    if "required field '" in text and "not found in normalized data" in text:
+        return "MISSING_REQUIRED_FIELD"
+    if "value is none" in text or "source field value is none" in text or "cannot map empty/null value" in text:
+        return "VALUE_IS_NULL"
+    if "invalid decimal value" in text or "float not allowed for monetary values" in text:
+        return "INVALID_DECIMAL"
+    if "invalid date value" in text or "expected string or datetime" in text:
+        return "INVALID_DATE"
+    if "unmapped value" in text:
+        return "UNMAPPED_VALUE"
+    if "mapping dict not configured" in text or "constant value is not configured" in text or "no column configured" in text:
+        return "MAPPING_RULE_MISSING"
+    if "invalid status value" in text:
+        return "INVALID_CANONICAL_STATUS"
+    if "unknown mapping type" in text:
+        return "UNKNOWN_MAPPING_TYPE"
+    if field_name in {"id", "amount", "currency", "status"} and "required field" in text:
+        return "MISSING_REQUIRED_FIELD"
+    return "CANONICAL_BUILD_FAILED"
+
+
+def _runtime_trace_status(error_code: str | None) -> str:
+    if error_code:
+        if error_code in {"VALUE_IS_NULL", "UNMAPPED_VALUE"}:
+            return "warning"
+        return "error"
+    return "ok"
+
+
 def _serialize_runtime_trace(row_number: int, traces: list, normalized_data: dict, build_errors: list | None = None) -> dict:
     return {
         "row": row_number,
@@ -81,11 +119,11 @@ def _serialize_runtime_trace(row_number: int, traces: list, normalized_data: dic
                 "sourceField": trace.source_field,
                 "sourceValue": _serialize_runtime_value(trace.source_value),
                 "outputValue": _serialize_runtime_value(trace.output_value),
-                "error": None if trace.error is None else {
-                    "field": trace.error.field,
-                    "reason": trace.error.reason,
-                    "row": trace.error.row,
-                },
+                "status": _runtime_trace_status(
+                    _runtime_error_code(trace.error.field, trace.error.reason) if trace.error else None
+                ),
+                "errorCode": _runtime_error_code(trace.error.field, trace.error.reason) if trace.error else None,
+                "errorMessage": trace.error.reason if trace.error else None,
             }
             for trace in traces
         ],
@@ -94,6 +132,7 @@ def _serialize_runtime_trace(row_number: int, traces: list, normalized_data: dic
                 "field": err.field,
                 "reason": err.reason,
                 "row": err.row,
+                "errorCode": _runtime_error_code(err.field, err.reason),
             }
             for err in (build_errors or [])
         ],
@@ -167,6 +206,7 @@ def _serialize_mapping(config: MappingConfig) -> dict:
     data = config.model_dump(by_alias=True)
     data["_id"] = str(data["_id"])
     data["draftMappingId"] = data["_id"]
+    data["draftMappingVersion"] = data.get("configVersion") or data["_id"]
     if data.get("fileType") is not None:
         data["fileType"] = str(data["fileType"])
     return data
@@ -225,6 +265,8 @@ async def _resolve_ai_generation_context(request: Request, packet, existing_draf
 
 async def _run_runtime_validation(request: Request, packet, config) -> dict:
     source_file_path = getattr(packet, "source_file_path", None)
+    validated_at = datetime.now(timezone.utc)
+    validated_mapping_version = getattr(config, "config_version", None) or str(getattr(config, "id", ""))
     sampled_rows = 0
     success_rows = 0
     failed_rows = 0
@@ -284,7 +326,15 @@ async def _run_runtime_validation(request: Request, packet, config) -> dict:
                 "label": "Runtime validation",
                 "status": "fail",
                 "reason": f"Source file is not available at {source_file_path}.",
-                "details": {"successRows": 0, "failedRows": 0, "sampledRows": 0},
+                "details": {
+                    "successRows": 0,
+                    "failedRows": 0,
+                    "sampledRows": 0,
+                    "validatedAt": validated_at.isoformat(),
+                    "validatedMappingVersion": validated_mapping_version,
+                    "successRate": 0,
+                    "riskLevel": "HIGH",
+                },
             }
     else:
         sample_preview = getattr(packet, "sample_preview", None) or []
@@ -301,7 +351,15 @@ async def _run_runtime_validation(request: Request, packet, config) -> dict:
                 "label": "Runtime validation",
                 "status": "fail",
                 "reason": "No source file path or sample preview is attached to this review packet.",
-                "details": {"successRows": 0, "failedRows": 0, "sampledRows": 0},
+                "details": {
+                    "successRows": 0,
+                    "failedRows": 0,
+                    "sampledRows": 0,
+                    "validatedAt": validated_at.isoformat(),
+                    "validatedMappingVersion": validated_mapping_version,
+                    "successRate": 0,
+                    "riskLevel": "HIGH",
+                },
             }
 
     if sampled_rows == 0:
@@ -322,6 +380,8 @@ async def _run_runtime_validation(request: Request, packet, config) -> dict:
             else f"Only {success_rows}/{sampled_rows} sampled rows normalized successfully."
         )
 
+    success_rate = (success_rows / sampled_rows) if sampled_rows else 0
+    risk_level = "LOW" if failed_rows == 0 else ("MEDIUM" if status == "pass" else "HIGH")
     gate = {
         "gateKey": "runtime_validation",
         "label": "Runtime validation",
@@ -333,6 +393,10 @@ async def _run_runtime_validation(request: Request, packet, config) -> dict:
             "failedRows": failed_rows,
             "failedExamples": failed_examples[:3],
             "traceSamples": trace_samples,
+            "validatedAt": validated_at.isoformat(),
+            "validatedMappingVersion": validated_mapping_version,
+            "successRate": success_rate,
+            "riskLevel": risk_level,
         },
     }
     await _repo(request).collection.update_one(
@@ -453,16 +517,24 @@ async def generate_ai_mapping_for_packet(request: Request, packet_id: str):
         )
         await mapping_repo.create(mapping)
         draft_id = str(mapping.id)
-        await repo.collection.update_one({"_id": packet_id}, {"$set": {"draftMappingId": draft_id}})
+        await repo.collection.update_one(
+            {"_id": packet_id},
+            {"$set": {
+                "draftMappingId": draft_id,
+                "draftMappingVersion": getattr(mapping, "config_version", None) or draft_id,
+            }},
+        )
 
     validation_gates = [
         dict(gate) for gate in (packet.validation_gates or [])
         if gate.get("gateKey") != "runtime_validation"
     ]
+    mapping_payload = _serialize_mapping(mapping if isinstance(mapping, MappingConfig) else updated)
     await repo.collection.update_one(
         {"_id": packet_id},
         {"$set": {
             "draftMappingId": draft_id,
+            "draftMappingVersion": mapping_payload["draftMappingVersion"],
             "parseStrategy": {
                 **(packet.parse_strategy or {}),
                 "sheetName": config_dict.get("sheetName") or packet.parse_strategy.get("sheetName") or "Sheet1",
@@ -473,11 +545,10 @@ async def generate_ai_mapping_for_packet(request: Request, packet_id: str):
             "validationGates": validation_gates,
         }},
     )
-
-    mapping_payload = _serialize_mapping(mapping if isinstance(mapping, MappingConfig) else updated)
     return {
         "ok": True,
         "draftMappingId": draft_id,
+        "draftMappingVersion": mapping_payload["draftMappingVersion"],
         "mapping": mapping_payload,
         "warnings": mapping_warnings,
         "validationGates": validation_gates,
@@ -581,11 +652,17 @@ async def save_draft_mapping_for_packet(
         await mapping_repo.create(proposal)
         draft_mapping_id = str(proposal.id)
 
+    draft_mapping_version = (
+        getattr(existing, "config_version", None)
+        if existing is not None
+        else getattr(proposal, "config_version", None)
+    ) or draft_mapping_id
     validation_gates = [dict(gate) for gate in (packet.validation_gates or []) if gate.get("gateKey") != "runtime_validation"]
     await repo.collection.update_one(
         {"_id": packet_id},
         {"$set": {
             "draftMappingId": draft_mapping_id,
+            "draftMappingVersion": draft_mapping_version,
             "parseStrategy.sheetName": payload.sheet_name,
             "parseStrategy.startRow": payload.start_row,
             "parseStrategy.fieldMappingCount": len(field_mappings),
@@ -595,6 +672,7 @@ async def save_draft_mapping_for_packet(
     return {
         "ok": True,
         "draftMappingId": draft_mapping_id,
+        "draftMappingVersion": draft_mapping_version,
         "fieldMappingCount": len(field_mappings),
         "sheetName": payload.sheet_name,
         "startRow": payload.start_row,

@@ -240,8 +240,13 @@
     return response.json();
   }
 
+  function getReviewPacketById(packetId) {
+    return ([...(state.reviewCenterCache?.data?.packets || []), ...(state.reviewPackets || [])]
+      .find(item => String(item._id) === String(packetId)) || null);
+  }
+
   async function openPacketInStudio(packetId) {
-    const packet = state.reviewPackets.find(item => item._id === packetId);
+    const packet = getReviewPacketById(packetId);
     if (!packet) {
       state.studio.reviewItemId = packetId || null;
       location.hash = "mapping-studio";
@@ -988,154 +993,368 @@
     `;
   }
 
-  function renderRuntimeTraceSamples(runtimeGate) {
-    if (!runtimeGate?.details || !Array.isArray(runtimeGate.details.traceSamples) || runtimeGate.details.traceSamples.length === 0) {
-      return "";
+  const VALIDATION_SUGGESTIONS = {
+    SOURCE_FIELD_NOT_FOUND: "Source field does not exist in sample data. Re-map this target to an existing partner field.",
+    MISSING_REQUIRED_FIELD: "Required field '<field>' is missing. Map a partner field to this canonical field.",
+    INVALID_DECIMAL: "Map the partner numeric amount field to 'amount' and ensure the sample value is numeric.",
+    INVALID_DATE: "Check the source date field and ensure it matches a supported runtime date format.",
+    UNMAPPED_VALUE: "Add a mapping rule for this partner value or configure a fallback rule.",
+    INVALID_CANONICAL_STATUS: "Map the partner status into one of SUCCESS, FAILED, PENDING, REVERSED."
+  };
+
+  function getDraftMappingVersion(packet) {
+    return packet?.draftMappingVersion
+      || state.guidedReviewAI?.mapping?.draftMappingVersion
+      || state.guidedReviewAI?.mapping?.configVersion
+      || packet?.draftMappingId
+      || null;
+  }
+
+  function getRuntimeValidationState(packet) {
+    const runtimeGate = (packet?.validationGates || []).find(gate => gate.gateKey === "runtime_validation") || null;
+    const details = runtimeGate?.details || {};
+    const currentVersion = getDraftMappingVersion(packet);
+    const validatedVersion = details.validatedMappingVersion || null;
+    const hasValidation = !!runtimeGate;
+    const isStale = !!(hasValidation && currentVersion && validatedVersion && currentVersion !== validatedVersion);
+    const failedRows = Number(details.failedRows || 0);
+    const status = String(runtimeGate?.status || "").toLowerCase();
+    const summaryLabel = !hasValidation ? "Not run" : isStale ? "Stale" : status !== "pass" ? "Failed" : failedRows > 0 ? "Passed with warnings" : "Passed";
+    return {
+      runtimeGate,
+      currentVersion,
+      validatedVersion,
+      validatedAt: details.validatedAt || null,
+      hasValidation,
+      isStale,
+      failedRows,
+      canProceed: !!(runtimeGate && !isStale && status === "pass"),
+      summaryLabel
+    };
+  }
+
+  function getValidationSuggestion(code, field) {
+    const template = VALIDATION_SUGGESTIONS[code] || "Review this mapping rule and align the partner source field, transform, and canonical target before validating again.";
+    return template.replace("<field>", field || "field");
+  }
+
+  function collectValidationIssues(runtimeGate) {
+    const issues = [];
+    const seen = new Set();
+    const traceSamples = Array.isArray(runtimeGate?.details?.traceSamples) ? runtimeGate.details.traceSamples : [];
+    traceSamples.forEach(sample => {
+      (sample.fieldTraces || []).forEach(trace => {
+        if (!trace.errorCode) return;
+        const key = `${trace.errorCode}:${trace.path || ""}:${trace.errorMessage || ""}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        issues.push({
+          code: trace.errorCode,
+          field: trace.path || trace.sourceField || "",
+          row: sample.row,
+          message: trace.errorMessage || trace.errorCode,
+          suggestion: getValidationSuggestion(trace.errorCode, trace.path)
+        });
+      });
+      (sample.buildErrors || []).forEach(err => {
+        const key = `${err.errorCode || "CANONICAL_BUILD_FAILED"}:${err.field || ""}:${err.reason || ""}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        issues.push({
+          code: err.errorCode || "CANONICAL_BUILD_FAILED",
+          field: err.field || "",
+          row: err.row || sample.row,
+          message: err.reason || err.errorCode || "Build failed",
+          suggestion: getValidationSuggestion(err.errorCode || "CANONICAL_BUILD_FAILED", err.field)
+        });
+      });
+    });
+    return issues;
+  }
+
+  function collectRuntimeFieldStats(runtimeGate) {
+    const stats = {};
+    const traceSamples = Array.isArray(runtimeGate?.details?.traceSamples) ? runtimeGate.details.traceSamples : [];
+    traceSamples.forEach(sample => {
+      (sample.fieldTraces || []).forEach(trace => {
+        const key = trace.path || trace.sourceField || "unknown";
+        if (!stats[key]) {
+          stats[key] = { field: key, ok: 0, warning: 0, error: 0 };
+        }
+        const status = trace.status || "ok";
+        if (status === "warning") stats[key].warning += 1;
+        else if (status === "error") stats[key].error += 1;
+        else stats[key].ok += 1;
+      });
+    });
+    return Object.values(stats).sort((a, b) => (b.error - a.error) || (b.warning - a.warning) || a.field.localeCompare(b.field));
+  }
+
+  function collectCandidateColumns(headers, sampleRows) {
+    const maxCols = Math.max(headers.length, ...sampleRows.map(row => row.length), 0);
+    const candidates = [];
+    for (let index = 0; index < maxCols; index += 1) {
+      const header = headers[index];
+      const headerText = header === null || header === undefined ? "" : String(header).trim();
+      const values = sampleRows.map(row => row[index]).filter(value => value !== null && value !== undefined && String(value).trim() !== "");
+      if (!headerText && values.length === 0) continue;
+      const meaningfulHeader = /[A-Za-zÀ-ỹ0-9]/.test(headerText);
+      candidates.push({
+        index,
+        header: headerText || `Column ${index + 1}`,
+        nonEmptyCount: values.length,
+        sampleValues: values.slice(0, 2),
+        priority: (meaningfulHeader ? 2 : 0) + Math.min(values.length, 3)
+      });
+    }
+    return candidates.sort((a, b) => (b.priority - a.priority) || (b.nonEmptyCount - a.nonEmptyCount) || (a.index - b.index));
+  }
+
+  function renderRuntimeVisualSummary(runtimeGate, validationState) {
+    const details = runtimeGate?.details || {};
+    const sampledRows = Number(details.sampledRows || 0);
+    const successRows = Number(details.successRows || 0);
+    const failedRows = Number(details.failedRows || 0);
+    const warningRows = validationState?.summaryLabel === "Passed with warnings" ? failedRows : 0;
+    const hardFailedRows = validationState?.summaryLabel === "Failed" ? failedRows : 0;
+    const okPercent = sampledRows ? (successRows / sampledRows) * 100 : 0;
+    const warnPercent = sampledRows ? (warningRows / sampledRows) * 100 : 0;
+    const failPercent = sampledRows ? (hardFailedRows / sampledRows) * 100 : 0;
+    const fieldStats = collectRuntimeFieldStats(runtimeGate).slice(0, 6);
+    const freshnessTone = validationState?.isStale ? "warning" : validationState?.hasValidation ? "matched" : "neutral";
+
+    const heatmapHtml = fieldStats.length ? fieldStats.map(item => {
+      const total = item.ok + item.warning + item.error;
+      const okWidth = total ? (item.ok / total) * 100 : 0;
+      const warningWidth = total ? (item.warning / total) * 100 : 0;
+      const errorWidth = total ? (item.error / total) * 100 : 0;
+      return `
+        <div style="display:grid; grid-template-columns: 140px 1fr auto; gap:10px; align-items:center;">
+          <div style="font-family:var(--font-mono); font-size:12px;">${escapeHtml(item.field)}</div>
+          <div style="height:10px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,0.06); display:flex;">
+            <div style="width:${okWidth}%; background:#10B981;"></div>
+            <div style="width:${warningWidth}%; background:#F59E0B;"></div>
+            <div style="width:${errorWidth}%; background:#EF4444;"></div>
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); min-width:72px; text-align:right;">${item.error} err / ${item.warning} warn</div>
+        </div>
+      `;
+    }).join("") : `<div class="muted" style="font-size:12px;">No field-level runtime traces yet.</div>`;
+
+    return `
+      <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
+        <div style="display:grid; grid-template-columns: 1.2fr 0.8fr; gap:16px;">
+          <div>
+            <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Runtime Coverage</div>
+            <div style="height:14px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,0.06); display:flex;">
+              <div style="width:${okPercent}%; background:#10B981;"></div>
+              <div style="width:${warnPercent}%; background:#F59E0B;"></div>
+              <div style="width:${failPercent}%; background:#EF4444;"></div>
+            </div>
+            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; font-size:11px; color:var(--text-muted);">
+              <span><strong style="color:#10B981;">${escapeHtml(String(successRows))}</strong> success</span>
+              <span><strong style="color:#F59E0B;">${escapeHtml(String(warningRows))}</strong> warnings</span>
+              <span><strong style="color:#EF4444;">${escapeHtml(String(hardFailedRows))}</strong> failed</span>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Freshness</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+              <span class="badge ${freshnessTone}">${escapeHtml(validationState?.summaryLabel || "Not run")}</span>
+              <span class="badge neutral">Draft ${escapeHtml(validationState?.currentVersion || "-")}</span>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted);">Validated on <code>${escapeHtml(validationState?.validatedVersion || details.validatedMappingVersion || "-")}</code></div>
+          </div>
+        </div>
+        <div style="margin-top:14px;">
+          <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Field Issue Heatmap</div>
+          <div style="display:flex; flex-direction:column; gap:8px;">${heatmapHtml}</div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderPartnerSampleRecord(packet, runtimeGate) {
+    const headers = packet?.structureSignature?.headers || [];
+    let rows = [];
+    const hasDisplayValue = value => value !== null && value !== undefined && String(value).trim() !== "";
+    const relevantTraceKeys = new Set(
+      ((runtimeGate?.details?.traceSamples || [])[0]?.fieldTraces || [])
+        .map(trace => trace.sourceField || (trace.column ? `Column ${trace.column}` : ""))
+        .filter(Boolean)
+    );
+
+    if (Array.isArray(packet?.samplePreview) && packet.samplePreview.length > 0) {
+      rows = packet.samplePreview.slice(0, 20).map(sample => ({
+        rowIndex: sample?.rowIndex || null,
+        cells: Array.isArray(sample?.values)
+          ? sample.values.map((value, index) => ({
+              key: headers[index] || `Column ${index + 1}`,
+              value
+            }))
+          : []
+      }));
+    } else {
+      rows = (runtimeGate?.details?.traceSamples || []).slice(0, 20).map(sample => ({
+        rowIndex: sample?.row || null,
+        cells: (sample?.fieldTraces || []).map(trace => ({
+          key: trace.sourceField || (trace.column ? `Column ${trace.column}` : trace.path || "Field"),
+          value: trace.sourceValue
+        }))
+      }));
     }
 
-    const sampledRows = Number(runtimeGate.details.sampledRows || 0);
-    const successRows = Number(runtimeGate.details.successRows || 0);
-    const failedRows = Number(runtimeGate.details.failedRows || 0);
-    const remappedCount = runtimeGate.details.traceSamples.reduce((count, sample) => {
-      return count + (sample.fieldTraces || []).filter(trace => !trace.error && trace.sourceValue !== trace.outputValue).length;
-    }, 0);
-    const issueCount = runtimeGate.details.traceSamples.reduce((count, sample) => {
-      return count + (sample.fieldTraces || []).filter(trace => !!trace.error).length + (sample.buildErrors || []).length;
-    }, 0);
+    const usableRows = rows
+      .map(row => ({
+        rowIndex: row.rowIndex,
+        cells: (row.cells || []).filter(cell => cell.key)
+      }))
+      .filter(row => row.cells.length > 0)
+      .slice(0, 20);
 
-    const metrics = [
-      { label: "Sampled Rows", value: sampledRows, tone: "neutral", tag: "info" },
-      { label: "Passed", value: successRows, tone: "matched", tag: "ok" },
-      { label: "Failed", value: failedRows, tone: failedRows > 0 ? "critical" : "neutral", tag: failedRows > 0 ? "issue" : "info" },
-      { label: "Remapped", value: remappedCount, tone: remappedCount > 0 ? "warning" : "neutral", tag: remappedCount > 0 ? "review" : "info" },
-      { label: "Field Issues", value: issueCount, tone: issueCount > 0 ? "critical" : "neutral", tag: issueCount > 0 ? "issue" : "info" },
-    ];
+    if (!usableRows.length) {
+      return `
+        <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
+          <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Partner Sample Rows</div>
+          <div class="muted" style="font-size:12px;">No partner sample rows are attached to this review packet.</div>
+        </section>
+      `;
+    }
 
-    const metricsHtml = metrics.map(metric => `
-      <div style="padding: 10px 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; background: rgba(255,255,255,0.02); min-width: 126px;">
-        <div style="font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">${escapeHtml(metric.label)}</div>
-        <div style="margin-top: 6px; display:flex; align-items:center; gap:8px;">
-          <strong style="font-size: 20px; line-height: 1;">${escapeHtml(String(metric.value))}</strong>
-          <span class="badge ${metric.tone}">${metric.tag}</span>
+    const derivedHeaders = headers.length
+      ? headers.map((header, index) => ({ key: header || `Column ${index + 1}`, index }))
+      : usableRows[0].cells.map((cell, index) => ({ key: cell.key || `Column ${index + 1}`, index }));
+
+    const relevantHeaders = derivedHeaders.filter(header => relevantTraceKeys.has(header.key));
+    const limitedHeaders = (relevantHeaders.length ? relevantHeaders : derivedHeaders)
+      .filter(header => usableRows.some(row => hasDisplayValue(row.cells[header.index]?.value)))
+      .slice(0, 8);
+
+    return `
+      <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
+        <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+          <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted);">Partner Sample Rows</div>
+          <span class="badge neutral">${escapeHtml(String(usableRows.length))} records</span>
         </div>
-      </div>
-    `).join("");
+        <div class="table-wrap">
+          <table style="width:100%; border-collapse:collapse; font-size:11.5px;">
+            <thead>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.03);">
+                <th style="padding:8px 10px; text-align:left; white-space:nowrap;">Row</th>
+                ${limitedHeaders.map(header => `<th style="padding:8px 10px; text-align:left; white-space:nowrap;">${escapeHtml(String(header.key))}</th>`).join("")}
+              </tr>
+            </thead>
+            <tbody>
+              ${usableRows.map(row => `
+                <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+                  <td style="padding:8px 10px; font-family:var(--font-mono); color:var(--brand-accent-blue); white-space:nowrap;">${escapeHtml(String(row.rowIndex ?? "-"))}</td>
+                  ${limitedHeaders.map(header => {
+                    const cell = row.cells[header.index];
+                    return `<td style="padding:8px 10px; font-family:var(--font-mono); word-break:break-word;">${escapeHtml(String(cell?.value ?? "-"))}</td>`;
+                  }).join("")}
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderRuntimeTraceSamples(runtimeGate) {
+    if (!runtimeGate?.details || !Array.isArray(runtimeGate.details.traceSamples) || runtimeGate.details.traceSamples.length === 0) {
+      return `<div class="muted" style="font-size:12px;">No runtime trace samples are available yet.</div>`;
+    }
+
+    const hasDisplayValue = value => value !== null && value !== undefined && String(value).trim() !== "";
 
     const rowsHtml = runtimeGate.details.traceSamples.map((sample, index) => {
-      const fieldTraces = Array.isArray(sample.fieldTraces) ? sample.fieldTraces : [];
+      const fieldTraces = Array.isArray(sample.fieldTraces)
+        ? sample.fieldTraces.filter(trace =>
+            hasDisplayValue(trace.sourceValue)
+            || hasDisplayValue(trace.outputValue)
+            || hasDisplayValue(trace.errorMessage)
+            || hasDisplayValue(trace.path)
+          )
+        : [];
       const buildErrors = Array.isArray(sample.buildErrors) ? sample.buildErrors : [];
-      const rowIssues = fieldTraces.filter(trace => !!trace.error).length + buildErrors.length;
-      const rowRemaps = fieldTraces.filter(trace => !trace.error && trace.sourceValue !== trace.outputValue).length;
-      const tone = rowIssues > 0 ? "critical" : rowRemaps > 0 ? "warning" : "matched";
-
+      const rowStatus = buildErrors.length > 0 || fieldTraces.some(trace => trace.status === "error")
+        ? "Failed"
+        : fieldTraces.some(trace => trace.status === "warning")
+          ? "Warning"
+          : "Passed";
+      const rowTone = rowStatus === "Failed" ? "critical" : rowStatus === "Warning" ? "warning" : "matched";
       const sourcePreview = fieldTraces.map(trace => {
-        const sourceLabel = trace.type === "CONSTANT"
-          ? "constant"
-          : (trace.column ? `col ${trace.column}` : (trace.sourceField || "-"));
-        return `
-          <div style="display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
-            <div style="min-width: 96px; font-family: monospace; color: var(--text-muted);">${escapeHtml(String(sourceLabel))}</div>
-            <div style="flex:1; font-family: monospace; color: var(--brand-accent-blue); text-align:right; word-break: break-word;">${escapeHtml(String(trace.sourceValue ?? "-"))}</div>
-          </div>
-        `;
+        const label = trace.sourceField || (trace.column ? `Column ${trace.column}` : trace.type === "CONSTANT" ? "Constant" : trace.path || "-");
+        return `<div style="display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid rgba(255,255,255,0.05);"><div style="font-family:var(--font-mono); color:var(--text-muted);">${escapeHtml(String(label))}</div><div style="font-family:var(--font-mono); text-align:right; word-break:break-word;">${escapeHtml(String(trace.sourceValue ?? "-"))}</div></div>`;
       }).join("");
-
-      const normalizedPreview = Object.entries(sample.normalizedData || {}).map(([key, value]) => `
-        <div style="display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
-          <div style="min-width: 96px; font-family: monospace;">${escapeHtml(String(key))}</div>
-          <div style="flex:1; font-family: monospace; text-align:right; word-break: break-word;">${escapeHtml(String(value ?? "-"))}</div>
-        </div>
-      `).join("");
-
+      const normalizedPreview = Object.entries(sample.normalizedData || {})
+        .filter(([, value]) => hasDisplayValue(value))
+        .map(([key, value]) => `<div style="display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid rgba(255,255,255,0.05);"><div style="font-family:var(--font-mono);">${escapeHtml(String(key))}</div><div style="font-family:var(--font-mono); text-align:right; word-break:break-word;">${escapeHtml(String(value ?? "-"))}</div></div>`)
+        .join("");
       const traceRows = fieldTraces.map(trace => {
-        const sourceLabel = trace.type === "CONSTANT"
-          ? "constant"
-          : (trace.column ? `col ${trace.column}` : (trace.sourceField || "-"));
-        const statusLabel = trace.error
-          ? trace.error.reason
-          : (trace.sourceValue !== trace.outputValue ? "remapped" : "ok");
-        const statusColor = trace.error ? "#ef4444" : (trace.sourceValue !== trace.outputValue ? "#f59e0b" : "#10B981");
+        const sourceField = trace.sourceField || (trace.column ? `Column ${trace.column}` : trace.type === "CONSTANT" ? "Constant" : "-");
+        const toneColor = trace.status === "error" ? "#ef4444" : trace.status === "warning" ? "#f59e0b" : "#10B981";
         return `
-          <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
-            <td style="padding: 8px; font-family: monospace;">${escapeHtml(trace.path || "-")}</td>
-            <td style="padding: 8px; color: var(--text-muted);">${escapeHtml(String(sourceLabel))}</td>
-            <td style="padding: 8px; font-family: monospace; color: var(--brand-accent-blue);">${escapeHtml(String(trace.sourceValue ?? "-"))}</td>
-            <td style="padding: 8px; color: var(--text-muted);">${escapeHtml(String(trace.type || "-"))}</td>
-            <td style="padding: 8px; font-family: monospace;">${escapeHtml(String(trace.outputValue ?? "-"))}</td>
-            <td style="padding: 8px; color: ${statusColor};">${escapeHtml(String(statusLabel))}</td>
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+            <td style="padding:8px;">${escapeHtml(String(sourceField))}</td>
+            <td style="padding:8px; font-family:var(--font-mono);">${escapeHtml(String(trace.sourceValue ?? "-"))}</td>
+            <td style="padding:8px; font-family:var(--font-mono);">${escapeHtml(String(trace.path || "-"))}</td>
+            <td style="padding:8px;">${escapeHtml(String(trace.type || "-"))}</td>
+            <td style="padding:8px; font-family:var(--font-mono);">${escapeHtml(String(trace.outputValue ?? "-"))}</td>
+            <td style="padding:8px; color:${toneColor}; text-transform:capitalize;">${escapeHtml(String(trace.status || "ok"))}</td>
+            <td style="padding:8px; color:var(--text-muted);">${escapeHtml(String(trace.errorMessage || "-"))}</td>
           </tr>
         `;
       }).join("");
-
+      const buildErrorsHtml = buildErrors.length ? `<div style="margin-top:12px; padding:12px; border:1px solid rgba(239,68,68,0.18); border-radius:8px; background:rgba(239,68,68,0.05);"><div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#fca5a5; margin-bottom:6px;">Canonical Build Errors</div>${buildErrors.map(err => `<div style="font-size:12px; margin-top:4px;"><strong>${escapeHtml(String(err.field || "-"))}</strong> · ${escapeHtml(String(err.errorCode || "CANONICAL_BUILD_FAILED"))} · ${escapeHtml(String(err.reason || "-"))}</div>`).join("")}</div>` : "";
       return `
-        <details ${index === 0 ? "open" : ""} style="border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; background: rgba(255,255,255,0.02); overflow: hidden;">
-          <summary style="list-style: none; cursor: pointer; padding: 14px 16px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
-            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <details ${index === 0 ? "open" : ""} style="border:1px solid rgba(255,255,255,0.08); border-radius:10px; background:rgba(255,255,255,0.02); overflow:hidden;">
+          <summary style="list-style:none; cursor:pointer; padding:14px 16px; display:flex; justify-content:space-between; gap:12px; align-items:center;">
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
               <strong>Row ${escapeHtml(String(sample.row || "-"))}</strong>
-              <span class="badge ${tone}">${rowIssues > 0 ? `${rowIssues} issue${rowIssues > 1 ? "s" : ""}` : rowRemaps > 0 ? `${rowRemaps} remap` : "clean"}</span>
-              <span class="badge neutral">${escapeHtml(String(fieldTraces.length))} fields</span>
+              <span class="badge ${rowTone}">${escapeHtml(rowStatus)}</span>
+              <span class="badge neutral">${escapeHtml(String(fieldTraces.length))} traces</span>
             </div>
-            <div style="display:flex; align-items:center; gap:8px; color: var(--text-muted); font-size: 12px;">
-              <span>${buildErrors.length > 0 ? "canonical build issue" : "inspect mapping path"}</span>
-              <span class="material-symbols-outlined" style="font-size:18px;">expand_more</span>
-            </div>
+            <span class="material-symbols-outlined" style="font-size:18px; color:var(--text-muted);">expand_more</span>
           </summary>
-          <div style="padding: 0 16px 16px 16px; border-top: 1px solid rgba(255,255,255,0.06);">
-            <div style="display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px; margin-top: 14px;">
-              <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(255,255,255,0.015);">
-                <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">Raw Source Snapshot</div>
-                <div>${sourcePreview || `<span class="muted">No source values</span>`}</div>
+          <div style="padding:0 16px 16px 16px; border-top:1px solid rgba(255,255,255,0.06);">
+            <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; margin-top:14px;">
+              <div style="padding:12px; border:1px solid rgba(255,255,255,0.06); border-radius:8px; background:rgba(255,255,255,0.015);">
+                <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Raw Source Snapshot</div>
+                ${sourcePreview || `<span class="muted">No source values</span>`}
               </div>
-              <div style="padding: 12px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; background: rgba(255,255,255,0.015);">
-                <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">Normalized Output</div>
-                <div>${normalizedPreview || `<span class="muted">No normalized fields</span>`}</div>
+              <div style="padding:12px; border:1px solid rgba(255,255,255,0.06); border-radius:8px; background:rgba(255,255,255,0.015);">
+                <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Normalized Output</div>
+                ${normalizedPreview || `<span class="muted">No normalized output</span>`}
               </div>
             </div>
-            <div style="margin-top: 12px;">
-              <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">Field-Level Trace</div>
+            <div style="margin-top:12px;">
+              <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Field-Level Trace</div>
               <div class="table-wrap">
-                <table style="width: 100%; text-align: left; font-size: 11.5px; border-collapse: collapse;">
+                <table style="width:100%; border-collapse:collapse; font-size:11.5px;">
                   <thead>
-                    <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.08); font-weight: 700;">
-                      <th style="padding: 6px 8px;">Field</th>
-                      <th style="padding: 6px 8px;">Source</th>
-                      <th style="padding: 6px 8px;">Raw</th>
-                      <th style="padding: 6px 8px;">Transform</th>
-                      <th style="padding: 6px 8px;">Mapped</th>
-                      <th style="padding: 6px 8px;">Status</th>
+                    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+                      <th style="padding:6px 8px; text-align:left;">Raw Partner Field</th>
+                      <th style="padding:6px 8px; text-align:left;">Raw Partner Value</th>
+                      <th style="padding:6px 8px; text-align:left;">Target Internal Field</th>
+                      <th style="padding:6px 8px; text-align:left;">Transform</th>
+                      <th style="padding:6px 8px; text-align:left;">Final Normalized Value</th>
+                      <th style="padding:6px 8px; text-align:left;">Validation Status</th>
+                      <th style="padding:6px 8px; text-align:left;">Failure Reason</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    ${traceRows}
-                  </tbody>
+                  <tbody>${traceRows}</tbody>
                 </table>
               </div>
-              ${buildErrors.length > 0 ? `
-                <div style="margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(239,68,68,0.2); border-radius: 8px; background: rgba(239,68,68,0.04);">
-                  <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; margin-bottom: 6px;">Canonical Build Errors</div>
-                  <div style="font-size: 11.5px; color: #fca5a5;">${escapeHtml(buildErrors.map(err => `${err.field}: ${err.reason}`).join(" | "))}</div>
-                </div>
-              ` : ""}
+              ${buildErrorsHtml}
             </div>
           </div>
         </details>
       `;
     }).join("");
 
-    return `
-      <div style="margin-top: 16px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom: 10px; flex-wrap: wrap;">
-          <div style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Runtime Mapping Trace</div>
-          <div class="muted" style="font-size: 12px;">Summary first, then drill down by sample row.</div>
-        </div>
-        <div style="display:flex; gap:10px; flex-wrap: wrap; margin-bottom: 12px;">
-          ${metricsHtml}
-        </div>
-        <div style="display:flex; flex-direction: column; gap: 10px;">
-          ${rowsHtml}
-        </div>
-      </div>
-    `;
+    return `<div style="display:flex; flex-direction:column; gap:10px;">${rowsHtml}</div>`;
   }
 
   function renderReviewHistoryTab() {
@@ -1334,10 +1553,11 @@
       }
     } else if (step === 2) {
       const sigHeaders = selectedPacket.structureSignature?.headers || [];
+      const sampleRows = (selectedPacket.samplePreview || []).map(item => Array.isArray(item?.values) ? item.values : []).filter(row => row.length);
+      const candidateColumns = collectCandidateColumns(sigHeaders, sampleRows);
       const aiMapping = state.guidedReviewAI.mapping;
-      const aiReasoning = aiMapping?.configHealth?.reasoning || "";
       const aiConfidence = aiMapping?.configHealth?.confidence;
-      const rawDraftFieldMappings = (aiMapping?.fieldMappings || []).filter(fm => fm.path !== "currency");
+      const rawDraftFieldMappings = aiMapping?.fieldMappings || [];
       const idMapping = rawDraftFieldMappings.find(mapping => mapping.path === "id");
       const draftFieldMappings = rawDraftFieldMappings.filter(mapping => {
         if (mapping.path !== "trace") return true;
@@ -1349,6 +1569,13 @@
           const headerLabel = sourceColumn > 0 && sigHeaders[sourceColumn - 1] ? sigHeaders[sourceColumn - 1] : (mapping.sourceField || `Column ${sourceColumn || "?"}`);
           const currentMap = mapping.path || "";
           const confidence = typeof aiConfidence === "number" ? Math.round(aiConfidence * 100) : Math.max(70, 95 - (index * 3));
+          const populateVia = mapping.type === "CONSTANT"
+            ? `Constant${mapping.constant ? `: ${mapping.constant}` : ""}`
+            : mapping.type === "MAPPING"
+              ? "Rule / value mapping"
+              : sourceColumn > 0
+                ? `Source column ${sourceColumn}`
+                : "Source column";
           
           const mappingStr = mapping.mapping ? escapeHtml(JSON.stringify(mapping.mapping)) : "";
           const originalRequired = mapping.required ? "true" : "false";
@@ -1357,6 +1584,7 @@
           return `
             <tr>
               <td><code style="font-size:11px;">${escapeHtml(headerLabel)}</code></td>
+              <td style="color:var(--text-muted);">${escapeHtml(populateVia)}</td>
               <td>
                 <select class="inline-field-select" 
                         data-source-column="${sourceColumn}" 
@@ -1370,6 +1598,7 @@
                   <option value="" ${currentMap === "" ? "selected" : ""}>unmapped</option>
                   <option value="id" ${currentMap === "id" ? "selected" : ""}>partner_txn_id</option>
                   <option value="amount" ${currentMap === "amount" ? "selected" : ""}>amount</option>
+                  <option value="currency" ${currentMap === "currency" ? "selected" : ""}>currency</option>
                   <option value="status" ${currentMap === "status" ? "selected" : ""}>status</option>
                   <option value="transDate" ${currentMap === "transDate" ? "selected" : ""}>transaction_time</option>
                 </select>
@@ -1378,16 +1607,82 @@
             </tr>
           `;
       }).join("") : "";
-      const suggestionHtml = state.guidedReviewAI.loading ? `<div>Loading...</div>` : `
-        <div class="table-wrap"><table style="width:100%; border-collapse:collapse; font-size: 12px;">
-          <thead><tr style="background:rgba(255,255,255,0.05)"><th>Field</th><th>Target</th><th>AI Conf</th></tr></thead>
-          <tbody>${editableMappingRows}</tbody>
-        </table></div>`;
+      const mappedFieldCount = draftFieldMappings.filter(mapping => !!mapping.path).length;
+      const selectedSourceColumnCount = new Set(
+        draftFieldMappings
+          .map(mapping => mapping.column)
+          .filter(column => column !== null && column !== undefined && column !== "")
+          .map(column => String(column))
+      ).size;
+      const requiredCanonicalFields = ["id", "amount", "currency", "transDate", "status"];
+      const requiredFromSourceCount = requiredCanonicalFields.filter(field =>
+        draftFieldMappings.some(mapping => mapping.path === field && mapping.column !== null && mapping.column !== undefined && mapping.column !== "")
+      ).length;
+      const requiredFromConstantsCount = requiredCanonicalFields.filter(field =>
+        draftFieldMappings.some(mapping => mapping.path === field && (mapping.type === "CONSTANT" || (mapping.mapping && mapping.type === "MAPPING" && (mapping.column === null || mapping.column === undefined || mapping.column === ""))))
+      ).length;
+      const requiredCoveredCount = requiredCanonicalFields.filter(field =>
+        draftFieldMappings.some(mapping => mapping.path === field)
+      ).length;
+      const confidencePct = typeof aiConfidence === "number" ? Math.round(aiConfidence * 100) : null;
+      const candidateColumnLabels = candidateColumns.slice(0, 5).map(item => item.header);
+      let suggestionHtml = "";
+      if (state.guidedReviewAI.loading) {
+        suggestionHtml = `
+          <div class="empty-state" style="padding: 48px 12px;">
+            <span class="spinner" style="display:inline-block; width:36px; height:36px; border:3px solid rgba(255,255,255,0.1); border-top:3px solid var(--brand-accent-blue); border-radius:50%; animation:spin 1s linear infinite;"></span>
+            <h3 style="margin-top: 16px;">Generating Draft Mapping</h3>
+            <p class="muted">Building partner-to-canonical field suggestions from the current sample rows...</p>
+          </div>
+        `;
+      } else if (state.guidedReviewAI.error) {
+        suggestionHtml = `
+          <div class="empty-state" style="padding: 48px 12px;">
+            <span class="material-symbols-outlined" style="color:var(--status-failed); font-size:48px;">error</span>
+            <h3 style="margin-top: 16px;">Draft Mapping Failed</h3>
+            <p class="muted">${escapeHtml(state.guidedReviewAI.error)}</p>
+          </div>
+        `;
+      } else {
+        suggestionHtml = `
+          <div style="display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:16px; margin-bottom:16px;">
+            <div class="panel" style="margin:0; padding:16px; text-align:center; background:rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.06); border-radius:10px;">
+              <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">Partner Columns Available</div>
+              <div style="font-size:32px; font-weight:800; color:#FFF; margin-top:8px; font-family:var(--font-mono);">${formatNumber(sigHeaders.length)}</div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Columns detected in the incoming partner file</div>
+            </div>
+            <div class="panel" style="margin:0; padding:16px; text-align:center; background:rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.06); border-radius:10px;">
+              <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">Candidate Columns For Reconciliation</div>
+              <div style="font-size:32px; font-weight:800; color:#FFF; margin-top:8px; font-family:var(--font-mono);">${formatNumber(selectedSourceColumnCount)}</div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Columns currently selected from the partner file</div>
+            </div>
+            <div class="panel" style="margin:0; padding:16px; text-align:center; background:rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.06); border-radius:10px;">
+              <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">Required Fields Covered</div>
+              <div style="font-size:32px; font-weight:800; color:#FFF; margin-top:8px; font-family:var(--font-mono);">${requiredCoveredCount}/${requiredCanonicalFields.length}</div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${requiredFromSourceCount} from source columns, ${requiredFromConstantsCount} from constants/rules</div>
+            </div>
+          </div>
+          <section class="panel" style="margin:0; padding:20px; border-radius:10px;">
+            <h4 style="margin:0 0 16px 0; font-size:15px; border-bottom:1px solid rgba(255,255,255,0.06); padding-bottom:8px; color:var(--brand-accent-blue);">AI Suggestion / Draft Mapping</h4>
+            <p class="muted" style="margin:0 0 12px 0;">Use the AI draft if it is good enough, or open Mapping Studio for a full edit.</p>
+            <div style="margin:0 0 16px 0; padding:12px 14px; background:rgba(255,255,255,0.02); border-left:3px solid var(--brand-accent-blue); border-radius:4px; font-size:13px; line-height:1.5; color:#E2E8F0;">
+              <strong style="font-size:10px; text-transform:uppercase; color:var(--brand-accent-blue); display:block; margin-bottom:4px;">Mapping Scope</strong>
+              ${escapeHtml(`${sigHeaders.length} partner columns were detected, but only ${selectedSourceColumnCount} candidate columns are currently selected to populate ${mappedFieldCount} canonical mapping fields. Runtime processing only depends on relevant source columns, constants, and rules.`)}
+              ${candidateColumnLabels.length ? `<div style="margin-top:8px; color:var(--text-muted);">Top candidate columns: ${escapeHtml(candidateColumnLabels.join(", "))}</div>` : ""}
+              ${confidencePct !== null ? `<div style="margin-top:8px; color:var(--text-muted);">AI confidence: ${escapeHtml(String(confidencePct))}%</div>` : ""}
+            </div>
+            <div class="table-wrap"><table style="width:100%; border-collapse:collapse; font-size: 12px;">
+              <thead><tr style="background:rgba(255,255,255,0.05)"><th>Partner Column</th><th>Populate Via</th><th>Canonical Field</th><th>AI Conf</th></tr></thead>
+              <tbody>${editableMappingRows}</tbody>
+            </table></div>
+          </section>
+        `;
+      }
       stepBodyHtml = `
-        <div class="guided-step-content">
-          <div class="guided-section-header" style="margin-bottom: 16px;">
-            <h4>AI Suggestion / Draft Mapping</h4>
-            <p>Use the AI draft if it is good enough, or open Mapping Studio for a full edit.</p>
+        <div class="guided-step-content" style="display:flex; flex-direction:column; gap:14px;">
+          <div>
+            <h4 style="margin:0;">Draft Mapping Review</h4>
+            <p class="muted" style="margin:6px 0 0 0;">Review the AI proposal and adjust the partner field mapping before runtime validation.</p>
           </div>
           ${suggestionHtml}
           <div class="guided-action-bar" style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
@@ -1397,111 +1692,136 @@
         </div>
       `;
     } else if (step === 3) {
-      const packetGates = selectedPacket.validationGates || [];
-      const runtimeGate = packetGates.find(item => item.gateKey === "runtime_validation");
-      const runtimeGateStatus = runtimeGate ? String(runtimeGate.status || "").toLowerCase() : "pending";
-      const allGatesPassed = packetGates.every(gate => String(gate.status || "").toLowerCase() === "pass");
-      const renderedGates = packetGates.map(gate => `
-        <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; margin-bottom:10px; background:rgba(255,255,255,0.01);">
-          <div><strong>${escapeHtml(gate.label || gate.gateKey)}</strong></div>
-          <span class="material-symbols-outlined" style="color:${gate.status === 'pass' ? '#10B981' : '#EF4444'}">${gate.status === 'pass' ? 'check_circle' : 'cancel'}</span>
-        </div>
-      `).join("");
-      let validationDetailsHtml = "";
-      if (runtimeGate) {
-        const traceSamplesHtml = renderRuntimeTraceSamples(runtimeGate);
-        if (runtimeGate.status === "pass") {
-          validationDetailsHtml = `
-            <div style="margin-top: 16px; border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; background: rgba(16, 185, 129, 0.02); padding: 12px; font-size: 13px; color: #E2E8F0; display:flex; align-items:center; gap:8px;">
-              <span class="material-symbols-outlined" style="color:#10B981; font-size:20px;">check_circle</span>
-              <div>
-                <strong>Validation Passed:</strong> Normalized ${runtimeGate.details?.successRows || 0} of ${runtimeGate.details?.sampledRows || 0} rows successfully.
-              </div>
-            </div>
-            ${traceSamplesHtml}
-          `;
-        } else {
-          let errorRows = "";
-          if (runtimeGate.details && Array.isArray(runtimeGate.details.failedExamples) && runtimeGate.details.failedExamples.length > 0) {
-            errorRows = runtimeGate.details.failedExamples.map(err => `
-              <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
-                <td style="padding: 8px; font-family: monospace; color: var(--brand-accent-blue);">Row ${err.row}</td>
-                <td style="padding: 8px; font-family: monospace; color: #ef4444;">${escapeHtml(err.field || "N/A")}</td>
-                <td style="padding: 8px; color: var(--text-muted); font-size: 11.5px;">${escapeHtml(err.reason)}</td>
-              </tr>
-            `).join("");
-          }
-          validationDetailsHtml = `
-            <div style="margin-top: 16px; border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; background: rgba(239, 68, 68, 0.02); padding: 12px;">
-              <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
-                <span class="material-symbols-outlined" style="color:#EF4444; font-size:20px;">cancel</span>
-                <div>
-                  <strong style="color: #ef4444;">Validation Failed:</strong> Normalized only ${runtimeGate.details?.successRows || 0} of ${runtimeGate.details?.sampledRows || 0} rows.
-                </div>
-              </div>
-              ${errorRows ? `
-                <div class="table-wrap">
-                  <table style="width: 100%; text-align: left; font-size: 12px; border-collapse: collapse;">
-                    <thead>
-                      <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.08); font-weight: 700;">
-                        <th style="padding: 6px 8px;">Location</th>
-                        <th style="padding: 6px 8px;">Field</th>
-                        <th style="padding: 6px 8px;">Error Reason</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${errorRows}
-                    </tbody>
-                  </table>
-                </div>
-              ` : ""}
-            </div>
-            ${traceSamplesHtml}
-          `;
-        }
+      const validationState = getRuntimeValidationState(selectedPacket);
+      const runtimeGate = validationState.runtimeGate;
+      const details = runtimeGate?.details || {};
+      const issues = collectValidationIssues(runtimeGate);
+      const summaryTone = validationState.summaryLabel === "Failed" ? "critical" : validationState.summaryLabel === "Passed with warnings" ? "warning" : "matched";
+      let bannerTone = "warning";
+      let bannerTitle = "Runtime validation has not been run for the latest draft mapping.";
+      let bannerText = "Run runtime validation before moving to the decision step.";
+      if (validationState.isStale) {
+        bannerTitle = "Runtime validation is stale for the current draft mapping.";
+        bannerText = "The draft mapping changed after the last validation. Re-run runtime validation before continuing.";
+      } else if (validationState.summaryLabel === "Passed with warnings") {
+        bannerTone = "warning";
+        bannerTitle = "Runtime validation passed with warnings.";
+        bannerText = runtimeGate?.reason || "Some sampled rows still failed validation.";
+      } else if (validationState.summaryLabel === "Failed") {
+        bannerTone = "critical";
+        bannerTitle = "Runtime validation failed.";
+        bannerText = runtimeGate?.reason || "The current mapping did not validate successfully.";
+      } else if (validationState.summaryLabel === "Passed") {
+        bannerTone = "matched";
+        bannerTitle = "Runtime validation is current for this draft mapping.";
+        bannerText = runtimeGate?.reason || "All sampled rows validated successfully.";
       }
-
-      stepBodyHtml = `
-        <div class="guided-step-content">
-          <h4>Validation Results</h4>
-          <div class="runtime-validation-panel" style="padding:16px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02); margin-bottom:20px;">
-            <strong>Runtime validation</strong>
-            <p style="font-size:12px; color:var(--text-muted);">${escapeHtml(runtimeGate?.reason || "Run a live runtime validation on the current review packet before activation.")}</p>
-            <button class="button primary" data-action="validate-runtime-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">Run runtime validate</button>
+      const summaryCard = `
+        <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
+          <div style="display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px;">
+            <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Sampled Rows</div><div style="font-size:22px; font-weight:800;">${escapeHtml(String(details.sampledRows || 0))}</div></div>
+            <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Success Rows</div><div style="font-size:22px; font-weight:800;">${escapeHtml(String(details.successRows || 0))}</div></div>
+            <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Failed Rows</div><div style="font-size:22px; font-weight:800;">${escapeHtml(String(details.failedRows || 0))}</div></div>
+            <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Success Rate</div><div style="font-size:22px; font-weight:800;">${escapeHtml(`${details.successRows || 0}/${details.sampledRows || 0} (${Math.round((Number(details.successRate || 0)) * 100)}%)`)}</div></div>
           </div>
-          <div class="validation-gates-list">${renderedGates}</div>
-          ${validationDetailsHtml}
+          <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;">
+            <span class="badge ${summaryTone}">${escapeHtml(validationState.summaryLabel)}</span>
+            <span class="badge neutral">Gate ${escapeHtml(String(runtimeGate?.status || "pending").toUpperCase())}</span>
+            <span class="badge ${String(details.riskLevel || "").toUpperCase() === "HIGH" ? "failed" : String(details.riskLevel || "").toUpperCase() === "MEDIUM" ? "warning" : "matched"}">Risk ${escapeHtml(String(details.riskLevel || "-"))}</span>
+            <span class="badge neutral">${escapeHtml(formatDisplayDateTime(details.validatedAt || "-"))}</span>
+          </div>
+          <div style="margin-top:12px; font-size:12px; color:var(--text-muted);"><strong>Reason:</strong> ${escapeHtml(runtimeGate?.reason || "Run runtime validation on the latest draft mapping.")}</div>
+        </section>
+      `;
+      const issuesHtml = issues.length ? `
+        <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
+          <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Validation Issues List</div>
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            ${issues.map(issue => `
+              <div style="padding:12px; border:1px solid rgba(255,255,255,0.08); border-radius:8px; background:rgba(255,255,255,0.02);">
+                <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                  <strong>${escapeHtml(issue.code)}</strong>
+                  <span class="badge warning">${escapeHtml(issue.field || "field")}</span>
+                  <span class="muted" style="font-size:12px;">Row ${escapeHtml(String(issue.row || "-"))}</span>
+                </div>
+                <div style="margin-top:6px; font-size:12px;">${escapeHtml(issue.message)}</div>
+                <div style="margin-top:6px; font-size:12px; color:var(--text-muted);">${escapeHtml(issue.suggestion)}</div>
+              </div>
+            `).join("")}
+          </div>
+        </section>
+      ` : `
+        <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
+          <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Validation Issues List</div>
+          <div class="muted" style="font-size:12px;">No deterministic validation issues were produced for the sampled rows.</div>
+        </section>
+      `;
+      stepBodyHtml = `
+        <div class="guided-step-content" style="display:flex; flex-direction:column; gap:14px;">
+          <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+            <div>
+              <h4 style="margin:0;">Runtime Validation</h4>
+              <p class="muted" style="margin:6px 0 0 0;">Inspect the latest runtime gate for the current draft mapping before approving.</p>
+            </div>
+            <button class="button primary" data-action="validate-runtime-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">${validationState.hasValidation ? "Re-run runtime validation" : "Run runtime validation"}</button>
+          </div>
+          ${renderRuntimeVisualSummary(runtimeGate, validationState)}
+          ${renderPartnerSampleRecord(selectedPacket, runtimeGate)}
+          ${summaryCard}
+          <section class="panel" style="margin:0; padding:16px; border-radius:10px; border:1px solid rgba(255,255,255,0.08); background:${bannerTone === "critical" ? "rgba(239,68,68,0.05)" : bannerTone === "warning" ? "rgba(245,158,11,0.06)" : "rgba(16,185,129,0.05)"};">
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <span class="material-symbols-outlined" style="color:${bannerTone === "critical" ? "#ef4444" : bannerTone === "warning" ? "#f59e0b" : "#10B981"};">${bannerTone === "critical" ? "error" : bannerTone === "warning" ? "warning" : "check_circle"}</span>
+              <div>
+                <strong>${escapeHtml(bannerTitle)}</strong>
+                <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">${escapeHtml(bannerText)}</div>
+              </div>
+            </div>
+          </section>
+          ${issuesHtml}
+          <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
+            <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Runtime Mapping Preview</div>
+            ${renderRuntimeTraceSamples(runtimeGate)}
+          </section>
         </div>
       `;
     } else if (step === 4) {
-      const gateSummary = (selectedPacket.validationGates || []).reduce((acc, gate) => {
-        const status = String(gate.status || "").toLowerCase();
-        acc[status] = (acc[status] || 0) + 1;
-        return acc;
-      }, {});
-      const hasFailedGates = (gateSummary.fail || 0) > 0;
+      const validationState = getRuntimeValidationState(selectedPacket);
+      const runtimeGate = validationState.runtimeGate;
       const isMappingReady = !!selectedPacket.draftMappingId;
-      const runtimeGate = (selectedPacket.validationGates || []).find(gate => gate.gateKey === "runtime_validation");
-      const runtimeValidated = String(runtimeGate?.status || "").toLowerCase() === "pass";
-      const isReady = isMappingReady && runtimeValidated && !hasFailedGates;
+      const isReady = isMappingReady && validationState.canProceed;
+      const recommendation = isReady
+        ? "The latest draft mapping is ready for approval and activation."
+        : validationState.isStale
+          ? "Validation is stale. Return to Step 3 and re-run runtime validation on the current draft mapping."
+          : validationState.summaryLabel === "Failed"
+            ? "Validation failed. Return to Step 3 and resolve the runtime mapping issues before approval."
+            : "A current runtime validation is required before approval.";
       stepBodyHtml = `
-        <div class="guided-step-content">
-          <h4>Copilot Recommendation</h4>
-          <div style="background: rgba(255,255,255,0.02); padding: 16px; border-radius: 8px; margin-bottom: 24px;">
-            <p>${isReady ? "All validation checks passed successfully. Copilot recommends approving and activating this configuration." : "Copilot recommends adjusting the mapping configuration in Mapping Studio. Current sample row tests contain structural errors."}</p>
-          </div>
-          <div style="display: flex; flex-direction: column; gap: 10px;">
-            <button class="button primary ${isReady ? 'success-cta' : ''}" data-action="approve-packet-activate" data-packet-id="${escapeHtml(selectedPacket._id)}" ${isReady ? "" : "disabled"}>Approve & Activate</button>
+        <div class="guided-step-content" style="display:flex; flex-direction:column; gap:14px;">
+          <h4 style="margin:0;">Decision</h4>
+          <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+              <span class="badge ${isMappingReady ? "matched" : "warning"}">Mapping ${isMappingReady ? "ready" : "missing"}</span>
+              <span class="badge ${validationState.canProceed ? "matched" : validationState.isStale ? "warning" : "failed"}">Runtime validation ${escapeHtml(validationState.summaryLabel)}</span>
+            </div>
+            <div style="margin-top:12px; font-size:12px; color:var(--text-muted);"><strong>Gate summary:</strong> ${escapeHtml(runtimeGate?.reason || "Runtime validation has not been completed for the latest draft mapping.")}</div>
+            <div style="margin-top:10px; font-size:13px;">${escapeHtml(recommendation)}</div>
+          </section>
+          ${(!validationState.canProceed || !isMappingReady) ? `<button class="button secondary-action" data-action="back-to-guided-step-3">Return to Step 3</button>` : ""}
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <button class="button primary ${isReady ? "success-cta" : ""}" data-action="approve-packet-activate" data-packet-id="${escapeHtml(selectedPacket._id)}" ${isReady ? "" : "disabled"}>Approve & Activate</button>
             <button class="button secondary-action" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">Reject change</button>
           </div>
         </div>
       `;
     }
 
+    const step3State = step === 3 ? getRuntimeValidationState(selectedPacket) : null;
+    const disableNext = step === 3 && !step3State?.canProceed;
     const footerHtml = `
       <div class="guided-review-footer" style="display:flex; justify-content:space-between; margin-top:20px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 16px;">
         <button class="button" data-action="guided-prev" ${step === 1 ? 'disabled' : ''}>Back</button>
-        ${step < 4 ? `<button class="button primary" data-action="guided-next" data-packet-id="${escapeHtml(selectedPacket._id)}">Next</button>` : ""}
+        ${step < 4 ? `<button class="button primary" data-action="guided-next" data-packet-id="${escapeHtml(selectedPacket._id)}" ${disableNext ? "disabled" : ""}>Next</button>` : ""}
       </div>
     `;
 
@@ -3786,10 +4106,14 @@
               el.style.opacity = "";
               el.innerHTML = originalText;
               if (!ok) throw new Error(body.detail || "Runtime validation failed");
-              updateReviewPacketLocally(packetId, packet => {
-                const gates = Array.isArray(packet.validationGates) ? packet.validationGates.filter(gate => gate.gateKey !== body.gate.gateKey) : [];
-                gates.push(body.gate);
-                packet.validationGates = gates;
+              const currentPacket = ([...(state.reviewCenterCache?.data?.packets || []), ...(state.reviewPackets || [])].find(packet => String(packet._id) === String(packetId)) || {});
+              const gates = Array.isArray(currentPacket.validationGates) ? currentPacket.validationGates.filter(gate => gate.gateKey !== body.gate.gateKey) : [];
+              gates.push(body.gate);
+              syncLocalReviewPacket(packetId, {
+                draftMappingId: currentPacket.draftMappingId || null,
+                draftMappingVersion: currentPacket.draftMappingVersion || body.gate?.details?.validatedMappingVersion || currentPacket.draftMappingId || null,
+                validationGates: gates,
+                parseStrategy: currentPacket.parseStrategy || {}
               });
               state.reviewCenterCache = null;
               showToast(body.gate?.reason || "Runtime validation completed.");
@@ -3958,32 +4282,29 @@
                   throw new Error(detail || "Save mapping failed");
                 }
                 
-                if (!state.localDraftMappingIds) {
-                  state.localDraftMappingIds = {};
-                }
-                state.localDraftMappingIds[packetId] = body.draftMappingId;
                 state.guidedReviewAI = {
                   loading: false,
                   error: "",
                   mapping: {
                     ...(state.guidedReviewAI.mapping || {}),
                     _id: body.draftMappingId,
+                    configVersion: body.draftMappingVersion || state.guidedReviewAI.mapping?.configVersion || body.draftMappingId,
+                    draftMappingVersion: body.draftMappingVersion || body.draftMappingId,
                     fieldMappings,
                     sheetName: body.sheetName,
                     startRow: body.startRow,
                   },
                   packetId
                 };
-                updateReviewPacketLocally(packetId, packet => {
-                  packet.draftMappingId = body.draftMappingId;
-                  packet.parseStrategy = {
-                    ...(packet.parseStrategy || {}),
+                syncLocalReviewPacket(packetId, {
+                  draftMappingId: body.draftMappingId,
+                  draftMappingVersion: body.draftMappingVersion || body.draftMappingId,
+                  validationGates: Array.isArray(body.validationGates) ? body.validationGates : [],
+                  parseStrategy: {
+                    ...(currentPacket?.parseStrategy || {}),
                     sheetName: body.sheetName,
                     startRow: body.startRow,
                     fieldMappingCount: body.fieldMappingCount
-                  };
-                  if (Array.isArray(body.validationGates)) {
-                    packet.validationGates = body.validationGates;
                   }
                 });
                 state.reviewCenterCache = null;
@@ -3999,6 +4320,11 @@
               });
             return;
           } else if (step === 3) {
+            const currentPacket = getReviewPacketById(packetId);
+            if (!getRuntimeValidationState(currentPacket || {}).canProceed) {
+              showToast("Run current runtime validation before moving to the decision step.");
+              return;
+            }
             state.guidedReviewStep = 4;
             render();
             return;
@@ -4013,6 +4339,11 @@
         }
         if (action === "back-to-guided-step-1") {
           state.guidedReviewStep = 1;
+          render();
+          return;
+        }
+        if (action === "back-to-guided-step-3") {
+          state.guidedReviewStep = 3;
           render();
           return;
         }
@@ -4102,32 +4433,29 @@
                 }
                 throw new Error(detail || "Save mapping failed");
               }
-              if (!state.localDraftMappingIds) {
-                state.localDraftMappingIds = {};
-              }
-              state.localDraftMappingIds[packetId] = body.draftMappingId;
               state.guidedReviewAI = {
                 loading: false,
                 error: "",
                 mapping: {
                   ...(state.guidedReviewAI.mapping || {}),
                   _id: body.draftMappingId,
+                  configVersion: body.draftMappingVersion || state.guidedReviewAI.mapping?.configVersion || body.draftMappingId,
+                  draftMappingVersion: body.draftMappingVersion || body.draftMappingId,
                   fieldMappings,
                   sheetName: body.sheetName,
                   startRow: body.startRow,
                 },
                 packetId
               };
-              updateReviewPacketLocally(packetId, packet => {
-                packet.draftMappingId = body.draftMappingId;
-                packet.parseStrategy = {
-                  ...(packet.parseStrategy || {}),
+              syncLocalReviewPacket(packetId, {
+                draftMappingId: body.draftMappingId,
+                draftMappingVersion: body.draftMappingVersion || body.draftMappingId,
+                validationGates: Array.isArray(body.validationGates) ? body.validationGates : [],
+                parseStrategy: {
+                  ...(currentPacket?.parseStrategy || {}),
                   sheetName: body.sheetName,
                   startRow: body.startRow,
                   fieldMappingCount: body.fieldMappingCount
-                };
-                if (Array.isArray(body.validationGates)) {
-                  packet.validationGates = body.validationGates;
                 }
               });
               state.reviewCenterCache = null;
@@ -5020,20 +5348,15 @@
         }
         const mapping = body.mapping || null;
         if (body.draftMappingId) {
-          if (!state.localDraftMappingIds) {
-            state.localDraftMappingIds = {};
-          }
-          state.localDraftMappingIds[packet._id] = body.draftMappingId;
-          updateReviewPacketLocally(packet._id, currentPacket => {
-            currentPacket.draftMappingId = body.draftMappingId;
-            currentPacket.parseStrategy = {
-              ...(currentPacket.parseStrategy || {}),
-              sheetName: mapping?.sheetName || currentPacket?.parseStrategy?.sheetName || "Sheet1",
-              startRow: mapping?.startRow || currentPacket?.parseStrategy?.startRow || 2,
+          syncLocalReviewPacket(packet._id, {
+            draftMappingId: body.draftMappingId,
+            draftMappingVersion: body.draftMappingVersion || mapping?.draftMappingVersion || mapping?.configVersion || body.draftMappingId,
+            validationGates: Array.isArray(body.validationGates) ? body.validationGates : [],
+            parseStrategy: {
+              ...(packet.parseStrategy || {}),
+              sheetName: mapping?.sheetName || packet?.parseStrategy?.sheetName || "Sheet1",
+              startRow: mapping?.startRow || packet?.parseStrategy?.startRow || 2,
               fieldMappingCount: (mapping?.fieldMappings || []).length,
-            };
-            if (Array.isArray(body.validationGates)) {
-              currentPacket.validationGates = body.validationGates;
             }
           });
         }
@@ -5086,6 +5409,27 @@
         state.guidedReviewScope.error = err.message || "Failed to load scope classification.";
         renderPreserveScroll();
       });
+  }
+
+  function syncLocalReviewPacket(packetId, updates = {}) {
+    if (updates.draftMappingId) {
+      state.localDraftMappingIds = state.localDraftMappingIds || {};
+      state.localDraftMappingIds[packetId] = updates.draftMappingId;
+    }
+    updateReviewPacketLocally(packetId, currentPacket => {
+      if (Object.prototype.hasOwnProperty.call(updates, "draftMappingId")) {
+        currentPacket.draftMappingId = updates.draftMappingId;
+      }
+      if (Object.prototype.hasOwnProperty.call(updates, "draftMappingVersion")) {
+        currentPacket.draftMappingVersion = updates.draftMappingVersion;
+      }
+      if (Object.prototype.hasOwnProperty.call(updates, "validationGates")) {
+        currentPacket.validationGates = updates.validationGates || [];
+      }
+      if (Object.prototype.hasOwnProperty.call(updates, "parseStrategy")) {
+        currentPacket.parseStrategy = updates.parseStrategy;
+      }
+    });
   }
 
   function updateReviewPacketLocally(packetId, updater) {

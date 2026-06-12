@@ -50,6 +50,7 @@ class ReviewPacket(BaseModel):
         alias="draftMappingId",
         validation_alias=AliasChoices("draftMappingId", "proposalConfigId"),
     )
+    draft_mapping_version: Optional[str] = Field(default=None, alias="draftMappingVersion")
     target_action_id: Optional[str] = Field(default=None, alias="targetActionId")
     source_file_id: Optional[str] = Field(default=None, alias="sourceFileId")
     source_file_path: Optional[str] = Field(default=None, alias="sourceFilePath")

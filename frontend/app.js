@@ -7,6 +7,7 @@
     focus: "operational",
     reconStatus: "",
     explorerFilters: { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" },
+    reconciliationPagination: { limit: 25, offset: 0 },
     evidenceHistory: {},
     reviewedRecords: {},
     resolvedReconStatuses: {},
@@ -33,6 +34,18 @@
     copilotContext: null,
     selectedReviewPacketId: null,
     reviewPackets: [],
+    postApprovalRuns: {},
+    reconciliationRun: null,
+    reconciliationInsightsLoading: false,
+    reconciliationInsightsError: "",
+    reconciliationInsightTabData: {
+      anomalies: null,
+      patterns: null,
+      recommendations: null
+    },
+    reconciliationInsightTabLoading: "",
+    reconciliationInsightTabErrors: {},
+    selectedReconRows: {},
     reviewTab: "pending",
     reviewHistoryCache: null,
     reviewHistoryLoading: false,
@@ -63,6 +76,9 @@
   const toast = document.getElementById("toast");
   let activeRenderToken = 0;
   let activePartnerFetchToken = 0;
+  const postApprovalPollers = {};
+  let reconciliationRunPoller = null;
+  let automationPoller = null;
   let briefStep = 0;
   const BRIEF_STEPS = ["Brief", "Review", "Decision"];
   const INLINE_FIELD_LABELS = {
@@ -446,7 +462,12 @@
   function bindFilters() {
     document.querySelectorAll("#partner-filter").forEach(pf => {
       pf.addEventListener("change", () => {
+        if (state.partner === pf.value) return;
         state.partner = pf.value;
+        state.activeReconData = null;
+        state.reconciliationRun = null;
+        state.selectedEvidenceRowId = null;
+        state.reconciliationPagination = { ...(state.reconciliationPagination || {}), offset: 0 };
         render();
       });
     });
@@ -459,7 +480,12 @@
         input.value = formatDisplayDate(state.date);
         return;
       }
+      if (state.date === parsed) return;
       state.date = parsed;
+      state.activeReconData = null;
+      state.reconciliationRun = null;
+      state.selectedEvidenceRowId = null;
+      state.reconciliationPagination = { ...(state.reconciliationPagination || {}), offset: 0 };
       render();
     };
 
@@ -474,7 +500,12 @@
     document.querySelectorAll("#date-picker").forEach(input => {
       input.addEventListener("change", () => {
         if (!input.value) return;
+        if (state.date === input.value) return;
         state.date = input.value;
+        state.activeReconData = null;
+        state.reconciliationRun = null;
+        state.selectedEvidenceRowId = null;
+        state.reconciliationPagination = { ...(state.reconciliationPagination || {}), offset: 0 };
         render();
       });
     });
@@ -495,6 +526,10 @@
   }
 
   function onRouteChange() {
+    if (automationPoller) {
+      clearInterval(automationPoller);
+      automationPoller = null;
+    }
     const key = location.hash.replace("#", "") || "review-center";
     const aliases = {
       "review-queue": "review-center",
@@ -583,13 +618,15 @@
 
   async function renderReconciliationPage(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
     const isAlreadyOnRecon = view.querySelector(".summary-strip") !== null;
-    if (!isAlreadyOnRecon) {
+    const contextChanged = state.lastPartner !== state.partner || state.lastDate !== state.date || !state.activeReconData;
+    if (!isAlreadyOnRecon || contextChanged) {
       view.innerHTML = loadingPanel("Loading reconciliation results...");
     } else {
       state.preservedScrollTop = (document.scrollingElement || document.documentElement).scrollTop;
     }
 
-    let url = `/api/v1/reconciliation/results?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&limit=100`;
+    const pageState = state.reconciliationPagination || { limit: 25, offset: 0 };
+    let url = `/api/v1/reconciliation/results?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&limit=${encodeURIComponent(pageState.limit || 25)}&offset=${encodeURIComponent(pageState.offset || 0)}`;
     if (state.reconStatus) {
       url += `&status=${encodeURIComponent(state.reconStatus)}`;
     }
@@ -608,12 +645,9 @@
         }
       });
     }
-    const [insightsSummary, anomalies, patterns, recommendations, copilot] = await Promise.all([
-      fetchJson(`/api/v1/reconciliation/insights?type=summary&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-      fetchJson(`/api/v1/reconciliation/insights?type=anomalies&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-      fetchJson(`/api/v1/reconciliation/insights?type=patterns&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-      fetchJson(`/api/v1/reconciliation/insights?type=recommendations&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-      fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&screen=reconciliation`).catch(() => null)
+    const [statsResponse, reconRunResponse] = await Promise.all([
+      fetchJson(`/api/v1/reconciliation/stats?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
+      fetchJson(`/api/v1/reconciliation/run-status?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null)
     ]);
     if (
       renderToken !== activeRenderToken ||
@@ -621,20 +655,95 @@
       state.partner !== partnerAtStart ||
       state.date !== dateAtStart
     ) return;
-    state.insightsSummary = insightsSummary;
-    state.insightsData = { anomalies, patterns, recommendations };
-    state.copilotContext = copilot;
-    if (!state.activeReconData || state.lastPartner !== state.partner || state.lastDate !== state.date) {
-      state.activeReconData = data;
-      state.lastPartner = state.partner;
-      state.lastDate = state.date;
+    state.insightsSummary = statsResponse;
+    state.reconciliationInsightsLoading = true;
+    state.reconciliationInsightsError = "";
+    state.reconciliationInsightTabData = {
+      anomalies: null,
+      patterns: null,
+      recommendations: null
+    };
+    state.reconciliationInsightTabLoading = ["anomalies", "patterns", "recommendations"][state.activeInsightTab || 0];
+    state.reconciliationInsightTabErrors = {};
+    state.selectedReconRows = {};
+    state.reconciliationRun = reconRunResponse?.run || null;
+    state.activeReconData = data;
+    state.lastPartner = state.partner;
+    state.lastDate = state.date;
+    view.innerHTML = renderReconciliation(data);
+    if (state.reconciliationRun && !isTerminalReconciliationRun(state.reconciliationRun)) {
+      pollReconciliationRun();
     }
-    view.innerHTML = renderReconciliation(state.activeReconData);
     if (typeof state.preservedScrollTop === "number") {
       const viewport = document.scrollingElement || document.documentElement;
       viewport.scrollTop = state.preservedScrollTop;
       state.preservedScrollTop = null;
     }
+    loadReconciliationCopilot(renderToken, routeAtStart, partnerAtStart, dateAtStart);
+    loadActiveReconciliationInsight(renderToken, routeAtStart, partnerAtStart, dateAtStart);
+  }
+
+  async function loadReconciliationCopilot(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    try {
+      const copilot = await fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(partnerAtStart)}&date=${encodeURIComponent(dateAtStart)}&screen=reconciliation`).catch(() => null);
+      if (
+        renderToken !== activeRenderToken ||
+        state.route !== routeAtStart ||
+        state.partner !== partnerAtStart ||
+        state.date !== dateAtStart
+      ) return;
+      state.copilotContext = copilot;
+    } catch (err) {
+      return;
+    }
+  }
+
+  async function loadActiveReconciliationInsight(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    const tabKey = ["anomalies", "patterns", "recommendations"][state.activeInsightTab || 0];
+    if (state.reconciliationInsightTabData?.[tabKey]) {
+      state.reconciliationInsightsLoading = false;
+      return;
+    }
+    state.reconciliationInsightTabLoading = tabKey;
+    state.reconciliationInsightsLoading = true;
+    state.reconciliationInsightTabErrors = {
+      ...(state.reconciliationInsightTabErrors || {}),
+      [tabKey]: ""
+    };
+    try {
+      const tabData = await fetchJson(`/api/v1/reconciliation/insights?type=${encodeURIComponent(tabKey)}&partner=${encodeURIComponent(partnerAtStart)}&date=${encodeURIComponent(dateAtStart)}`).catch(() => null);
+      if (
+        renderToken !== activeRenderToken ||
+        state.route !== routeAtStart ||
+        state.partner !== partnerAtStart ||
+        state.date !== dateAtStart
+      ) return;
+      state.reconciliationInsightTabLoading = "";
+      state.reconciliationInsightsLoading = false;
+      state.reconciliationInsightTabData = {
+        ...(state.reconciliationInsightTabData || {}),
+        [tabKey]: tabData || []
+      };
+      state.reconciliationInsightsError = "";
+    } catch (err) {
+      if (
+        renderToken !== activeRenderToken ||
+        state.route !== routeAtStart ||
+        state.partner !== partnerAtStart ||
+        state.date !== dateAtStart
+      ) return;
+      state.reconciliationInsightTabLoading = "";
+      state.reconciliationInsightsLoading = false;
+      const message = err.message || "AI insights are unavailable right now.";
+      state.reconciliationInsightsError = message;
+      state.reconciliationInsightTabErrors = {
+        ...(state.reconciliationInsightTabErrors || {}),
+        [tabKey]: message
+      };
+    }
+    view.innerHTML = renderReconciliation(state.activeReconData || { results: [] });
+    bindFilters();
+    bindViewActions();
   }
 
   function renderMappingStudioPage() {
@@ -651,6 +760,7 @@
     if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
     state.copilotContext = copilot;
     view.innerHTML = renderAutomation(data);
+    pollAutomationOverview();
     bindViewActions();
   }
 
@@ -1362,6 +1472,11 @@
       return loadingPanel("Loading decision history...");
     }
     const history = state.reviewHistoryCache || { decisions: [], reconNotes: [] };
+    const postApprovalRuns = Object.values(state.postApprovalRuns || {}).sort((a, b) => {
+      const left = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      const right = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      return left - right;
+    });
     const decisionRows = history.decisions.length ? history.decisions.map(item => `
       <tr>
         <td><strong>${escapeHtml(item.fileName || "-")}</strong></td>
@@ -1379,8 +1494,26 @@
         <td style="font-variant-numeric: tabular-nums;">${escapeHtml(item.time)}</td>
       </tr>
     `).join("") : `<tr><td colspan="3" style="text-align:center; padding: 24px 0; color: var(--text-muted);">No reconciliation reviews recorded yet.</td></tr>`;
+    const postRunRows = postApprovalRuns.length ? postApprovalRuns.map(run => `
+      <tr>
+        <td><code>${escapeHtml(run.packetId || "-")}</code></td>
+        <td>${badge(run.status || "-")}</td>
+        <td>${escapeHtml(run.stage || "-")}</td>
+        <td>${escapeHtml(run.message || "-")}</td>
+        <td>${escapeHtml(formatDisplayDateTime(run.updatedAt || run.createdAt || "-"))}</td>
+      </tr>
+    `).join("") : `<tr><td colspan="5" style="text-align:center; padding: 24px 0; color: var(--text-muted);">No post-approval runs tracked in this session.</td></tr>`;
 
     return `
+      <section class="panel">
+        <div class="panel-header" style="margin-bottom: 16px;">
+          <div>
+            <h2 style="margin: 0; font-size: 18px;">Post-Approval Runs</h2>
+            <p class="section-subtitle">Background execution status after approving a review packet.</p>
+          </div>
+        </div>
+        ${table(["Packet", "Status", "Stage", "Message", "Updated At"], postRunRows)}
+      </section>
       <section class="panel">
         <div class="panel-header" style="margin-bottom: 16px;">
           <div>
@@ -1997,17 +2130,33 @@
       partner: job.partner,
       fetchMethod: job.fetchMethod,
     }))).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))).slice(0, 8);
+    const resolveJobDate = job => {
+      const runDate = String(job.latestRuntimeRun?.date || "").trim();
+      if (runDate) return runDate;
+      const fileDate = String(job.latestFile?.reconciliationDate || "").trim();
+      return fileDate ? fileDate.slice(0, 10) : "";
+    };
     const rows = jobs.length ? jobs.map(job => `
       <tr>
         <td><strong>${escapeHtml(job.partner || "-")}</strong></td>
         <td>${escapeHtml(job.fetchMethod || "-")}</td>
         <td><code>${escapeHtml(job.schedule || "-")}</code></td>
         <td>${escapeHtml(job.destination || "-")}</td>
-        <td>${job.enabled ? `<span class="badge matched">Enabled</span>` : `<span class="badge critical">Disabled</span>`}</td>
+        <td>
+          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            ${job.enabled ? `<span class="badge matched">Enabled</span>` : `<span class="badge critical">Disabled</span>`}
+            ${badge(job.status || "HEALTHY")}
+            ${job.hasPendingFile ? `<span class="badge warning">Pending file</span>` : ""}
+          </div>
+          <div class="muted" style="font-size:11px; margin-top:6px;">${escapeHtml(job.statusMessage || "No active runtime work.")}</div>
+        </td>
         <td>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <span class="badge neutral">${formatNumber(job.pendingReviewPackets || 0)} pending packets</span>
             <button class="button secondary-action" data-action="run-job-now" data-partner="${escapeHtml(job.partner || "")}">Run Now</button>
+            <button class="button tertiary-action" data-action="open-reconciliation-from-automation" data-partner="${escapeHtml(job.partner || "")}" data-date="${escapeHtml(resolveJobDate(job))}" title="Open Reconciliation" aria-label="Open Reconciliation" style="padding: 4px 6px; min-width: unset; display:inline-flex; align-items:center; justify-content:center;">
+              <span class="material-symbols-outlined" style="font-size:16px;">visibility</span>
+            </button>
           </div>
         </td>
       </tr>
@@ -2016,18 +2165,19 @@
       ${metrics([
         ["Enabled Jobs", formatNumber(jobs.filter(job => job.enabled).length), "Scheduler-connected fetch configs"],
         ["Pending Review Items", formatNumber(jobs.reduce((sum, job) => sum + Number(job.pendingReviewPackets || 0), 0)), "Review items waiting after automation runs"],
-        ["Partners Covered", formatNumber(jobs.length), "Configured partner fetch routes"],
-        ["Mode", "Recommend Only", "Automation recommends but does not auto-approve"]
+        ["Partners Waiting", formatNumber(jobs.filter(job => job.hasPendingFile).length), "Partners with files ready but not fully reconciled"],
+        ["Active Runtime Runs", formatNumber(jobs.filter(job => ["QUEUED", "FETCHING", "INGESTING", "WAITING_RECONCILE", "RECONCILING"].includes(String(job.status || "").toUpperCase())).length), "Partners currently fetching, ingesting, or reconciling"],
+        ["Partners Covered", formatNumber(jobs.length), "Configured partner fetch routes"]
       ])}
       <section class="panel" style="margin-bottom: 24px;">
         <div class="panel-header with-icon">
           <div>
             <h2 class="section-title">Scheduler Jobs</h2>
-            <p class="section-subtitle">Visibility into configured fetch routes and how many review items they are creating.</p>
+            <p class="section-subtitle">Realtime visibility into partner fetch routes, pending files, and current runtime stages.</p>
           </div>
           <span class="material-symbols-outlined panel-header-icon">schedule</span>
         </div>
-        ${table(["Partner", "Method", "Schedule", "Destination", "Status", "Review Output"], rows)}
+        ${table(["Partner", "Method", "Schedule", "Destination", "Runtime State", "Actions"], rows)}
       </section>
       <section class="panel">
         <div class="panel-header with-icon">
@@ -2359,6 +2509,41 @@
 
     // 1. Improved Context Toolbar
     const toolbarHtml = renderPageFilters({ showDate: true, showClear: false, showReconActions: true });
+    const run = state.reconciliationRun;
+    const runStatus = String(run?.status || "IDLE").toUpperCase();
+    const runStatusPanelHtml = `
+      <section class="panel" style="margin-bottom:12px;">
+        <div class="panel-header with-icon">
+          <div>
+            <h2 class="section-title">Reconciliation Run Status</h2>
+            <p class="section-subtitle">Persisted runtime state for the selected partner and reconciliation date.</p>
+          </div>
+          <span class="material-symbols-outlined panel-header-icon">monitoring</span>
+        </div>
+        <div class="grid cols-4">
+          <div class="metric compact">
+            <span>Status</span>
+            <strong>${badge(runStatus === "IDLE" ? "NO_ACTIVITY" : runStatus)}</strong>
+            <small>${escapeHtml(run?.message || "No reconciliation run recorded yet.")}</small>
+          </div>
+          <div class="metric compact">
+            <span>Started</span>
+            <strong>${escapeHtml(run?.startedAt ? formatDisplayDateTime(run.startedAt) : "-")}</strong>
+            <small>Runtime started time</small>
+          </div>
+          <div class="metric compact">
+            <span>Finished</span>
+            <strong>${escapeHtml(run?.finishedAt ? formatDisplayDateTime(run.finishedAt) : "-")}</strong>
+            <small>Runtime finished time</small>
+          </div>
+          <div class="metric compact">
+            <span>Results Written</span>
+            <strong>${escapeHtml(String(run?.reconciliationCount ?? "-"))}</strong>
+            <small>Persisted reconciliation results</small>
+          </div>
+        </div>
+      </section>
+    `;
 
     // 2. Semantic Risk Summary Strip (Left-border semantic highlights)
     const riskBadgeClass = riskLevel === "HIGH" ? "failed" : "matched";
@@ -2433,11 +2618,18 @@
     const insightsData = state.insightsData;
     const insightTabs = ["Anomalies", "Patterns", "Recommendations"];
     let insightContent = '<div class="insight-content empty"><p class="muted">No insights available.</p></div>';
-    if (insightsData) {
-      const activeTabKey = ["anomalies", "patterns", "recommendations"][state.activeInsightTab || 0];
-      const tabItems = Array.isArray(insightsData) ? insightsData : (insightsData[activeTabKey] || []);
+    const activeTabKey = ["anomalies", "patterns", "recommendations"][state.activeInsightTab || 0];
+    const activeTabItems = state.reconciliationInsightTabData?.[activeTabKey];
+    const activeTabError = state.reconciliationInsightTabErrors?.[activeTabKey];
+    const activeTabLoading = state.reconciliationInsightTabLoading === activeTabKey;
+    if (activeTabLoading) {
+      insightContent = renderInsightLoadingState(activeTabKey);
+    } else if (activeTabError) {
+      insightContent = `<div class="insight-content empty"><p class="muted">AI insights are unavailable right now.</p><p class="muted" style="font-size:11px;">${escapeHtml(activeTabError)}</p></div>`;
+    } else if (activeTabItems) {
+      const tabItems = Array.isArray(activeTabItems) ? activeTabItems : [];
       if (tabItems.length === 0) {
-        insightContent = `<div class="insight-content empty"><p class="muted">No items found for this category.</p></div>`;
+        insightContent = `<div class="insight-content empty"><p class="muted">No mismatches were selected for this insight category.</p></div>`;
       } else {
         insightContent = `
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; padding-top: 8px;">
@@ -2514,7 +2706,11 @@
       return true;
     });
 
-    const headers = ["Sev", "Issue Type", "Trace / TXN ID", "Internal Status", "Partner Status", "Internal Amount", "Partner Amount", "Delta", "Action"];
+    const hasBatchSelection = filteredItems.some(item => item.reconciliationStatus !== "MATCHED");
+    const selectedBatchKeys = Object.entries(state.selectedReconRows || {})
+      .filter(([, selected]) => selected)
+      .map(([key]) => key);
+    const headers = ["", "Sev", "Issue Type", "Trace / TXN ID", "Internal Status", "Partner Status", "Internal Amount", "Partner Amount", "Delta", "Action"];
     const rows = filteredItems.map(item => {
       const isMatched = item.reconciliationStatus === "MATCHED";
       const isMissing = /MISSING_/.test(item.reconciliationStatus);
@@ -2525,9 +2721,13 @@
       const isSelected = !isMatched && state.selectedEvidenceRowId === rowId;
       const rowStyle = isSelected ? "background: rgba(240, 185, 11, 0.08); border-left: 3px solid var(--brand-primary);" : "";
       const isReviewed = state.reviewedRecords && state.reviewedRecords[rowId];
+      const isBatchChecked = Boolean(state.selectedReconRows?.[rowId]);
 
       return `
         <tr style="${rowStyle}">
+          <td style="text-align:center;">
+            ${isMatched ? "" : `<input type="checkbox" data-action="toggle-recon-row" data-row-id="${escapeHtml(rowId)}" ${isBatchChecked ? "checked" : ""} />`}
+          </td>
           <td><span class="badge severity-${sev.toLowerCase()}" style="font-size: 10px; padding: 1px 6px; border: none; font-weight: 600;">${sev}</span></td>
           <td>
             <span style="font-size: 11.5px; font-weight: 500;">${escapeHtml(item.reconciliationStatus || "MISMATCH")}</span>
@@ -2559,6 +2759,52 @@
         <button class="button secondary" data-action="clear-recon-filters" style="height: 26px; font-size: 11px; padding: 2px 8px;">Clear</button>
       </div>
     `;
+    const batchReviewHtml = hasBatchSelection ? `
+      <div class="page-filters explorer-filters" style="margin-top: 10px; margin-bottom: 12px; padding: 8px 12px; border-radius: 6px; background: rgba(0,0,0,0.15); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;">
+        <div style="display:flex; gap:8px; align-items:center;">
+          <label style="display:inline-flex; gap:6px; align-items:center; font-size:11px; color: var(--text-muted);">
+            <input type="checkbox" data-action="toggle-recon-select-all" ${selectedBatchKeys.length && selectedBatchKeys.length === filteredItems.filter(item => item.reconciliationStatus !== "MATCHED").length ? "checked" : ""}/>
+            Select visible mismatches
+          </label>
+          <span style="font-size:11px; color: var(--text-muted);">${formatNumber(selectedBatchKeys.length)} selected</span>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="recon-batch-status" style="height: 28px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); border-radius: 4px; padding: 2px 6px;">
+            <option value="MATCHED">Resolve as MATCHED</option>
+            <option value="MISSING_INTERNAL">Resolve as MISSING_INTERNAL</option>
+            <option value="MISSING_PARTNER">Resolve as MISSING_PARTNER</option>
+            <option value="STATUS_MISMATCH">Resolve as STATUS_MISMATCH</option>
+          </select>
+          <button class="button primary" data-action="batch-review-selected" ${selectedBatchKeys.length ? "" : "disabled"} style="height: 28px; font-size: 11px; padding: 2px 8px;">Batch Review</button>
+        </div>
+      </div>
+    ` : "";
+
+    const pageLimit = Number(data.limit || state.reconciliationPagination?.limit || 25);
+    const pageOffset = Number(data.offset || state.reconciliationPagination?.offset || 0);
+    const pageStart = totalRows ? pageOffset + 1 : 0;
+    const pageEnd = Math.min(pageOffset + pageLimit, totalRows);
+    const hasPrevPage = pageOffset > 0;
+    const hasNextPage = pageOffset + pageLimit < totalRows;
+    const currentPage = totalRows ? Math.floor(pageOffset / pageLimit) + 1 : 1;
+    const totalPages = Math.max(1, Math.ceil(totalRows / pageLimit));
+    const paginationHtml = `
+      <div class="page-filters explorer-filters" style="margin-top: 12px; padding: 8px 12px; border-radius: 6px; background: rgba(0,0,0,0.15); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;">
+        <div style="font-size: 11px; color: var(--text-muted);">
+          Showing <strong>${formatNumber(pageStart)}</strong>-<strong>${formatNumber(pageEnd)}</strong> of <strong>${formatNumber(totalRows)}</strong> records
+          <span style="margin-left:8px;">Page <strong>${formatNumber(currentPage)}</strong> of <strong>${formatNumber(totalPages)}</strong></span>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <label style="font-size:11px; color: var(--text-muted);">Page size</label>
+          <select id="recon-page-size" style="height: 28px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); border-radius: 4px; padding: 2px 6px;">
+            ${[25, 50].map(size => `<option value="${size}" ${size === pageLimit ? "selected" : ""}>${size}</option>`).join("")}
+          </select>
+          <button class="button secondary" data-action="recon-set-page-size" style="height: 28px; font-size: 11px; padding: 2px 8px;">Apply</button>
+          <button class="button secondary" data-action="recon-prev-page" ${hasPrevPage ? "" : "disabled"} style="height: 28px; font-size: 11px; padding: 2px 8px;">Previous</button>
+          <button class="button secondary" data-action="recon-next-page" ${hasNextPage ? "" : "disabled"} style="height: 28px; font-size: 11px; padding: 2px 8px;">Next</button>
+        </div>
+      </div>
+    `;
 
     const evidenceTableHtml = `
       <section class="panel evidence-table-section">
@@ -2572,7 +2818,9 @@
           </div>
         </div>
         ${tableFiltersHtml}
+        ${batchReviewHtml}
         ${table(headers, rows)}
+        ${paginationHtml}
       </section>
     `;
 
@@ -2640,6 +2888,7 @@
     // Wrap in grid layout
     return `
       ${toolbarHtml}
+      ${runStatusPanelHtml}
       ${summaryStripHtml}
       <div class="reconciliation-container" style="display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start;">
         <div>
@@ -3802,7 +4051,8 @@
               el.style.cursor = "";
               el.innerHTML = originalText;
               if (!ok) throw new Error(body.detail || "Run now failed");
-              showToast(`Automation job completed for ${partner}.`);
+              showToast(body.message || `Automation job queued for ${partner}.`);
+              pollAutomationOverview();
               render();
             })
             .catch(err => {
@@ -3812,6 +4062,49 @@
               el.innerHTML = originalText;
               showToast(err.message || "Run now failed");
             });
+          return;
+        }
+        if (action === "run-reconciliation-now") {
+          const originalText = el.innerHTML;
+          el.disabled = true;
+          el.style.opacity = "0.6";
+          el.style.cursor = "not-allowed";
+          el.innerHTML = `<span class="spinner-mini" style="display:inline-block; width:12px; height:12px; border:2px solid #000; border-top:2px solid transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:6px; vertical-align:middle;"></span>Running...`;
+          showToast(`Running reconciliation for ${state.partner} on ${state.date}...`);
+          fetch(`/api/v1/reconciliation/run`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ partner: state.partner, date: state.date }),
+          })
+            .then(r => r.json().then(body => ({ ok: r.ok, body })))
+            .then(({ ok, body }) => {
+              el.disabled = false;
+              el.style.opacity = "";
+              el.style.cursor = "";
+              el.innerHTML = originalText;
+              if (!ok) throw new Error(body.detail || "Run reconciliation failed");
+              state.reconciliationRun = body.run || null;
+              pollReconciliationRun();
+              showToast("Reconciliation queued. Status will update automatically.");
+            })
+            .catch(err => {
+              el.disabled = false;
+              el.style.opacity = "";
+              el.style.cursor = "";
+              el.innerHTML = originalText;
+              showToast(err.message || "Run reconciliation failed");
+            });
+          return;
+        }
+        if (action === "open-reconciliation-from-automation") {
+          const partner = el.dataset.partner;
+          const date = el.dataset.date;
+          if (partner) state.partner = partner;
+          if (date) state.date = date;
+          state.activeReconData = null;
+          state.reconciliationRun = null;
+          showToast(`Opening reconciliation for ${state.partner}${state.date ? ` on ${state.date}` : ""}.`);
+          location.hash = "reconciliation";
           return;
         }
         if (action === "select-partner") {
@@ -3861,6 +4154,7 @@
         if (action === "clear-filters") {
           state.reconStatus = "";
           state.explorerFilters = { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" };
+          state.reconciliationPagination = { ...(state.reconciliationPagination || {}), offset: 0 };
           render();
           return;
         }
@@ -3870,11 +4164,13 @@
         }
         if (action === "set-recon-status") {
           state.reconStatus = el.dataset.status || "";
+          state.reconciliationPagination = { ...(state.reconciliationPagination || {}), offset: 0 };
           render();
           return;
         }
         if (action === "reset-recon-status") {
           state.reconStatus = "";
+          state.reconciliationPagination = { ...(state.reconciliationPagination || {}), offset: 0 };
           render();
           return;
         }
@@ -3901,11 +4197,41 @@
             dateFrom: parsedDateFrom,
             dateTo: parsedDateTo
           };
+          state.reconciliationPagination = { ...(state.reconciliationPagination || {}), offset: 0 };
           render();
           return;
         }
         if (action === "clear-recon-filters") {
           state.explorerFilters = { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" };
+          state.reconciliationPagination = { ...(state.reconciliationPagination || {}), offset: 0 };
+          render();
+          return;
+        }
+        if (action === "recon-prev-page") {
+          const current = state.reconciliationPagination || { limit: 100, offset: 0 };
+          state.reconciliationPagination = {
+            ...current,
+            offset: Math.max(0, (current.offset || 0) - (current.limit || 100)),
+          };
+          state.activeReconData = null;
+          render();
+          return;
+        }
+        if (action === "recon-next-page") {
+          const current = state.reconciliationPagination || { limit: 100, offset: 0 };
+          state.reconciliationPagination = {
+            ...current,
+            offset: (current.offset || 0) + (current.limit || 100),
+          };
+          state.activeReconData = null;
+          render();
+          return;
+        }
+        if (action === "recon-set-page-size") {
+          const select = document.getElementById("recon-page-size");
+          const nextLimit = Number(select?.value || 100);
+          state.reconciliationPagination = { limit: nextLimit, offset: 0 };
+          state.activeReconData = null;
           render();
           return;
         }
@@ -3913,6 +4239,9 @@
           const tabIndex = parseInt(el.dataset.tabIndex || "0", 10);
           state.activeInsightTab = tabIndex;
           render();
+          if (state.route === "reconciliation") {
+            loadActiveReconciliationInsight(activeRenderToken, state.route, state.partner, state.date);
+          }
           return;
         }
         if (action === "approve-config") {
@@ -4064,10 +4393,10 @@
                 const runInfo = body.postApproveRun;
                 if (runInfo?.partner) state.partner = runInfo.partner;
                 if (runInfo?.date) state.date = runInfo.date;
-                if (runInfo?.ok) {
-                  showToast(`Approve xong va da chay doi soat ngay. ${runInfo.reconciliationCount || 0} ket qua duoc cap nhat.`);
-                } else if (body.warning) {
-                  showToast(body.warning);
+                if (runInfo?.packetId) {
+                  upsertPostApprovalRun(runInfo);
+                  pollPostApprovalRun(runInfo.packetId);
+                  showToast("Approved. Post-approval processing is queued.");
                 } else {
                   showToast("Review packet updated.");
                 }
@@ -4556,6 +4885,59 @@
             });
           return;
         }
+        if (action === "toggle-recon-row") {
+          const rowId = el.dataset.rowId;
+          if (!rowId) return;
+          state.selectedReconRows = {
+            ...(state.selectedReconRows || {}),
+            [rowId]: Boolean(el.checked),
+          };
+          render();
+          return;
+        }
+        if (action === "toggle-recon-select-all") {
+          const shouldSelect = Boolean(el.checked);
+          const results = (state.activeReconData && state.activeReconData.results) || [];
+          const nextSelection = { ...(state.selectedReconRows || {}) };
+          results
+            .filter(item => item.reconciliationStatus !== "MATCHED")
+            .forEach(item => {
+              const rowId = item.partnerTxnId || item.internalTxnId || item.id;
+              nextSelection[rowId] = shouldSelect;
+            });
+          state.selectedReconRows = nextSelection;
+          render();
+          return;
+        }
+        if (action === "batch-review-selected") {
+          const selectedKeys = Object.entries(state.selectedReconRows || {})
+            .filter(([, selected]) => selected)
+            .map(([key]) => key);
+          if (!selectedKeys.length) {
+            showToast("Select at least one reconciliation row.");
+            return;
+          }
+          const resolvedStatus = document.getElementById("recon-batch-status")?.value || "MATCHED";
+          Promise.all(selectedKeys.map(key => resolveReviewRecord(key, resolvedStatus)))
+            .then(async () => {
+              if (state.activeReconData && state.activeReconData.results) {
+                state.activeReconData.results.forEach(item => {
+                  const key = item.partnerTxnId || item.internalTxnId || item.id;
+                  if (selectedKeys.includes(key)) {
+                    item.reconciliationStatus = resolvedStatus;
+                  }
+                });
+              }
+              await loadReconciliationReviewRecords();
+              state.selectedReconRows = {};
+              showToast(`Batch reviewed ${selectedKeys.length} records.`);
+              render();
+            })
+            .catch(() => {
+              showToast("Batch review failed.");
+            });
+          return;
+        }
         if (action === "mark-exception") {
           showToast("Record marked as exception.");
           state.selectedEvidenceRowId = null;
@@ -5032,6 +5414,11 @@
 
   function renderPageFilters(options = {}) {
     const { showDate = true, showClear = true, showReconActions = false } = options;
+    const reconRun = state.reconciliationRun;
+    const reconStatus = String(reconRun?.status || "IDLE").toUpperCase();
+    const reconStatusClass = reconStatus === "COMPLETED" ? "matched" : reconStatus === "FAILED" ? "failed" : isActiveRuntimeStatus(reconStatus) ? "warning" : "neutral";
+    const reconStatusLabel = reconStatus === "IDLE" ? "No run" : statusLabel(reconStatus);
+    const reconStatusDetail = reconRun?.message || (reconRun?.updatedAt ? `Updated ${formatDisplayDateTime(reconRun.updatedAt)}` : "No reconciliation run recorded");
     return `
       <div class="page-filters" style="align-items: center;">
         <div class="filter-group">
@@ -5064,11 +5451,14 @@
         ` : ""}
         ${showReconActions ? `
           <div style="margin-left: auto; display: flex; align-items: center; gap: 12px; height: 44px; margin-top: auto;">
+            <button class="button primary compact" data-action="run-reconciliation-now" style="padding: 4px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; height: 32px; border-radius: 6px; background: var(--brand-accent-blue); color: black; font-weight: 600; border: none; cursor: pointer; box-shadow: var(--shadow);">
+              <span class="material-symbols-outlined" style="font-size: 15px;">sync</span> Run Reconciliation
+            </button>
             <div style="display: flex; align-items: center; gap: 6px;">
-              <span class="badge matched" style="padding: 4px 8px; font-size: 11px; font-weight: 600; border-radius: 4px; border: none; background: rgba(16, 185, 129, 0.08); color: rgba(16, 185, 129, 0.8); text-transform: none; display: inline-flex; align-items: center; gap: 4px; height: 26px;">
-                <span style="display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: #10b981; opacity: 0.7;"></span>Completed
+              <span class="badge ${reconStatusClass}" style="padding: 4px 8px; font-size: 11px; font-weight: 600; border-radius: 4px; border: none; text-transform: none; display: inline-flex; align-items: center; gap: 4px; height: 26px;">
+                <span style="display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0.7;"></span>${escapeHtml(reconStatusLabel)}
               </span>
-              <span style="font-size: 11px; color: var(--text-muted);">Last run 10:42</span>
+              <span style="font-size: 11px; color: var(--text-muted);">${escapeHtml(reconStatusDetail)}</span>
             </div>
             <button class="button primary compact" data-action="approve-all-recon" style="padding: 4px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; height: 32px; border-radius: 6px; background: var(--brand-primary); color: black; font-weight: 600; border: none; cursor: pointer; box-shadow: var(--shadow);">
               <span class="material-symbols-outlined" style="font-size: 15px;">check_circle</span> Approve Run
@@ -5170,7 +5560,12 @@
       "MONITOR": "warning",
       "LOW": "matched",
       "MEDIUM": "warning",
-      "HIGH": "critical"
+      "HIGH": "critical",
+      "QUEUED": "neutral",
+      "FETCHING": "processing",
+      "INGESTING": "processing",
+      "WAITING_RECONCILE": "warning",
+      "RECONCILING": "warning"
     };
     const tone = toneMap[raw] || "neutral";
     return `<span class="badge ${tone}">${text}</span>`;
@@ -5208,7 +5603,12 @@
       MONITOR: "Monitor",
       LOW: "Low",
       MEDIUM: "Medium",
-      HIGH: "High"
+      HIGH: "High",
+      QUEUED: "Queued",
+      FETCHING: "Fetching",
+      INGESTING: "Ingesting",
+      WAITING_RECONCILE: "Waiting Reconcile",
+      RECONCILING: "Reconciling"
     };
     return labels[raw] || raw.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   }
@@ -5266,6 +5666,38 @@
     return String(value).replace(/[&<>"']/g, ch => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;"
     }[ch]));
+  }
+
+  function renderInsightLoadingState(tabKey) {
+    const labelMap = {
+      anomalies: {
+        title: "Analyzing anomaly clusters",
+        detail: "AI is grouping the most important mismatch anomalies for this reconciliation window."
+      },
+      patterns: {
+        title: "Detecting recurring patterns",
+        detail: "AI is reading grouped error signals to identify repeatable operational or partner-side patterns."
+      },
+      recommendations: {
+        title: "Drafting operator actions",
+        detail: "AI is turning summary metrics and selected errors into concrete next steps for operators."
+      }
+    };
+    const activeState = labelMap[tabKey] || {
+      title: "Preparing insight",
+      detail: "AI is processing selected reconciliation signals."
+    };
+    return `
+      <div class="insight-content empty" style="padding: 12px 4px;">
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+          <span class="spinner" style="display:inline-block; width:28px; height:28px; border:3px solid rgba(255,255,255,0.1); border-top:3px solid var(--brand-accent-blue); border-radius:50%; animation:spin 1s linear infinite;"></span>
+          <div>
+            <p class="muted" style="margin:0; color: var(--text-primary); font-weight:600;">${escapeHtml(activeState.title)}</p>
+            <p class="muted" style="margin:2px 0 0 0; font-size:11px;">${escapeHtml(activeState.detail)}</p>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   function highlightInsightText(text) {
@@ -5430,6 +5862,108 @@
         currentPacket.parseStrategy = updates.parseStrategy;
       }
     });
+  }
+
+  function upsertPostApprovalRun(run) {
+    if (!run || !run.packetId) return;
+    state.postApprovalRuns = state.postApprovalRuns || {};
+    state.postApprovalRuns[String(run.packetId)] = {
+      ...(state.postApprovalRuns[String(run.packetId)] || {}),
+      ...run
+    };
+  }
+
+  function isTerminalPostApprovalRun(run) {
+    const status = String(run?.status || "").toUpperCase();
+    return status === "COMPLETED" || status === "FAILED";
+  }
+
+  function isTerminalReconciliationRun(run) {
+    const status = String(run?.status || "").toUpperCase();
+    return status === "COMPLETED" || status === "FAILED";
+  }
+
+  function isActiveRuntimeStatus(status) {
+    return ["QUEUED", "FETCHING", "INGESTING", "WAITING_RECONCILE", "RECONCILING", "RUNNING"].includes(String(status || "").toUpperCase());
+  }
+
+  function pollAutomationOverview() {
+    if (automationPoller || state.route !== "automation") return;
+    const tick = async () => {
+      try {
+        const data = await fetchJson(`/api/v1/automation/jobs`);
+        if (state.route !== "automation") {
+          clearInterval(automationPoller);
+          automationPoller = null;
+          return;
+        }
+        view.innerHTML = renderAutomation(data);
+        bindViewActions();
+        const hasActiveRuns = (data.jobs || []).some(job => isActiveRuntimeStatus(job.status));
+        if (!hasActiveRuns) {
+          clearInterval(automationPoller);
+          automationPoller = null;
+        }
+      } catch (_) {
+        clearInterval(automationPoller);
+        automationPoller = null;
+      }
+    };
+    automationPoller = setInterval(tick, 5000);
+  }
+
+  function pollReconciliationRun() {
+    if (reconciliationRunPoller || !state.partner || !state.date) return;
+    const tick = () => {
+      fetch(`/api/v1/reconciliation/run-status?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`)
+        .then(r => r.json().then(body => ({ ok: r.ok, body })))
+        .then(async ({ ok, body }) => {
+          if (!ok) throw new Error(body.detail || "Failed to load reconciliation run.");
+          const run = body.run || null;
+          if (!run) return;
+          state.reconciliationRun = run;
+          render();
+          if (isTerminalReconciliationRun(run)) {
+            clearInterval(reconciliationRunPoller);
+            reconciliationRunPoller = null;
+            if (String(run.status).toUpperCase() === "COMPLETED") {
+              state.activeReconData = null;
+              await render();
+            }
+          }
+        })
+        .catch(() => {
+          clearInterval(reconciliationRunPoller);
+          reconciliationRunPoller = null;
+        });
+    };
+    tick();
+    reconciliationRunPoller = setInterval(tick, 3000);
+  }
+
+  function pollPostApprovalRun(packetId) {
+    if (!packetId || postApprovalPollers[packetId]) return;
+    const tick = () => {
+      fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/post-approve-run`)
+        .then(r => r.json().then(body => ({ ok: r.ok, body })))
+        .then(({ ok, body }) => {
+          if (!ok) throw new Error(body.detail || "Failed to load post-approval run.");
+          const run = body.run || null;
+          if (!run) return;
+          upsertPostApprovalRun(run);
+          render();
+          if (isTerminalPostApprovalRun(run)) {
+            clearInterval(postApprovalPollers[packetId]);
+            delete postApprovalPollers[packetId];
+          }
+        })
+        .catch(() => {
+          clearInterval(postApprovalPollers[packetId]);
+          delete postApprovalPollers[packetId];
+        });
+    };
+    tick();
+    postApprovalPollers[packetId] = setInterval(tick, 4000);
   }
 
   function updateReviewPacketLocally(packetId, updater) {

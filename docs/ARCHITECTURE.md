@@ -1,17 +1,19 @@
 # Architecture
 
-## Overview
+**Cập nhật lần cuối:** 2026-06-16
 
-The platform ingests partner files into canonical transaction records, compares them with internal transactions, and exposes review and operations workflows over FastAPI. Mapping changes are approval-driven and persisted in MongoDB.
+## Tổng quan
+
+Nền tảng tiếp nhận file đối tác, chuẩn hóa thành các bản giao dịch canonical, so sánh với giao dịch nội bộ, và phơi bày quy trình review/vận hành qua FastAPI. Các thay đổi mapping được định hướng theo approval và persisted trong MongoDB.
 
 ## Main Runtime Pieces
 
 - `run.py`
-  - CLI entrypoint for serving the API, running ingestion, controlling the scheduler, and running reconciliation
+  - CLI entrypoint cho serving API, chạy ingestion, điều khiển scheduler, và chạy reconciliation
 - `src.api:create_app`
-  - FastAPI app factory with MongoDB lifespan management and router registration
+  - FastAPI app factory với MongoDB lifespan management và router registration
 - `frontend/`
-  - Vite-served Vanilla JS dashboard that talks to the backend through `/api`
+  - Vite-served Vanilla JS dashboard giao tiếp với backend qua `/api`
 
 ## Backend Subsystems
 
@@ -23,7 +25,7 @@ The platform ingests partner files into canonical transaction records, compares 
 - `src/validators/`
 - `src/config/loader.py`
 
-Responsibilities:
+**Responsibilities:**
 
 - compute file hash
 - detect duplicate files
@@ -35,14 +37,22 @@ Responsibilities:
 ### Reconciliation
 
 - `src/reconciliation/engine.py`
+- `src/reconciliation/scope.py`
 - `src/models/internal_transaction.py`
 - `src/models/reconciliation_result.py`
+- `src/models/reconciliation_run.py`
+- `src/models/reconciliation_review_record.py`
+- `src/services/runtime_runs.py`
 
-Responsibilities:
+**Responsibilities:**
 
 - compare partner-side canonical data with internal transactions
-- classify result status
-- persist reconciliation results for API and dashboard consumption
+- classify result status (`MATCHED`, `AMOUNT_MISMATCH`, `STATUS_MISMATCH`, `MISSING_INTERNAL`, `MISSING_PARTNER`, etc.)
+- triển khai streaming processing qua async generator (`_iter_partner_record_batches`) với batch size mặc định 5000
+- hỗ trợ batch scope resolution (`FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT`, `UNCONFIRMED`) qua `src/reconciliation/scope.py`
+- tracking reconciliation runs (`reconciliation_run` collection) cho UI-triggered execution
+- hỗ trợ review notes và resolution state qua `reconciliation_review_record` collection
+- persist reconciliation results theo batch write (`RESULT_WRITE_BATCH_SIZE = 5000`)
 
 ### Approval and Mapping Lifecycle
 
@@ -51,14 +61,21 @@ Responsibilities:
 - `src/models/mapping_config.py`
 - `src/models/review_packet.py`
 - `src/models/copilot_action.py`
+- `src/models/post_approval_run.py`
 - `src/config/config_health.py`
+- `src/services/review_packet_actions.py`
+- `src/services/mapping_contract.py`
 
-Responsibilities:
+**Responsibilities:**
 
-- create or review mapping proposals
-- keep approved runtime mappings separate from pending proposals
-- track review packets and Copilot actions
-- support approve-activate, approve-keep-current, reject, and studio handoff flows
+- tạo hoặc review mapping proposals
+- duy trì approved runtime mappings riêng biệt với pending proposals
+- track review packets và Copilot actions
+- hỗ trợ bốn luồng quyết định: **Approve-Activate**, **Approve-Keep-Current**, **Reject**, và **Send to Mapping Studio**
+- **Approve-Activate flow:** dùng `PostApprovalRun` model để tracking long-running reprocess + reconcile flows
+- chạy background task (`asyncio.create_task`) sau approve để thực hiện re-ingestion và re-reconciliation
+- dùng `summarize_runtime_error` từ `src/core/error_formatting.py` để UI-safe error summaries
+- mapping contract normalization và validation qua `src/services/mapping_contract.py`
 
 ### Automation
 
@@ -66,12 +83,13 @@ Responsibilities:
 - `src/fetchers/`
 - `src/api/automation.py`
 
-Responsibilities:
+**Responsibilities:**
 
 - load enabled fetch configs
-- fetch partner files via configured method
+- fetch partner files via configured method (SFTP, filedrop, API)
 - run ingestion
 - expose automation visibility and run-now control
+- unified runtime run tracking (`partner_runtime_run` collection) cho scheduler-triggered và manual reconciliation
 
 ### AI-Assisted Analysis
 
@@ -80,57 +98,90 @@ Responsibilities:
 - `src/api/reconciliation.py`
 - `src/services/copilot_context.py`
 
-Responsibilities:
+**Responsibilities:**
 
 - summarize reconciliation outcomes
 - generate discrepancy views and daily reports
-- provide contextual Copilot guidance for dashboard screens
+- provide contextual Copilot guidance cho các dashboard screens (intake, review, reconciliation, automation)
+- response caching và cache invalidation sau post-approval reprocess
+
+### Services
+
+- `src/services/copilot_context.py` — Rule-based Copilot context for the operations dashboard
+- `src/services/mapping_contract.py` — Shared mapping contract normalization, serialization, and validation helpers
+- `src/services/review_packet_actions.py` — Shared review packet approval, reprocessing, and post-approval run orchestration
+- `src/services/runtime_runs.py` — Helpers for unified runtime run visibility (create/update/serialize `PartnerRuntimeRun`)
+
+### Core Utilities
+
+- `src/core/enums.py` — Core enums: `ProcessingStatus`, `TransactionStatus`, `FileType`, `ReconciliationStatus`, `ReconciliationScopeType`
+- `src/core/types.py` — Canonical types: `FieldMapping`, `CanonicalTransaction`, `PartnerData`, `ValidationError`, `ProcessingStats`
+- `src/core/constants.py` — System constants: `DEFAULT_CURRENCY`, `FILE_HASH_KEY`, duplicate key patterns
+- `src/core/error_formatting.py` — UI-safe error summarization helpers (`summarize_runtime_error`) cho status fields và background task error handling
 
 ## Request Surface
 
-The API currently registers these router groups:
+API hiện đang đăng ký các router groups sau (xem `src/api/__init__.py`):
 
-- `/api/v1/insights`
-- `/api/v1/reports`
-- `/api/v1/reconciliation`
-- `/api/v1/data`
-- `/api/v1/mappings`
-- `/api/v1/mapping`
-- `/api/v1/copilot`
-- `/api/v1/operations`
-- `/api/v1/review-packets`
-- `/api/v1/automation`
+| Router module | Prefix | Registered as |
+|---|---|---|
+| `insights` | `/api/v1` | `insights_router` (insights + reports) |
+| `reconciliation` | `/api/v1/reconciliation` | `reconciliation_router` |
+| `data_explorer` | `/api/v1/data` | `data_explorer_router` |
+| `mappings` | `/api/v1/mappings` | `mappings_router` |
+| `mappings` (v2) | `/api/v1/mapping` | `mappings_v2_router` |
+| `copilot` | `/api/v1/copilot` | `copilot_router` |
+| `operations` | `/api/v1/operations` | `operations_router` |
+| `review_packets` | `/api/v1/review-packets` | `review_packets_router` |
+| `automation` | `/api/v1/automation` | `automation_router` |
+
+**Tổng cộng 9 router groups** (insights/reports chung một router).
 
 ## Data Stores
 
-MongoDB is the only primary persistence store currently configured in runtime code. Important collections include:
+MongoDB là primary persistence store duy nhất. Indexes được apply tại startup bởi `src/models/indexes.py`.
 
-- `reconciliation_file`
-- `data_container`
-- `internal_transaction`
-- `reconciliation_result`
-- `reconciliation_mapping_config`
-- `review_packet`
-- `copilot_action`
-- `fetch_config`
+### Collections
 
-Indexes are applied at startup by `src/models/indexes.py`.
+| Collection | Purpose | Key models |
+|---|---|---|
+| `reconciliation_file` | File metadata, processing status, scope type | `ReconciliationFile` |
+| `data_container` | Partner canonical records (ingested rows) | `DataContainer` |
+| `internal_transaction` | Internal/backend transaction records | `InternalTransaction` |
+| `reconciliation_result` | Reconciliation match/mismatch results | `ReconciliationResult` |
+| `reconciliation_mapping_config` | Field mapping configs (approved + pending) | `MappingConfig` |
+| `review_packet` | Review packets for approval workflows | `ReviewPacket` |
+| `copilot_action` | Copilot action tracking | `CopilotAction` |
+| `fetch_config` | Automation fetch configuration | `FetchConfig` |
+| `reconciliation_run` | Manual reconciliation run tracking | `ReconciliationRun` |
+| `post_approval_run` | Post-approval reprocessing tracking | `PostApprovalRun` |
+| `partner_runtime_run` | Unified runtime visibility (scheduler/manual/post-approval) | `PartnerRuntimeRun` |
+| `reconciliation_review_record` | Review notes and resolution state per record | `ReconciliationReviewRecord` |
+
+Index definitions chi tiết xem tại `src/models/indexes.py`.
 
 ## Frontend Shape
 
-The dashboard is a small SPA in `frontend/app.js` with these major views:
+Dashboard là một SPA nhỏ trong `frontend/app.js` với các view chính:
 
-- Command Center
-- Data Intake
-- Review Center
-- Reconciliation
-- Mapping Studio
-- Automation
+- **Command Center** — tổng quan và điều hướng
+- **Data Intake** — xem trạng thái file và ingestion
+- **Review Center** — review và approve mapping changes
+- **Reconciliation** — xem kết quả đối chiếu
+- **Mapping Studio** — chỉnh sửa mapping configs
+- **Automation** — quản lý scheduler và fetch configs
 
-The Vite dev server proxies `/api` to `http://localhost:8000`.
+**Build tool:** Vite (xem `frontend/vite.config.js`, `frontend/package.json`).
+Vite dev server proxy `/api` tới `http://localhost:8000`.
 
 ## Operational Notes
 
-- The root README is the canonical startup doc.
-- API-serving behavior should be documented from `run.py` and `src/api/__init__.py`, not copied from stale examples.
-- Approval-driven mapping behavior is a first-class runtime concept and should not be omitted from architecture descriptions.
+- Root README là canonical startup doc.
+- API-serving behavior nên được document từ `run.py` và `src/api/__init__.py`.
+- Approval-driven mapping behavior là first-class runtime concept.
+- Background tasks tracking dùng `app.state.background_tasks` (set of `asyncio.Task`).
+- Error formatting dùng `summarize_runtime_error` để giữ UI-facing status fields ngắn gọn.
+
+---
+
+*Architecture analysis: 2026-06-16*

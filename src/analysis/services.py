@@ -14,7 +14,14 @@ import json
 import logging
 from typing import Any
 
-from src.analysis.schemas import AnalysisInput, AnalysisResult, GroupResult, SummaryResult, TopAnomaly
+from src.analysis.schemas import (
+    AnalysisInput,
+    AnalysisResult,
+    GroupResult,
+    SelectedErrorSignal,
+    SummaryResult,
+    TopAnomaly,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +37,7 @@ def build_analysis_input(
     metrics_result: SummaryResult,
     grouped_results: list[GroupResult],
     anomalies: list[TopAnomaly] | None = None,
+    selected_error_signals: list[SelectedErrorSignal] | None = None,
 ) -> AnalysisInput:
     """Build a standardized AnalysisInput from metrics and grouped output.
 
@@ -73,6 +81,7 @@ def build_analysis_input(
         summary_metrics=summary_metrics,
         grouped_stats=grouped_stats,
         top_anomalies=anomalies or [],
+        selected_error_signals=selected_error_signals or [],
     )
 
 

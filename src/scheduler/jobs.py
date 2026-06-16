@@ -10,11 +10,18 @@ from typing import Any, Optional
 
 from src.config.loader import ConfigLoader
 from src.core.enums import FileType, ProcessingStatus
+from src.core.error_formatting import summarize_runtime_error
 from src.fetchers import create_fetcher
-from src.fetchers.base import FetchResult
+from src.fetchers.base import BaseFetcher, FetchResult
 from src.logging import StructuredLogger
 from src.models.fetch_config import FetchConfig, FetchConfigRepository
 from src.pipeline.ingestion_pipeline import IngestionPipeline
+from src.reconciliation.engine import ReconciliationEngine
+from src.services.runtime_runs import create_runtime_run, update_runtime_run
+from src.models.partner_runtime_run import (
+    PartnerRuntimeRunStatus,
+    PartnerRuntimeTriggerType,
+)
 
 logger = logging.getLogger("reconciliation.jobs")
 
@@ -114,6 +121,14 @@ async def run_fetch_config_once(
     Returns a compact result suitable for API/admin visibility.
     """
     partner = config.partner
+    run = await create_runtime_run(
+        db,
+        partner=partner,
+        date=reconciliation_date.strftime("%Y-%m-%d"),
+        trigger_type=PartnerRuntimeTriggerType.SCHEDULER,
+        status=PartnerRuntimeRunStatus.FETCHING,
+        message="Fetching partner file.",
+    )
     logger.info("Processing partner: %s (method=%s)", partner, config.fetch_method)
 
     try:
@@ -121,6 +136,13 @@ async def run_fetch_config_once(
         fetch_result = await fetcher.fetch(config.get_method_config(), reconciliation_date)
 
         if not fetch_result.success:
+            await update_runtime_run(
+                db,
+                str(run.id),
+                status=PartnerRuntimeRunStatus.FAILED,
+                message=fetch_result.error or "Fetch failed.",
+                finished_at=datetime.now(timezone.utc),
+            )
             logger.error("Fetch failed for %s: %s", partner, fetch_result.error)
             if structured_logger:
                 structured_logger.get_logger().info(
@@ -139,6 +161,13 @@ async def run_fetch_config_once(
             partner,
             fetch_result.local_path,
             fetch_result.file_size,
+        )
+        await update_runtime_run(
+            db,
+            str(run.id),
+            status=PartnerRuntimeRunStatus.INGESTING,
+            message="Fetched file successfully. Ingesting rows.",
+            file_name=fetch_result.local_path.split("/")[-1],
         )
         if structured_logger:
             structured_logger.get_logger().info(
@@ -160,6 +189,13 @@ async def run_fetch_config_once(
             structured_logger=structured_logger,
         )
         if not ingestion_result or not ingestion_result.file_record:
+            await update_runtime_run(
+                db,
+                str(run.id),
+                status=PartnerRuntimeRunStatus.FAILED,
+                message="Ingestion pipeline did not return a file record.",
+                finished_at=datetime.now(timezone.utc),
+            )
             return {
                 "success": False,
                 "stage": "ingestion",
@@ -172,6 +208,43 @@ async def run_fetch_config_once(
             "value",
             ingestion_result.file_record.processing_status,
         )
+        stats = {
+            "totalRows": ingestion_result.stats.total_rows,
+            "successRows": ingestion_result.stats.success_rows,
+            "failedRows": ingestion_result.stats.failed_rows,
+        }
+        await update_runtime_run(
+            db,
+            str(run.id),
+            status=PartnerRuntimeRunStatus.WAITING_RECONCILE if processing_status == ProcessingStatus.COMPLETED.value else PartnerRuntimeRunStatus.FAILED,
+            message="Ingestion completed. Waiting to start reconciliation." if processing_status == ProcessingStatus.COMPLETED.value else "Ingestion failed.",
+            source_file_id=str(ingestion_result.file_record.id),
+            stats=stats,
+        )
+
+        reconciliation_count = None
+        if processing_status == ProcessingStatus.COMPLETED.value:
+            await update_runtime_run(
+                db,
+                str(run.id),
+                status=PartnerRuntimeRunStatus.RECONCILING,
+                message="Reconciling ingested partner rows against internal transactions.",
+                started_at=datetime.now(timezone.utc),
+            )
+            recon_results = await ReconciliationEngine(db).reconcile(
+                partner,
+                reconciliation_date,
+                source_file_id=str(ingestion_result.file_record.id),
+            )
+            reconciliation_count = len(recon_results)
+            await update_runtime_run(
+                db,
+                str(run.id),
+                status=PartnerRuntimeRunStatus.COMPLETED,
+                message="Fetch, ingestion, and reconciliation completed successfully.",
+                reconciliation_count=reconciliation_count,
+                finished_at=datetime.now(timezone.utc),
+            )
 
         if config.cleanup_after_ingest and processing_status == ProcessingStatus.COMPLETED.value:
             if config.archive_dir:
@@ -192,9 +265,22 @@ async def run_fetch_config_once(
             "filePath": fetch_result.local_path,
             "fileSize": fetch_result.file_size,
             "processingStatus": processing_status,
+            "runtimeRun": {
+                "id": str(run.id),
+                "status": PartnerRuntimeRunStatus.COMPLETED.value if processing_status == ProcessingStatus.COMPLETED.value else PartnerRuntimeRunStatus.FAILED.value,
+                "reconciliationCount": reconciliation_count,
+            },
         }
 
     except Exception as exc:
+        summarized_error = summarize_runtime_error(exc)
+        await update_runtime_run(
+            db,
+            str(run.id),
+            status=PartnerRuntimeRunStatus.FAILED,
+            message=summarized_error,
+            finished_at=datetime.now(timezone.utc),
+        )
         logger.error("Unexpected error processing %s: %s", partner, exc, exc_info=True)
         if structured_logger:
             structured_logger.get_logger().info(
@@ -205,7 +291,7 @@ async def run_fetch_config_once(
             "success": False,
             "stage": "unexpected",
             "partner": partner,
-            "error": str(exc),
+            "error": summarized_error,
         }
 
 

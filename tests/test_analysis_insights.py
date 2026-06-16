@@ -17,6 +17,12 @@ from src.analysis.insights import (
 )
 
 
+async def empty_async_gen():
+    """Async generator that yields nothing."""
+    if False:
+        yield
+
+
 def _make_mock_result(status: str = "MATCHED", partner: str = "MOMO") -> SimpleNamespace:
     """Create a mock reconciliation result."""
     from src.core.enums import ReconciliationStatus
@@ -297,6 +303,21 @@ class TestGenerateInsights:
 class TestGetSummary:
     """Test get_summary orchestration function."""
 
+    @staticmethod
+    def _make_mock_collection(docs: list | None = None) -> MagicMock:
+        """Create a mock collection supporting both find().limit() and aggregate()."""
+        docs = docs or []
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(return_value=docs)
+        mock_cursor.limit = MagicMock(return_value=mock_cursor)
+
+        mock_collection = MagicMock()
+        mock_collection.find = MagicMock(return_value=mock_cursor)
+
+        mock_collection.aggregate = MagicMock(return_value=empty_async_gen())
+
+        return mock_collection
+
     @pytest.mark.asyncio
     async def test_returns_summary_dict(self) -> None:
         llm_response = json.dumps({
@@ -306,10 +327,7 @@ class TestGetSummary:
         })
         provider = MockLLMProvider(response=llm_response)
 
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=[])
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_collection = self._make_mock_collection()
 
         result = await get_summary("MOMO", "2024-07-07", mock_collection, provider)
 
@@ -325,10 +343,7 @@ class TestGetSummary:
     async def test_handles_empty_results(self) -> None:
         provider = MockLLMProvider(response="{}")
 
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=[])
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_collection = self._make_mock_collection()
 
         result = await get_summary("MOMO", "2024-07-07", mock_collection, provider)
 
@@ -339,6 +354,21 @@ class TestGetSummary:
 class TestGetDiscrepancies:
     """Test get_discrepancies orchestration function."""
 
+    @staticmethod
+    def _make_mock_collection(docs: list | None = None) -> MagicMock:
+        """Create a mock collection supporting both find().limit() and aggregate()."""
+        docs = docs or []
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(return_value=docs)
+        mock_cursor.limit = MagicMock(return_value=mock_cursor)
+
+        mock_collection = MagicMock()
+        mock_collection.find = MagicMock(return_value=mock_cursor)
+
+        mock_collection.aggregate = MagicMock(return_value=empty_async_gen())
+
+        return mock_collection
+
     @pytest.mark.asyncio
     async def test_returns_analysis_results(self) -> None:
         llm_response = json.dumps({
@@ -348,10 +378,7 @@ class TestGetDiscrepancies:
         })
         provider = MockLLMProvider(response=llm_response)
 
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=[])
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_collection = self._make_mock_collection()
 
         results = await get_discrepancies("MOMO", "2024-07-07", "operational", mock_collection, provider)
 
@@ -361,10 +388,7 @@ class TestGetDiscrepancies:
     async def test_fallback_on_llm_failure(self) -> None:
         provider = MockLLMProvider(should_fail=True)
 
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=[])
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_collection = self._make_mock_collection()
 
         results = await get_discrepancies("MOMO", "2024-07-07", "operational", mock_collection, provider)
 

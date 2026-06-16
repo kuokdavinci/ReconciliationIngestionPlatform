@@ -56,6 +56,26 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_review_packet_draft_mapping",
         ),
     ],
+    "post_approval_run": [
+        IndexModel(
+            [("packetId", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_post_approval_run_packet_created",
+        ),
+        IndexModel(
+            [("status", ASCENDING), ("updatedAt", ASCENDING)],
+            name="idx_post_approval_run_status_updated",
+        ),
+    ],
+    "partner_runtime_run": [
+        IndexModel(
+            [("partner", ASCENDING), ("date", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_partner_runtime_run_partner_date_created",
+        ),
+        IndexModel(
+            [("status", ASCENDING), ("updatedAt", ASCENDING)],
+            name="idx_partner_runtime_run_status_updated",
+        ),
+    ],
     "data_container": [
         IndexModel(
             "partnerData.trace",
@@ -90,12 +110,31 @@ INDEXES: dict[str, list[IndexModel]] = {
     ],
     "reconciliation_result": [
         IndexModel(
+            [("partner", ASCENDING), ("date", ASCENDING), ("_id", ASCENDING)],
+            name="idx_recon_partner_date_id",
+        ),
+        IndexModel(
+            [
+                ("partner", ASCENDING),
+                ("date", ASCENDING),
+                ("reconciliationStatus", ASCENDING),
+                ("_id", ASCENDING),
+            ],
+            name="idx_recon_partner_date_status_id",
+        ),
+        IndexModel(
             "partnerTxnId",
             name="idx_recon_partner_txn_id",
         ),
         IndexModel(
             "reconciliationStatus",
             name="idx_recon_status",
+        ),
+    ],
+    "reconciliation_run": [
+        IndexModel(
+            [("partner", ASCENDING), ("date", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_reconciliation_run_partner_date_created",
         ),
     ],
     "reconciliation_review_record": [

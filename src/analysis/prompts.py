@@ -263,6 +263,21 @@ def _format_anomalies_section(anomalies: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _format_selected_error_signals_section(signals: list[dict[str, Any]]) -> str:
+    """Format bounded, selected error signals for the LLM."""
+    if not signals:
+        return "## Selected Error Signals\n\nNo selected error signals available."
+
+    lines = ["## Selected Error Signals", ""]
+    for signal in signals:
+        lines.append(
+            f"- **{signal['status']}**: {signal['sample_count']} sampled records, "
+            f"range: {signal.get('amount_range', 'N/A')}, "
+            f"pattern hint: {signal.get('pattern_hint', 'N/A')}"
+        )
+    return "\n".join(lines)
+
+
 def _fmt_amount(amount: float | int) -> str:
     """Format a monetary amount for display."""
     if amount >= 1_000_000_000:
@@ -305,6 +320,10 @@ def build_analysis_prompt(analysis_input: AnalysisInput) -> str:
         "",
         _format_anomalies_section(
             [a.model_dump() for a in analysis_input.top_anomalies]
+        ),
+        "",
+        _format_selected_error_signals_section(
+            [s.model_dump() for s in analysis_input.selected_error_signals]
         ),
         "",
         "---",

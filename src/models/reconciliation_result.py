@@ -66,6 +66,26 @@ class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
         """Find all results for a partner on a specific date."""
         return await self.find_many({"partner": partner, "date": date})
 
+    async def find_page_by_partner_and_date(
+        self,
+        partner: str,
+        date: str,
+        *,
+        status: ReconciliationStatus | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[ReconciliationResult], int]:
+        query: dict[str, object] = {"partner": partner, "date": date}
+        if status is not None:
+            query["reconciliationStatus"] = status.value
+
+        total = await self.collection.count_documents(query)
+        cursor = self.collection.find(query).sort("_id", 1).skip(offset).limit(limit)
+        records: list[ReconciliationResult] = []
+        async for raw in cursor:
+            records.append(self._from_mongo(raw))
+        return records, total
+
     async def find_by_partner_date_and_status(
         self, partner: str, date: str, status: ReconciliationStatus
     ) -> list[ReconciliationResult]:

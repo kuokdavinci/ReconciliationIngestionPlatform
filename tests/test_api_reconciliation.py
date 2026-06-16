@@ -1,9 +1,11 @@
 """Tests for Reconciliation API endpoints."""
 
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 
 def _create_test_app():
@@ -172,3 +174,30 @@ class TestStats:
         client = TestClient(app)
         response = client.get("/api/v1/reconciliation/stats", params={"date": "2024-07-07"})
         assert response.status_code == 400
+
+
+class TestRunReconciliation:
+    @pytest.mark.asyncio
+    async def test_run_reconciliation_returns_count(self):
+        from src.api.reconciliation import run_reconciliation_now, RunReconciliationPayload
+        app, mock_collection = _create_test_app()
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=mock_collection.database)))
+        with patch("src.api.reconciliation.ReconciliationEngine.reconcile", new=AsyncMock(return_value=[1, 2, 3])):
+            response = await run_reconciliation_now(
+                request,
+                RunReconciliationPayload(partner="MOMO", date="2024-07-07"),
+            )
+        assert response["ok"] is True
+        assert response["reconciliationCount"] == 3
+
+    @pytest.mark.asyncio
+    async def test_run_reconciliation_requires_partner(self):
+        from src.api.reconciliation import run_reconciliation_now, RunReconciliationPayload
+        app, mock_collection = _create_test_app()
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=mock_collection.database)))
+        with pytest.raises(HTTPException) as exc:
+            await run_reconciliation_now(
+                request,
+                RunReconciliationPayload(partner="", date="2024-07-07"),
+            )
+        assert exc.value.status_code == 400

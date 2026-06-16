@@ -12,6 +12,7 @@ from src.config.ai_generator import generate_config_from_samples
 from src.core.enums import ProcessingStatus
 from src.core.enums import FileType
 from src.models.mapping_config import MappingConfig, MappingConfigRepository, MappingConfigStatus
+from src.models.post_approval_run import PostApprovalRunRepository
 from src.models.review_packet import (
     ReviewPacket,
     ReviewDecisionMode,
@@ -30,6 +31,7 @@ from src.services.review_packet_actions import (
     approve_packet_mapping_and_reprocess,
     build_config_loader,
     mark_packet,
+    serialize_post_approval_run,
     update_packet_scope,
 )
 
@@ -195,6 +197,14 @@ async def get_review_packet(request: Request, packet_id: str):
     if packet is None:
         raise HTTPException(status_code=404, detail="Review packet not found.")
     return {"packet": _serialize(packet)}
+
+
+@router.get("/{packet_id}/post-approve-run")
+async def get_post_approve_run(request: Request, packet_id: str):
+    run = await PostApprovalRunRepository(_get_db(request)).find_latest_by_packet_id(packet_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Post-approval run not found.")
+    return {"run": serialize_post_approval_run(run)}
 
 
 async def _next_pending_version(request: Request, partner: str) -> str:
@@ -712,11 +722,6 @@ async def approve_activate_packet_action(
     )
     if post_approve_run is not None:
         response["postApproveRun"] = post_approve_run
-        if not post_approve_run.get("ok", False):
-            response["warning"] = (
-                post_approve_run.get("reason")
-                or "Approved, but post-approve processing did not complete."
-            )
     return response
 
 

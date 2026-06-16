@@ -709,3 +709,50 @@ async def test_mixed_skipped_and_matched_guard(mock_db):
     engine._result_repo.insert_many.assert_called_once()
     inserted = engine._result_repo.insert_many.call_args[0][0]
     assert len(inserted) == 3
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_flushes_results_in_chunks(mock_db):
+    """Large result sets should be inserted in chunks instead of one unbounded batch."""
+    engine = ReconciliationEngine(mock_db)
+    engine.PARTNER_BATCH_SIZE = 2
+    engine.RESULT_WRITE_BATCH_SIZE = 2
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    partner_records = [
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId="00000000-0000-0000-0000-000000000001",
+            partnerData=PartnerData(
+                _id=f"txn_{i}",
+                trace=f"trace_{i}",
+                status="Thành công",
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for i in range(5)
+    ]
+
+    engine._data_repo.find_many = AsyncMock(return_value=partner_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=[])
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date)
+
+    assert len(results) == 5
+    assert all(r.reconciliation_status == ReconciliationStatus.MISSING_INTERNAL for r in results)
+    engine._result_repo.collection.delete_many.assert_called_once_with({
+        "partner": partner,
+        "date": "2024-07-07",
+    })
+    assert engine._result_repo.insert_many.await_count == 3
+    inserted_batch_sizes = [
+        len(call.args[0]) for call in engine._result_repo.insert_many.await_args_list
+    ]
+    assert inserted_batch_sizes == [2, 2, 1]

@@ -10,6 +10,7 @@ from src.api.review_packets import (
     _run_runtime_validation,
     approve_activate_packet,
     approve_keep_current_packet,
+    get_post_approve_run,
     list_review_packets,
     save_draft_mapping_for_packet,
     validate_runtime_packet,
@@ -22,7 +23,7 @@ def _make_request(db: MagicMock):
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))
 
 
-def _make_db(review_collection=None, action_collection=None, mapping_collection=None):
+def _make_db(review_collection=None, action_collection=None, mapping_collection=None, post_approval_run_collection=None):
     db = MagicMock()
 
     def _get_collection(name):
@@ -32,6 +33,8 @@ def _make_db(review_collection=None, action_collection=None, mapping_collection=
             return action_collection or MagicMock()
         if name == "reconciliation_mapping_config":
             return mapping_collection or MagicMock()
+        if name == "post_approval_run":
+            return post_approval_run_collection or MagicMock()
         return MagicMock()
 
     db.__getitem__ = MagicMock(side_effect=_get_collection)
@@ -189,13 +192,12 @@ async def test_approve_activate_packet_triggers_post_approve_processing():
     with patch(
         "src.api.review_packets.approve_packet_mapping_and_reprocess",
         new=AsyncMock(return_value={
-            "ok": True,
-            "stage": "reconciliation",
-            "processingStatus": "COMPLETED",
-            "reconciliationCount": 12,
-            "insightCacheInvalidated": 3,
-            "stats": {"totalRows": 12, "successRows": 12, "failedRows": 0},
-            "errors": [],
+            "_id": "run-001",
+            "packetId": "pkt-activate-001",
+            "status": "QUEUED",
+            "stage": "approval",
+            "message": "Approved. Post-approval processing is queued.",
+            "sourceFileId": "file-001",
         }),
     ), patch(
         "src.models.mapping_config.MappingConfigRepository.find_by_partner_and_type",
@@ -209,8 +211,8 @@ async def test_approve_activate_packet_triggers_post_approve_processing():
 
     assert data["ok"] is True
     assert data["packet"]["decisionMode"] == "APPROVE_ACTIVATE_NEXT_RUNTIME"
-    assert data["postApproveRun"]["stage"] == "reconciliation"
-    assert data["postApproveRun"]["reconciliationCount"] == 12
+    assert data["postApproveRun"]["stage"] == "approval"
+    assert data["postApproveRun"]["status"] == "QUEUED"
 
 
 @pytest.mark.asyncio
@@ -232,6 +234,34 @@ async def test_approve_activate_requires_runtime_validation():
     with pytest.raises(Exception) as exc:
         await approve_activate_packet(request, "pkt-002", ReviewDecisionPayload())
     assert "Runtime validation must pass" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_get_post_approve_run():
+    post_approval_run_collection = MagicMock()
+    post_approval_run_collection.find_one = AsyncMock(return_value={
+        "_id": "run-001",
+        "packetId": "pkt-activate-001",
+        "partner": "MOMO",
+        "date": "2024-06-05",
+        "status": "RECONCILING",
+        "stage": "reconciliation",
+        "message": "Reconciling ingested partner rows against internal transactions.",
+        "sourceFileId": "file-001",
+        "outputFileId": "file-002",
+        "reconciliationCount": 12,
+        "stats": {"totalRows": 12, "successRows": 12, "failedRows": 0},
+        "errors": [],
+        "createdAt": "2024-01-01T00:00:00+00:00",
+        "updatedAt": "2024-01-01T00:01:00+00:00",
+    })
+    request = _make_request(_make_db(post_approval_run_collection=post_approval_run_collection))
+
+    data = await get_post_approve_run(request, "pkt-activate-001")
+
+    assert data["run"]["packetId"] == "pkt-activate-001"
+    assert data["run"]["status"] == "RECONCILING"
+    assert data["run"]["stage"] == "reconciliation"
 
 
 @pytest.mark.asyncio

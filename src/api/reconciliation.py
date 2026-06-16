@@ -6,12 +6,24 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from src.models.partner_runtime_run import (
+    PartnerRuntimeRunRepository,
+    PartnerRuntimeRunStatus,
+    PartnerRuntimeTriggerType,
+)
+from src.core.error_formatting import summarize_runtime_error
 from src.models.reconciliation_result import (
     ReconciliationResult,
     ReconciliationResultRepository,
 )
 from src.models.reconciliation_review_record import ReconciliationReviewRecordRepository
 from src.core.enums import ReconciliationStatus
+from src.reconciliation.engine import ReconciliationEngine
+from src.services.runtime_runs import (
+    create_runtime_run,
+    serialize_partner_runtime_run,
+    update_runtime_run,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +40,20 @@ class ResolveReviewPayload(BaseModel):
     partner: str
     date: str
     resolved_status: str = Field(alias="resolvedStatus")
+
+
+class RunReconciliationPayload(BaseModel):
+    partner: str
+    date: str
+
+
+def _track_background_task(request: Request, task: asyncio.Task) -> None:
+    tasks = getattr(request.app.state, "background_tasks", None)
+    if tasks is None:
+        tasks = set()
+        request.app.state.background_tasks = tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
 
 
 def _validate_date(date_str: Optional[str]) -> str:
@@ -181,7 +207,7 @@ async def list_results(
     partner: Optional[str] = Query(default=None, description="Partner identifier"),
     date: Optional[str] = Query(default=None, description="Date (YYYY-MM-DD)"),
     status: Optional[str] = Query(default=None, description="Filter by reconciliation status"),
-    limit: int = Query(default=100, ge=1, le=1000, description="Max results (max 1000)"),
+    limit: int = Query(default=25, ge=1, le=1000, description="Max results (max 1000)"),
     offset: int = Query(default=0, ge=0, description="Number of results to skip"),
 ):
     try:
@@ -194,15 +220,13 @@ async def list_results(
 
     try:
         repo = _get_repo(request)
-        if status:
-            records = await repo.find_by_partner_date_and_status(
-                partner, date, ReconciliationStatus(status)
-            )
-        else:
-            records = await repo.find_by_partner_and_date(partner, date)
-
-        total = len(records)
-        page = records[offset:offset + limit]
+        page, total = await repo.find_page_by_partner_and_date(
+            partner,
+            date,
+            status=ReconciliationStatus(status) if status else None,
+            limit=limit,
+            offset=offset,
+        )
         return {
             "results": [_serialize(r) for r in page],
             "total": total,
@@ -263,6 +287,85 @@ async def reconciliation_stats(
     except Exception as exc:
         logger.error(f"Error fetching reconciliation stats: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch stats: {str(exc)}")
+
+
+async def _run_reconciliation_in_background(db, run_id: str, partner: str, date: str) -> None:
+    started_at = datetime.now(timezone.utc)
+    await update_runtime_run(
+        db,
+        run_id,
+        status=PartnerRuntimeRunStatus.RECONCILING,
+        message="Reconciling records for the selected partner/date.",
+        started_at=started_at,
+    )
+    try:
+        recon_date = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        results = await ReconciliationEngine(db).reconcile(partner, recon_date)
+        finished_at = datetime.now(timezone.utc)
+        await update_runtime_run(
+            db,
+            run_id,
+            status=PartnerRuntimeRunStatus.COMPLETED,
+            message="Reconciliation completed successfully.",
+            reconciliation_count=len(results),
+            finished_at=finished_at,
+        )
+    except Exception as exc:
+        finished_at = datetime.now(timezone.utc)
+        await update_runtime_run(
+            db,
+            run_id,
+            status=PartnerRuntimeRunStatus.FAILED,
+            message=f"Reconciliation failed: {summarize_runtime_error(exc)}",
+            finished_at=finished_at,
+        )
+
+
+@router.post("/run")
+async def run_reconciliation_now(request: Request, payload: RunReconciliationPayload):
+    try:
+        partner = _validate_partner(payload.partner)
+        date = _validate_date(payload.date)
+    except HTTPException:
+        raise
+
+    try:
+        db = getattr(request.app.state, "db", None)
+        if db is None:
+            raise HTTPException(status_code=503, detail="Database connection not available.")
+        run = await create_runtime_run(
+            db,
+            partner=partner,
+            date=date,
+            trigger_type=PartnerRuntimeTriggerType.MANUAL_RECONCILIATION,
+            status=PartnerRuntimeRunStatus.QUEUED,
+            message="Reconciliation is queued.",
+        )
+        task = asyncio.create_task(_run_reconciliation_in_background(db, str(run.id), partner, date))
+        _track_background_task(request, task)
+        return {"ok": True, "run": serialize_partner_runtime_run(run)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error running reconciliation: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to run reconciliation: {str(exc)}")
+
+
+@router.get("/run-status")
+async def get_reconciliation_run_status(
+    request: Request,
+    partner: Optional[str] = Query(default=None, description="Partner identifier"),
+    date: Optional[str] = Query(default=None, description="Date (YYYY-MM-DD)"),
+):
+    partner = _validate_partner(partner)
+    date = _validate_date(date)
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database connection not available.")
+    run = await PartnerRuntimeRunRepository(db).find_latest_by_partner_and_date(partner, date)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Reconciliation run not found.")
+    return {"run": serialize_partner_runtime_run(run)}
 
 
 @router.get("/insights")
@@ -328,5 +431,3 @@ async def reconciliation_insights(
     except Exception as exc:
         logger.error(f"Error generating reconciliation insights: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate reconciliation insights: {str(exc)}")
-
-

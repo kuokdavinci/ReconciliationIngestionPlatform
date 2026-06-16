@@ -96,6 +96,15 @@ class TopAnomaly(BaseModel):
     amount_range: str = Field(default="", description="Amount range description (e.g. '0-100k')")
 
 
+class SelectedErrorSignal(BaseModel):
+    """Summarized signal derived from a bounded, selected set of error records."""
+
+    status: str = Field(description="Reconciliation error status")
+    sample_count: int = Field(description="Number of sampled records represented by this signal")
+    amount_range: str = Field(default="", description="Representative amount-difference or amount band")
+    pattern_hint: str = Field(default="", description="Short deterministic hint about the sampled pattern")
+
+
 class AnalysisInput(BaseModel):
     """Full structured input contract for the LLM layer.
 
@@ -122,6 +131,10 @@ class AnalysisInput(BaseModel):
     top_anomalies: list[TopAnomaly] = Field(
         default_factory=list,
         description="Pre-processed anomalies (rule-based filtering)",
+    )
+    selected_error_signals: list[SelectedErrorSignal] = Field(
+        default_factory=list,
+        description="Summarized signals derived from bounded, selected error records",
     )
 
 

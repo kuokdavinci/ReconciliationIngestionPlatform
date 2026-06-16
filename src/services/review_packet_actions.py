@@ -1,18 +1,26 @@
 """Shared review packet approval and reprocessing actions."""
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 
 from src.analysis.insights import invalidate_insight_cache
 from src.config.cache import ConfigCache
 from src.config.loader import ConfigLoader
 from src.config.validator import ConfigValidator
+from src.core.error_formatting import summarize_runtime_error
 from src.core.enums import ProcessingStatus
 from src.models.copilot_action import CopilotActionRepository, CopilotActionStatus
 from src.models.mapping_config import MappingConfigRepository, MappingConfigStatus
+from src.models.post_approval_run import (
+    PostApprovalRun,
+    PostApprovalRunRepository,
+    PostApprovalRunStage,
+    PostApprovalRunStatus,
+)
 from src.models.reconciliation_file import ReconciliationFileRepository
 from src.models.review_packet import (
     ReviewDecisionMode,
@@ -36,6 +44,10 @@ def _packet_repo(request: Request) -> ReviewPacketRepository:
 
 def build_config_loader(request: Request) -> ConfigLoader:
     db = _get_db(request)
+    return build_config_loader_from_db(db)
+
+
+def build_config_loader_from_db(db) -> ConfigLoader:
     return ConfigLoader(
         MappingConfigRepository(db),
         ConfigCache(),
@@ -101,11 +113,70 @@ async def update_packet_scope(request: Request, packet_id: str, packet, scope_ty
         await file_repo.update_one({"_id": packet.source_file_id}, {"scopeType": scope_type})
 
 
+def serialize_post_approval_run(run: PostApprovalRun) -> dict[str, Any]:
+    data = run.model_dump(by_alias=True)
+    data["_id"] = str(data["_id"])
+    for key in ("createdAt", "updatedAt", "startedAt", "finishedAt"):
+        value = data.get(key)
+        if isinstance(value, datetime):
+            data[key] = value.isoformat()
+    return data
+
+
+async def _update_post_approval_run(
+    db,
+    run_id: str,
+    *,
+    status: Optional[PostApprovalRunStatus] = None,
+    stage: Optional[PostApprovalRunStage] = None,
+    message: Optional[str] = None,
+    started_at: Optional[datetime] = None,
+    finished_at: Optional[datetime] = None,
+    source_file_id: Optional[str] = None,
+    output_file_id: Optional[str] = None,
+    reconciliation_count: Optional[int] = None,
+    stats: Optional[dict[str, Any]] = None,
+    errors: Optional[list[Any]] = None,
+) -> None:
+    update: dict[str, Any] = {"updatedAt": datetime.now(timezone.utc)}
+    if status is not None:
+        update["status"] = status.value
+    if stage is not None:
+        update["stage"] = stage.value
+    if message is not None:
+        update["message"] = message
+    if started_at is not None:
+        update["startedAt"] = started_at
+    if finished_at is not None:
+        update["finishedAt"] = finished_at
+    if source_file_id is not None:
+        update["sourceFileId"] = source_file_id
+    if output_file_id is not None:
+        update["outputFileId"] = output_file_id
+    if reconciliation_count is not None:
+        update["reconciliationCount"] = reconciliation_count
+    if stats is not None:
+        update["stats"] = stats
+    if errors is not None:
+        update["errors"] = errors
+    await PostApprovalRunRepository(db).collection.update_one({"_id": run_id}, {"$set": update})
+
+
+def _track_background_task(app: FastAPI, task: asyncio.Task) -> None:
+    tasks = getattr(app.state, "background_tasks", None)
+    if tasks is None:
+        tasks = set()
+        app.state.background_tasks = tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
 async def approve_packet_mapping_and_reprocess(request: Request, packet, reviewed_by: Optional[str]) -> dict | None:
     if not packet.draft_mapping_id:
         return None
 
-    mapping_repo = MappingConfigRepository(_get_db(request))
+    db = _get_db(request)
+    mapping_repo = MappingConfigRepository(db)
     config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
     if config is None or config.status != MappingConfigStatus.PENDING_APPROVAL:
         return None
@@ -145,40 +216,117 @@ async def approve_packet_mapping_and_reprocess(request: Request, packet, reviewe
     config.approved_at = now
     config.approved_by = reviewed_by
     config.config_health = health
-    return await reprocess_and_reconcile(request, packet, config)
+
+    run = PostApprovalRun(
+        packetId=str(packet.id),
+        partner=packet.partner,
+        date=packet.reconciliation_date.strftime("%Y-%m-%d") if getattr(packet, "reconciliation_date", None) else None,
+        status=PostApprovalRunStatus.QUEUED,
+        stage=PostApprovalRunStage.APPROVAL,
+        message="Approved. Post-approval processing is queued.",
+        sourceFileId=getattr(packet, "source_file_id", None),
+    )
+    run_repo = PostApprovalRunRepository(db)
+    await run_repo.create(run)
+    task = asyncio.create_task(
+        _run_post_approval_reprocess(
+            request.app,
+            str(run.id),
+            str(packet.id),
+            str(config.id),
+        )
+    )
+    _track_background_task(request.app, task)
+    return serialize_post_approval_run(run)
 
 
-async def reprocess_and_reconcile(request: Request, packet, config) -> dict | None:
+async def _run_post_approval_reprocess(app: FastAPI, run_id: str, packet_id: str, config_id: str) -> None:
+    db = getattr(app.state, "db", None)
+    if db is None:
+        return
+    packet_repo = ReviewPacketRepository(db)
+    mapping_repo = MappingConfigRepository(db)
+    packet = await packet_repo.find_one({"_id": packet_id})
+    config = await mapping_repo.find_one({"_id": config_id})
+    if packet is None or config is None:
+        await _update_post_approval_run(
+            db,
+            run_id,
+            status=PostApprovalRunStatus.FAILED,
+            stage=PostApprovalRunStage.APPROVAL,
+            message="Packet or approved mapping could not be loaded for post-approval processing.",
+            finished_at=datetime.now(timezone.utc),
+        )
+        return
+    try:
+        await reprocess_and_reconcile(db, packet, config, run_id)
+    except Exception as exc:
+        summarized_error = summarize_runtime_error(exc)
+        await _update_post_approval_run(
+            db,
+            run_id,
+            status=PostApprovalRunStatus.FAILED,
+            message=f"Post-approval processing failed: {summarized_error}",
+            finished_at=datetime.now(timezone.utc),
+            errors=[summarized_error],
+        )
+
+
+async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | None:
     source_file_path = getattr(packet, "source_file_path", None)
     source_file_id = getattr(packet, "source_file_id", None)
     if not source_file_path or not source_file_id:
+        await _update_post_approval_run(
+            db,
+            run_id,
+            status=PostApprovalRunStatus.FAILED,
+            stage=PostApprovalRunStage.APPROVAL,
+            message="Review packet has no source file attached for post-approval processing.",
+            finished_at=datetime.now(timezone.utc),
+        )
         return None
 
     path = Path(source_file_path)
     if not path.exists():
-        return {
-            "ok": False,
-            "stage": "reprocess",
-            "reason": f"Source file is no longer available at {source_file_path}.",
-        }
+        await _update_post_approval_run(
+            db,
+            run_id,
+            status=PostApprovalRunStatus.FAILED,
+            stage=PostApprovalRunStage.APPROVAL,
+            message=f"Source file is no longer available at {source_file_path}.",
+            finished_at=datetime.now(timezone.utc),
+        )
+        return None
 
-    db = _get_db(request)
     file_repo = ReconciliationFileRepository(db)
     source_file = await file_repo.find_one({"_id": source_file_id})
     if source_file is None:
-        return {
-            "ok": False,
-            "stage": "reprocess",
-            "reason": f"Source file record {source_file_id} was not found.",
-        }
+        await _update_post_approval_run(
+            db,
+            run_id,
+            status=PostApprovalRunStatus.FAILED,
+            stage=PostApprovalRunStage.APPROVAL,
+            message=f"Source file record {source_file_id} was not found.",
+            finished_at=datetime.now(timezone.utc),
+        )
+        return None
 
     if source_file.processing_status == ProcessingStatus.FAILED:
         await db["data_container"].delete_many({"sourceFileId": source_file_id})
         await file_repo.delete_one({"_id": source_file_id})
 
+    await _update_post_approval_run(
+        db,
+        run_id,
+        status=PostApprovalRunStatus.INGESTING,
+        stage=PostApprovalRunStage.INGESTION,
+        message="Ingesting partner file with the approved mapping.",
+        started_at=datetime.now(timezone.utc),
+    )
+
     pipeline = IngestionPipeline(
         db=db,
-        config_loader=build_config_loader(request),
+        config_loader=build_config_loader_from_db(db),
         batch_size=100,
         logger=None,
     )
@@ -211,6 +359,17 @@ async def reprocess_and_reconcile(request: Request, packet, config) -> dict | No
         "errors": ingestion_result.errors,
     }
     if processing_status != ProcessingStatus.COMPLETED.value:
+        await _update_post_approval_run(
+            db,
+            run_id,
+            status=PostApprovalRunStatus.FAILED,
+            stage=PostApprovalRunStage.INGESTION,
+            message="Ingestion failed after approval.",
+            finished_at=datetime.now(timezone.utc),
+            output_file_id=str(ingestion_result.file_record.id),
+            stats=result["stats"],
+            errors=ingestion_result.errors,
+        )
         return result
 
     if packet.scope_type:
@@ -219,12 +378,34 @@ async def reprocess_and_reconcile(request: Request, packet, config) -> dict | No
             {"scopeType": packet.scope_type},
         )
 
+    await _update_post_approval_run(
+        db,
+        run_id,
+        status=PostApprovalRunStatus.RECONCILING,
+        stage=PostApprovalRunStage.RECONCILIATION,
+        message="Reconciling ingested partner rows against internal transactions.",
+        output_file_id=str(ingestion_result.file_record.id),
+        stats=result["stats"],
+        errors=ingestion_result.errors,
+    )
+
     recon_date = source_file.reconciliation_date
     recon_results = await ReconciliationEngine(db).reconcile(
         config.partner,
         recon_date,
         source_file_id=str(ingestion_result.file_record.id),
     )
+
+    await _update_post_approval_run(
+        db,
+        run_id,
+        stage=PostApprovalRunStage.CACHE_INVALIDATION,
+        message="Invalidating insight cache after reconciliation.",
+        output_file_id=str(ingestion_result.file_record.id),
+        reconciliation_count=len(recon_results),
+        stats=result["stats"],
+    )
+
     invalidated = await invalidate_insight_cache(
         config.partner,
         recon_date.strftime("%Y-%m-%d"),
@@ -235,5 +416,17 @@ async def reprocess_and_reconcile(request: Request, packet, config) -> dict | No
             "reconciliationCount": len(recon_results),
             "insightCacheInvalidated": invalidated,
         }
+    )
+    await _update_post_approval_run(
+        db,
+        run_id,
+        status=PostApprovalRunStatus.COMPLETED,
+        stage=PostApprovalRunStage.CACHE_INVALIDATION,
+        message="Post-approval processing completed successfully.",
+        finished_at=datetime.now(timezone.utc),
+        output_file_id=str(ingestion_result.file_record.id),
+        reconciliation_count=len(recon_results),
+        stats=result["stats"],
+        errors=ingestion_result.errors,
     )
     return result

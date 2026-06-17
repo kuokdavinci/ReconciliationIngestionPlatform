@@ -53,6 +53,14 @@ class MockStructuredLogger:
         self.events.append(("ROW_FAILED", {"file_id": file_id, "row_number": row_number, "trace": trace, "reason": reason}))
 
 
+def _make_mock_db():
+    db = MagicMock()
+    coll = MagicMock()
+    coll.count_documents = AsyncMock(return_value=0)
+    db.__getitem__ = MagicMock(return_value=coll)
+    return db
+
+
 class TestIngestionResult:
     """Tests for IngestionResult dataclass."""
 
@@ -200,7 +208,7 @@ class TestProcessFileHappyPath:
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
         # Mock repositories
-        mock_db = MagicMock()
+        mock_db = _make_mock_db()
         mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
         mock_recon_repo.find_by_file_hash = AsyncMock(return_value=None)
         mock_recon_repo.create = AsyncMock(side_effect=lambda doc: doc)
@@ -209,9 +217,6 @@ class TestProcessFileHappyPath:
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
         mock_data_repo.insert_many = AsyncMock(return_value=3)
-
-        # Wire up db to return our mock repos
-        mock_db.__getitem__ = MagicMock(side_effect=lambda name: MagicMock())
 
         pipeline = IngestionPipeline(
             db=mock_db, config_loader=mock_config_loader, batch_size=100
@@ -298,7 +303,7 @@ class TestProcessFileMixedRows:
         mock_config_loader = MagicMock(spec=ConfigLoader)
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
-        mock_db = MagicMock()
+        mock_db = _make_mock_db()
         mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
         mock_recon_repo.find_by_file_hash = AsyncMock(return_value=None)
         mock_recon_repo.create = AsyncMock(side_effect=lambda doc: doc)
@@ -307,8 +312,6 @@ class TestProcessFileMixedRows:
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
         mock_data_repo.insert_many = AsyncMock(return_value=2)
-
-        mock_db.__getitem__ = MagicMock(side_effect=lambda name: MagicMock())
 
         pipeline = IngestionPipeline(
             db=mock_db, config_loader=mock_config_loader, batch_size=100
@@ -411,7 +414,7 @@ class TestProcessFileException:
         excel_file = tmp_path / "file.xlsx"
         excel_file.write_bytes(b"fake excel content")
 
-        mock_db = MagicMock()
+        mock_db = _make_mock_db()
         mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
         mock_recon_repo.find_by_file_hash = AsyncMock(return_value=None)
         mock_recon_repo.create = AsyncMock(side_effect=lambda doc: doc)
@@ -478,7 +481,7 @@ class TestBatchInsertion:
         mock_config_loader = MagicMock(spec=ConfigLoader)
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
-        mock_db = MagicMock()
+        mock_db = _make_mock_db()
         mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
         mock_recon_repo.find_by_file_hash = AsyncMock(return_value=None)
         mock_recon_repo.create = AsyncMock(side_effect=lambda doc: doc)
@@ -487,8 +490,6 @@ class TestBatchInsertion:
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
         mock_data_repo.insert_many = AsyncMock(side_effect=lambda batch: len(batch))
-
-        mock_db.__getitem__ = MagicMock(side_effect=lambda name: MagicMock())
 
         # Use batch_size=5 to test batching
         pipeline = IngestionPipeline(
@@ -571,7 +572,7 @@ class TestPipelineLogging:
         mock_config_loader = MagicMock(spec=ConfigLoader)
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
-        mock_db = MagicMock()
+        mock_db = _make_mock_db()
         mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
         mock_recon_repo.find_by_file_hash = AsyncMock(return_value=None)
         mock_recon_repo.create = AsyncMock(side_effect=lambda doc: doc)
@@ -580,8 +581,6 @@ class TestPipelineLogging:
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
         mock_data_repo.insert_many = AsyncMock(return_value=3)
-
-        mock_db.__getitem__ = MagicMock(side_effect=lambda name: MagicMock())
 
         mock_logger = MockStructuredLogger()
 
@@ -664,7 +663,7 @@ class TestPipelineLogging:
         mock_config_loader = MagicMock(spec=ConfigLoader)
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
-        mock_db = MagicMock()
+        mock_db = _make_mock_db()
         mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
         mock_recon_repo.find_by_file_hash = AsyncMock(return_value=None)
         mock_recon_repo.create = AsyncMock(side_effect=lambda doc: doc)
@@ -673,8 +672,6 @@ class TestPipelineLogging:
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
         mock_data_repo.insert_many = AsyncMock(return_value=2)
-
-        mock_db.__getitem__ = MagicMock(side_effect=lambda name: MagicMock())
 
         mock_logger = MockStructuredLogger()
 
@@ -785,7 +782,7 @@ class TestPipelineLogging:
         excel_file = tmp_path / "file.xlsx"
         excel_file.write_bytes(b"fake excel content")
 
-        mock_db = MagicMock()
+        mock_db = _make_mock_db()
         mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
         mock_recon_repo.find_by_file_hash = AsyncMock(return_value=None)
         mock_recon_repo.create = AsyncMock(side_effect=lambda doc: doc)
@@ -859,7 +856,7 @@ class TestPipelineAllInvalidRows:
         mock_config_loader = MagicMock(spec=ConfigLoader)
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
-        mock_db = MagicMock()
+        mock_db = _make_mock_db()
         mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
         mock_recon_repo.find_by_file_hash = AsyncMock(return_value=None)
         mock_recon_repo.create = AsyncMock(side_effect=lambda doc: doc)
@@ -868,8 +865,6 @@ class TestPipelineAllInvalidRows:
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
         mock_data_repo.insert_many = AsyncMock(return_value=0)
-
-        mock_db.__getitem__ = MagicMock(side_effect=lambda name: MagicMock())
 
         pipeline = IngestionPipeline(
             db=mock_db, config_loader=mock_config_loader, batch_size=100

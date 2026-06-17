@@ -12,9 +12,20 @@ def _create_test_app():
     app = FastAPI()
     app.include_router(router)
     mock_db = MagicMock()
-    fetch_collection = MagicMock()
-    mapping_collection = MagicMock()
-    review_collection = MagicMock()
+    def _create_mock_coll():
+        coll = MagicMock()
+        coll.find_one = AsyncMock(return_value=None)
+        coll.find = MagicMock(return_value=[])
+        coll.count_documents = AsyncMock(return_value=0)
+        coll.insert_one = AsyncMock()
+        coll.insert_many = AsyncMock(return_value=[])
+        coll.update_one = AsyncMock()
+        coll.delete_many = AsyncMock()
+        return coll
+
+    fetch_collection = _create_mock_coll()
+    mapping_collection = _create_mock_coll()
+    review_collection = _create_mock_coll()
 
     def _get_collection(name):
         if name == "fetch_config":
@@ -23,7 +34,7 @@ def _create_test_app():
             return mapping_collection
         if name == "review_packet":
             return review_collection
-        return MagicMock()
+        return _create_mock_coll()
 
     mock_db.__getitem__ = MagicMock(side_effect=_get_collection)
     app.state.db = mock_db
@@ -34,7 +45,7 @@ def _create_test_app():
 def test_run_automation_job_now():
     app, fetch_collection = _create_test_app()
     fetch_collection.find_one = AsyncMock(return_value={
-        "_id": "job-001",
+        "_id": "123e4567-e89b-12d3-a456-426614174000",
         "partner": "ZALOPAY",
         "fetchMethod": "FILEDROP",
         "enabled": True,
@@ -56,4 +67,4 @@ def test_run_automation_job_now():
         assert response.status_code == 200
         payload = response.json()
         assert payload["ok"] is True
-        assert payload["result"]["partner"] == "ZALOPAY"
+        assert payload["partner"] == "ZALOPAY"

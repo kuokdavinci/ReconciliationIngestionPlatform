@@ -19,6 +19,7 @@ from src.models.reconciliation_result import (
 from src.models.reconciliation_review_record import ReconciliationReviewRecordRepository
 from src.core.enums import ReconciliationStatus
 from src.reconciliation.engine import ReconciliationEngine
+from src.services.audit import record_audit_event
 from src.services.runtime_runs import (
     create_runtime_run,
     serialize_partner_runtime_run,
@@ -278,9 +279,9 @@ async def reconciliation_stats(
             "partner": partner,
             "date": date,
             "total": total,
-            "by_status": by_status,
-            "total_partner_amount": str(totals["total_partner_amount"]) if totals["total_partner_amount"] is not None else None,
-            "total_internal_amount": str(totals["total_internal_amount"]) if totals["total_internal_amount"] is not None else None,
+            "byStatus": by_status,
+            "totalPartnerAmount": str(totals["total_partner_amount"]) if totals["total_partner_amount"] is not None else None,
+            "totalInternalAmount": str(totals["total_internal_amount"]) if totals["total_internal_amount"] is not None else None,
         }
     except HTTPException:
         raise
@@ -300,15 +301,37 @@ async def _run_reconciliation_in_background(db, run_id: str, partner: str, date:
     )
     try:
         recon_date = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        results = await ReconciliationEngine(db).reconcile(partner, recon_date)
+        results = await ReconciliationEngine(db).reconcile(
+            partner,
+            recon_date,
+            reconciliation_run_id=run_id,
+        )
         finished_at = datetime.now(timezone.utc)
         await update_runtime_run(
             db,
             run_id,
             status=PartnerRuntimeRunStatus.COMPLETED,
             message="Reconciliation completed successfully.",
+            validation_state="NOT_RUN",
+            stats={"resultCount": len(results)},
             reconciliation_count=len(results),
             finished_at=finished_at,
+        )
+        run_doc = await db["partner_runtime_run"].find_one({"_id": run_id})
+        await record_audit_event(
+            db,
+            entity_type="RECONCILIATION_RUN",
+            entity_id=run_id,
+            action="COMPLETED",
+            metadata={
+                "partner": partner,
+                "date": date,
+                "status": PartnerRuntimeRunStatus.COMPLETED.value,
+                "reference": run_id,
+                "sourceFileId": run_doc.get("sourceFileId") if run_doc else None,
+                "mappingVersion": run_doc.get("mappingVersion") if run_doc else None,
+                "reconciliationCount": len(results),
+            },
         )
     except Exception as exc:
         finished_at = datetime.now(timezone.utc)
@@ -318,6 +341,22 @@ async def _run_reconciliation_in_background(db, run_id: str, partner: str, date:
             status=PartnerRuntimeRunStatus.FAILED,
             message=f"Reconciliation failed: {summarize_runtime_error(exc)}",
             finished_at=finished_at,
+        )
+        run_doc = await db["partner_runtime_run"].find_one({"_id": run_id})
+        await record_audit_event(
+            db,
+            entity_type="RECONCILIATION_RUN",
+            entity_id=run_id,
+            action="FAILED",
+            metadata={
+                "partner": partner,
+                "date": date,
+                "status": PartnerRuntimeRunStatus.FAILED.value,
+                "reference": run_id,
+                "sourceFileId": run_doc.get("sourceFileId") if run_doc else None,
+                "mappingVersion": run_doc.get("mappingVersion") if run_doc else None,
+                "error": summarize_runtime_error(exc),
+            },
         )
 
 
@@ -340,6 +379,7 @@ async def run_reconciliation_now(request: Request, payload: RunReconciliationPay
             trigger_type=PartnerRuntimeTriggerType.MANUAL_RECONCILIATION,
             status=PartnerRuntimeRunStatus.QUEUED,
             message="Reconciliation is queued.",
+            validation_state="NOT_RUN",
         )
         task = asyncio.create_task(_run_reconciliation_in_background(db, str(run.id), partner, date))
         _track_background_task(request, task)

@@ -15,6 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from motor.motor_asyncio import AsyncIOMotorCollection
 
+from src.api.response_utils import camelize
 from src.analysis.config import AnalysisConfig
 from src.analysis.provider import create_provider
 from src.analysis.schemas import AnalysisResult
@@ -165,33 +166,33 @@ async def insights_sample():
     return {
         "partner": "MOMO",
         "date": "2024-07-07",
-        "summary_metrics": {
-            "total_transactions": 1250,
+        "summaryMetrics": {
+            "totalTransactions": 1250,
             "matched": 1187,
-            "mismatch_rate": 5.04,
-            "total_amount_mismatch": 24500000.0,
-            "by_status": {
+            "mismatchRate": 5.04,
+            "totalAmountMismatch": 24500000.0,
+            "byStatus": {
                 "MATCHED": 1187,
                 "AMOUNT_MISMATCH": 32,
                 "MISSING_INTERNAL": 18,
                 "MISSING_PARTNER": 13,
             },
         },
-        "grouped_stats": [
-            {"key": "MATCHED", "count": 1187, "percentage": 94.96, "total_amount": 2450000000.0, "details": {}},
-            {"key": "AMOUNT_MISMATCH", "count": 32, "percentage": 2.56, "total_amount": 24500000.0, "details": {"avg_difference": 765625.0}},
-            {"key": "MISSING_INTERNAL", "count": 18, "percentage": 1.44, "total_amount": 0.0, "details": {}},
-            {"key": "MISSING_PARTNER", "count": 13, "percentage": 1.04, "total_amount": 0.0, "details": {}},
+        "groupedStats": [
+            {"key": "MATCHED", "count": 1187, "percentage": 94.96, "totalAmount": 2450000000.0, "details": {}},
+            {"key": "AMOUNT_MISMATCH", "count": 32, "percentage": 2.56, "totalAmount": 24500000.0, "details": {"avgDifference": 765625.0}},
+            {"key": "MISSING_INTERNAL", "count": 18, "percentage": 1.44, "totalAmount": 0.0, "details": {}},
+            {"key": "MISSING_PARTNER", "count": 13, "percentage": 1.04, "totalAmount": 0.0, "details": {}},
         ],
-        "key_findings": [
+        "keyFindings": [
             "[CRITICAL] Ingestion gap at 14:20-14:30 — 18 records missing internally (24.5M VND)",
             "[HIGH] 32 amount mismatches, 3 outliers drive 60% of 24.5M VND impact",
             "[MEDIUM] MOMO mismatch rate 5.04% — second consecutive day above threshold",
         ],
-        "guardrail_result": sample_observation["guardrail_result"],
-        "generated_at": "2024-07-07T12:00:00+00:00",
-        "llm_status": "success",
-        "ai_observation": sample_observation,
+        "guardrailResult": camelize(sample_observation["guardrail_result"]),
+        "generatedAt": "2024-07-07T12:00:00+00:00",
+        "llmStatus": "success",
+        "aiObservation": camelize(sample_observation),
     }
 
 
@@ -205,8 +206,8 @@ async def insights_sample_stats():
     return {
         "total": 1250,
         "matched": 1187,
-        "mismatch_rate": 5.04,
-        "by_status": {
+        "mismatchRate": 5.04,
+        "byStatus": {
             "MATCHED": 1187,
             "AMOUNT_MISMATCH": 32,
             "STATUS_MISMATCH": 0,
@@ -266,7 +267,7 @@ async def insights_summary(
         # Replace generated_at with proper timestamp
         result["generated_at"] = datetime.now(timezone.utc).isoformat()
 
-        return result
+        return camelize(result)
 
     except HTTPException:
         raise
@@ -372,7 +373,7 @@ async def insights_discrepancies(
         )
 
         # Convert AnalysisResult objects to dicts for JSON response
-        return [r.model_dump() for r in results]
+        return [camelize(r.model_dump()) for r in results]
 
     except HTTPException:
         raise
@@ -432,7 +433,7 @@ async def reports_daily(
         # Add proper timestamp
         report["generated_at"] = datetime.now(timezone.utc).isoformat()
 
-        return report
+        return camelize(report)
 
     except HTTPException:
         raise

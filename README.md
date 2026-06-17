@@ -30,7 +30,7 @@ More detail:
 
 ## Prerequisites
 
-- Python `3.14+` for local development via `uv`
+- Python `3.11+` for local development via `uv`
 - `uv`
 - Docker and Docker Compose for MongoDB/SFTP and optional full local stack
 - Node.js for the dashboard

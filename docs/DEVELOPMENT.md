@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- Python `>=3.14` (xem `pyproject.toml`)
+- Python `>=3.11` (xem `pyproject.toml`)
 - Node.js (không có engines ràng buộc trong `frontend/package.json`)
 - Docker và Docker Compose
 - `uv` (recommended) hoặc `pip`

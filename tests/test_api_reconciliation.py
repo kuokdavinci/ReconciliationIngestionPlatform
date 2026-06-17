@@ -196,8 +196,8 @@ class TestStats:
         data = response.json()
         assert data["partner"] == "MOMO"
         assert data["total"] == 100
-        assert data["by_status"]["MATCHED"] == 80
-        assert data["by_status"]["AMOUNT_MISMATCH"] == 20
+        assert data["byStatus"]["MATCHED"] == 80
+        assert data["byStatus"]["AMOUNT_MISMATCH"] == 20
 
     def test_missing_partner_returns_400(self):
         app, _ = _create_test_app()
@@ -209,7 +209,7 @@ class TestStats:
 class TestRunReconciliation:
     @pytest.mark.asyncio
     async def test_run_reconciliation_returns_count(self):
-        from api.reconciliation import run_reconciliation_now, RunReconciliationPayload
+        from src.api.reconciliation import run_reconciliation_now, RunReconciliationPayload
         app, mock_collection = _create_test_app()
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=mock_collection.database)))
         with patch("src.api.reconciliation.ReconciliationEngine.reconcile", new=AsyncMock(return_value=[1, 2, 3])):
@@ -223,7 +223,7 @@ class TestRunReconciliation:
 
     @pytest.mark.asyncio
     async def test_run_reconciliation_requires_partner(self):
-        from api.reconciliation import run_reconciliation_now, RunReconciliationPayload
+        from src.api.reconciliation import run_reconciliation_now, RunReconciliationPayload
         app, mock_collection = _create_test_app()
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=mock_collection.database)))
         with pytest.raises(HTTPException) as exc:

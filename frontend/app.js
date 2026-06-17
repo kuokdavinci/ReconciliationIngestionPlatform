@@ -57,6 +57,13 @@
       error: "",
       mapping: null,
       packetId: null
+    },
+    audit: {
+      events: [],
+      entityType: "",
+      action: "",
+      lastLoadedAt: "",
+      selectedEventId: null,
     }
   };
 
@@ -66,7 +73,8 @@
     ["automation", "Automation", "smart_toy"],
   ];
   const utilityRoutes = {
-    "mapping-studio": { title: "Mapping Studio", icon: "schema" }
+    "mapping-studio": { title: "Mapping Studio", icon: "schema" },
+    "audit-log": { title: "Audit Log", icon: "history" }
   };
 
   const view = document.getElementById("view");
@@ -129,12 +137,24 @@
         return;
       }
 
+      const openAuditDetailEl = e.target.closest("[data-action='open-audit-detail']");
+      if (openAuditDetailEl) {
+        state.audit.selectedEventId = openAuditDetailEl.dataset.eventId || null;
+        render();
+        return;
+      }
+
       // 2. Modal actions delegation
       const modalActionEl = e.target.closest("#modal-root [data-action]");
       if (modalActionEl) {
         const action = modalActionEl.dataset.action;
         if (action === "close-evidence-drawer") {
           state.selectedEvidenceRowId = null;
+          render();
+          return;
+        }
+        if (action === "close-audit-detail") {
+          state.audit.selectedEventId = null;
           render();
           return;
         }
@@ -329,7 +349,7 @@
       .then(r => r.json())
       .then(data => {
         if (requestToken !== activePartnerFetchToken) return;
-        const found = Object.keys(data.by_partner || {});
+        const found = Object.keys(data.byPartner || {});
         const defaultPartners = ["MOMO", "VNPAY", "ZALOPAY", "ACMEPAY"];
         const partners = Array.from(new Set([...found, ...defaultPartners]));
         state.partnerOptions = partners;
@@ -764,6 +784,29 @@
     bindViewActions();
   }
 
+  async function renderAuditPage(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    view.innerHTML = loadingPanel("Loading audit log...");
+    const qs = new URLSearchParams({
+      limit: "200",
+      partner: partnerAtStart,
+      date: dateAtStart
+    });
+    if (state.audit.entityType) qs.set("entityType", state.audit.entityType);
+    if (state.audit.action) qs.set("action", state.audit.action);
+    const data = await fetchJson(`/api/v1/audit/events?${qs.toString()}`);
+    if (
+      renderToken !== activeRenderToken ||
+      state.route !== routeAtStart ||
+      state.partner !== partnerAtStart ||
+      state.date !== dateAtStart
+    ) return;
+    state.audit.events = Array.isArray(data.events) ? data.events : [];
+    state.audit.lastLoadedAt = new Date().toISOString();
+    view.innerHTML = renderAuditLog();
+    bindFilters();
+    bindViewActions();
+  }
+
   async function render() {
     const modalContainer = document.getElementById("modal-root");
     if (modalContainer) {
@@ -780,7 +823,8 @@
       "review-center": `Review pending runtime changes for ${state.partner}`,
       reconciliation: `Deterministic reconciliation outcomes for ${state.partner} on ${formatDisplayDate(state.date)}`,
       automation: `Scheduler, job visibility, and automation context`,
-      "mapping-studio": `Create a draft mapping, validate it, then send it to Review Center`
+      "mapping-studio": `Create a draft mapping, validate it, then send it to Review Center`,
+      "audit-log": `Append-only activity trail for ${state.partner} on ${formatDisplayDate(state.date)}`
     };
     subtitle.textContent = routeSubtitle[state.route] || `Operations Console - ${state.partner}`;
 
@@ -830,6 +874,199 @@
       return;
     }
 
+    if (state.route === "audit-log") {
+      try {
+        await renderAuditPage(renderToken, routeAtStart, partnerAtStart, dateAtStart);
+      } catch (err) {
+        if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
+        view.innerHTML = renderError(err);
+      }
+      fetchPartners();
+      bindFilters();
+      bindViewActions();
+      return;
+    }
+
+  }
+
+  function normalizeAuditValue(value) {
+    if (value === null || value === undefined || value === "") return "-";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  }
+
+  function getSelectedAuditEvent() {
+    const events = Array.isArray(state.audit.events) ? state.audit.events : [];
+    return events.find(event => event._id === state.audit.selectedEventId) || null;
+  }
+
+  function renderAuditDetailPopup(event) {
+    if (!event) return "";
+    const metadata = event.metadata || {};
+    const detailRows = [
+      ["Entity type", event.entityType || "-"],
+      ["Entity ID", event.entityId || "-"],
+      ["Action", event.action || "-"],
+      ["Actor", event.actor || "system"],
+      ["Partner", metadata.partner || "-"],
+      ["Date", metadata.date || "-"],
+      ["Reference", metadata.reference || "-"],
+      ["Status", metadata.status || "-"],
+      ["Mapping version", metadata.mappingVersion || "-"],
+      ["Draft mapping version", metadata.draftMappingVersion || "-"],
+      ["Draft mapping", metadata.draftMappingId || "-"],
+      ["Source file", metadata.sourceFileId || "-"],
+      ["Created at", event.createdAt || "-"]
+    ];
+
+    return `
+      <div class="brief-overlay">
+        <button class="brief-overlay-backdrop" data-action="close-audit-detail" aria-label="Close audit detail"></button>
+        <div class="brief-modal" style="max-width: 720px;">
+          <div class="brief-modal-header">
+            <div>
+              <span class="brief-eyebrow">AUDIT DETAIL</span>
+              <div class="brief-header-badges">
+                ${badge(event.entityType || "UNKNOWN")}
+                ${badge(event.action || "-")}
+              </div>
+            </div>
+            <button class="brief-close-btn" data-action="close-audit-detail">&times;</button>
+          </div>
+          <div class="brief-modal-content">
+            <div class="brief-review-item" style="margin-bottom: 16px;">
+              <div class="brief-review-header">
+                <span class="brief-review-kind badge neutral">${escapeHtml(event.actor || "system")}</span>
+                <span class="badge neutral">${escapeHtml(metadata.partner || "-")}</span>
+              </div>
+              <h3 class="brief-review-title">${escapeHtml(event.entityId || "-")}</h3>
+              <p class="brief-review-reason">${escapeHtml(metadata.date || "-")}</p>
+            </div>
+            <div class="review-summary-list" style="display:grid; gap:10px; margin-bottom: 18px;">
+              ${detailRows.map(([label, value]) => `
+                <div style="display:grid; grid-template-columns: 140px minmax(0, 1fr); gap:12px;">
+                  <strong>${escapeHtml(label)}</strong>
+                  <span style="word-break: break-word;">${escapeHtml(normalizeAuditValue(value))}</span>
+                </div>
+              `).join("")}
+            </div>
+            <div class="panel" style="margin:0; padding:16px;">
+              <p class="brief-eyebrow" style="margin:0 0 10px 0;">Raw Metadata</p>
+              <pre style="margin:0; white-space:pre-wrap; word-break:break-word; font-family:var(--font-mono); font-size:12px; color:var(--text-primary);">${escapeHtml(JSON.stringify(metadata, null, 2))}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function getFilteredAuditEvents() {
+    const events = Array.isArray(state.audit.events) ? state.audit.events : [];
+    return events.filter(event => {
+      const metadata = event.metadata || {};
+      const matchesPartner = !state.partner || metadata.partner === state.partner;
+      const matchesDate = !state.date || metadata.date === state.date;
+      const matchesEntity = !state.audit.entityType || event.entityType === state.audit.entityType;
+      const matchesAction = !state.audit.action || event.action === state.audit.action;
+      return matchesPartner && matchesDate && matchesEntity && matchesAction;
+    });
+  }
+
+  function renderAuditLog() {
+    const filtered = getFilteredAuditEvents();
+    const entityOptions = ["", "REVIEW_PACKET", "MAPPING_CONFIG", "RECONCILIATION_RUN"];
+    const actionOptions = [
+      "",
+      "APPROVED",
+      "REJECTED",
+      "APPROVE_ACTIVATE_NEXT_RUNTIME",
+      "APPROVE_KEEP_CURRENT_FOR_FILE",
+      "REJECT",
+      "COMPLETED",
+      "FAILED"
+    ];
+    const rows = filtered.map(event => {
+      const metadata = event.metadata || {};
+      return `
+        <tr>
+          <td><code>${escapeHtml(event.createdAt || "-")}</code></td>
+          <td>${badge(event.entityType || "UNKNOWN")}</td>
+          <td>${badge(event.action || "-")}</td>
+          <td><code>${escapeHtml(normalizeAuditValue(metadata.reference))}</code></td>
+          <td>
+            <button
+              class="button secondary-action"
+              data-action="open-audit-detail"
+              data-event-id="${escapeHtml(event._id || "")}"
+              aria-label="View audit detail"
+              title="View audit detail"
+              style="min-width: 40px; padding: 8px 10px; justify-content:center;"
+            >
+              <span class="material-symbols-outlined" style="font-size:18px;">visibility</span>
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    const selectedAuditEvent = getSelectedAuditEvent();
+    setTimeout(() => {
+      let modalContainer = document.getElementById("modal-root");
+      if (!modalContainer) {
+        modalContainer = document.createElement("div");
+        modalContainer.id = "modal-root";
+        document.body.appendChild(modalContainer);
+      }
+      modalContainer.innerHTML = selectedAuditEvent ? renderAuditDetailPopup(selectedAuditEvent) : "";
+    }, 0);
+
+    return `
+      <section class="panel">
+        ${renderPageFilters({ showDate: true, showClear: false })}
+        <div class="panel-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom: 16px;">
+          <div>
+            <h3 style="margin:0;">Audit Log</h3>
+            <p class="muted" style="margin:6px 0 0 0;">Read-only timeline for mapping approvals, review decisions, and reconciliation runs.</p>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span class="muted" style="font-size:11px;">Loaded ${escapeHtml(state.audit.lastLoadedAt ? formatDisplayDateTime(state.audit.lastLoadedAt) : "-")}</span>
+            <button class="button secondary-action" data-action="refresh-audit">Refresh</button>
+          </div>
+        </div>
+        <div class="page-filters" style="margin-bottom: 16px;">
+          <div class="filter-group">
+            <span class="filter-label">ENTITY</span>
+            <div class="filter-input-wrapper">
+              <select id="audit-entity-filter">
+                ${entityOptions.map(value => `<option value="${value}" ${value === state.audit.entityType ? "selected" : ""}>${value || "All entities"}</option>`).join("")}
+              </select>
+            </div>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">ACTION</span>
+            <div class="filter-input-wrapper">
+              <select id="audit-action-filter">
+                ${actionOptions.map(value => `<option value="${value}" ${value === state.audit.action ? "selected" : ""}>${value || "All actions"}</option>`).join("")}
+              </select>
+            </div>
+          </div>
+          <div class="filter-group" style="margin-left:auto;">
+            <span class="filter-label">MATCHED EVENTS</span>
+            <div class="filter-input-wrapper"><strong>${formatNumber(filtered.length)}</strong></div>
+          </div>
+        </div>
+        ${filtered.length ? table(
+          ["Timestamp", "Entity", "Action", "Reference", "Detail"],
+          rows
+        ) : `
+          <div class="empty-state" style="padding: 32px 16px;">
+            <span class="material-symbols-outlined">history</span>
+            <h3>No audit events</h3>
+            <p class="muted">No audit entries match the current partner/date/filter combination.</p>
+          </div>
+        `}
+      </section>
+    `;
   }
 
   function renderCopilotBrief(copilot = state.copilotContext, pendingItems = []) {
@@ -960,7 +1197,8 @@
     const panes = [step1, step2, step3];
 
     return `
-      <div class="brief-overlay" data-action="close-brief">
+      <div class="brief-overlay">
+        <button class="brief-overlay-backdrop" data-action="close-brief" aria-label="Close brief"></button>
         <div class="brief-modal">
           <div class="brief-modal-header">
             <div>
@@ -2228,12 +2466,12 @@
     const insights = state.insightsData ? state.insightsData.summary : null;
     if (!insights) return '<div class="empty-state">No dashboard data loaded.</div>';
 
-    const m = insights.summary_metrics || {};
-    const byStatus = m.by_status || {};
-    const total = m.total_transactions || 0;
+    const m = insights.summaryMetrics || {};
+    const byStatus = m.byStatus || {};
+    const total = m.totalTransactions || 0;
     const matched = m.matched || 0;
     const issueCount = Math.max(0, total - matched);
-    const mismatchRate = m.mismatch_rate || 0;
+    const mismatchRate = m.mismatchRate || 0;
     const mismatchAmount = m.total_amount_mismatch ? formatAmount(m.total_amount_mismatch) : "-";
     const matchedPct = total ? Math.round((matched / total) * 100) : 0;
     const obs = insights.ai_observation;
@@ -3919,6 +4157,22 @@
   }
 
   function bindViewActions() {
+    const auditEntityFilter = document.getElementById("audit-entity-filter");
+    if (auditEntityFilter) {
+      auditEntityFilter.addEventListener("change", () => {
+        state.audit.entityType = auditEntityFilter.value || "";
+        render();
+      });
+    }
+
+    const auditActionFilter = document.getElementById("audit-action-filter");
+    if (auditActionFilter) {
+      auditActionFilter.addEventListener("change", () => {
+        state.audit.action = auditActionFilter.value || "";
+        render();
+      });
+    }
+
     const reconStatus = document.getElementById("recon-status-filter");
     if (reconStatus) {
       reconStatus.addEventListener("change", () => {
@@ -4125,6 +4379,11 @@
           const partner = el.dataset.partner;
           if (partner) state.partner = partner;
           location.hash = "review-center";
+          return;
+        }
+        if (action === "refresh-audit") {
+          state.audit.lastLoadedAt = "";
+          render();
           return;
         }
         if (action === "go-review-packet") {
@@ -4991,7 +5250,7 @@
             if (!ok) throw new Error(body.detail || "Upload analysis failed");
             state.studio.fileName = file.name;
             state.studio.headers = body.headers || [];
-            state.studio.sampleRows = body.sample_rows || [];
+            state.studio.sampleRows = body.sampleRows || [];
             state.studio.config = body.config;
             state.studio.draftMappingId = body.draftMappingId || null;
             state.studio.reviewItemId = body.reviewItemId || null;
@@ -5038,7 +5297,7 @@
             
             state.studio.fileName = file.name;
             state.studio.headers = body.headers || [];
-            state.studio.sampleRows = body.sample_rows || [];
+            state.studio.sampleRows = body.sampleRows || [];
             state.studio.config = body.config;
             state.studio.draftMappingId = body.draftMappingId || null;
             state.studio.reviewItemId = body.reviewItemId || null;

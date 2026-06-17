@@ -218,6 +218,8 @@ class ReconciliationEngine:
         partner: str,
         reconciliation_date: datetime,
         source_file_id: str | None = None,
+        reconciliation_run_id: str | None = None,
+        mapping_version: str | None = None,
     ) -> list[ReconciliationResult]:
         """Execute reconciliation matching for a given partner and date.
 
@@ -315,8 +317,10 @@ class ReconciliationEngine:
                             partner=partner,
                             date=date_str,
                             partnerTxnId=str(partner_record.id),
+                            reconciliationRunId=reconciliation_run_id,
                             sourceFileId=source_file_id,
                             scopeType=scope_type.value,
+                            mappingVersion=mapping_version,
                             partnerRecordId=str(partner_record.id),
                             reconciliationStatus=ReconciliationStatus.UNMAPPED_SKIPPED,
                         )
@@ -378,8 +382,10 @@ class ReconciliationEngine:
                             internalAmount=internal_amount,
                             partnerStatus=partner_status,
                             internalStatus=internal_status,
+                            reconciliationRunId=reconciliation_run_id,
                             sourceFileId=source_file_id,
                             scopeType=scope_type.value,
+                            mappingVersion=mapping_version,
                             reconciliationStatus=recon_status,
                             partnerRecordId=str(partner_record.id),
                             internalRecordId=str(internal_record["id"]),
@@ -395,8 +401,10 @@ class ReconciliationEngine:
                             partnerTxnId=partner_txn_id,
                             partnerAmount=partner_amount,
                             partnerStatus=partner_status,
+                            reconciliationRunId=reconciliation_run_id,
                             sourceFileId=source_file_id,
                             scopeType=scope_type.value,
+                            mappingVersion=mapping_version,
                             reconciliationStatus=ReconciliationStatus.MISSING_INTERNAL,
                             partnerRecordId=str(partner_record.id),
                         )
@@ -419,8 +427,10 @@ class ReconciliationEngine:
                         internalTxnId=internal_record["id"],
                         internalAmount=internal_record["amount"],
                         internalStatus=internal_record["status"],
+                        reconciliationRunId=reconciliation_run_id,
                         sourceFileId=source_file_id,
                         scopeType=scope_type.value,
+                        mappingVersion=mapping_version,
                         reconciliationStatus=ReconciliationStatus.MISSING_PARTNER,
                         internalRecordId=str(internal_record["id"]),
                     )

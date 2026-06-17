@@ -136,13 +136,12 @@ class TestInsightsSummary:
         data = response.json()
         assert data["partner"] == "MOMO"
         assert data["date"] == "2024-07-07"
-        assert data["summary_metrics"]["total_transactions"] == 100
-        assert data["summary_metrics"]["matched"] == 95
-        assert data["summary_metrics"]["mismatch_rate"] == 5.0
-        assert len(data["grouped_stats"]) == 2
-        assert len(data["key_findings"]) == 1
-        # generated_at should be replaced with proper timestamp
-        assert "T" in data["generated_at"]
+        assert data["summaryMetrics"]["totalTransactions"] == 100
+        assert data["summaryMetrics"]["matched"] == 95
+        assert data["summaryMetrics"]["mismatchRate"] == 5.0
+        assert len(data["groupedStats"]) == 2
+        assert len(data["keyFindings"]) == 1
+        assert "T" in data["generatedAt"]
 
     def test_returns_500_on_orchestration_error(self) -> None:
         app = _create_test_app()
@@ -252,6 +251,7 @@ class TestInsightsDiscrepancies:
         assert len(data) == 1
         assert data[0]["type"] == "operational_delay"
         assert data[0]["severity"] == "medium"
+        assert data[0]["affectedCount"] == 5
 
     def test_returns_500_on_orchestration_error(self) -> None:
         app = _create_test_app()
@@ -338,8 +338,9 @@ class TestReportsDaily:
         assert len(data["partners"]) == 1
         assert data["partners"][0]["partner"] == "MOMO"
         assert "alerts" in data
-        assert "generated_at" in data
-        assert "T" in data["generated_at"]  # Proper ISO timestamp
+        assert data["partners"][0]["summaryMetrics"]["totalTransactions"] == 100
+        assert "generatedAt" in data
+        assert "T" in data["generatedAt"]  # Proper ISO timestamp
 
     def test_returns_500_on_report_error(self) -> None:
         app = _create_test_app()

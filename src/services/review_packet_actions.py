@@ -29,6 +29,7 @@ from src.models.review_packet import (
 )
 from src.pipeline.ingestion_pipeline import IngestionPipeline
 from src.reconciliation.engine import ReconciliationEngine
+from src.services.audit import record_audit_event
 
 
 def _get_db(request: Request):
@@ -99,6 +100,27 @@ async def mark_packet(
     packet.decision_mode = decision_mode
     packet.reviewed_at = now
     packet.reviewed_by = reviewed_by
+    audit_date = (
+        packet.reconciliation_date.strftime("%Y-%m-%d")
+        if getattr(packet, "reconciliation_date", None)
+        else None
+    )
+    await record_audit_event(
+        _get_db(request),
+        entity_type="REVIEW_PACKET",
+        entity_id=packet_id,
+        action=decision_mode.value,
+        actor=reviewed_by,
+        metadata={
+            "partner": packet.partner,
+            "date": audit_date,
+            "status": status.value,
+            "reference": packet.draft_mapping_version or packet.draft_mapping_id or packet.source_file_id,
+            "draftMappingId": packet.draft_mapping_id,
+            "draftMappingVersion": packet.draft_mapping_version,
+            "sourceFileId": packet.source_file_id,
+        },
+    )
     return {"ok": True, "packet": serializer(packet)}
 
 
@@ -394,6 +416,8 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         config.partner,
         recon_date,
         source_file_id=str(ingestion_result.file_record.id),
+        reconciliation_run_id=run_id,
+        mapping_version=getattr(config, "config_version", None) or str(config.id),
     )
 
     await _update_post_approval_run(

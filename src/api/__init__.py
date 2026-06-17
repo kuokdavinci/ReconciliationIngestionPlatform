@@ -91,4 +91,7 @@ def create_app() -> FastAPI:
     from src.api.automation import router as automation_router
     app.include_router(automation_router)
 
+    from src.api.audit import router as audit_router
+    app.include_router(audit_router)
+
     return app

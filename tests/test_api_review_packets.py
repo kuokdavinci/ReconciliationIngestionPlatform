@@ -7,7 +7,6 @@ import pytest
 
 from src.api.review_packets import (
     ReviewDecisionPayload,
-    _run_runtime_validation,
     approve_activate_packet,
     approve_keep_current_packet,
     get_post_approve_run,
@@ -16,6 +15,7 @@ from src.api.review_packets import (
     validate_runtime_packet,
     SaveDraftMappingPayload,
 )
+from src.services.runtime_validation import run_runtime_validation
 from src.models.mapping_config import MappingConfig
 
 
@@ -295,7 +295,7 @@ async def test_validate_runtime_packet_updates_gate():
     })
     request = _make_request(_make_db(review_collection=review_collection, mapping_collection=mapping_collection))
 
-    with patch("src.api.review_packets._run_runtime_validation", new=AsyncMock(return_value={
+    with patch("src.api.review_packets.run_runtime_validation", new=AsyncMock(return_value={
         "gateKey": "runtime_validation",
         "label": "Runtime validation",
         "status": "pass",
@@ -505,9 +505,8 @@ async def test_run_runtime_validation_returns_medium_risk_for_partial_pass():
         "status": "PENDING_APPROVAL",
         "configHealth": {},
     })
-    request = _make_request(_make_db(review_collection=review_collection))
-
-    gate = await _run_runtime_validation(request, packet, config)
+    db = _make_db(review_collection=review_collection)
+    gate = await run_runtime_validation(db, packet, config)
 
     assert gate["status"] == "pass"
     assert gate["details"]["riskLevel"] == "MEDIUM"
@@ -548,9 +547,8 @@ async def test_run_runtime_validation_returns_high_risk_for_failed_validation():
         "status": "PENDING_APPROVAL",
         "configHealth": {},
     })
-    request = _make_request(_make_db(review_collection=review_collection))
-
-    gate = await _run_runtime_validation(request, packet, config)
+    db = _make_db(review_collection=review_collection)
+    gate = await run_runtime_validation(db, packet, config)
 
     assert gate["status"] == "fail"
     assert gate["details"]["riskLevel"] == "HIGH"

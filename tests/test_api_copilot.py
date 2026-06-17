@@ -212,7 +212,7 @@ async def test_copilot_action_wraps_existing_review_packet_handler():
     ))
 
     with patch(
-        "src.api.copilot.approve_keep_current_packet",
+        "src.api.copilot.approve_keep_current_packet_action",
         new=AsyncMock(return_value={"ok": True, "packet": {"_id": "pkt-001"}}),
     ) as approve_mock:
         data = await execute_copilot_action(

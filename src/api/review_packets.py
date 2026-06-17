@@ -34,6 +34,9 @@ from src.services.review_packet_actions import (
     serialize_post_approval_run,
     update_packet_scope,
 )
+from src.services.ai_mapping_context import resolve_ai_generation_context
+from src.services.runtime_validation import run_runtime_validation, upsert_validation_gate
+
 
 router = APIRouter(prefix="/api/v1/review-packets")
 
@@ -59,86 +62,6 @@ def _serialize(packet) -> dict:
     data["reviewItemId"] = data["_id"]
     return data
 
-
-def _serialize_runtime_value(value):
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return str(value)
-    return value
-
-
-def _runtime_error_code(field: str | None, reason: str | None) -> str:
-    text = str(reason or "").lower()
-    field_name = str(field or "").lower()
-    if "sourcefield '" in text and "not found" in text:
-        return "SOURCE_FIELD_NOT_FOUND"
-    if text.startswith("column ") and " not found" in text:
-        return "COLUMN_NOT_FOUND"
-    if "out of range" in text or "invalid column letter" in text:
-        return "COLUMN_OUT_OF_RANGE"
-    if "required field '" in text and "not found in normalized data" in text:
-        return "MISSING_REQUIRED_FIELD"
-    if "value is none" in text or "source field value is none" in text or "cannot map empty/null value" in text:
-        return "VALUE_IS_NULL"
-    if "invalid decimal value" in text or "float not allowed for monetary values" in text:
-        return "INVALID_DECIMAL"
-    if "invalid date value" in text or "expected string or datetime" in text:
-        return "INVALID_DATE"
-    if "unmapped value" in text:
-        return "UNMAPPED_VALUE"
-    if "mapping dict not configured" in text or "constant value is not configured" in text or "no column configured" in text:
-        return "MAPPING_RULE_MISSING"
-    if "invalid status value" in text:
-        return "INVALID_CANONICAL_STATUS"
-    if "unknown mapping type" in text:
-        return "UNKNOWN_MAPPING_TYPE"
-    if field_name in {"id", "amount", "currency", "status"} and "required field" in text:
-        return "MISSING_REQUIRED_FIELD"
-    return "CANONICAL_BUILD_FAILED"
-
-
-def _runtime_trace_status(error_code: str | None) -> str:
-    if error_code:
-        if error_code in {"VALUE_IS_NULL", "UNMAPPED_VALUE"}:
-            return "warning"
-        return "error"
-    return "ok"
-
-
-def _serialize_runtime_trace(row_number: int, traces: list, normalized_data: dict, build_errors: list | None = None) -> dict:
-    return {
-        "row": row_number,
-        "normalizedData": {
-            key: _serialize_runtime_value(val)
-            for key, val in normalized_data.items()
-        },
-        "fieldTraces": [
-            {
-                "path": trace.path,
-                "type": trace.mapping_type,
-                "column": trace.column,
-                "sourceField": trace.source_field,
-                "sourceValue": _serialize_runtime_value(trace.source_value),
-                "outputValue": _serialize_runtime_value(trace.output_value),
-                "status": _runtime_trace_status(
-                    _runtime_error_code(trace.error.field, trace.error.reason) if trace.error else None
-                ),
-                "errorCode": _runtime_error_code(trace.error.field, trace.error.reason) if trace.error else None,
-                "errorMessage": trace.error.reason if trace.error else None,
-            }
-            for trace in traces
-        ],
-        "buildErrors": [
-            {
-                "field": err.field,
-                "reason": err.reason,
-                "row": err.row,
-                "errorCode": _runtime_error_code(err.field, err.reason),
-            }
-            for err in (build_errors or [])
-        ],
-    }
 
 
 class ReviewDecisionPayload(BaseModel):
@@ -222,199 +145,6 @@ def _serialize_mapping(config: MappingConfig) -> dict:
     return data
 
 
-async def _resolve_ai_generation_context(request: Request, packet, existing_draft: MappingConfig | None):
-    headers = []
-    sample_rows = []
-    header_row_index = None
-    first_data_row_index = None
-
-    packet_signature = getattr(packet, "structure_signature", None) or {}
-    if packet_signature:
-        headers = list(packet_signature.get("headers") or [])
-        sample_rows = list(packet_signature.get("sampleRows") or [])
-        header_row_index = packet_signature.get("headerRowIndex")
-        first_data_row_index = packet_signature.get("firstDataRowIndex")
-
-    if existing_draft is not None and not headers:
-        draft_signature = getattr(existing_draft, "structure_signature", None) or {}
-        headers = list(draft_signature.get("headers") or [])
-        sample_rows = sample_rows or list(draft_signature.get("sampleRows") or [])
-        header_row_index = header_row_index if header_row_index is not None else draft_signature.get("headerRowIndex")
-        first_data_row_index = first_data_row_index if first_data_row_index is not None else draft_signature.get("firstDataRowIndex")
-
-    if not headers:
-        mapping_repo = MappingConfigRepository(_get_db(request))
-        file_type_value = getattr(packet, "file_type_detected", None) or FileType.SETTLEMENT.value
-        try:
-            file_type = FileType(file_type_value)
-        except ValueError:
-            file_type = FileType.SETTLEMENT
-        approved = await mapping_repo.find_by_partner_and_type(packet.partner, "UPC", file_type)
-        if approved is not None:
-            approved_signature = getattr(approved, "structure_signature", None) or {}
-            headers = list(approved_signature.get("headers") or [])
-            sample_rows = sample_rows or list(approved_signature.get("sampleRows") or [])
-            header_row_index = header_row_index if header_row_index is not None else approved_signature.get("headerRowIndex")
-            first_data_row_index = first_data_row_index if first_data_row_index is not None else approved_signature.get("firstDataRowIndex")
-
-    if not sample_rows:
-        packet_preview = getattr(packet, "sample_preview", None) or []
-        sample_rows = [
-            list(item.get("values") or [])
-            for item in packet_preview
-            if isinstance(item, dict) and isinstance(item.get("values"), list)
-        ]
-
-    return {
-        "headers": headers,
-        "sample_rows": sample_rows,
-        "header_row_index": header_row_index,
-        "first_data_row_index": first_data_row_index,
-    }
-
-
-async def _run_runtime_validation(request: Request, packet, config) -> dict:
-    source_file_path = getattr(packet, "source_file_path", None)
-    validated_at = datetime.now(timezone.utc)
-    validated_mapping_version = getattr(config, "config_version", None) or str(getattr(config, "id", ""))
-    sampled_rows = 0
-    success_rows = 0
-    failed_rows = 0
-    failed_examples: list[dict] = []
-    trace_samples: list[dict] = []
-    normalizer = TransactionNormalizer(config.field_mappings)
-
-    def _consume_row(row: list, row_number: int) -> None:
-        nonlocal sampled_rows, success_rows, failed_rows, failed_examples, trace_samples
-        sampled_rows += 1
-        norm_result, field_traces = normalizer.normalize_with_trace(row, row_number)
-        if norm_result.errors:
-            failed_rows += 1
-            failed_examples.append({
-                "row": row_number,
-                "reason": norm_result.errors[0].reason,
-                "field": norm_result.errors[0].field,
-            })
-            if len(trace_samples) < 5:
-                trace_samples.append(
-                    _serialize_runtime_trace(row_number, field_traces, norm_result.data)
-                )
-            return
-        txn, build_errors = TransactionNormalizer.build_canonical(
-            norm_result.data, [], row_number
-        )
-        if txn is None:
-            failed_rows += 1
-            failed_examples.append({
-                "row": row_number,
-                "reason": build_errors[0].reason,
-                "field": build_errors[0].field,
-            })
-            if len(trace_samples) < 5:
-                trace_samples.append(
-                    _serialize_runtime_trace(row_number, field_traces, norm_result.data, build_errors)
-                )
-        else:
-            success_rows += 1
-            if len(trace_samples) < 5:
-                trace_samples.append(
-                    _serialize_runtime_trace(row_number, field_traces, norm_result.data)
-                )
-
-    if source_file_path:
-        path = Path(source_file_path)
-        if path.exists():
-            with create_reader(source_file_path, config) as reader:
-                for row in reader.iter_rows():
-                    row_number = config.start_row + sampled_rows
-                    _consume_row(row, row_number)
-                    if sampled_rows >= 20:
-                        break
-        else:
-            return {
-                "gateKey": "runtime_validation",
-                "label": "Runtime validation",
-                "status": "fail",
-                "reason": f"Source file is not available at {source_file_path}.",
-                "details": {
-                    "successRows": 0,
-                    "failedRows": 0,
-                    "sampledRows": 0,
-                    "validatedAt": validated_at.isoformat(),
-                    "validatedMappingVersion": validated_mapping_version,
-                    "successRate": 0,
-                    "riskLevel": "HIGH",
-                },
-            }
-    else:
-        sample_preview = getattr(packet, "sample_preview", None) or []
-        for idx, sample in enumerate(sample_preview[:20]):
-            row = sample.get("values") if isinstance(sample, dict) else None
-            if not isinstance(row, list):
-                continue
-            row_number = int(sample.get("rowIndex") or (config.start_row + idx)) if isinstance(sample, dict) else (config.start_row + idx)
-            _consume_row(row, row_number)
-
-        if sampled_rows == 0:
-            return {
-                "gateKey": "runtime_validation",
-                "label": "Runtime validation",
-                "status": "fail",
-                "reason": "No source file path or sample preview is attached to this review packet.",
-                "details": {
-                    "successRows": 0,
-                    "failedRows": 0,
-                    "sampledRows": 0,
-                    "validatedAt": validated_at.isoformat(),
-                    "validatedMappingVersion": validated_mapping_version,
-                    "successRate": 0,
-                    "riskLevel": "HIGH",
-                },
-            }
-
-    if sampled_rows == 0:
-        status = "fail"
-        reason = "No readable data rows were produced by the proposed mapping."
-    elif success_rows == 0:
-        status = "fail"
-        reason = "The proposed mapping could not normalize any sampled rows."
-    elif failed_rows == 0:
-        status = "pass"
-        reason = f"Validated successfully on {success_rows}/{sampled_rows} sampled rows."
-    else:
-        success_rate = success_rows / sampled_rows
-        status = "pass" if success_rate >= 0.8 else "fail"
-        reason = (
-            f"Validated {success_rows}/{sampled_rows} sampled rows successfully."
-            if status == "pass"
-            else f"Only {success_rows}/{sampled_rows} sampled rows normalized successfully."
-        )
-
-    success_rate = (success_rows / sampled_rows) if sampled_rows else 0
-    risk_level = "LOW" if failed_rows == 0 else ("MEDIUM" if status == "pass" else "HIGH")
-    gate = {
-        "gateKey": "runtime_validation",
-        "label": "Runtime validation",
-        "status": status,
-        "reason": reason,
-        "details": {
-            "sampledRows": sampled_rows,
-            "successRows": success_rows,
-            "failedRows": failed_rows,
-            "failedExamples": failed_examples[:3],
-            "traceSamples": trace_samples,
-            "validatedAt": validated_at.isoformat(),
-            "validatedMappingVersion": validated_mapping_version,
-            "successRate": success_rate,
-            "riskLevel": risk_level,
-        },
-    }
-    await _repo(request).collection.update_one(
-        {"_id": str(packet.id)},
-        {"$set": {"validationGates": _upsert_validation_gate(packet, gate)}},
-    )
-    return gate
-
 
 @router.post("/{packet_id}/validate-runtime")
 async def validate_runtime_packet(request: Request, packet_id: str):
@@ -430,7 +160,7 @@ async def validate_runtime_packet(request: Request, packet_id: str):
     if config is None:
         raise HTTPException(status_code=404, detail="Draft mapping not found.")
 
-    gate = await _run_runtime_validation(request, packet, config)
+    gate = await run_runtime_validation(_get_db(request), packet, config)
     ok = gate["status"] == "pass"
     return {"ok": ok, "gate": gate}
 
@@ -449,7 +179,7 @@ async def generate_ai_mapping_for_packet(request: Request, packet_id: str):
     if packet.draft_mapping_id:
         existing = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
 
-    context = await _resolve_ai_generation_context(request, packet, existing)
+    context = await resolve_ai_generation_context(_get_db(request), packet, existing)
     headers = context["headers"]
     sample_rows = context["sample_rows"]
     if not headers:

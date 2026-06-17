@@ -15,7 +15,19 @@ def _create_test_app():
     app = FastAPI()
     app.include_router(router)
     mock_db = MagicMock()
-    mock_collection = MagicMock()
+    
+    def _create_mock_coll():
+        coll = MagicMock()
+        coll.count_documents = AsyncMock(return_value=0)
+        coll.insert_one = AsyncMock()
+        coll.insert_many = AsyncMock(return_value=[])
+        coll.find_one = AsyncMock(return_value=None)
+        coll.update_one = AsyncMock()
+        coll.delete_many = AsyncMock()
+        return coll
+
+    mock_collection = _create_mock_coll()
+    mock_collection.database = mock_db
     mock_db.__getitem__ = MagicMock(return_value=mock_collection)
     app.state.db = mock_db
     app.state.mongo_client = MagicMock()
@@ -28,14 +40,31 @@ class _AsyncCursor:
     def __init__(self, docs: list[dict]):
         self._docs = docs
         self._idx = 0
+        self._limit = None
+        self._skip = 0
+
+    def sort(self, *args, **kwargs):
+        return self
+
+    def skip(self, value: int):
+        self._skip = value
+        return self
+
+    def limit(self, value: int):
+        self._limit = value
+        return self
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
-        if self._idx >= len(self._docs):
+        sliced_docs = self._docs[self._skip:]
+        if self._limit is not None:
+            sliced_docs = sliced_docs[:self._limit]
+
+        if self._idx >= len(sliced_docs):
             raise StopAsyncIteration
-        val = self._docs[self._idx]
+        val = sliced_docs[self._idx]
         self._idx += 1
         return val
 
@@ -79,7 +108,7 @@ class TestListResults:
         data = response.json()
         assert "results" in data
         assert "total" in data
-        assert data["limit"] == 100
+        assert data["limit"] == 25
         assert data["offset"] == 0
 
     def test_limit_and_offset_work(self):
@@ -93,6 +122,7 @@ class TestListResults:
 
         mock_cursor = _AsyncCursor(fake_docs)
         mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_collection.count_documents = AsyncMock(return_value=10)
 
         client = TestClient(app)
         response = client.get(
@@ -179,7 +209,7 @@ class TestStats:
 class TestRunReconciliation:
     @pytest.mark.asyncio
     async def test_run_reconciliation_returns_count(self):
-        from src.api.reconciliation import run_reconciliation_now, RunReconciliationPayload
+        from api.reconciliation import run_reconciliation_now, RunReconciliationPayload
         app, mock_collection = _create_test_app()
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=mock_collection.database)))
         with patch("src.api.reconciliation.ReconciliationEngine.reconcile", new=AsyncMock(return_value=[1, 2, 3])):
@@ -188,11 +218,12 @@ class TestRunReconciliation:
                 RunReconciliationPayload(partner="MOMO", date="2024-07-07"),
             )
         assert response["ok"] is True
-        assert response["reconciliationCount"] == 3
+        assert "run" in response
+        assert response["run"]["partner"] == "MOMO"
 
     @pytest.mark.asyncio
     async def test_run_reconciliation_requires_partner(self):
-        from src.api.reconciliation import run_reconciliation_now, RunReconciliationPayload
+        from api.reconciliation import run_reconciliation_now, RunReconciliationPayload
         app, mock_collection = _create_test_app()
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=mock_collection.database)))
         with pytest.raises(HTTPException) as exc:

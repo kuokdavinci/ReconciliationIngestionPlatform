@@ -28,15 +28,33 @@ def _create_test_app():
     app = FastAPI()
     app.include_router(router)
     mock_db = MagicMock()
-    fetch_collection = MagicMock()
-    packet_collection = MagicMock()
+    
+    def _create_mock_coll():
+        coll = MagicMock()
+        coll.find_one = AsyncMock(return_value=None)
+        coll.find = MagicMock(return_value=_AsyncCursor([]))
+        coll.count_documents = AsyncMock(return_value=0)
+        coll.insert_one = AsyncMock()
+        coll.insert_many = AsyncMock(return_value=[])
+        coll.update_one = AsyncMock()
+        coll.delete_many = AsyncMock()
+        return coll
+
+    fetch_collection = _create_mock_coll()
+    packet_collection = _create_mock_coll()
+    runtime_run_collection = _create_mock_coll()
+    recon_file_collection = _create_mock_coll()
 
     def _get_collection(name):
         if name == "fetch_config":
             return fetch_collection
         if name == "review_packet":
             return packet_collection
-        return MagicMock()
+        if name == "partner_runtime_run":
+            return runtime_run_collection
+        if name == "reconciliation_file":
+            return recon_file_collection
+        return _create_mock_coll()
 
     mock_db.__getitem__ = MagicMock(side_effect=_get_collection)
     app.state.db = mock_db
@@ -48,7 +66,7 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
     app, fetch_collection, packet_collection = _create_test_app()
     fetch_collection.find = MagicMock(return_value=_AsyncCursor([
         {
-            "_id": "job-001",
+            "_id": "123e4567-e89b-12d3-a456-426614174000",
             "partner": "ZALOPAY",
             "fetchMethod": "FILEDROP",
             "schedule": "0 0 * * *",

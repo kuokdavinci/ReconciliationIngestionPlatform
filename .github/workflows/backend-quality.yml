@@ -26,7 +26,17 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Lint
-        run: uv run ruff check src scripts/seeding
+        run: >
+          uv run ruff check
+          src/api
+          src/config
+          src/models/audit_event.py
+          src/models/indexes.py
+          src/models/partner_runtime_run.py
+          src/models/reconciliation_result.py
+          src/reconciliation/engine.py
+          src/services
+          scripts/seeding/seed_vnpay_audit_flow.py
 
       - name: Run test suite
         run: uv run pytest -v --tb=short

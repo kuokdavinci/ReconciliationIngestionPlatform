@@ -19,8 +19,11 @@ from src.services.runtime_validation import run_runtime_validation
 from src.models.mapping_config import MappingConfig
 
 
-def _make_request(db: MagicMock):
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))
+def _make_request(db: MagicMock, headers: dict | None = None):
+    return SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=db)),
+        headers=headers or {},
+    )
 
 
 def _make_db(
@@ -152,7 +155,11 @@ async def test_approve_keep_current_packet():
     action_collection.update_one = AsyncMock()
     request = _make_request(_make_db(review_collection=review_collection, action_collection=action_collection))
 
-    data = await approve_keep_current_packet(request, "pkt-001", ReviewDecisionPayload())
+    data = await approve_keep_current_packet(
+        request,
+        "pkt-001",
+        ReviewDecisionPayload(reviewedBy="admin"),
+    )
 
     assert data["ok"] is True
     assert data["packet"]["decisionMode"] == "APPROVE_KEEP_CURRENT_FOR_FILE"
@@ -221,7 +228,7 @@ async def test_approve_activate_packet_triggers_post_approve_processing():
         data = await approve_activate_packet(
             request,
             "pkt-activate-001",
-            ReviewDecisionPayload(),
+            ReviewDecisionPayload(reviewedBy="admin"),
         )
 
     assert data["ok"] is True
@@ -247,8 +254,39 @@ async def test_approve_activate_requires_runtime_validation():
     request = _make_request(_make_db(review_collection=review_collection))
 
     with pytest.raises(Exception) as exc:
-        await approve_activate_packet(request, "pkt-002", ReviewDecisionPayload())
+        await approve_activate_packet(
+            request,
+            "pkt-002",
+            ReviewDecisionPayload(reviewedBy="admin"),
+        )
     assert "Runtime validation must pass" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_approve_keep_current_requires_actor():
+    review_collection = MagicMock()
+    action_collection = MagicMock()
+    review_collection.find_one = AsyncMock(return_value={
+        "_id": "pkt-001",
+        "sourceType": "UPLOAD",
+        "partner": "MOMO",
+        "fileName": "momo.xlsx",
+        "fileTypeDetected": "SETTLEMENT",
+        "targetActionId": "act-001",
+        "recommendedAction": {"actionType": "APPROVE_REQUIRED_BEFORE_RUNTIME"},
+        "parseStrategy": {},
+        "validationGates": [{"gateKey": "runtime_validation", "status": "pass"}],
+        "samplePreview": [],
+        "riskSummary": {},
+        "status": "PENDING",
+        "createdAt": "2024-01-01T00:00:00+00:00",
+    })
+    request = _make_request(_make_db(review_collection=review_collection, action_collection=action_collection))
+
+    with pytest.raises(Exception) as exc:
+        await approve_keep_current_packet(request, "pkt-001", ReviewDecisionPayload())
+
+    assert "Actor is required" in str(exc.value)
 
 
 @pytest.mark.asyncio

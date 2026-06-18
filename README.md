@@ -55,6 +55,9 @@ cp .env.example .env
 docker compose up -d mongodb sftp mongo-express
 ```
 
+`mongo-express` in `docker-compose.yml` is configured for local development convenience and currently runs with `ME_CONFIG_BASICAUTH: "false"`.
+Do not expose it beyond localhost or reuse that setting as a production default.
+
 4. Start the backend API:
 
 ```bash

@@ -22,6 +22,7 @@ class PartnerRuntimeRunStatus(str, Enum):
     QUEUED = "QUEUED"
     FETCHING = "FETCHING"
     INGESTING = "INGESTING"
+    WAITING_REVIEW = "WAITING_REVIEW"
     WAITING_RECONCILE = "WAITING_RECONCILE"
     RECONCILING = "RECONCILING"
     COMPLETED = "COMPLETED"
@@ -38,6 +39,7 @@ class PartnerRuntimeRun(BaseModel):
     partner: str
     date: str
     trigger_type: PartnerRuntimeTriggerType = Field(alias="triggerType")
+    triggered_by: Optional[str] = Field(default=None, alias="triggeredBy")
     status: PartnerRuntimeRunStatus = PartnerRuntimeRunStatus.QUEUED
     message: Optional[str] = None
     source_file_id: Optional[str] = Field(default=None, alias="sourceFileId")

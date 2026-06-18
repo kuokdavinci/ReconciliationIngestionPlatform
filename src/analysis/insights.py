@@ -12,6 +12,7 @@ Orchestration flow:
 Fallback chain: primary provider → fallback provider → rule-based
 """
 
+import asyncio
 import logging
 import time
 from typing import Any, Optional
@@ -21,7 +22,6 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from src.analysis.cache import build_cache_key, get_insight_cache
 from src.analysis.config import AnalysisConfig
 from src.analysis.grouping import GroupingEngine
-from src.analysis.metrics import MetricsService
 from src.analysis.prompts import build_analysis_prompt, build_system_prompt
 from src.analysis.provider import AIProviderRouter, LLMProvider
 from src.analysis.providers.openai_compat import OpenAICompatProvider
@@ -45,6 +45,17 @@ from src.core.enums import ReconciliationStatus
 logger = logging.getLogger(__name__)
 
 
+def _normalize_extra_query_for_mongo(extra_query: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    if not extra_query:
+        return {}
+    normalized = dict(extra_query)
+    if "source_file_id" in normalized and "sourceFileId" not in normalized:
+        normalized["sourceFileId"] = normalized.pop("source_file_id")
+    if "reconciliation_run_id" in normalized and "reconciliationRunId" not in normalized:
+        normalized["reconciliationRunId"] = normalized.pop("reconciliation_run_id")
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # MongoDB query helper
 # ---------------------------------------------------------------------------
@@ -54,6 +65,7 @@ async def _query_reconciliation_results(
     partner: str,
     date: str,
     *,
+    extra_query: Optional[dict[str, Any]] = None,
     mismatch_only: bool = False,
     limit: int | None = None,
 ) -> list[Any]:
@@ -68,6 +80,7 @@ async def _query_reconciliation_results(
         List of reconciliation result objects (as SimpleNamespace-like dicts).
     """
     query: dict[str, Any] = {"partner": partner, "date": date}
+    query.update(_normalize_extra_query_for_mongo(extra_query))
     if mismatch_only:
         query["reconciliationStatus"] = {
             "$in": [
@@ -110,9 +123,13 @@ async def _query_summary_metrics(
     collection: AsyncIOMotorCollection,
     partner: str,
     date: str,
+    *,
+    extra_query: Optional[dict[str, Any]] = None,
 ) -> SummaryResult:
+    match_query: dict[str, Any] = {"partner": partner, "date": date}
+    match_query.update(_normalize_extra_query_for_mongo(extra_query))
     pipeline = [
-        {"$match": {"partner": partner, "date": date}},
+        {"$match": match_query},
         {
             "$group": {
                 "_id": "$reconciliationStatus",
@@ -200,9 +217,12 @@ async def _query_selected_error_results(
     collection: AsyncIOMotorCollection,
     partner: str,
     date: str,
+    *,
+    extra_query: Optional[dict[str, Any]] = None,
     per_status_limit: int = 50,
 ) -> list[Any]:
     selected_docs: list[dict[str, Any]] = []
+    mongo_extra_query = _normalize_extra_query_for_mongo(extra_query)
     status_order = [
         ReconciliationStatus.MISSING_INTERNAL.value,
         ReconciliationStatus.MISSING_PARTNER.value,
@@ -213,7 +233,12 @@ async def _query_selected_error_results(
     ]
     for status in status_order:
         cursor = collection.find(
-            {"partner": partner, "date": date, "reconciliationStatus": status}
+            {
+                "partner": partner,
+                "date": date,
+                "reconciliationStatus": status,
+                **mongo_extra_query,
+            }
         ).limit(per_status_limit)
         docs = await cursor.to_list(length=per_status_limit)
         selected_docs.extend(docs)
@@ -392,6 +417,7 @@ async def get_summary(
     collection: AsyncIOMotorCollection,
     llm_provider: LLMProvider,
     config: Optional[AnalysisConfig] = None,
+    extra_query: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Generate summary insights for a partner on a given date.
 
@@ -416,7 +442,7 @@ async def get_summary(
     cfg = config or AnalysisConfig()
 
     # Step 1: Query aggregated metrics from MongoDB
-    summary = await _query_summary_metrics(collection, partner, date)
+    summary = await _query_summary_metrics(collection, partner, date, extra_query=extra_query)
     logger.info(
         f"Queried aggregated reconciliation metrics for {partner} on {date}",
         extra={"event": "ai_insight_query", "partner": partner, "date": date, "count": summary.total_transactions},
@@ -536,6 +562,7 @@ async def get_discrepancies(
     collection: AsyncIOMotorCollection,
     llm_provider: LLMProvider,
     config: Optional[AnalysisConfig] = None,
+    extra_query: Optional[dict[str, Any]] = None,
 ) -> list[AnalysisResult]:
     """Generate discrepancy insights for a partner on a given date.
 
@@ -562,11 +589,12 @@ async def get_discrepancies(
     cfg = config or AnalysisConfig()
 
     # Step 1: Query MongoDB
-    summary = await _query_summary_metrics(collection, partner, date)
+    summary = await _query_summary_metrics(collection, partner, date, extra_query=extra_query)
     results = await _query_selected_error_results(
         collection,
         partner,
         date,
+        extra_query=extra_query,
         per_status_limit=50,
     )
     logger.info(
@@ -619,7 +647,10 @@ async def get_discrepancies(
         )
     else:
         insights, schema_valid, guardrail_result = await _generate_insights_with_fallback(
-            analysis_input, llm_provider, start_time
+            analysis_input,
+            llm_provider,
+            start_time,
+            timeout_seconds=float(cfg.timeout),
         )
 
         if insight_cache and schema_valid and insights:
@@ -681,7 +712,11 @@ async def generate_insights(
     Returns:
         List of AnalysisResult objects (LLM-enriched or rule-based fallback).
     """
-    results, _, _ = await _generate_insights_with_fallback(analysis_input, llm_provider, time.monotonic())
+    results, _, _ = await _generate_insights_with_fallback(
+        analysis_input,
+        llm_provider,
+        time.monotonic(),
+    )
     return results
 
 
@@ -759,6 +794,7 @@ async def _generate_insights_with_fallback(
     analysis_input: AnalysisInput,
     llm_provider: LLMProvider,
     start_time: float,
+    timeout_seconds: float = 30.0,
 ) -> tuple[list[AnalysisResult], bool, dict | None]:
     """Generate insights with structured output, fallback chain, and schema validation.
 
@@ -794,9 +830,15 @@ async def _generate_insights_with_fallback(
         # If provider is AIProviderRouter, it handles fallback internally.
         # If it's a plain LLMProvider (backward compat), call generate directly.
         if isinstance(llm_provider, AIProviderRouter):
-            llm_response = await llm_provider.generate(user_prompt, system_prompt)
+            llm_response = await asyncio.wait_for(
+                llm_provider.generate(user_prompt, system_prompt),
+                timeout=timeout_seconds,
+            )
         else:
-            llm_response = await llm_provider.generate(user_prompt, system_prompt)
+            llm_response = await asyncio.wait_for(
+                llm_provider.generate(user_prompt, system_prompt),
+                timeout=timeout_seconds,
+            )
 
         if not llm_response:
             logger.warning("LLM returned no response, falling back to rule-based")
@@ -867,8 +909,6 @@ def _rule_based_fallback(analysis_input: AnalysisInput) -> list[AnalysisResult]:
     """
     results = []
     metrics = analysis_input.summary_metrics
-    focus = analysis_input.focus
-
     mismatch_rate = metrics.get("mismatch_rate", 0)
     if mismatch_rate > 0:
         severity = "critical" if mismatch_rate > 20 else "high" if mismatch_rate > 10 else "medium" if mismatch_rate > 5 else "low"

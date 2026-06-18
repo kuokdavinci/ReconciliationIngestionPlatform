@@ -250,64 +250,119 @@ async def test_reconciliation_ignores_pending_internal_for_missing_partner(mock_
 
 @pytest.mark.asyncio
 async def test_reconciliation_incremental_scope_ignores_unrelated_internal_rows(mock_db):
-    """Incremental scope should only reconcile against keys present in the file."""
+    """Incremental append should ignore out-of-scope internal rows already in DB."""
     engine = ReconciliationEngine(mock_db)
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
     source_file_id = "00000000-0000-0000-0000-000000000001"
 
-    partner_record = DataContainer(
-        identify=partner,
-        workflowType="UPC",
-        reconciliationDate=recon_date,
-        sourceFileId=source_file_id,
-        partnerData=PartnerData(
-            _id="txn_01",
-            trace="trace_01",
-            status="Thành công",
+    partner_records = [
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId=source_file_id,
+            partnerData=PartnerData(
+                _id=f"txn_{index:02d}",
+                trace=f"trace_{index:02d}",
+                status="Thành công",
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for index in range(20)
+    ]
+    internal_records = [
+        InternalTransaction(
+            _id=f"int_{index:02d}",
+            partner=partner,
+            partnerTxnId=f"trace_{index:02d}",
             amount=Decimal("150000"),
-            currency="VND",
-        ),
-    )
-
-    matched_internal = InternalTransaction(
-        _id="int_01",
-        partner=partner,
-        partnerTxnId="trace_01",
-        amount=Decimal("150000"),
-        status=TransactionStatus.SUCCESS,
-        transactionTime=recon_date,
-    )
-    unrelated_internal = InternalTransaction(
-        _id="int_02",
-        partner=partner,
-        partnerTxnId="trace_02",
-        amount=Decimal("90000"),
-        status=TransactionStatus.SUCCESS,
-        transactionTime=recon_date,
-    )
+            status=TransactionStatus.SUCCESS,
+            transactionTime=recon_date,
+        )
+        for index in range(40)
+    ]
 
     file_collection = MagicMock()
     file_collection.find_one = AsyncMock(return_value={"_id": source_file_id, "scopeType": "INCREMENTAL_APPEND"})
     mock_db.__getitem__ = MagicMock(side_effect=lambda name: file_collection if name == "reconciliation_file" else MagicMock())
 
-    engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
-    engine._internal_repo.find_many = AsyncMock(return_value=[matched_internal, unrelated_internal])
+    engine._data_repo.find_many = AsyncMock(return_value=partner_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
     engine._result_repo.collection.delete_many = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date, source_file_id=source_file_id)
 
-    assert len(results) == 1
-    assert results[0].reconciliation_status == ReconciliationStatus.MATCHED
+    assert len(results) == 20
+    assert {result.partner_txn_id for result in results} == {f"trace_{index:02d}" for index in range(20)}
+    assert all(result.reconciliation_status == ReconciliationStatus.MATCHED for result in results)
     engine._result_repo.collection.delete_many.assert_called_once_with({
         "partner": partner,
         "date": "2024-07-07",
-        "sourceFileId": source_file_id,
     })
     assert results[0].source_file_id == source_file_id
     assert results[0].scope_type == "INCREMENTAL_APPEND"
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_incremental_append_uses_cumulative_partner_scope(mock_db):
+    """Incremental append should reconcile the cumulative partner scope already ingested for the day."""
+    engine = ReconciliationEngine(mock_db)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+    wave1_source_file_id = "00000000-0000-0000-0000-000000000001"
+    wave2_source_file_id = "00000000-0000-0000-0000-000000000002"
+
+    partner_records = [
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId=wave1_source_file_id if index < 20 else wave2_source_file_id,
+            partnerData=PartnerData(
+                _id=f"txn_{index:02d}",
+                trace=f"trace_{index:02d}",
+                status="Thành công",
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for index in range(40)
+    ]
+    internal_records = [
+        InternalTransaction(
+            _id=f"int_{index:02d}",
+            partner=partner,
+            partnerTxnId=f"trace_{index:02d}",
+            amount=Decimal("150000"),
+            status=TransactionStatus.SUCCESS,
+            transactionTime=recon_date,
+        )
+        for index in range(40)
+    ]
+
+    file_collection = MagicMock()
+    file_collection.find_one = AsyncMock(return_value={"_id": wave2_source_file_id, "scopeType": "INCREMENTAL_APPEND"})
+    mock_db.__getitem__ = MagicMock(side_effect=lambda name: file_collection if name == "reconciliation_file" else MagicMock())
+
+    engine._data_repo.find_many = AsyncMock(return_value=partner_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile(partner, recon_date, source_file_id=wave2_source_file_id)
+
+    assert len(results) == 40
+    assert {result.partner_txn_id for result in results} == {f"trace_{index:02d}" for index in range(40)}
+    assert all(result.reconciliation_status == ReconciliationStatus.MATCHED for result in results)
+    engine._result_repo.collection.delete_many.assert_called_once_with({
+        "partner": partner,
+        "date": "2024-07-07",
+    })
 
 
 @pytest.mark.asyncio

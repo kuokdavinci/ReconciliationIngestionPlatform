@@ -40,6 +40,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         }
         if "Content-Type" in self.headers:
             headers["Content-Type"] = self.headers["Content-Type"]
+        for key in ["x-actor", "X-Actor"]:
+            if key in self.headers:
+                headers[key] = self.headers[key]
 
         request = Request(
             target,

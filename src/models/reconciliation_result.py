@@ -74,12 +74,18 @@ class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
         date: str,
         *,
         status: ReconciliationStatus | None = None,
+        reconciliation_run_id: str | None = None,
+        source_file_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[ReconciliationResult], int]:
         query: dict[str, object] = {"partner": partner, "date": date}
         if status is not None:
             query["reconciliationStatus"] = status.value
+        if reconciliation_run_id is not None:
+            query["reconciliationRunId"] = reconciliation_run_id
+        elif source_file_id is not None:
+            query["sourceFileId"] = source_file_id
 
         total = await self.collection.count_documents(query)
         cursor = self.collection.find(query).sort("_id", 1).skip(offset).limit(limit)
@@ -100,13 +106,19 @@ class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
 
     async def count_by_status(
         self, partner: str, date: str
+        , *, reconciliation_run_id: str | None = None, source_file_id: str | None = None
     ) -> dict[str, int]:
         """Aggregate reconciliation results by status.
 
         Returns dict like {"MATCHED": 1450, "AMOUNT_MISMATCH": 30, ...}
         """
+        match_query: dict[str, object] = {"partner": partner, "date": date}
+        if reconciliation_run_id is not None:
+            match_query["reconciliationRunId"] = reconciliation_run_id
+        elif source_file_id is not None:
+            match_query["sourceFileId"] = source_file_id
         pipeline = [
-            {"$match": {"partner": partner, "date": date}},
+            {"$match": match_query},
             {"$group": {"_id": "$reconciliationStatus", "count": {"$sum": 1}}},
         ]
         cursor = self.collection.aggregate(pipeline)
@@ -117,10 +129,16 @@ class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
 
     async def get_total_amounts(
         self, partner: str, date: str
+        , *, reconciliation_run_id: str | None = None, source_file_id: str | None = None
     ) -> dict[str, object]:
         """Get sum of partner_amount and internal_amount for a partner+date."""
+        match_query: dict[str, object] = {"partner": partner, "date": date}
+        if reconciliation_run_id is not None:
+            match_query["reconciliationRunId"] = reconciliation_run_id
+        elif source_file_id is not None:
+            match_query["sourceFileId"] = source_file_id
         pipeline = [
-            {"$match": {"partner": partner, "date": date}},
+            {"$match": match_query},
             {
                 "$group": {
                     "_id": None,

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
+from src.api.actor import require_actor
 from src.config.cache import ConfigCache
 from src.config.loader import ConfigLoader
 from src.config.validator import ConfigValidator
@@ -111,6 +112,7 @@ async def list_automation_jobs(request: Request):
             PartnerRuntimeRunStatus.QUEUED.value,
             PartnerRuntimeRunStatus.FETCHING.value,
             PartnerRuntimeRunStatus.INGESTING.value,
+            PartnerRuntimeRunStatus.WAITING_REVIEW.value,
             PartnerRuntimeRunStatus.WAITING_RECONCILE.value,
             PartnerRuntimeRunStatus.RECONCILING.value,
         }
@@ -157,6 +159,7 @@ async def list_automation_jobs(request: Request):
 
 @router.post("/jobs/{partner}/run")
 async def run_automation_job_now(request: Request, partner: str):
+    actor = require_actor(request, payload_field_name="actor")
     db = _get_db(request)
     fetch_repo = FetchConfigRepository(db)
     config = await fetch_repo.find_by_partner(partner)
@@ -170,6 +173,7 @@ async def run_automation_job_now(request: Request, partner: str):
     return {
         "ok": True,
         "queued": True,
+        "actor": actor,
         "partner": partner,
         "message": "Automation run queued. Watch runtime state for live progress.",
     }

@@ -9,8 +9,11 @@ import pytest
 from src.api.copilot import CopilotActionPayload, execute_copilot_action, get_context
 
 
-def _make_request(db: MagicMock):
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))
+def _make_request(db: MagicMock, headers: dict | None = None):
+    return SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=db)),
+        headers=headers or {},
+    )
 
 
 class _AsyncCursor:
@@ -218,7 +221,7 @@ async def test_copilot_action_wraps_existing_review_packet_handler():
         data = await execute_copilot_action(
             request,
             "approve_keep_current",
-            CopilotActionPayload(partner="MOMO", date="2026-06-05"),
+            CopilotActionPayload(partner="MOMO", date="2026-06-05", reviewedBy="admin"),
         )
 
     assert data["ok"] is True

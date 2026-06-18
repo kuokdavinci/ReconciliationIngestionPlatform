@@ -22,6 +22,9 @@ Bring up a smaller local set:
 docker compose up -d mongodb sftp mongo-express
 ```
 
+`mongo-express` is intentionally configured as a local-only convenience service.
+The current Compose file sets `ME_CONFIG_BASICAUTH: "false"`, so keep it bound to localhost and do not treat that setting as a production default.
+
 ## Stop
 
 ```bash
@@ -68,3 +71,4 @@ Credentials come from `.env`:
 
 - `api` and `scheduler` both receive an `APP_MONGODB_URL` override pointing at the Compose MongoDB service.
 - `scheduler` also overrides `SFTP_HOST=sftp`.
+- `mongo-express` is meant for local inspection only unless you add auth and network restrictions explicitly.

@@ -1,8 +1,9 @@
 """Tests for automation run-now endpoint."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi.testclient import TestClient
+import pytest
 
 
 def _create_test_app():
@@ -42,7 +43,10 @@ def _create_test_app():
     return app, fetch_collection
 
 
-def test_run_automation_job_now():
+@pytest.mark.asyncio
+async def test_run_automation_job_now():
+    from src.api.automation import run_automation_job_now
+
     app, fetch_collection = _create_test_app()
     fetch_collection.find_one = AsyncMock(return_value={
         "_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -62,9 +66,11 @@ def test_run_automation_job_now():
         "fileSize": 512,
         "processingStatus": "COMPLETED",
     })):
-        client = TestClient(app)
-        response = client.post("/api/v1/automation/jobs/ZALOPAY/run", json={})
-        assert response.status_code == 200
-        payload = response.json()
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(db=app.state.db)),
+            headers={"X-Actor": "admin"},
+        )
+        payload = await run_automation_job_now(request, "ZALOPAY")
         assert payload["ok"] is True
+        assert payload["actor"] == "admin"
         assert payload["partner"] == "ZALOPAY"

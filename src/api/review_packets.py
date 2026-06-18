@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from src.api.actor import require_actor
 from src.config.ai_generator import generate_config_from_samples
 from src.core.enums import FileType
 from src.models.mapping_config import MappingConfig, MappingConfigRepository, MappingConfigStatus
@@ -64,7 +65,7 @@ def _serialize(packet) -> dict:
 
 
 class ReviewDecisionPayload(BaseModel):
-    reviewed_by: Optional[str] = None
+    reviewed_by: Optional[str] = Field(default=None, alias="reviewedBy")
     scope_type: Optional[str] = Field(default=None, alias="scopeType")
 
 
@@ -435,6 +436,7 @@ async def approve_activate_packet_action(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _repo(request)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
@@ -478,6 +480,7 @@ async def approve_keep_current_packet_action(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _repo(request)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
@@ -511,6 +514,7 @@ async def reject_packet_action(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     return await mark_packet(
         request,
         packet_id,
@@ -536,6 +540,7 @@ async def send_packet_to_studio(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _repo(request)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:

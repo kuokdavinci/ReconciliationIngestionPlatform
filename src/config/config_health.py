@@ -416,6 +416,6 @@ def _is_config_stale(config: MappingConfig, sig: StructureSignature) -> bool:
     config_sig = getattr(config, "structure_signature", None) or {}
     config_health = getattr(config, "config_health", None) or {}
     return (
-        config_sig != sig.to_dict()
+        config_sig.get("hash") != sig.hash
         or bool(config_health.get("stale"))
     )

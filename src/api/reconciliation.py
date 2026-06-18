@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from src.api.actor import require_actor
 from src.models.partner_runtime_run import (
     PartnerRuntimeRunRepository,
     PartnerRuntimeRunStatus,
@@ -46,6 +47,7 @@ class ResolveReviewPayload(BaseModel):
 class RunReconciliationPayload(BaseModel):
     partner: str
     date: str
+    triggered_by: Optional[str] = Field(default=None, alias="triggeredBy")
 
 
 def _track_background_task(request: Request, task: asyncio.Task) -> None:
@@ -59,11 +61,15 @@ def _track_background_task(request: Request, task: asyncio.Task) -> None:
 
 def _validate_date(date_str: Optional[str]) -> str:
     if date_str is None:
-        raise HTTPException(status_code=400, detail="Date parameter is required (YYYY-MM-DD format).")
+        raise HTTPException(
+            status_code=400, detail="Date parameter is required (YYYY-MM-DD format)."
+        )
     try:
         datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid date format: '{date_str}'. Expected YYYY-MM-DD.")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid date format: '{date_str}'. Expected YYYY-MM-DD."
+        )
     return date_str
 
 
@@ -82,6 +88,14 @@ def _validate_status(status: Optional[str]) -> Optional[str]:
                 detail=f"Invalid status: '{status}'. Must be one of: {', '.join(valid)}.",
             )
     return status
+
+
+def _date_bounds(date_str: str) -> tuple[datetime, datetime]:
+    day = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return (
+        day.replace(hour=0, minute=0, second=0, microsecond=0),
+        day.replace(hour=23, minute=59, second=59, microsecond=999999),
+    )
 
 
 def _get_repo(request: Request) -> ReconciliationResultRepository:
@@ -125,6 +139,150 @@ def _review_note_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
+async def _resolve_latest_run_filters(db, partner: str, date: str) -> dict[str, object]:
+    context = await _resolve_latest_run_context(db, partner, date)
+    if context.get("source_file_id"):
+        file_id = context["source_file_id"]
+        file_doc = await db["reconciliation_file"].find_one({"_id": file_id})
+        if file_doc and file_doc.get("scopeType") == "INCREMENTAL_APPEND":
+            start_of_day, end_of_day = _date_bounds(date)
+            cursor = db["reconciliation_file"].find(
+                {
+                    "partner": partner,
+                    "reconciliationDate": {"$gte": start_of_day, "$lte": end_of_day},
+                    "createdAt": {"$lte": file_doc["createdAt"]},
+                }
+            )
+            file_ids = []
+            async for f in cursor:
+                file_ids.append(str(f["_id"]))
+            if file_ids:
+                return {"source_file_id": {"$in": file_ids}}
+        return {"source_file_id": file_id}
+    run = await PartnerRuntimeRunRepository(db).find_latest_by_partner_and_date(partner, date)
+    if run is not None and getattr(run, "id", None):
+        return {"reconciliation_run_id": str(run.id)}
+    return {}
+
+
+async def _resolve_latest_run_context(db, partner: str, date: str) -> dict[str, str]:
+    context: dict[str, str] = {}
+    start_of_day, end_of_day = _date_bounds(date)
+    latest_post_approval_run = await db["post_approval_run"].find_one(
+        {
+            "partner": partner,
+            "date": date,
+            "$or": [
+                {"outputFileId": {"$nin": [None, ""]}},
+                {"sourceFileId": {"$nin": [None, ""]}},
+            ],
+        },
+        sort=[("updatedAt", -1), ("createdAt", -1)],
+    )
+
+    latest_scoped_run = await db["partner_runtime_run"].find_one(
+        {
+            "partner": partner,
+            "date": date,
+            "sourceFileId": {"$nin": [None, ""]},
+        },
+        sort=[("createdAt", -1)],
+    )
+
+    latest_file = await db["reconciliation_file"].find_one(
+        {"partner": partner, "reconciliationDate": {"$gte": start_of_day, "$lte": end_of_day}},
+        sort=[("createdAt", -1)],
+    )
+
+    candidates = []
+    if latest_post_approval_run is not None:
+        ts = latest_post_approval_run.get("updatedAt") or latest_post_approval_run.get("createdAt")
+        candidates.append((ts, "post_approval_run", latest_post_approval_run))
+
+    if latest_scoped_run is not None:
+        ts = latest_scoped_run.get("updatedAt") or latest_scoped_run.get("createdAt")
+        candidates.append((ts, "partner_runtime_run", latest_scoped_run))
+
+    if latest_file is not None:
+        ts = latest_file.get("createdAt")
+        candidates.append((ts, "reconciliation_file", latest_file))
+
+    if not candidates:
+        return context
+
+    # Sort candidates by timestamp (newest first)
+    # Since they are MongoDB UTC datetimes, we can compare them directly.
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    newest_type = candidates[0][1]
+    newest_doc = candidates[0][2]
+
+    if newest_type == "post_approval_run":
+        output_file_id = newest_doc.get("outputFileId")
+        source_file_id = newest_doc.get("sourceFileId")
+        if output_file_id:
+            context["source_file_id"] = str(output_file_id)
+        elif source_file_id:
+            context["source_file_id"] = str(source_file_id)
+    elif newest_type == "partner_runtime_run":
+        if newest_doc.get("sourceFileId"):
+            context["source_file_id"] = str(newest_doc["sourceFileId"])
+        if newest_doc.get("mappingVersion"):
+            context["mapping_version"] = str(newest_doc["mappingVersion"])
+    elif newest_type == "reconciliation_file":
+        if newest_doc.get("_id"):
+            context["source_file_id"] = str(newest_doc["_id"])
+
+    return context
+
+
+async def _count_partner_rows_for_source_file(db, source_file_id: str) -> int:
+    return await db["data_container"].count_documents({"sourceFileId": source_file_id})
+
+
+async def _resolve_display_run(db, partner: str, date: str):
+    latest_context = await _resolve_latest_run_context(db, partner, date)
+    latest_source_file_id = latest_context.get("source_file_id")
+    if latest_source_file_id:
+        latest_context_run_raw = await db["partner_runtime_run"].find_one(
+            {
+                "partner": partner,
+                "date": date,
+                "sourceFileId": latest_source_file_id,
+            },
+            sort=[("createdAt", -1)],
+        )
+        if latest_context_run_raw is not None:
+            return PartnerRuntimeRunRepository(db)._from_mongo(latest_context_run_raw)
+
+    active_statuses = [
+        PartnerRuntimeRunStatus.WAITING_REVIEW.value,
+        PartnerRuntimeRunStatus.WAITING_RECONCILE.value,
+        PartnerRuntimeRunStatus.RECONCILING.value,
+        PartnerRuntimeRunStatus.INGESTING.value,
+        PartnerRuntimeRunStatus.FETCHING.value,
+        PartnerRuntimeRunStatus.QUEUED.value,
+    ]
+    active_run_raw = await db["partner_runtime_run"].find_one(
+        {"partner": partner, "date": date, "status": {"$in": active_statuses}},
+        sort=[("createdAt", -1)],
+    )
+    if active_run_raw is not None:
+        return PartnerRuntimeRunRepository(db)._from_mongo(active_run_raw)
+
+    latest_scoped_run_raw = await db["partner_runtime_run"].find_one(
+        {
+            "partner": partner,
+            "date": date,
+            "sourceFileId": {"$nin": [None, ""]},
+        },
+        sort=[("createdAt", -1)],
+    )
+    if latest_scoped_run_raw is not None:
+        return PartnerRuntimeRunRepository(db)._from_mongo(latest_scoped_run_raw)
+
+    return await PartnerRuntimeRunRepository(db).find_latest_by_partner_and_date(partner, date)
+
+
 @router.get("/review-records")
 async def list_review_records(
     request: Request,
@@ -139,6 +297,7 @@ async def list_review_records(
 
 @router.post("/review-records/{record_key}/note")
 async def add_review_note(request: Request, record_key: str, payload: ReviewNotePayload):
+    actor = require_actor(request, payload_field_name="actor")
     partner = _validate_partner(payload.partner)
     date = _validate_date(payload.date)
     note = (payload.note or "").strip()
@@ -159,12 +318,13 @@ async def add_review_note(request: Request, record_key: str, payload: ReviewNote
             },
             "$set": {
                 "reviewed": True,
+                "reviewedBy": actor,
                 "updatedAt": now,
             },
             "$push": {
                 "notes": {
                     "time": _review_note_timestamp(),
-                    "event": f"User Review Note: {note}",
+                    "event": f"{actor}: {note}",
                 }
             },
         },
@@ -176,6 +336,7 @@ async def add_review_note(request: Request, record_key: str, payload: ReviewNote
 
 @router.post("/review-records/{record_key}/resolve")
 async def resolve_review_record(request: Request, record_key: str, payload: ResolveReviewPayload):
+    actor = require_actor(request, payload_field_name="actor")
     partner = _validate_partner(payload.partner)
     date = _validate_date(payload.date)
     now = datetime.now(timezone.utc)
@@ -192,6 +353,8 @@ async def resolve_review_record(request: Request, record_key: str, payload: Reso
             },
             "$set": {
                 "reviewed": True,
+                "reviewedBy": actor,
+                "resolvedBy": actor,
                 "resolvedStatus": payload.resolved_status,
                 "updatedAt": now,
             },
@@ -225,6 +388,11 @@ async def list_results(
             partner,
             date,
             status=ReconciliationStatus(status) if status else None,
+            **(
+                await _resolve_latest_run_filters(
+                    getattr(request.app.state, "db", None), partner, date
+                )
+            ),
             limit=limit,
             offset=offset,
         )
@@ -270,9 +438,12 @@ async def reconciliation_stats(
 
     try:
         repo = _get_repo(request)
+        scope_filters = await _resolve_latest_run_filters(
+            getattr(request.app.state, "db", None), partner, date
+        )
         by_status, totals = await asyncio.gather(
-            repo.count_by_status(partner, date),
-            repo.get_total_amounts(partner, date),
+            repo.count_by_status(partner, date, **scope_filters),
+            repo.get_total_amounts(partner, date, **scope_filters),
         )
         total = sum(by_status.values())
         return {
@@ -280,8 +451,12 @@ async def reconciliation_stats(
             "date": date,
             "total": total,
             "byStatus": by_status,
-            "totalPartnerAmount": str(totals["total_partner_amount"]) if totals["total_partner_amount"] is not None else None,
-            "totalInternalAmount": str(totals["total_internal_amount"]) if totals["total_internal_amount"] is not None else None,
+            "totalPartnerAmount": str(totals["total_partner_amount"])
+            if totals["total_partner_amount"] is not None
+            else None,
+            "totalInternalAmount": str(totals["total_internal_amount"])
+            if totals["total_internal_amount"] is not None
+            else None,
         }
     except HTTPException:
         raise
@@ -290,7 +465,14 @@ async def reconciliation_stats(
         raise HTTPException(status_code=500, detail=f"Failed to fetch stats: {str(exc)}")
 
 
-async def _run_reconciliation_in_background(db, run_id: str, partner: str, date: str) -> None:
+async def _run_reconciliation_in_background(
+    db,
+    run_id: str,
+    partner: str,
+    date: str,
+    source_file_id: str | None = None,
+    mapping_version: str | None = None,
+) -> None:
     started_at = datetime.now(timezone.utc)
     await update_runtime_run(
         db,
@@ -298,13 +480,17 @@ async def _run_reconciliation_in_background(db, run_id: str, partner: str, date:
         status=PartnerRuntimeRunStatus.RECONCILING,
         message="Reconciling records for the selected partner/date.",
         started_at=started_at,
+        source_file_id=source_file_id,
+        mapping_version=mapping_version,
     )
     try:
         recon_date = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         results = await ReconciliationEngine(db).reconcile(
             partner,
             recon_date,
+            source_file_id=source_file_id,
             reconciliation_run_id=run_id,
+            mapping_version=mapping_version,
         )
         finished_at = datetime.now(timezone.utc)
         await update_runtime_run(
@@ -365,6 +551,11 @@ async def run_reconciliation_now(request: Request, payload: RunReconciliationPay
     try:
         partner = _validate_partner(payload.partner)
         date = _validate_date(payload.date)
+        triggered_by = require_actor(
+            request,
+            payload_actor=payload.triggered_by,
+            payload_field_name="triggeredBy",
+        )
     except HTTPException:
         raise
 
@@ -372,18 +563,49 @@ async def run_reconciliation_now(request: Request, payload: RunReconciliationPay
         db = getattr(request.app.state, "db", None)
         if db is None:
             raise HTTPException(status_code=503, detail="Database connection not available.")
+        latest_context = await _resolve_latest_run_context(db, partner, date)
+        source_file_id = latest_context.get("source_file_id")
+        if not source_file_id:
+            raise HTTPException(
+                status_code=409,
+                detail="No partner file context is available for this date. Run ingestion first or finish the review flow before reconciling.",
+            )
+        partner_row_count = await _count_partner_rows_for_source_file(db, source_file_id)
+        if partner_row_count <= 0:
+            raise HTTPException(
+                status_code=409,
+                detail="The latest partner file has not been ingested yet. Complete approval/ingestion before running reconciliation.",
+            )
         run = await create_runtime_run(
             db,
             partner=partner,
             date=date,
             trigger_type=PartnerRuntimeTriggerType.MANUAL_RECONCILIATION,
+            triggered_by=triggered_by,
             status=PartnerRuntimeRunStatus.QUEUED,
             message="Reconciliation is queued.",
             validation_state="NOT_RUN",
         )
-        task = asyncio.create_task(_run_reconciliation_in_background(db, str(run.id), partner, date))
+        if latest_context.get("source_file_id"):
+            await update_runtime_run(
+                db,
+                str(run.id),
+                source_file_id=source_file_id,
+                mapping_version=latest_context.get("mapping_version"),
+            )
+        task = asyncio.create_task(
+            _run_reconciliation_in_background(
+                db,
+                str(run.id),
+                partner,
+                date,
+                source_file_id=source_file_id,
+                mapping_version=latest_context.get("mapping_version"),
+            )
+        )
         _track_background_task(request, task)
-        return {"ok": True, "run": serialize_partner_runtime_run(run)}
+        queued_run = await PartnerRuntimeRunRepository(db).find_one({"_id": str(run.id)})
+        return {"ok": True, "run": serialize_partner_runtime_run(queued_run or run)}
     except HTTPException:
         raise
     except Exception as exc:
@@ -402,7 +624,7 @@ async def get_reconciliation_run_status(
     db = getattr(request.app.state, "db", None)
     if db is None:
         raise HTTPException(status_code=503, detail="Database connection not available.")
-    run = await PartnerRuntimeRunRepository(db).find_latest_by_partner_and_date(partner, date)
+    run = await _resolve_display_run(db, partner, date)
     if run is None:
         raise HTTPException(status_code=404, detail="Reconciliation run not found.")
     return {"run": serialize_partner_runtime_run(run)}
@@ -413,7 +635,10 @@ async def reconciliation_insights(
     request: Request,
     partner: Optional[str] = Query(default=None, description="Partner identifier"),
     date: Optional[str] = Query(default=None, description="Date (YYYY-MM-DD)"),
-    type: Optional[str] = Query(default="summary", description="Insight type: summary | anomalies | patterns | recommendations"),
+    type: Optional[str] = Query(
+        default="summary",
+        description="Insight type: summary | anomalies | patterns | recommendations",
+    ),
 ):
     """Get reconciliation insights (Summary, Anomalies, Patterns, Recommendations)."""
     try:
@@ -437,20 +662,24 @@ async def reconciliation_insights(
 
         from src.analysis.config import AnalysisConfig
         from src.analysis.provider import create_provider
+
         llm_provider = create_provider(AnalysisConfig())
 
         if type == "summary":
             from src.analysis.insights import get_summary
+
             result = await get_summary(
                 partner=partner,
                 date=date,
                 collection=collection,
                 llm_provider=llm_provider,
+                extra_query=await _resolve_latest_run_filters(db, partner, date),
             )
             result["generated_at"] = datetime.now().isoformat()
             return result
         else:
             from src.analysis.insights import get_discrepancies
+
             focus_map = {
                 "anomalies": "inconsistency",
                 "patterns": "partner",
@@ -463,6 +692,7 @@ async def reconciliation_insights(
                 focus=focus,
                 collection=collection,
                 llm_provider=llm_provider,
+                extra_query=await _resolve_latest_run_filters(db, partner, date),
             )
             return [r.model_dump() for r in results]
 
@@ -470,4 +700,6 @@ async def reconciliation_insights(
         raise
     except Exception as exc:
         logger.error(f"Error generating reconciliation insights: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to generate reconciliation insights: {str(exc)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to generate reconciliation insights: {str(exc)}"
+        )

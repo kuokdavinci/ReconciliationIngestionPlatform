@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from src.models.audit_event import AuditEventRepository
 
 router = APIRouter(prefix="/api/v1/audit")
+DATE_OPTIONAL_ENTITY_TYPES = {"MAPPING_CONFIG"}
 
 
 def _get_db(request: Request):
@@ -21,6 +22,43 @@ def _serialize_event(event) -> dict:
         data["createdAt"] = event.created_at.isoformat()
     return data
 
+
+def _build_audit_query(
+    *,
+    entity_type: str | None,
+    entity_id: str | None,
+    partner: str | None,
+    date: str | None,
+    action: str | None,
+) -> dict:
+    query: dict = {}
+    if entity_type:
+        query["entityType"] = entity_type
+    if entity_id:
+        query["entityId"] = entity_id
+    if action:
+        query["action"] = action
+    if partner:
+        query["metadata.partner"] = partner
+    if not date:
+        return query
+
+    if entity_type in DATE_OPTIONAL_ENTITY_TYPES:
+        return query
+
+    if entity_type is None:
+        query["$or"] = [
+            {"metadata.date": date},
+            {
+                "entityType": {"$in": sorted(DATE_OPTIONAL_ENTITY_TYPES)},
+                "metadata.date": {"$exists": False},
+            },
+        ]
+        return query
+
+    query["metadata.date"] = date
+    return query
+
 @router.get("/events")
 async def list_audit_events(
     request: Request,
@@ -31,18 +69,13 @@ async def list_audit_events(
     action: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
 ):
-    query: dict = {}
-    if entity_type:
-        query["entityType"] = entity_type
-    if entity_id:
-        query["entityId"] = entity_id
-    if action:
-        query["action"] = action
-    if partner:
-        query["metadata.partner"] = partner
-    if date:
-        query["metadata.date"] = date
-
+    query = _build_audit_query(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        partner=partner,
+        date=date,
+        action=action,
+    )
     db = _get_db(request)
     repo = AuditEventRepository(db)
     cursor = repo.collection.find(query).sort("createdAt", -1).limit(limit)

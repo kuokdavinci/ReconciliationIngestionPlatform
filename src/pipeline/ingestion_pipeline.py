@@ -258,11 +258,29 @@ class IngestionPipeline:
                         f"config_health_check_passed for {partner}"
                     )
                 except ConfigurationApprovalRequiredError as approval_exc:
-                    raise RuntimeError(
+                    approval_reason = (
                         f"configuration approval required for partner={partner}; "
                         f"proposal_id={approval_exc.proposal_id or 'unknown'}; "
                         f"action_id={approval_exc.action_id or 'unknown'}"
-                    ) from approval_exc
+                    )
+                    await self._recon_repo.update_status(
+                        file_record.id, ProcessingStatus.PENDING
+                    )
+                    file_record.processing_status = ProcessingStatus.PENDING
+                    stats = ProcessingStats(
+                        total_rows=0,
+                        success_rows=0,
+                        failed_rows=0,
+                    )
+                    errors.append({
+                        "field": "configApproval",
+                        "reason": approval_reason,
+                    })
+                    return IngestionResult(
+                        file_record=file_record,
+                        stats=stats,
+                        errors=errors,
+                    )
                 except Exception as hc_exc:
                     self._logger.get_logger().warning(
                         f"Config health check failed for {partner}: {hc_exc} "

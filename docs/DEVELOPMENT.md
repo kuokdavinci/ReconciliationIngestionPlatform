@@ -34,6 +34,9 @@ cp .env.example .env
 docker compose up -d mongodb sftp mongo-express
 ```
 
+`mongo-express` is a local/dev helper only.
+Current Compose config disables its basic auth layer with `ME_CONFIG_BASICAUTH: "false"`, so keep it on localhost and do not mirror that posture outside development.
+
 ## Run Backend
 
 Preferred local command:

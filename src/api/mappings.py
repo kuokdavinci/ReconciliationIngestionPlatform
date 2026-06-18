@@ -8,8 +8,9 @@ from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from src.api.actor import require_actor
 from src.analysis.insights import invalidate_insight_cache
 from src.config.ai_generator import generate_config_from_samples
 from src.config.settings import settings
@@ -135,7 +136,7 @@ async def _sync_review_packets_for_config(
 class MappingReviewPayload(BaseModel):
     confidence: float | None = None
     reasoning: str | None = None
-    reviewed_by: str | None = None
+    reviewed_by: str | None = Field(default=None, alias="reviewedBy")
 
 
 @router.get("")
@@ -166,6 +167,7 @@ async def approve_mapping_config_action(
     config_id: str,
     payload: MappingReviewPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _get_repo(request)
     config = await repo.find_one({"_id": config_id})
     if config is None:
@@ -261,6 +263,7 @@ async def reject_mapping_config_action(
     config_id: str,
     payload: MappingReviewPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _get_repo(request)
     config = await repo.find_one({"_id": config_id})
     if config is None:

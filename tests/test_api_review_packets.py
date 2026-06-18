@@ -23,8 +23,21 @@ def _make_request(db: MagicMock):
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))
 
 
-def _make_db(review_collection=None, action_collection=None, mapping_collection=None, post_approval_run_collection=None):
+def _make_db(
+    review_collection=None,
+    action_collection=None,
+    mapping_collection=None,
+    post_approval_run_collection=None,
+    audit_collection=None,
+):
     db = MagicMock()
+    resolved_audit_collection = audit_collection or MagicMock()
+    if not hasattr(resolved_audit_collection, "insert_one") or isinstance(
+        resolved_audit_collection.insert_one, MagicMock
+    ):
+        resolved_audit_collection.insert_one = AsyncMock(
+            return_value=SimpleNamespace(inserted_id="audit-001")
+        )
 
     def _get_collection(name):
         if name == "review_packet":
@@ -35,6 +48,8 @@ def _make_db(review_collection=None, action_collection=None, mapping_collection=
             return mapping_collection or MagicMock()
         if name == "post_approval_run":
             return post_approval_run_collection or MagicMock()
+        if name == "audit_event":
+            return resolved_audit_collection
         return MagicMock()
 
     db.__getitem__ = MagicMock(side_effect=_get_collection)

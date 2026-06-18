@@ -2,10 +2,10 @@
 
 import inspect
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import datetime
 from typing import Optional
 from unittest.mock import Mock
+
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from src.core.enums import ReconciliationScopeType, ReconciliationStatus, TransactionStatus
@@ -218,6 +218,8 @@ class ReconciliationEngine:
         partner: str,
         reconciliation_date: datetime,
         source_file_id: str | None = None,
+        reconciliation_run_id: str | None = None,
+        mapping_version: str | None = None,
     ) -> list[ReconciliationResult]:
         """Execute reconciliation matching for a given partner and date.
 
@@ -255,7 +257,7 @@ class ReconciliationEngine:
                 "$lte": end_of_day,
             }
         }
-        if source_file_id and scope_type != ReconciliationScopeType.FULL_SNAPSHOT:
+        if source_file_id and scope_type == ReconciliationScopeType.REPLACEMENT:
             partner_query["sourceFileId"] = source_file_id
 
         # 3. Build internal query
@@ -267,7 +269,10 @@ class ReconciliationEngine:
             }
         }
         scoped_partner_keys: set[str] = set()
-        if source_file_id and scope_type != ReconciliationScopeType.FULL_SNAPSHOT:
+        if source_file_id and scope_type in {
+            ReconciliationScopeType.INCREMENTAL_APPEND,
+            ReconciliationScopeType.REPLACEMENT,
+        }:
             scoped_partner_keys = await self._collect_scoped_partner_keys(partner_query)
 
         # 4. Keep only finalized internal transactions, then resolve duplicates
@@ -289,6 +294,11 @@ class ReconciliationEngine:
                     {"sourceFileId": source_file_id},
                     {"partnerTxnId": {"$in": replacement_keys}},
                 ],
+            }
+        elif source_file_id and scope_type == ReconciliationScopeType.INCREMENTAL_APPEND:
+            delete_query = {
+                "partner": partner,
+                "date": date_str,
             }
         elif source_file_id and scope_type != ReconciliationScopeType.FULL_SNAPSHOT:
             delete_query = {
@@ -315,8 +325,10 @@ class ReconciliationEngine:
                             partner=partner,
                             date=date_str,
                             partnerTxnId=str(partner_record.id),
-                            sourceFileId=source_file_id,
+                            reconciliationRunId=reconciliation_run_id,
+                            sourceFileId=str(partner_record.source_file_id) if partner_record.source_file_id else source_file_id,
                             scopeType=scope_type.value,
+                            mappingVersion=mapping_version,
                             partnerRecordId=str(partner_record.id),
                             reconciliationStatus=ReconciliationStatus.UNMAPPED_SKIPPED,
                         )
@@ -378,8 +390,10 @@ class ReconciliationEngine:
                             internalAmount=internal_amount,
                             partnerStatus=partner_status,
                             internalStatus=internal_status,
-                            sourceFileId=source_file_id,
+                            reconciliationRunId=reconciliation_run_id,
+                            sourceFileId=str(partner_record.source_file_id) if partner_record.source_file_id else source_file_id,
                             scopeType=scope_type.value,
+                            mappingVersion=mapping_version,
                             reconciliationStatus=recon_status,
                             partnerRecordId=str(partner_record.id),
                             internalRecordId=str(internal_record["id"]),
@@ -395,8 +409,10 @@ class ReconciliationEngine:
                             partnerTxnId=partner_txn_id,
                             partnerAmount=partner_amount,
                             partnerStatus=partner_status,
-                            sourceFileId=source_file_id,
+                            reconciliationRunId=reconciliation_run_id,
+                            sourceFileId=str(partner_record.source_file_id) if partner_record.source_file_id else source_file_id,
                             scopeType=scope_type.value,
+                            mappingVersion=mapping_version,
                             reconciliationStatus=ReconciliationStatus.MISSING_INTERNAL,
                             partnerRecordId=str(partner_record.id),
                         )
@@ -419,8 +435,10 @@ class ReconciliationEngine:
                         internalTxnId=internal_record["id"],
                         internalAmount=internal_record["amount"],
                         internalStatus=internal_record["status"],
+                        reconciliationRunId=reconciliation_run_id,
                         sourceFileId=source_file_id,
                         scopeType=scope_type.value,
+                        mappingVersion=mapping_version,
                         reconciliationStatus=ReconciliationStatus.MISSING_PARTNER,
                         internalRecordId=str(internal_record["id"]),
                     )

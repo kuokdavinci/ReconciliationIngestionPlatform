@@ -57,8 +57,20 @@
       error: "",
       mapping: null,
       packetId: null
+    },
+    guidedReviewTraceModal: {
+      open: false,
+      sampleIndex: null
+    },
+    audit: {
+      events: [],
+      entityType: "",
+      action: "",
+      lastLoadedAt: "",
+      selectedEventId: null,
     }
   };
+  state.actor = "Administrator";
 
   const routes = [
     ["review-center", "Review Center", "fact_check"],
@@ -66,7 +78,8 @@
     ["automation", "Automation", "smart_toy"],
   ];
   const utilityRoutes = {
-    "mapping-studio": { title: "Mapping Studio", icon: "schema" }
+    "mapping-studio": { title: "Mapping Studio", icon: "schema" },
+    "audit-log": { title: "Audit Log", icon: "history" }
   };
 
   const view = document.getElementById("view");
@@ -102,6 +115,17 @@
     description: "STRING"
   };
 
+  function getActorName() {
+    return (state.actor || "Administrator").trim() || "Administrator";
+  }
+
+  function withActorHeaders(headers = {}) {
+    return {
+      ...headers,
+      "X-Actor": getActorName(),
+    };
+  }
+
   function init() {
     renderNav();
     window.addEventListener("hashchange", onRouteChange);
@@ -129,12 +153,24 @@
         return;
       }
 
+      const openAuditDetailEl = e.target.closest("[data-action='open-audit-detail']");
+      if (openAuditDetailEl) {
+        state.audit.selectedEventId = openAuditDetailEl.dataset.eventId || null;
+        render();
+        return;
+      }
+
       // 2. Modal actions delegation
       const modalActionEl = e.target.closest("#modal-root [data-action]");
       if (modalActionEl) {
         const action = modalActionEl.dataset.action;
         if (action === "close-evidence-drawer") {
           state.selectedEvidenceRowId = null;
+          render();
+          return;
+        }
+        if (action === "close-audit-detail") {
+          state.audit.selectedEventId = null;
           render();
           return;
         }
@@ -162,6 +198,7 @@
           saveReviewNote(rowId, noteText.trim())
             .then(async () => {
               await loadReconciliationReviewRecords();
+              await refreshAuditLogIfVisible();
               showToast("Note saved and record marked as reviewed.");
               state.selectedEvidenceRowId = null;
               render();
@@ -227,7 +264,7 @@
   async function saveReviewNote(rowId, noteText) {
     const response = await fetch(`/api/v1/reconciliation/review-records/${encodeURIComponent(rowId)}/note`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: withActorHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         partner: state.partner,
         date: state.date,
@@ -243,7 +280,7 @@
   async function resolveReviewRecord(rowId, resolvedStatus = "MATCHED") {
     const response = await fetch(`/api/v1/reconciliation/review-records/${encodeURIComponent(rowId)}/resolve`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: withActorHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         partner: state.partner,
         date: state.date,
@@ -329,7 +366,7 @@
       .then(r => r.json())
       .then(data => {
         if (requestToken !== activePartnerFetchToken) return;
-        const found = Object.keys(data.by_partner || {});
+        const found = Object.keys(data.byPartner || {});
         const defaultPartners = ["MOMO", "VNPAY", "ZALOPAY", "ACMEPAY"];
         const partners = Array.from(new Set([...found, ...defaultPartners]));
         state.partnerOptions = partners;
@@ -711,7 +748,7 @@
       [tabKey]: ""
     };
     try {
-      const tabData = await fetchJson(`/api/v1/reconciliation/insights?type=${encodeURIComponent(tabKey)}&partner=${encodeURIComponent(partnerAtStart)}&date=${encodeURIComponent(dateAtStart)}`).catch(() => null);
+      const tabData = await fetchJson(`/api/v1/reconciliation/insights?type=${encodeURIComponent(tabKey)}&partner=${encodeURIComponent(partnerAtStart)}&date=${encodeURIComponent(dateAtStart)}`);
       if (
         renderToken !== activeRenderToken ||
         state.route !== routeAtStart ||
@@ -722,7 +759,7 @@
       state.reconciliationInsightsLoading = false;
       state.reconciliationInsightTabData = {
         ...(state.reconciliationInsightTabData || {}),
-        [tabKey]: tabData || []
+        [tabKey]: Array.isArray(tabData) ? tabData : []
       };
       state.reconciliationInsightsError = "";
     } catch (err) {
@@ -764,6 +801,29 @@
     bindViewActions();
   }
 
+  async function renderAuditPage(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    view.innerHTML = loadingPanel("Loading audit log...");
+    const qs = new URLSearchParams({
+      limit: "200",
+      partner: partnerAtStart,
+      date: dateAtStart
+    });
+    if (state.audit.entityType) qs.set("entityType", state.audit.entityType);
+    if (state.audit.action) qs.set("action", state.audit.action);
+    const data = await fetchJson(`/api/v1/audit/events?${qs.toString()}`);
+    if (
+      renderToken !== activeRenderToken ||
+      state.route !== routeAtStart ||
+      state.partner !== partnerAtStart ||
+      state.date !== dateAtStart
+    ) return;
+    state.audit.events = Array.isArray(data.events) ? data.events : [];
+    state.audit.lastLoadedAt = new Date().toISOString();
+    view.innerHTML = renderAuditLog();
+    bindFilters();
+    bindViewActions();
+  }
+
   async function render() {
     const modalContainer = document.getElementById("modal-root");
     if (modalContainer) {
@@ -780,7 +840,8 @@
       "review-center": `Review pending runtime changes for ${state.partner}`,
       reconciliation: `Deterministic reconciliation outcomes for ${state.partner} on ${formatDisplayDate(state.date)}`,
       automation: `Scheduler, job visibility, and automation context`,
-      "mapping-studio": `Create a draft mapping, validate it, then send it to Review Center`
+      "mapping-studio": `Create a draft mapping, validate it, then send it to Review Center`,
+      "audit-log": `Append-only activity trail for ${state.partner} on ${formatDisplayDate(state.date)}`
     };
     subtitle.textContent = routeSubtitle[state.route] || `Operations Console - ${state.partner}`;
 
@@ -830,6 +891,199 @@
       return;
     }
 
+    if (state.route === "audit-log") {
+      try {
+        await renderAuditPage(renderToken, routeAtStart, partnerAtStart, dateAtStart);
+      } catch (err) {
+        if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
+        view.innerHTML = renderError(err);
+      }
+      fetchPartners();
+      bindFilters();
+      bindViewActions();
+      return;
+    }
+
+  }
+
+  function normalizeAuditValue(value) {
+    if (value === null || value === undefined || value === "") return "-";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  }
+
+  function getSelectedAuditEvent() {
+    const events = Array.isArray(state.audit.events) ? state.audit.events : [];
+    return events.find(event => event._id === state.audit.selectedEventId) || null;
+  }
+
+  function renderAuditDetailPopup(event) {
+    if (!event) return "";
+    const metadata = event.metadata || {};
+    const detailRows = [
+      ["Entity type", event.entityType || "-"],
+      ["Entity ID", event.entityId || "-"],
+      ["Action", event.action || "-"],
+      ["Actor", event.actor || "system"],
+      ["Partner", metadata.partner || "-"],
+      ["Date", metadata.date || "-"],
+      ["Reference", metadata.reference || "-"],
+      ["Status", metadata.status || "-"],
+      ["Mapping version", metadata.mappingVersion || "-"],
+      ["Draft mapping version", metadata.draftMappingVersion || "-"],
+      ["Draft mapping", metadata.draftMappingId || "-"],
+      ["Source file", metadata.sourceFileId || "-"],
+      ["Created at", event.createdAt || "-"]
+    ];
+
+    return `
+      <div class="brief-overlay">
+        <button class="brief-overlay-backdrop" data-action="close-audit-detail" aria-label="Close audit detail"></button>
+        <div class="brief-modal" style="max-width: 720px;">
+          <div class="brief-modal-header">
+            <div>
+              <span class="brief-eyebrow">AUDIT DETAIL</span>
+              <div class="brief-header-badges">
+                ${badge(event.entityType || "UNKNOWN")}
+                ${badge(event.action || "-")}
+              </div>
+            </div>
+            <button class="brief-close-btn" data-action="close-audit-detail">&times;</button>
+          </div>
+          <div class="brief-modal-content">
+            <div class="brief-review-item" style="margin-bottom: 16px;">
+              <div class="brief-review-header">
+                <span class="brief-review-kind badge neutral">${escapeHtml(event.actor || "system")}</span>
+                <span class="badge neutral">${escapeHtml(metadata.partner || "-")}</span>
+              </div>
+              <h3 class="brief-review-title">${escapeHtml(event.entityId || "-")}</h3>
+              <p class="brief-review-reason">${escapeHtml(metadata.date || "-")}</p>
+            </div>
+            <div class="review-summary-list" style="display:grid; gap:10px; margin-bottom: 18px;">
+              ${detailRows.map(([label, value]) => `
+                <div style="display:grid; grid-template-columns: 140px minmax(0, 1fr); gap:12px;">
+                  <strong>${escapeHtml(label)}</strong>
+                  <span style="word-break: break-word;">${escapeHtml(normalizeAuditValue(value))}</span>
+                </div>
+              `).join("")}
+            </div>
+            <div class="panel" style="margin:0; padding:16px;">
+              <p class="brief-eyebrow" style="margin:0 0 10px 0;">Raw Metadata</p>
+              <pre style="margin:0; white-space:pre-wrap; word-break:break-word; font-family:var(--font-mono); font-size:12px; color:var(--text-primary);">${escapeHtml(JSON.stringify(metadata, null, 2))}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function getFilteredAuditEvents() {
+    const events = Array.isArray(state.audit.events) ? state.audit.events : [];
+    return events.filter(event => {
+      const metadata = event.metadata || {};
+      const matchesPartner = !state.partner || metadata.partner === state.partner;
+      const matchesDate = !state.date || metadata.date === state.date;
+      const matchesEntity = !state.audit.entityType || event.entityType === state.audit.entityType;
+      const matchesAction = !state.audit.action || event.action === state.audit.action;
+      return matchesPartner && matchesDate && matchesEntity && matchesAction;
+    });
+  }
+
+  function renderAuditLog() {
+    const filtered = getFilteredAuditEvents();
+    const entityOptions = ["", "REVIEW_PACKET", "MAPPING_CONFIG", "RECONCILIATION_RUN"];
+    const actionOptions = [
+      "",
+      "APPROVED",
+      "REJECTED",
+      "APPROVE_ACTIVATE_NEXT_RUNTIME",
+      "APPROVE_KEEP_CURRENT_FOR_FILE",
+      "REJECT",
+      "COMPLETED",
+      "FAILED"
+    ];
+    const rows = filtered.map(event => {
+      const metadata = event.metadata || {};
+      return `
+        <tr>
+          <td><code>${escapeHtml(event.createdAt || "-")}</code></td>
+          <td>${badge(event.entityType || "UNKNOWN")}</td>
+          <td>${badge(event.action || "-")}</td>
+          <td><code>${escapeHtml(normalizeAuditValue(metadata.reference))}</code></td>
+          <td>
+            <button
+              class="button secondary-action"
+              data-action="open-audit-detail"
+              data-event-id="${escapeHtml(event._id || "")}"
+              aria-label="View audit detail"
+              title="View audit detail"
+              style="min-width: 40px; padding: 8px 10px; justify-content:center;"
+            >
+              <span class="material-symbols-outlined" style="font-size:18px;">visibility</span>
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    const selectedAuditEvent = getSelectedAuditEvent();
+    setTimeout(() => {
+      let modalContainer = document.getElementById("modal-root");
+      if (!modalContainer) {
+        modalContainer = document.createElement("div");
+        modalContainer.id = "modal-root";
+        document.body.appendChild(modalContainer);
+      }
+      modalContainer.innerHTML = selectedAuditEvent ? renderAuditDetailPopup(selectedAuditEvent) : "";
+    }, 0);
+
+    return `
+      <section class="panel">
+        ${renderPageFilters({ showDate: true, showClear: false })}
+        <div class="panel-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom: 16px;">
+          <div>
+            <h3 style="margin:0;">Audit Log</h3>
+            <p class="muted" style="margin:6px 0 0 0;">Read-only timeline for mapping approvals, review decisions, and reconciliation runs.</p>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span class="muted" style="font-size:11px;">Loaded ${escapeHtml(state.audit.lastLoadedAt ? formatDisplayDateTime(state.audit.lastLoadedAt) : "-")}</span>
+            <button class="button secondary-action" data-action="refresh-audit">Refresh</button>
+          </div>
+        </div>
+        <div class="page-filters" style="margin-bottom: 16px;">
+          <div class="filter-group">
+            <span class="filter-label">ENTITY</span>
+            <div class="filter-input-wrapper">
+              <select id="audit-entity-filter">
+                ${entityOptions.map(value => `<option value="${value}" ${value === state.audit.entityType ? "selected" : ""}>${value || "All entities"}</option>`).join("")}
+              </select>
+            </div>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">ACTION</span>
+            <div class="filter-input-wrapper">
+              <select id="audit-action-filter">
+                ${actionOptions.map(value => `<option value="${value}" ${value === state.audit.action ? "selected" : ""}>${value || "All actions"}</option>`).join("")}
+              </select>
+            </div>
+          </div>
+          <div class="filter-group" style="margin-left:auto;">
+            <span class="filter-label">MATCHED EVENTS</span>
+            <div class="filter-input-wrapper"><strong>${formatNumber(filtered.length)}</strong></div>
+          </div>
+        </div>
+        ${filtered.length ? table(
+          ["Timestamp", "Entity", "Action", "Reference", "Detail"],
+          rows
+        ) : `
+          <div class="empty-state" style="padding: 32px 16px;">
+            <span class="material-symbols-outlined">history</span>
+            <h3>No audit events</h3>
+            <p class="muted">No audit entries match the current partner/date/filter combination.</p>
+          </div>
+        `}
+      </section>
+    `;
   }
 
   function renderCopilotBrief(copilot = state.copilotContext, pendingItems = []) {
@@ -960,7 +1214,8 @@
     const panes = [step1, step2, step3];
 
     return `
-      <div class="brief-overlay" data-action="close-brief">
+      <div class="brief-overlay">
+        <button class="brief-overlay-backdrop" data-action="close-brief" aria-label="Close brief"></button>
         <div class="brief-modal">
           <div class="brief-modal-header">
             <div>
@@ -1036,6 +1291,18 @@
 
   function getSelectedReviewPacket(items) {
     return items.find(packet => packet._id === state.selectedReviewPacketId) || items[0] || null;
+  }
+
+  function getTrackedReviewPacket(data) {
+    const packetId = state.selectedReviewPacketId;
+    if (!packetId) return null;
+    const packets = data?.packets || state.reviewPackets || [];
+    return packets.find(packet => String(packet._id) === String(packetId)) || null;
+  }
+
+  async function refreshAuditLogIfVisible() {
+    if (state.route !== "audit-log") return;
+    await render();
   }
 
   function summarizeReviewPacket(packet) {
@@ -1230,30 +1497,11 @@
     const okPercent = sampledRows ? (successRows / sampledRows) * 100 : 0;
     const warnPercent = sampledRows ? (warningRows / sampledRows) * 100 : 0;
     const failPercent = sampledRows ? (hardFailedRows / sampledRows) * 100 : 0;
-    const fieldStats = collectRuntimeFieldStats(runtimeGate).slice(0, 6);
     const freshnessTone = validationState?.isStale ? "warning" : validationState?.hasValidation ? "matched" : "neutral";
-
-    const heatmapHtml = fieldStats.length ? fieldStats.map(item => {
-      const total = item.ok + item.warning + item.error;
-      const okWidth = total ? (item.ok / total) * 100 : 0;
-      const warningWidth = total ? (item.warning / total) * 100 : 0;
-      const errorWidth = total ? (item.error / total) * 100 : 0;
-      return `
-        <div style="display:grid; grid-template-columns: 140px 1fr auto; gap:10px; align-items:center;">
-          <div style="font-family:var(--font-mono); font-size:12px;">${escapeHtml(item.field)}</div>
-          <div style="height:10px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,0.06); display:flex;">
-            <div style="width:${okWidth}%; background:#10B981;"></div>
-            <div style="width:${warningWidth}%; background:#F59E0B;"></div>
-            <div style="width:${errorWidth}%; background:#EF4444;"></div>
-          </div>
-          <div style="font-size:11px; color:var(--text-muted); min-width:72px; text-align:right;">${item.error} err / ${item.warning} warn</div>
-        </div>
-      `;
-    }).join("") : `<div class="muted" style="font-size:12px;">No field-level runtime traces yet.</div>`;
 
     return `
       <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
-        <div style="display:grid; grid-template-columns: 1.2fr 0.8fr; gap:16px;">
+        <div style="display:grid; grid-template-columns: 1fr auto; gap:16px; align-items:start;">
           <div>
             <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Runtime Coverage</div>
             <div style="height:14px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,0.06); display:flex;">
@@ -1262,12 +1510,13 @@
               <div style="width:${failPercent}%; background:#EF4444;"></div>
             </div>
             <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; font-size:11px; color:var(--text-muted);">
+              <span><strong>${escapeHtml(String(sampledRows))}</strong> sampled</span>
               <span><strong style="color:#10B981;">${escapeHtml(String(successRows))}</strong> success</span>
               <span><strong style="color:#F59E0B;">${escapeHtml(String(warningRows))}</strong> warnings</span>
               <span><strong style="color:#EF4444;">${escapeHtml(String(hardFailedRows))}</strong> failed</span>
             </div>
           </div>
-          <div>
+          <div style="min-width:200px;">
             <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Freshness</div>
             <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
               <span class="badge ${freshnessTone}">${escapeHtml(validationState?.summaryLabel || "Not run")}</span>
@@ -1276,195 +1525,198 @@
             <div style="font-size:11px; color:var(--text-muted);">Validated on <code>${escapeHtml(validationState?.validatedVersion || details.validatedMappingVersion || "-")}</code></div>
           </div>
         </div>
-        <div style="margin-top:14px;">
-          <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Field Issue Heatmap</div>
-          <div style="display:flex; flex-direction:column; gap:8px;">${heatmapHtml}</div>
-        </div>
       </section>
     `;
   }
 
-  function renderPartnerSampleRecord(packet, runtimeGate) {
-    const headers = packet?.structureSignature?.headers || [];
-    let rows = [];
-    const hasDisplayValue = value => value !== null && value !== undefined && String(value).trim() !== "";
-    const relevantTraceKeys = new Set(
-      ((runtimeGate?.details?.traceSamples || [])[0]?.fieldTraces || [])
-        .map(trace => trace.sourceField || (trace.column ? `Column ${trace.column}` : ""))
-        .filter(Boolean)
-    );
-
-    if (Array.isArray(packet?.samplePreview) && packet.samplePreview.length > 0) {
-      rows = packet.samplePreview.slice(0, 20).map(sample => ({
-        rowIndex: sample?.rowIndex || null,
-        cells: Array.isArray(sample?.values)
-          ? sample.values.map((value, index) => ({
-              key: headers[index] || `Column ${index + 1}`,
-              value
-            }))
-          : []
-      }));
-    } else {
-      rows = (runtimeGate?.details?.traceSamples || []).slice(0, 20).map(sample => ({
-        rowIndex: sample?.row || null,
-        cells: (sample?.fieldTraces || []).map(trace => ({
-          key: trace.sourceField || (trace.column ? `Column ${trace.column}` : trace.path || "Field"),
-          value: trace.sourceValue
-        }))
-      }));
-    }
-
-    const usableRows = rows
-      .map(row => ({
-        rowIndex: row.rowIndex,
-        cells: (row.cells || []).filter(cell => cell.key)
-      }))
-      .filter(row => row.cells.length > 0)
-      .slice(0, 20);
-
-    if (!usableRows.length) {
-      return `
-        <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
-          <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Partner Sample Rows</div>
-          <div class="muted" style="font-size:12px;">No partner sample rows are attached to this review packet.</div>
-        </section>
-      `;
-    }
-
-    const derivedHeaders = headers.length
-      ? headers.map((header, index) => ({ key: header || `Column ${index + 1}`, index }))
-      : usableRows[0].cells.map((cell, index) => ({ key: cell.key || `Column ${index + 1}`, index }));
-
-    const relevantHeaders = derivedHeaders.filter(header => relevantTraceKeys.has(header.key));
-    const limitedHeaders = (relevantHeaders.length ? relevantHeaders : derivedHeaders)
-      .filter(header => usableRows.some(row => hasDisplayValue(row.cells[header.index]?.value)))
-      .slice(0, 8);
-
-    return `
-      <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
-        <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
-          <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted);">Partner Sample Rows</div>
-          <span class="badge neutral">${escapeHtml(String(usableRows.length))} records</span>
-        </div>
-        <div class="table-wrap">
-          <table style="width:100%; border-collapse:collapse; font-size:11.5px;">
-            <thead>
-              <tr style="border-bottom:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.03);">
-                <th style="padding:8px 10px; text-align:left; white-space:nowrap;">Row</th>
-                ${limitedHeaders.map(header => `<th style="padding:8px 10px; text-align:left; white-space:nowrap;">${escapeHtml(String(header.key))}</th>`).join("")}
-              </tr>
-            </thead>
-            <tbody>
-              ${usableRows.map(row => `
-                <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
-                  <td style="padding:8px 10px; font-family:var(--font-mono); color:var(--brand-accent-blue); white-space:nowrap;">${escapeHtml(String(row.rowIndex ?? "-"))}</td>
-                  ${limitedHeaders.map(header => {
-                    const cell = row.cells[header.index];
-                    return `<td style="padding:8px 10px; font-family:var(--font-mono); word-break:break-word;">${escapeHtml(String(cell?.value ?? "-"))}</td>`;
-                  }).join("")}
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    `;
+  function getGuidedRuntimeSamples(runtimeGate) {
+    return Array.isArray(runtimeGate?.details?.traceSamples) ? runtimeGate.details.traceSamples : [];
   }
 
-  function renderRuntimeTraceSamples(runtimeGate) {
-    if (!runtimeGate?.details || !Array.isArray(runtimeGate.details.traceSamples) || runtimeGate.details.traceSamples.length === 0) {
-      return `<div class="muted" style="font-size:12px;">No runtime trace samples are available yet.</div>`;
+  function renderGuidedRuntimeTraceGallery(runtimeSamples) {
+    const samples = Array.isArray(runtimeSamples) ? runtimeSamples.slice(0, 10) : [];
+    if (!samples.length) {
+      return `<div class="muted" style="font-size:12px;">No runtime trace previews are available yet.</div>`;
     }
 
     const hasDisplayValue = value => value !== null && value !== undefined && String(value).trim() !== "";
 
-    const rowsHtml = runtimeGate.details.traceSamples.map((sample, index) => {
+    const cards = samples.map((sample, index) => {
       const fieldTraces = Array.isArray(sample.fieldTraces)
         ? sample.fieldTraces.filter(trace =>
             hasDisplayValue(trace.sourceValue)
             || hasDisplayValue(trace.outputValue)
-            || hasDisplayValue(trace.errorMessage)
             || hasDisplayValue(trace.path)
+            || hasDisplayValue(trace.errorMessage)
           )
         : [];
       const buildErrors = Array.isArray(sample.buildErrors) ? sample.buildErrors : [];
-      const rowStatus = buildErrors.length > 0 || fieldTraces.some(trace => trace.status === "error")
-        ? "Failed"
-        : fieldTraces.some(trace => trace.status === "warning")
-          ? "Warning"
-          : "Passed";
-      const rowTone = rowStatus === "Failed" ? "critical" : rowStatus === "Warning" ? "warning" : "matched";
-      const sourcePreview = fieldTraces.map(trace => {
-        const label = trace.sourceField || (trace.column ? `Column ${trace.column}` : trace.type === "CONSTANT" ? "Constant" : trace.path || "-");
-        return `<div style="display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid rgba(255,255,255,0.05);"><div style="font-family:var(--font-mono); color:var(--text-muted);">${escapeHtml(String(label))}</div><div style="font-family:var(--font-mono); text-align:right; word-break:break-word;">${escapeHtml(String(trace.sourceValue ?? "-"))}</div></div>`;
-      }).join("");
-      const normalizedPreview = Object.entries(sample.normalizedData || {})
-        .filter(([, value]) => hasDisplayValue(value))
-        .map(([key, value]) => `<div style="display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid rgba(255,255,255,0.05);"><div style="font-family:var(--font-mono);">${escapeHtml(String(key))}</div><div style="font-family:var(--font-mono); text-align:right; word-break:break-word;">${escapeHtml(String(value ?? "-"))}</div></div>`)
-        .join("");
-      const traceRows = fieldTraces.map(trace => {
-        const sourceField = trace.sourceField || (trace.column ? `Column ${trace.column}` : trace.type === "CONSTANT" ? "Constant" : "-");
-        const toneColor = trace.status === "error" ? "#ef4444" : trace.status === "warning" ? "#f59e0b" : "#10B981";
+      const hasErrors = buildErrors.length > 0 || fieldTraces.some(trace => String(trace.status || "").toLowerCase() === "error");
+      const hasWarnings = fieldTraces.some(trace => String(trace.status || "").toLowerCase() === "warning");
+      const tone = hasErrors ? "failed" : hasWarnings ? "warning" : "matched";
+      const label = hasErrors ? "Failed" : hasWarnings ? "Warning" : "Passed";
+      const rawRows = fieldTraces.map(trace => {
+        const sourceField = trace.sourceField || (trace.column ? `Column ${trace.column}` : trace.type === "CONSTANT" ? "Constant" : trace.path || "-");
         return `
-          <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
-            <td style="padding:8px;">${escapeHtml(String(sourceField))}</td>
-            <td style="padding:8px; font-family:var(--font-mono);">${escapeHtml(String(trace.sourceValue ?? "-"))}</td>
-            <td style="padding:8px; font-family:var(--font-mono);">${escapeHtml(String(trace.path || "-"))}</td>
-            <td style="padding:8px;">${escapeHtml(String(trace.type || "-"))}</td>
-            <td style="padding:8px; font-family:var(--font-mono);">${escapeHtml(String(trace.outputValue ?? "-"))}</td>
-            <td style="padding:8px; color:${toneColor}; text-transform:capitalize;">${escapeHtml(String(trace.status || "ok"))}</td>
-            <td style="padding:8px; color:var(--text-muted);">${escapeHtml(String(trace.errorMessage || "-"))}</td>
-          </tr>
+          <div style="display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.04);">
+            <div style="font-family:var(--font-mono); color:var(--text-muted);">${escapeHtml(String(sourceField))}</div>
+            <div style="font-family:var(--font-mono); text-align:right; word-break:break-word;">${escapeHtml(String(trace.sourceValue ?? "-"))}</div>
+          </div>
         `;
       }).join("");
-      const buildErrorsHtml = buildErrors.length ? `<div style="margin-top:12px; padding:12px; border:1px solid rgba(239,68,68,0.18); border-radius:8px; background:rgba(239,68,68,0.05);"><div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#fca5a5; margin-bottom:6px;">Canonical Build Errors</div>${buildErrors.map(err => `<div style="font-size:12px; margin-top:4px;"><strong>${escapeHtml(String(err.field || "-"))}</strong> · ${escapeHtml(String(err.errorCode || "CANONICAL_BUILD_FAILED"))} · ${escapeHtml(String(err.reason || "-"))}</div>`).join("")}</div>` : "";
+      const normalizedRows = Object.entries(sample.normalizedData || {})
+        .filter(([, value]) => hasDisplayValue(value))
+        .map(([key, value]) => `
+          <div style="display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.04);">
+            <div style="font-family:var(--font-mono); color:var(--text-muted);">${escapeHtml(String(key))}</div>
+            <div style="font-family:var(--font-mono); text-align:right; word-break:break-word;">${escapeHtml(String(value ?? "-"))}</div>
+          </div>
+        `).join("");
+      const errorSummary = buildErrors.length
+        ? `<div style="margin-top:10px; font-size:11px; color:#fca5a5;">${buildErrors.length} canonical build error${buildErrors.length !== 1 ? "s" : ""}</div>`
+        : "";
+
       return `
-        <details ${index === 0 ? "open" : ""} style="border:1px solid rgba(255,255,255,0.08); border-radius:10px; background:rgba(255,255,255,0.02); overflow:hidden;">
-          <summary style="list-style:none; cursor:pointer; padding:14px 16px; display:flex; justify-content:space-between; gap:12px; align-items:center;">
-            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <article style="padding:14px 0; border-bottom:1px solid rgba(255,255,255,0.08);">
+          <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:10px; flex-wrap:wrap; padding:0 2px;">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
               <strong>Row ${escapeHtml(String(sample.row || "-"))}</strong>
-              <span class="badge ${rowTone}">${escapeHtml(rowStatus)}</span>
-              <span class="badge neutral">${escapeHtml(String(fieldTraces.length))} traces</span>
+              <span class="badge ${tone}">${label}</span>
             </div>
-            <span class="material-symbols-outlined" style="font-size:18px; color:var(--text-muted);">expand_more</span>
-          </summary>
-          <div style="padding:0 16px 16px 16px; border-top:1px solid rgba(255,255,255,0.06);">
-            <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; margin-top:14px;">
-              <div style="padding:12px; border:1px solid rgba(255,255,255,0.06); border-radius:8px; background:rgba(255,255,255,0.015);">
-                <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Raw Source Snapshot</div>
-                ${sourcePreview || `<span class="muted">No source values</span>`}
-              </div>
-              <div style="padding:12px; border:1px solid rgba(255,255,255,0.06); border-radius:8px; background:rgba(255,255,255,0.015);">
-                <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Normalized Output</div>
-                ${normalizedPreview || `<span class="muted">No normalized output</span>`}
-              </div>
+            <button class="button tertiary compact" data-action="open-guided-runtime-detail" data-sample-index="${escapeHtml(String(index))}" style="padding:2px; min-width:unset; height:unset; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; color:var(--brand-primary); background:transparent; border:none;">
+              <span class="material-symbols-outlined" style="font-size:18px;">visibility</span>
+            </button>
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px;">
+            <div style="padding:12px; border:1px solid rgba(255,255,255,0.05); border-radius:8px; background:rgba(255,255,255,0.015);">
+              <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Before / Raw Source</div>
+              ${rawRows || `<span class="muted">No source values</span>`}
             </div>
-            <div style="margin-top:12px;">
-              <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Field-Level Trace</div>
-              <div class="table-wrap">
-                <table style="width:100%; border-collapse:collapse; font-size:11.5px;">
-                  <thead>
-                    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
-                      <th style="padding:6px 8px; text-align:left;">Raw Partner Field</th>
-                      <th style="padding:6px 8px; text-align:left;">Raw Partner Value</th>
-                      <th style="padding:6px 8px; text-align:left;">Target Internal Field</th>
-                      <th style="padding:6px 8px; text-align:left;">Transform</th>
-                      <th style="padding:6px 8px; text-align:left;">Final Normalized Value</th>
-                      <th style="padding:6px 8px; text-align:left;">Validation Status</th>
-                      <th style="padding:6px 8px; text-align:left;">Failure Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>${traceRows}</tbody>
-                </table>
-              </div>
-              ${buildErrorsHtml}
+            <div style="padding:12px; border:1px solid rgba(255,255,255,0.05); border-radius:8px; background:rgba(255,255,255,0.015);">
+              <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">After / Normalized Output</div>
+              ${normalizedRows || `<span class="muted">No normalized output</span>`}
             </div>
           </div>
-        </details>
+          ${errorSummary}
+        </article>
       `;
     }).join("");
 
-    return `<div style="display:flex; flex-direction:column; gap:10px;">${rowsHtml}</div>`;
+    return `
+      <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+        <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted);">Runtime Trace Review</div>
+        <span class="badge neutral">${escapeHtml(String(samples.length))} preview rows</span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        ${cards}
+      </div>
+    `;
+  }
+
+  function renderGuidedSampleRuntimePanel(packet, runtimeGate) {
+    const runtimeSamples = getGuidedRuntimeSamples(runtimeGate);
+    if (!runtimeSamples.length) {
+      return `
+        <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
+          <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Sample Rows & Runtime Preview</div>
+          <div class="muted" style="font-size:12px;">No sample rows or runtime traces are available yet.</div>
+        </section>
+      `;
+    }
+
+    return `
+      <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
+        <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Sample Rows & Runtime Preview</div>
+        ${renderGuidedRuntimeTraceGallery(runtimeSamples)}
+      </section>
+    `;
+  }
+
+  function renderGuidedRuntimeDetailModal(runtimeGate) {
+    if (!state.guidedReviewTraceModal?.open) return "";
+    const samples = getGuidedRuntimeSamples(runtimeGate);
+    const index = Number(state.guidedReviewTraceModal.sampleIndex);
+    const sample = Number.isInteger(index) ? samples[index] : null;
+    if (!sample) return "";
+
+    const hasDisplayValue = value => value !== null && value !== undefined && String(value).trim() !== "";
+    const fieldTraces = Array.isArray(sample.fieldTraces)
+      ? sample.fieldTraces.filter(trace =>
+          hasDisplayValue(trace.sourceValue)
+          || hasDisplayValue(trace.outputValue)
+          || hasDisplayValue(trace.errorMessage)
+          || hasDisplayValue(trace.path)
+        )
+      : [];
+    const buildErrors = Array.isArray(sample.buildErrors) ? sample.buildErrors : [];
+    const sourcePreview = fieldTraces.map(trace => {
+      const label = trace.sourceField || (trace.column ? `Column ${trace.column}` : trace.type === "CONSTANT" ? "Constant" : trace.path || "-");
+      return `<div style="display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid rgba(255,255,255,0.05);"><div style="font-family:var(--font-mono); color:var(--text-muted);">${escapeHtml(String(label))}</div><div style="font-family:var(--font-mono); text-align:right; word-break:break-word;">${escapeHtml(String(trace.sourceValue ?? "-"))}</div></div>`;
+    }).join("");
+    const normalizedPreview = Object.entries(sample.normalizedData || {})
+      .filter(([, value]) => hasDisplayValue(value))
+      .map(([key, value]) => `<div style="display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid rgba(255,255,255,0.05);"><div style="font-family:var(--font-mono);">${escapeHtml(String(key))}</div><div style="font-family:var(--font-mono); text-align:right; word-break:break-word;">${escapeHtml(String(value ?? "-"))}</div></div>`)
+      .join("");
+    const traceRows = fieldTraces.map(trace => {
+      const sourceField = trace.sourceField || (trace.column ? `Column ${trace.column}` : trace.type === "CONSTANT" ? "Constant" : "-");
+      const toneColor = trace.status === "error" ? "#ef4444" : trace.status === "warning" ? "#f59e0b" : "#10B981";
+      return `
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+          <td style="padding:8px;">${escapeHtml(String(sourceField))}</td>
+          <td style="padding:8px; font-family:var(--font-mono);">${escapeHtml(String(trace.sourceValue ?? "-"))}</td>
+          <td style="padding:8px; font-family:var(--font-mono);">${escapeHtml(String(trace.path || "-"))}</td>
+          <td style="padding:8px;">${escapeHtml(String(trace.type || "-"))}</td>
+          <td style="padding:8px; font-family:var(--font-mono);">${escapeHtml(String(trace.outputValue ?? "-"))}</td>
+          <td style="padding:8px; color:${toneColor}; text-transform:capitalize;">${escapeHtml(String(trace.status || "ok"))}</td>
+          <td style="padding:8px; color:var(--text-muted);">${escapeHtml(String(trace.errorMessage || "-"))}</td>
+        </tr>
+      `;
+    }).join("");
+    const buildErrorsHtml = buildErrors.length ? `<div style="margin-top:12px; padding:12px; border:1px solid rgba(239,68,68,0.18); border-radius:8px; background:rgba(239,68,68,0.05);"><div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#fca5a5; margin-bottom:6px;">Canonical Build Errors</div>${buildErrors.map(err => `<div style="font-size:12px; margin-top:4px;"><strong>${escapeHtml(String(err.field || "-"))}</strong> · ${escapeHtml(String(err.errorCode || "CANONICAL_BUILD_FAILED"))} · ${escapeHtml(String(err.reason || "-"))}</div>`).join("")}</div>` : "";
+
+    return `
+      <div class="guided-review-backdrop">
+        <div class="guided-review-modal" style="max-width: 920px; width: 100%; background: #111; padding: 24px; border-radius: 12px;">
+          <div class="guided-review-header" style="display:flex; justify-content:space-between; margin-bottom:20px;">
+            <div>
+              <h3 style="margin:0;">Runtime Trace Detail</h3>
+              <p class="muted" style="margin:6px 0 0 0;">Row ${escapeHtml(String(sample.row || "-"))}</p>
+            </div>
+            <button class="button-link" data-action="close-guided-runtime-detail"><span class="material-symbols-outlined">close</span></button>
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; margin-top:14px;">
+            <div style="padding:12px; border:1px solid rgba(255,255,255,0.06); border-radius:8px; background:rgba(255,255,255,0.015);">
+              <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Raw Source Snapshot</div>
+              ${sourcePreview || `<span class="muted">No source values</span>`}
+            </div>
+            <div style="padding:12px; border:1px solid rgba(255,255,255,0.06); border-radius:8px; background:rgba(255,255,255,0.015);">
+              <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Normalized Output</div>
+              ${normalizedPreview || `<span class="muted">No normalized output</span>`}
+            </div>
+          </div>
+          <div style="margin-top:12px;">
+            <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">Field-Level Trace</div>
+            <div class="table-wrap">
+              <table style="width:100%; border-collapse:collapse; font-size:11.5px;">
+                <thead>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+                    <th style="padding:6px 8px; text-align:left;">Raw Partner Field</th>
+                    <th style="padding:6px 8px; text-align:left;">Raw Partner Value</th>
+                    <th style="padding:6px 8px; text-align:left;">Target Internal Field</th>
+                    <th style="padding:6px 8px; text-align:left;">Transform</th>
+                    <th style="padding:6px 8px; text-align:left;">Final Normalized Value</th>
+                    <th style="padding:6px 8px; text-align:left;">Validation Status</th>
+                    <th style="padding:6px 8px; text-align:left;">Failure Reason</th>
+                  </tr>
+                </thead>
+                <tbody>${traceRows}</tbody>
+              </table>
+            </div>
+            ${buildErrorsHtml}
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   function renderReviewHistoryTab() {
@@ -1827,9 +2079,7 @@
     } else if (step === 3) {
       const validationState = getRuntimeValidationState(selectedPacket);
       const runtimeGate = validationState.runtimeGate;
-      const details = runtimeGate?.details || {};
       const issues = collectValidationIssues(runtimeGate);
-      const summaryTone = validationState.summaryLabel === "Failed" ? "critical" : validationState.summaryLabel === "Passed with warnings" ? "warning" : "matched";
       let bannerTone = "warning";
       let bannerTitle = "Runtime validation has not been run for the latest draft mapping.";
       let bannerText = "Run runtime validation before moving to the decision step.";
@@ -1849,23 +2099,6 @@
         bannerTitle = "Runtime validation is current for this draft mapping.";
         bannerText = runtimeGate?.reason || "All sampled rows validated successfully.";
       }
-      const summaryCard = `
-        <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
-          <div style="display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px;">
-            <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Sampled Rows</div><div style="font-size:22px; font-weight:800;">${escapeHtml(String(details.sampledRows || 0))}</div></div>
-            <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Success Rows</div><div style="font-size:22px; font-weight:800;">${escapeHtml(String(details.successRows || 0))}</div></div>
-            <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Failed Rows</div><div style="font-size:22px; font-weight:800;">${escapeHtml(String(details.failedRows || 0))}</div></div>
-            <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Success Rate</div><div style="font-size:22px; font-weight:800;">${escapeHtml(`${details.successRows || 0}/${details.sampledRows || 0} (${Math.round((Number(details.successRate || 0)) * 100)}%)`)}</div></div>
-          </div>
-          <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;">
-            <span class="badge ${summaryTone}">${escapeHtml(validationState.summaryLabel)}</span>
-            <span class="badge neutral">Gate ${escapeHtml(String(runtimeGate?.status || "pending").toUpperCase())}</span>
-            <span class="badge ${String(details.riskLevel || "").toUpperCase() === "HIGH" ? "failed" : String(details.riskLevel || "").toUpperCase() === "MEDIUM" ? "warning" : "matched"}">Risk ${escapeHtml(String(details.riskLevel || "-"))}</span>
-            <span class="badge neutral">${escapeHtml(formatDisplayDateTime(details.validatedAt || "-"))}</span>
-          </div>
-          <div style="margin-top:12px; font-size:12px; color:var(--text-muted);"><strong>Reason:</strong> ${escapeHtml(runtimeGate?.reason || "Run runtime validation on the latest draft mapping.")}</div>
-        </section>
-      `;
       const issuesHtml = issues.length ? `
         <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
           <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Validation Issues List</div>
@@ -1899,8 +2132,7 @@
             <button class="button primary" data-action="validate-runtime-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">${validationState.hasValidation ? "Re-run runtime validation" : "Run runtime validation"}</button>
           </div>
           ${renderRuntimeVisualSummary(runtimeGate, validationState)}
-          ${renderPartnerSampleRecord(selectedPacket, runtimeGate)}
-          ${summaryCard}
+          ${renderGuidedSampleRuntimePanel(selectedPacket, runtimeGate)}
           <section class="panel" style="margin:0; padding:16px; border-radius:10px; border:1px solid rgba(255,255,255,0.08); background:${bannerTone === "critical" ? "rgba(239,68,68,0.05)" : bannerTone === "warning" ? "rgba(245,158,11,0.06)" : "rgba(16,185,129,0.05)"};">
             <div style="display:flex; gap:10px; align-items:flex-start;">
               <span class="material-symbols-outlined" style="color:${bannerTone === "critical" ? "#ef4444" : bannerTone === "warning" ? "#f59e0b" : "#10B981"};">${bannerTone === "critical" ? "error" : bannerTone === "warning" ? "warning" : "check_circle"}</span>
@@ -1911,17 +2143,23 @@
             </div>
           </section>
           ${issuesHtml}
-          <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
-            <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Runtime Mapping Preview</div>
-            ${renderRuntimeTraceSamples(runtimeGate)}
-          </section>
         </div>
       `;
     } else if (step === 4) {
       const validationState = getRuntimeValidationState(selectedPacket);
-      const runtimeGate = validationState.runtimeGate;
       const isMappingReady = !!selectedPacket.draftMappingId;
       const isReady = isMappingReady && validationState.canProceed;
+      const packetApproved = String(selectedPacket.status || "").toUpperCase() === "APPROVED";
+      const postApprovalRun = getPostApprovalRunForPacket(selectedPacket._id);
+      const hasPostApprovalRun = !!postApprovalRun;
+      const postApprovalStatus = String(postApprovalRun?.status || "").toUpperCase();
+      const postApprovalActive = hasPostApprovalRun && !isTerminalPostApprovalRun(postApprovalRun);
+      const postApprovalCompleted = postApprovalStatus === "COMPLETED";
+      const postApprovalTone = postApprovalStatus === "COMPLETED"
+        ? "matched"
+        : postApprovalStatus === "FAILED"
+          ? "failed"
+          : "warning";
       const recommendation = isReady
         ? "The latest draft mapping is ready for approval and activation."
         : validationState.isStale
@@ -1929,21 +2167,48 @@
           : validationState.summaryLabel === "Failed"
             ? "Validation failed. Return to Step 3 and resolve the runtime mapping issues before approval."
             : "A current runtime validation is required before approval.";
+      const activationStatusHtml = hasPostApprovalRun ? `
+        <section class="panel" style="margin:0; padding:16px; border-radius:10px; border:1px solid rgba(255,255,255,0.08);">
+          <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+            <div>
+              <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Activation Progress</div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                <span class="badge ${postApprovalTone}">${escapeHtml(statusLabel(postApprovalStatus || "QUEUED"))}</span>
+                ${postApprovalRun.stage ? `<span class="badge neutral">${escapeHtml(String(postApprovalRun.stage).replace(/_/g, " "))}</span>` : ""}
+                ${postApprovalRun.outputFileId ? `<span class="badge neutral">File ${escapeHtml(postApprovalRun.outputFileId)}</span>` : ""}
+              </div>
+            </div>
+            ${postApprovalRun.updatedAt ? `<span class="muted" style="font-size:12px;">Updated ${escapeHtml(formatDisplayDateTime(postApprovalRun.updatedAt))}</span>` : ""}
+          </div>
+          <div style="margin-top:12px; font-size:13px;">${escapeHtml(postApprovalRun.message || "Post-approval processing has started.")}</div>
+          ${(postApprovalRun.stats && Object.keys(postApprovalRun.stats).length) ? `
+            <div style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px; margin-top:12px;">
+              <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Total Rows</div><div style="font-size:18px; font-weight:800;">${escapeHtml(String(postApprovalRun.stats.totalRows || 0))}</div></div>
+              <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Success Rows</div><div style="font-size:18px; font-weight:800;">${escapeHtml(String(postApprovalRun.stats.successRows || 0))}</div></div>
+              <div><div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; font-weight:700;">Failed Rows</div><div style="font-size:18px; font-weight:800;">${escapeHtml(String(postApprovalRun.stats.failedRows || 0))}</div></div>
+            </div>
+          ` : ""}
+          ${postApprovalRun.reconciliationCount !== null && postApprovalRun.reconciliationCount !== undefined ? `
+            <div style="margin-top:12px; font-size:12px; color:var(--text-muted);">Reconciliation results written: ${escapeHtml(String(postApprovalRun.reconciliationCount))}</div>
+          ` : ""}
+        </section>
+      ` : "";
+      const approvalFinished = packetApproved || postApprovalCompleted;
       stepBodyHtml = `
         <div class="guided-step-content" style="display:flex; flex-direction:column; gap:14px;">
           <h4 style="margin:0;">Decision</h4>
           <section class="panel" style="margin:0; padding:16px; border-radius:10px;">
             <div style="display:flex; gap:10px; flex-wrap:wrap;">
               <span class="badge ${isMappingReady ? "matched" : "warning"}">Mapping ${isMappingReady ? "ready" : "missing"}</span>
-              <span class="badge ${validationState.canProceed ? "matched" : validationState.isStale ? "warning" : "failed"}">Runtime validation ${escapeHtml(validationState.summaryLabel)}</span>
+              ${approvalFinished ? `<span class="badge matched">Approval completed</span>` : ""}
             </div>
-            <div style="margin-top:12px; font-size:12px; color:var(--text-muted);"><strong>Gate summary:</strong> ${escapeHtml(runtimeGate?.reason || "Runtime validation has not been completed for the latest draft mapping.")}</div>
-            <div style="margin-top:10px; font-size:13px;">${escapeHtml(recommendation)}</div>
+            <div style="margin-top:12px; font-size:13px;">${escapeHtml(approvalFinished ? "This review item has already been approved and activated." : recommendation)}</div>
           </section>
+          ${activationStatusHtml}
           ${(!validationState.canProceed || !isMappingReady) ? `<button class="button secondary-action" data-action="back-to-guided-step-3">Return to Step 3</button>` : ""}
           <div style="display:flex; flex-direction:column; gap:10px;">
-            <button class="button primary ${isReady ? "success-cta" : ""}" data-action="approve-packet-activate" data-packet-id="${escapeHtml(selectedPacket._id)}" ${isReady ? "" : "disabled"}>Approve & Activate</button>
-            <button class="button secondary-action" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">Reject change</button>
+            <button class="button primary ${isReady ? "success-cta" : ""}" data-action="approve-packet-activate" data-packet-id="${escapeHtml(selectedPacket._id)}" ${(isReady && !postApprovalActive && !approvalFinished) ? "" : "disabled"}>${approvalFinished ? "Already Approved" : postApprovalActive ? "Activation In Progress..." : "Approve & Activate"}</button>
+            <button class="button secondary-action" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}" ${(postApprovalActive || approvalFinished) ? "disabled" : ""}>Reject change</button>
           </div>
         </div>
       `;
@@ -1968,6 +2233,7 @@
           <div class="guided-review-body">
             <div style="display:flex; margin-bottom:24px;">${progressSteps}</div>
             ${stepBodyHtml}
+            ${step === 3 ? renderGuidedRuntimeDetailModal(getRuntimeValidationState(selectedPacket).runtimeGate) : ""}
             ${footerHtml}
           </div>
         </div>
@@ -1990,7 +2256,9 @@
     const packets = (data.packets || []).filter(packet => !state.partner || packet.partner === state.partner);
     const mappings = (data.mappings || []).filter(item => item.partner === state.partner);
     const allPending = getReviewCenterPendingItems(data);
-    const selectedPacket = getSelectedReviewPacket(allPending);
+    const selectedPacket = (state.guidedReviewOpen && state.selectedReviewPacketId)
+      ? (getTrackedReviewPacket(data) || getSelectedReviewPacket(allPending))
+      : getSelectedReviewPacket(allPending);
 
     // Intake info
     const intake = data.intake || {};
@@ -2166,7 +2434,7 @@
         ["Enabled Jobs", formatNumber(jobs.filter(job => job.enabled).length), "Scheduler-connected fetch configs"],
         ["Pending Review Items", formatNumber(jobs.reduce((sum, job) => sum + Number(job.pendingReviewPackets || 0), 0)), "Review items waiting after automation runs"],
         ["Partners Waiting", formatNumber(jobs.filter(job => job.hasPendingFile).length), "Partners with files ready but not fully reconciled"],
-        ["Active Runtime Runs", formatNumber(jobs.filter(job => ["QUEUED", "FETCHING", "INGESTING", "WAITING_RECONCILE", "RECONCILING"].includes(String(job.status || "").toUpperCase())).length), "Partners currently fetching, ingesting, or reconciling"],
+        ["Active Runtime Runs", formatNumber(jobs.filter(job => ["QUEUED", "FETCHING", "INGESTING", "WAITING_REVIEW", "WAITING_RECONCILE", "RECONCILING"].includes(String(job.status || "").toUpperCase())).length), "Partners currently fetching, ingesting, waiting for review, or reconciling"],
         ["Partners Covered", formatNumber(jobs.length), "Configured partner fetch routes"]
       ])}
       <section class="panel" style="margin-bottom: 24px;">
@@ -2228,12 +2496,12 @@
     const insights = state.insightsData ? state.insightsData.summary : null;
     if (!insights) return '<div class="empty-state">No dashboard data loaded.</div>';
 
-    const m = insights.summary_metrics || {};
-    const byStatus = m.by_status || {};
-    const total = m.total_transactions || 0;
+    const m = insights.summaryMetrics || {};
+    const byStatus = m.byStatus || {};
+    const total = m.totalTransactions || 0;
     const matched = m.matched || 0;
     const issueCount = Math.max(0, total - matched);
-    const mismatchRate = m.mismatch_rate || 0;
+    const mismatchRate = m.mismatchRate || 0;
     const mismatchAmount = m.total_amount_mismatch ? formatAmount(m.total_amount_mismatch) : "-";
     const matchedPct = total ? Math.round((matched / total) * 100) : 0;
     const obs = insights.ai_observation;
@@ -2474,6 +2742,8 @@
 
   function renderReconciliation(data) {
     const items = data.results || [];
+    const stats = state.insightsSummary || {};
+    const byStatus = stats.byStatus || {};
     
     // 1. Compact toolbar inputs & status mapping
     const totalAmountDiff = items.reduce((sum, item) => {
@@ -2481,10 +2751,16 @@
       const internalAmount = Number(item.internalAmount || 0);
       return sum + Math.abs(partnerAmount - internalAmount);
     }, 0);
-    const matchedCount = items.filter(item => item.reconciliationStatus === "MATCHED").length;
-    const mismatchRows = items.filter(item => String(item.reconciliationStatus || "") !== "MATCHED" && !/MISSING_/.test(String(item.reconciliationStatus || ""))).length;
-    const missingRows = items.filter(item => /MISSING_/.test(String(item.reconciliationStatus || ""))).length;
-    const totalRows = data.total || items.length;
+    const matchedCount = Number(byStatus.MATCHED || 0) + Number(byStatus.MATCHED_FAILED || 0) + Number(byStatus.MATCHED_REVERSED || 0);
+    const mismatchRows =
+      Number(byStatus.AMOUNT_MISMATCH || 0)
+      + Number(byStatus.STATUS_MISMATCH || 0)
+      + Number(byStatus.MULTIPLE_MISMATCH || 0)
+      + Number(byStatus.UNMAPPED_SKIPPED || 0);
+    const missingRows = Number(byStatus.MISSING_INTERNAL || 0) + Number(byStatus.MISSING_PARTNER || 0);
+    const totalRows = Number(stats.total || data.total || items.length);
+    const reviewedRowCount = Object.keys(state.reviewedRecords || {}).length;
+    const allRowsLoaded = Number(data.offset || 0) === 0 && items.length >= totalRows;
 
     // Derived summary states
     const unreviewedMismatchRows = items.filter(item => {
@@ -2496,9 +2772,12 @@
       const isReviewed = state.reviewedRecords && state.reviewedRecords[item.partnerTxnId || item.internalTxnId || item.id];
       return /MISSING_/.test(item.reconciliationStatus || "") && !isReviewed;
     }).length;
-    const reviewStatus = (unreviewedMismatchRows > 0 || unreviewedMissingRows > 0) ? "NEEDS_REVIEW" : "PASSED";
-    const riskLevel = (unreviewedMismatchRows > 0 || unreviewedMissingRows > 0) ? "HIGH" : "LOW";
-    const summary = state.insightsSummary || {};
+    const pendingReviewCount = allRowsLoaded
+      ? (unreviewedMismatchRows + unreviewedMissingRows)
+      : Math.max((mismatchRows + missingRows) - reviewedRowCount, 0);
+    const reviewStatus = pendingReviewCount > 0 ? "NEEDS_REVIEW" : "PASSED";
+    const riskLevel = pendingReviewCount > 0 ? "HIGH" : "LOW";
+    const summary = stats;
     
     // Fallback confidence clarification
     const aiSource = summary.llm_status || "Rule-based";
@@ -3919,6 +4198,22 @@
   }
 
   function bindViewActions() {
+    const auditEntityFilter = document.getElementById("audit-entity-filter");
+    if (auditEntityFilter) {
+      auditEntityFilter.addEventListener("change", () => {
+        state.audit.entityType = auditEntityFilter.value || "";
+        render();
+      });
+    }
+
+    const auditActionFilter = document.getElementById("audit-action-filter");
+    if (auditActionFilter) {
+      auditActionFilter.addEventListener("change", () => {
+        state.audit.action = auditActionFilter.value || "";
+        render();
+      });
+    }
+
     const reconStatus = document.getElementById("recon-status-filter");
     if (reconStatus) {
       reconStatus.addEventListener("change", () => {
@@ -4041,7 +4336,7 @@
           showToast(`Running automation job for ${partner}...`);
           fetch(`/api/v1/automation/jobs/${encodeURIComponent(partner)}/run`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withActorHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({}),
           })
             .then(r => r.json().then(body => ({ ok: r.ok, body })))
@@ -4065,6 +4360,11 @@
           return;
         }
         if (action === "run-reconciliation-now") {
+          const activePostApprovalRun = getActivePostApprovalRunForContext();
+          if (activePostApprovalRun) {
+            showToast(activePostApprovalRun.message || "Approved file is still being ingested. Wait for post-approval processing to finish.");
+            return;
+          }
           const originalText = el.innerHTML;
           el.disabled = true;
           el.style.opacity = "0.6";
@@ -4073,8 +4373,12 @@
           showToast(`Running reconciliation for ${state.partner} on ${state.date}...`);
           fetch(`/api/v1/reconciliation/run`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ partner: state.partner, date: state.date }),
+            headers: withActorHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({
+              partner: state.partner,
+              date: state.date,
+              triggeredBy: getActorName(),
+            }),
           })
             .then(r => r.json().then(body => ({ ok: r.ok, body })))
             .then(({ ok, body }) => {
@@ -4125,6 +4429,11 @@
           const partner = el.dataset.partner;
           if (partner) state.partner = partner;
           location.hash = "review-center";
+          return;
+        }
+        if (action === "refresh-audit") {
+          state.audit.lastLoadedAt = "";
+          render();
           return;
         }
         if (action === "go-review-packet") {
@@ -4249,8 +4558,8 @@
           if (!configId) return;
           fetch(`/api/v1/mappings/${encodeURIComponent(configId)}/approve`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            headers: withActorHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ reviewedBy: getActorName() }),
           })
             .then(r => r.json().then(body => ({ ok: r.ok, body })))
             .then(({ ok, body }) => {
@@ -4269,8 +4578,8 @@
           if (!configId) return;
           fetch(`/api/v1/mappings/${encodeURIComponent(configId)}/reject`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            headers: withActorHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ reviewedBy: getActorName() }),
           })
             .then(r => r.json().then(body => ({ ok: r.ok, body })))
             .then(({ ok, body }) => {
@@ -4328,8 +4637,8 @@
             const endpoint = action === "reject-packet" ? "reject" : "approve";
             fetch(`/api/v1/mappings/${encodeURIComponent(packetId)}/${endpoint}`, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ reviewed_by: "Administrator" }),
+              headers: withActorHeaders({ "Content-Type": "application/json" }),
+              body: JSON.stringify({ reviewedBy: getActorName() }),
             })
               .then(r => r.json().then(body => ({ ok: r.ok, body })))
               .then(({ ok, body }) => {
@@ -4369,9 +4678,10 @@
               payload.scopeType = state.overrideScopes[packetId];
             }
           }
+          payload.reviewedBy = getActorName();
           fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/${endpointMap[action]}`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withActorHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify(payload),
           })
             .then(r => r.json().then(body => ({ ok: r.ok, body })))
@@ -4394,16 +4704,25 @@
                 if (runInfo?.partner) state.partner = runInfo.partner;
                 if (runInfo?.date) state.date = runInfo.date;
                 if (runInfo?.packetId) {
+                  syncLocalReviewPacket(packetId, {
+                    status: "APPROVED",
+                    reviewedAt: new Date().toISOString(),
+                  });
+                  state.selectedReviewPacketId = packetId;
+                  state.guidedReviewOpen = true;
+                  state.guidedReviewStep = 4;
+                  state.reviewCenterCache = null;
                   upsertPostApprovalRun(runInfo);
                   pollPostApprovalRun(runInfo.packetId);
-                  showToast("Approved. Post-approval processing is queued.");
+                  showToast("Approved. Ingestion and reconciliation have started.");
                 } else {
                   showToast("Review packet updated.");
+                  state.guidedReviewOpen = false;
                 }
               } else {
+                state.guidedReviewOpen = false;
                 showToast("Review packet updated.");
               }
-              state.guidedReviewOpen = false;
               render();
             })
             .catch(err => {
@@ -4427,7 +4746,7 @@
           el.innerHTML = `<span class="spinner-mini" style="display:inline-block; width:12px; height:12px; border:2px solid #fff; border-top:2px solid transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:6px; vertical-align:middle;"></span>Validating...`;
           fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/validate-runtime`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withActorHeaders({ "Content-Type": "application/json" }),
           })
             .then(r => r.json().then(body => ({ ok: r.ok, body })))
             .then(({ ok, body }) => {
@@ -4471,14 +4790,37 @@
         }
         if (action === "open-guided-review") {
           state.guidedReviewOpen = true;
-          state.guidedReviewStep = 1;
           state.guidedReviewScope = { loading: false, error: "", data: null, packetId: null };
           state.guidedReviewAI = { loading: false, error: "", mapping: null, packetId: null };
-          render();
-          const packet = getSelectedReviewPacket(getReviewCenterPendingItems(state.reviewCenterCache?.data || { packets: state.reviewPackets, mappings: [], intake: {} }));
-          if (packet) {
-            loadGuidedReviewScopeLLM(packet);
+          state.guidedReviewTraceModal = { open: false, sampleIndex: null };
+          
+          let packet = getTrackedReviewPacket(state.reviewCenterCache?.data);
+          if (!packet) {
+            packet = getSelectedReviewPacket(getReviewCenterPendingItems(state.reviewCenterCache?.data || { packets: state.reviewPackets, mappings: [], intake: {} }));
           }
+          if (packet && String(packet.status).toUpperCase() === "APPROVED") {
+            state.guidedReviewStep = 4;
+            render();
+            pollPostApprovalRun(packet._id);
+          } else {
+            state.guidedReviewStep = 1;
+            render();
+            if (packet) {
+              loadGuidedReviewScopeLLM(packet);
+            }
+          }
+          return;
+        }
+        if (action === "open-guided-runtime-detail") {
+          const sampleIndex = Number(el.dataset.sampleIndex);
+          if (!Number.isInteger(sampleIndex)) return;
+          state.guidedReviewTraceModal = { open: true, sampleIndex };
+          renderPreserveScroll();
+          return;
+        }
+        if (action === "close-guided-runtime-detail") {
+          state.guidedReviewTraceModal = { open: false, sampleIndex: null };
+          renderPreserveScroll();
           return;
         }
         if (action === "guided-next") {
@@ -4500,7 +4842,7 @@
             
             fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/scope`, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: withActorHeaders({ "Content-Type": "application/json" }),
               body: JSON.stringify({ scopeType }),
             })
               .then(r => r.json().then(body => ({ ok: r.ok, body })))
@@ -4514,16 +4856,20 @@
                   currentPacket.scopeType = scopeType;
                 });
                 
-                state.guidedReviewStep = 2;
-                render();
-                
                 const currentPacket = [
                   ...(state.reviewPackets || []),
                   ...((state.reviewCenterCache && state.reviewCenterCache.data && state.reviewCenterCache.data.packets) || [])
                 ].find(packet => String(packet._id) === String(packetId)) || null;
-                if (currentPacket) {
-                  loadGuidedReviewAIMapping(currentPacket);
+                
+                if (currentPacket && getRuntimeValidationState(currentPacket).hasValidation) {
+                  state.guidedReviewStep = 3;
+                } else {
+                  state.guidedReviewStep = 2;
+                  if (currentPacket) {
+                    loadGuidedReviewAIMapping(currentPacket);
+                  }
                 }
+                render();
               })
               .catch(err => {
                 el.disabled = false;
@@ -4588,7 +4934,7 @@
             el.innerHTML = `<span class="spinner-mini" style="display:inline-block; width:12px; height:12px; border:2px solid #fff; border-top:2px solid transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:6px; vertical-align:middle;"></span>Saving...`;
             fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/save-draft-mapping`, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: withActorHeaders({ "Content-Type": "application/json" }),
               body: JSON.stringify({
                 sheetName: currentPacket?.parseStrategy?.sheetName || "Sheet1",
                 startRow: currentPacket?.parseStrategy?.startRow || 2,
@@ -4662,6 +5008,7 @@
         if (action === "guided-prev") {
           if (state.guidedReviewStep && state.guidedReviewStep > 1) {
             state.guidedReviewStep -= 1;
+            state.guidedReviewTraceModal = { open: false, sampleIndex: null };
             render();
           }
           return;
@@ -4673,12 +5020,14 @@
         }
         if (action === "back-to-guided-step-3") {
           state.guidedReviewStep = 3;
+          state.guidedReviewTraceModal = { open: false, sampleIndex: null };
           render();
           return;
         }
         if (action === "close-guided-review") {
           state.guidedReviewOpen = false;
           state.guidedReviewAI = { loading: false, error: "", mapping: null, packetId: null };
+          state.guidedReviewTraceModal = { open: false, sampleIndex: null };
           render();
           return;
         }
@@ -4740,7 +5089,7 @@
           el.innerHTML = `<span class="spinner-mini" style="display:inline-block; width:12px; height:12px; border:2px solid #fff; border-top:2px solid transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:6px; vertical-align:middle;"></span>Saving...`;
           fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/save-draft-mapping`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withActorHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({
               sheetName: currentPacket?.parseStrategy?.sheetName || "Sheet1",
               startRow: currentPacket?.parseStrategy?.startRow || 2,
@@ -4858,6 +5207,7 @@
                 }
               }
               await loadReconciliationReviewRecords();
+              await refreshAuditLogIfVisible();
               showToast(`Record ${rowId} marked as resolved.`);
               state.selectedEvidenceRowId = null;
               render();
@@ -4876,6 +5226,7 @@
           }))
             .then(async () => {
               await loadReconciliationReviewRecords();
+              await refreshAuditLogIfVisible();
               showToast("Reconciliation run approved. All anomalies marked as resolved.");
               state.selectedEvidenceRowId = null;
               render();
@@ -4929,6 +5280,7 @@
                 });
               }
               await loadReconciliationReviewRecords();
+              await refreshAuditLogIfVisible();
               state.selectedReconRows = {};
               showToast(`Batch reviewed ${selectedKeys.length} records.`);
               render();
@@ -4991,7 +5343,7 @@
             if (!ok) throw new Error(body.detail || "Upload analysis failed");
             state.studio.fileName = file.name;
             state.studio.headers = body.headers || [];
-            state.studio.sampleRows = body.sample_rows || [];
+            state.studio.sampleRows = body.sampleRows || [];
             state.studio.config = body.config;
             state.studio.draftMappingId = body.draftMappingId || null;
             state.studio.reviewItemId = body.reviewItemId || null;
@@ -5038,7 +5390,7 @@
             
             state.studio.fileName = file.name;
             state.studio.headers = body.headers || [];
-            state.studio.sampleRows = body.sample_rows || [];
+            state.studio.sampleRows = body.sampleRows || [];
             state.studio.config = body.config;
             state.studio.draftMappingId = body.draftMappingId || null;
             state.studio.reviewItemId = body.reviewItemId || null;
@@ -5245,7 +5597,7 @@
         
         fetch("/api/v1/mapping/validate", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: withActorHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify(configCopy)
         })
           .then(r => r.json())
@@ -5285,7 +5637,7 @@
         
         fetch("/api/v1/mapping/test", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: withActorHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({
             "mapping": state.studio.config,
             "sampleRow": row
@@ -5323,7 +5675,7 @@
         confirmHandoffBtn.innerHTML = `<span class="spinner small"></span> Handing off...`;
         fetch(`/api/v1/review-packets/from-mapping/${encodeURIComponent(draftId)}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: withActorHeaders({ "Content-Type": "application/json" }),
         })
           .then(r => r.json().then(body => ({ ok: r.ok, body })))
           .then(({ ok, body }) => {
@@ -5416,9 +5768,14 @@
     const { showDate = true, showClear = true, showReconActions = false } = options;
     const reconRun = state.reconciliationRun;
     const reconStatus = String(reconRun?.status || "IDLE").toUpperCase();
+    const postApprovalRun = getActivePostApprovalRunForContext();
+    const reconBlockedByPostApproval = Boolean(postApprovalRun);
+    const reconActionLabel = reconBlockedByPostApproval ? "Waiting for Approved Ingestion" : "Run Reconciliation";
     const reconStatusClass = reconStatus === "COMPLETED" ? "matched" : reconStatus === "FAILED" ? "failed" : isActiveRuntimeStatus(reconStatus) ? "warning" : "neutral";
     const reconStatusLabel = reconStatus === "IDLE" ? "No run" : statusLabel(reconStatus);
-    const reconStatusDetail = reconRun?.message || (reconRun?.updatedAt ? `Updated ${formatDisplayDateTime(reconRun.updatedAt)}` : "No reconciliation run recorded");
+    const reconStatusDetail = reconBlockedByPostApproval
+      ? (postApprovalRun.message || "Approved file is still being ingested before reconciliation can run.")
+      : (reconRun?.message || (reconRun?.updatedAt ? `Updated ${formatDisplayDateTime(reconRun.updatedAt)}` : "No reconciliation run recorded"));
     return `
       <div class="page-filters" style="align-items: center;">
         <div class="filter-group">
@@ -5451,8 +5808,8 @@
         ` : ""}
         ${showReconActions ? `
           <div style="margin-left: auto; display: flex; align-items: center; gap: 12px; height: 44px; margin-top: auto;">
-            <button class="button primary compact" data-action="run-reconciliation-now" style="padding: 4px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; height: 32px; border-radius: 6px; background: var(--brand-accent-blue); color: black; font-weight: 600; border: none; cursor: pointer; box-shadow: var(--shadow);">
-              <span class="material-symbols-outlined" style="font-size: 15px;">sync</span> Run Reconciliation
+            <button class="button primary compact" data-action="run-reconciliation-now" ${reconBlockedByPostApproval ? "disabled" : ""} style="padding: 4px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; height: 32px; border-radius: 6px; background: var(--brand-accent-blue); color: black; font-weight: 600; border: none; ${reconBlockedByPostApproval ? "cursor:not-allowed; opacity:0.55;" : "cursor:pointer;"} box-shadow: var(--shadow);">
+              <span class="material-symbols-outlined" style="font-size: 15px;">sync</span> ${reconActionLabel}
             </button>
             <div style="display: flex; align-items: center; gap: 6px;">
               <span class="badge ${reconStatusClass}" style="padding: 4px 8px; font-size: 11px; font-weight: 600; border-radius: 4px; border: none; text-transform: none; display: inline-flex; align-items: center; gap: 4px; height: 26px;">
@@ -5493,11 +5850,11 @@
   function executeCopilotAction(actionKey) {
     return fetch(`/api/v1/copilot/actions/${encodeURIComponent(actionKey)}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: withActorHeaders({ "Content-Type": "application/json", Accept: "application/json" }),
       body: JSON.stringify({
         partner: state.partner,
         date: state.date,
-        reviewedBy: "Administrator",
+        reviewedBy: getActorName(),
       }),
     }).then(r => r.json().then(body => {
       if (!r.ok) throw new Error(body.detail || "Copilot action failed");
@@ -5564,6 +5921,7 @@
       "QUEUED": "neutral",
       "FETCHING": "processing",
       "INGESTING": "processing",
+      "WAITING_REVIEW": "warning",
       "WAITING_RECONCILE": "warning",
       "RECONCILING": "warning"
     };
@@ -5607,6 +5965,7 @@
       QUEUED: "Queued",
       FETCHING: "Fetching",
       INGESTING: "Ingesting",
+      WAITING_REVIEW: "Waiting Review",
       WAITING_RECONCILE: "Waiting Reconcile",
       RECONCILING: "Reconciling"
     };
@@ -5771,7 +6130,7 @@
     render();
     fetch(`/api/v1/review-packets/${encodeURIComponent(packet._id)}/generate-ai-mapping`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: withActorHeaders({ "Content-Type": "application/json" }),
     })
       .then(r => r.json().then(body => ({ ok: r.ok, body })))
       .then(({ ok, body }) => {
@@ -5825,7 +6184,7 @@
     renderPreserveScroll();
     fetch(`/api/v1/review-packets/${encodeURIComponent(packet._id)}/classify-scope-llm`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: withActorHeaders({ "Content-Type": "application/json" }),
     })
       .then(r => r.json().then(body => ({ ok: r.ok, body })))
       .then(({ ok, body }) => {
@@ -5849,6 +6208,12 @@
       state.localDraftMappingIds[packetId] = updates.draftMappingId;
     }
     updateReviewPacketLocally(packetId, currentPacket => {
+      if (Object.prototype.hasOwnProperty.call(updates, "status")) {
+        currentPacket.status = updates.status;
+      }
+      if (Object.prototype.hasOwnProperty.call(updates, "reviewedAt")) {
+        currentPacket.reviewedAt = updates.reviewedAt;
+      }
       if (Object.prototype.hasOwnProperty.call(updates, "draftMappingId")) {
         currentPacket.draftMappingId = updates.draftMappingId;
       }
@@ -5883,8 +6248,41 @@
     return status === "COMPLETED" || status === "FAILED";
   }
 
+  function isLiveReconciliationRunStatus(status) {
+    return ["QUEUED", "FETCHING", "INGESTING", "RECONCILING", "RUNNING"].includes(String(status || "").toUpperCase());
+  }
+
   function isActiveRuntimeStatus(status) {
-    return ["QUEUED", "FETCHING", "INGESTING", "WAITING_RECONCILE", "RECONCILING", "RUNNING"].includes(String(status || "").toUpperCase());
+    return ["QUEUED", "FETCHING", "INGESTING", "WAITING_REVIEW", "WAITING_RECONCILE", "RECONCILING", "RUNNING"].includes(String(status || "").toUpperCase());
+  }
+
+  function getActivePostApprovalRunForContext() {
+    const runs = Object.values(state.postApprovalRuns || {});
+    return runs.find(run =>
+      run &&
+      run.partner === state.partner &&
+      run.date === state.date &&
+      !isTerminalPostApprovalRun(run)
+    ) || null;
+  }
+
+  function getPostApprovalRunForPacket(packetId) {
+    if (!packetId) return null;
+    return (state.postApprovalRuns || {})[String(packetId)] || null;
+  }
+
+  function hasMeaningfulRunChange(previousRun, nextRun) {
+    if (!previousRun && !nextRun) return false;
+    if (!previousRun || !nextRun) return true;
+    return [
+      "status",
+      "message",
+      "reconciliationCount",
+      "sourceFileId",
+      "mappingVersion",
+      "startedAt",
+      "finishedAt"
+    ].some(key => String(previousRun[key] ?? "") !== String(nextRun[key] ?? ""));
   }
 
   function pollAutomationOverview() {
@@ -5921,8 +6319,16 @@
           if (!ok) throw new Error(body.detail || "Failed to load reconciliation run.");
           const run = body.run || null;
           if (!run) return;
+          const previousRun = state.reconciliationRun;
           state.reconciliationRun = run;
-          render();
+          if (hasMeaningfulRunChange(previousRun, run)) {
+            render();
+          }
+          if (!isLiveReconciliationRunStatus(run.status)) {
+            clearInterval(reconciliationRunPoller);
+            reconciliationRunPoller = null;
+            return;
+          }
           if (isTerminalReconciliationRun(run)) {
             clearInterval(reconciliationRunPoller);
             reconciliationRunPoller = null;
@@ -5955,6 +6361,28 @@
           if (isTerminalPostApprovalRun(run)) {
             clearInterval(postApprovalPollers[packetId]);
             delete postApprovalPollers[packetId];
+            let shouldRender = true;
+            state.reviewCenterCache = null;
+            if (String(run.status || "").toUpperCase() === "COMPLETED") {
+              syncLocalReviewPacket(packetId, {
+                status: "APPROVED",
+                reviewedAt: run.finishedAt || new Date().toISOString(),
+              });
+              if (state.selectedReviewPacketId === packetId) {
+                state.selectedReviewPacketId = null;
+              }
+              state.guidedReviewOpen = false;
+              state.guidedReviewTraceModal = { open: false, sampleIndex: null };
+            }
+            if (state.route === "reconciliation" && run.partner === state.partner && run.date === state.date) {
+              state.activeReconData = null;
+              state.reconciliationRun = null;
+              shouldRender = true;
+            }
+            if (state.route === "review-center") {
+              shouldRender = true;
+            }
+            if (shouldRender) render();
           }
         })
         .catch(() => {

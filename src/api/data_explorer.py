@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from bson import Decimal128
 
+from src.api.response_utils import camelize
 from src.models.data_container import DataContainer, DataContainerRepository
 from src.models.reconciliation_file import ReconciliationFileRepository
 
@@ -216,10 +217,10 @@ async def get_file(request: Request, file_id: str):
             raise HTTPException(status_code=404, detail=f"File '{file_id}' not found.")
         transaction_count = await db["data_container"].count_documents({"sourceFileId": file_id})
         raw["_id"] = str(raw["_id"])
-        return {
+        return camelize({
             "file": raw,
-            "transaction_count": transaction_count,
-        }
+            "transactionCount": transaction_count,
+        })
     except HTTPException:
         raise
     except Exception as exc:
@@ -271,13 +272,13 @@ async def data_stats(
             async for doc in cursor:
                 by_partner[str(doc["_id"])] = doc["count"]
 
-        return {
+        return camelize({
             "partner": partner or "*",
             "date": date or "*",
-            "total_transactions": total_transactions,
-            "total_files": total_files,
-            "by_partner": by_partner,
-        }
+            "totalTransactions": total_transactions,
+            "totalFiles": total_files,
+            "byPartner": by_partner,
+        })
     except HTTPException:
         raise
     except Exception as exc:

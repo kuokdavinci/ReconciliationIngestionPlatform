@@ -1,15 +1,13 @@
 """Approval desk review packet endpoints."""
 
 from datetime import datetime, timezone
-from decimal import Decimal
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from src.api.actor import require_actor
 from src.config.ai_generator import generate_config_from_samples
-from src.core.enums import ProcessingStatus
 from src.core.enums import FileType
 from src.models.mapping_config import MappingConfig, MappingConfigRepository, MappingConfigStatus
 from src.models.post_approval_run import PostApprovalRunRepository
@@ -20,8 +18,6 @@ from src.models.review_packet import (
     ReviewPacketSourceType,
     ReviewPacketStatus,
 )
-from src.normalizer.normalizer import TransactionNormalizer
-from src.readers import create_reader
 from src.services.mapping_contract import (
     canonicalize_field_mappings,
     serialize_field_mappings,
@@ -35,7 +31,10 @@ from src.services.review_packet_actions import (
     update_packet_scope,
 )
 from src.services.ai_mapping_context import resolve_ai_generation_context
-from src.services.runtime_validation import run_runtime_validation, upsert_validation_gate
+from src.services.runtime_validation import (
+    derive_validation_state,
+    run_runtime_validation,
+)
 
 
 router = APIRouter(prefix="/api/v1/review-packets")
@@ -60,12 +59,13 @@ def _serialize(packet) -> dict:
     data = packet.model_dump(by_alias=True)
     data["_id"] = str(data["_id"])
     data["reviewItemId"] = data["_id"]
+    data["validationState"] = _derive_validation_state(packet.validation_gates or [])
     return data
 
 
 
 class ReviewDecisionPayload(BaseModel):
-    reviewed_by: Optional[str] = None
+    reviewed_by: Optional[str] = Field(default=None, alias="reviewedBy")
     scope_type: Optional[str] = Field(default=None, alias="scopeType")
 
 
@@ -96,6 +96,16 @@ def _has_passing_runtime_gate(packet) -> bool:
         if gate.get("gateKey") == "runtime_validation":
             return str(gate.get("status", "")).lower() == "pass"
     return False
+
+
+def _derive_validation_state(validation_gates: list[dict]) -> str:
+    runtime_gate = next(
+        (gate for gate in validation_gates if gate.get("gateKey") == "runtime_validation"),
+        None,
+    )
+    if runtime_gate is None:
+        return "NOT_RUN"
+    return derive_validation_state(runtime_gate)
 
 
 @router.get("")
@@ -162,7 +172,7 @@ async def validate_runtime_packet(request: Request, packet_id: str):
 
     gate = await run_runtime_validation(_get_db(request), packet, config)
     ok = gate["status"] == "pass"
-    return {"ok": ok, "gate": gate}
+    return {"ok": ok, "validationState": derive_validation_state(gate), "gate": gate}
 
 
 @router.post("/{packet_id}/generate-ai-mapping")
@@ -426,6 +436,7 @@ async def approve_activate_packet_action(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _repo(request)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
@@ -469,6 +480,7 @@ async def approve_keep_current_packet_action(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _repo(request)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
@@ -502,6 +514,7 @@ async def reject_packet_action(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     return await mark_packet(
         request,
         packet_id,
@@ -527,6 +540,7 @@ async def send_packet_to_studio(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _repo(request)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:

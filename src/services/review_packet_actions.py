@@ -29,6 +29,9 @@ from src.models.review_packet import (
 )
 from src.pipeline.ingestion_pipeline import IngestionPipeline
 from src.reconciliation.engine import ReconciliationEngine
+from src.services.audit import record_audit_event
+from src.services.runtime_runs import create_runtime_run, update_runtime_run
+from src.models.partner_runtime_run import PartnerRuntimeRunStatus, PartnerRuntimeTriggerType
 
 
 def _get_db(request: Request):
@@ -99,6 +102,27 @@ async def mark_packet(
     packet.decision_mode = decision_mode
     packet.reviewed_at = now
     packet.reviewed_by = reviewed_by
+    audit_date = (
+        packet.reconciliation_date.strftime("%Y-%m-%d")
+        if getattr(packet, "reconciliation_date", None)
+        else None
+    )
+    await record_audit_event(
+        _get_db(request),
+        entity_type="REVIEW_PACKET",
+        entity_id=packet_id,
+        action=decision_mode.value,
+        actor=reviewed_by,
+        metadata={
+            "partner": packet.partner,
+            "date": audit_date,
+            "status": status.value,
+            "reference": packet.draft_mapping_version or packet.draft_mapping_id or packet.source_file_id,
+            "draftMappingId": packet.draft_mapping_id,
+            "draftMappingVersion": packet.draft_mapping_version,
+            "sourceFileId": packet.source_file_id,
+        },
+    )
     return {"ok": True, "packet": serializer(packet)}
 
 
@@ -273,9 +297,29 @@ async def _run_post_approval_reprocess(app: FastAPI, run_id: str, packet_id: str
 
 
 async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | None:
+    runtime_run = await create_runtime_run(
+        db,
+        partner=config.partner,
+        date=packet.reconciliation_date.strftime("%Y-%m-%d"),
+        trigger_type=PartnerRuntimeTriggerType.POST_APPROVAL_REPROCESS,
+        triggered_by="system:post-approval",
+        status=PartnerRuntimeRunStatus.INGESTING,
+        message="Approved file is queued for ingestion.",
+        source_file_id=getattr(packet, "source_file_id", None),
+        mapping_version=getattr(config, "config_version", None) or str(getattr(config, "id", "")),
+        validation_state="NOT_RUN",
+    )
+    runtime_run_id = str(runtime_run.id)
     source_file_path = getattr(packet, "source_file_path", None)
     source_file_id = getattr(packet, "source_file_id", None)
     if not source_file_path or not source_file_id:
+        await update_runtime_run(
+            db,
+            runtime_run_id,
+            status=PartnerRuntimeRunStatus.FAILED,
+            message="Review packet has no source file attached for post-approval processing.",
+            finished_at=datetime.now(timezone.utc),
+        )
         await _update_post_approval_run(
             db,
             run_id,
@@ -288,6 +332,13 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
 
     path = Path(source_file_path)
     if not path.exists():
+        await update_runtime_run(
+            db,
+            runtime_run_id,
+            status=PartnerRuntimeRunStatus.FAILED,
+            message=f"Source file is no longer available at {source_file_path}.",
+            finished_at=datetime.now(timezone.utc),
+        )
         await _update_post_approval_run(
             db,
             run_id,
@@ -301,6 +352,13 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
     file_repo = ReconciliationFileRepository(db)
     source_file = await file_repo.find_one({"_id": source_file_id})
     if source_file is None:
+        await update_runtime_run(
+            db,
+            runtime_run_id,
+            status=PartnerRuntimeRunStatus.FAILED,
+            message=f"Source file record {source_file_id} was not found.",
+            finished_at=datetime.now(timezone.utc),
+        )
         await _update_post_approval_run(
             db,
             run_id,
@@ -311,7 +369,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         )
         return None
 
-    if source_file.processing_status == ProcessingStatus.FAILED:
+    if source_file.processing_status != ProcessingStatus.COMPLETED:
         await db["data_container"].delete_many({"sourceFileId": source_file_id})
         await file_repo.delete_one({"_id": source_file_id})
 
@@ -320,6 +378,13 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         run_id,
         status=PostApprovalRunStatus.INGESTING,
         stage=PostApprovalRunStage.INGESTION,
+        message="Ingesting partner file with the approved mapping.",
+        started_at=datetime.now(timezone.utc),
+    )
+    await update_runtime_run(
+        db,
+        runtime_run_id,
+        status=PartnerRuntimeRunStatus.INGESTING,
         message="Ingesting partner file with the approved mapping.",
         started_at=datetime.now(timezone.utc),
     )
@@ -359,6 +424,15 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         "errors": ingestion_result.errors,
     }
     if processing_status != ProcessingStatus.COMPLETED.value:
+        await update_runtime_run(
+            db,
+            runtime_run_id,
+            status=PartnerRuntimeRunStatus.FAILED,
+            message="Ingestion failed after approval.",
+            source_file_id=str(ingestion_result.file_record.id),
+            stats=result["stats"],
+            finished_at=datetime.now(timezone.utc),
+        )
         await _update_post_approval_run(
             db,
             run_id,
@@ -388,12 +462,22 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         stats=result["stats"],
         errors=ingestion_result.errors,
     )
+    await update_runtime_run(
+        db,
+        runtime_run_id,
+        status=PartnerRuntimeRunStatus.RECONCILING,
+        message="Reconciling ingested partner rows against internal transactions.",
+        source_file_id=str(ingestion_result.file_record.id),
+        stats=result["stats"],
+    )
 
     recon_date = source_file.reconciliation_date
     recon_results = await ReconciliationEngine(db).reconcile(
         config.partner,
         recon_date,
         source_file_id=str(ingestion_result.file_record.id),
+        reconciliation_run_id=runtime_run_id,
+        mapping_version=getattr(config, "config_version", None) or str(config.id),
     )
 
     await _update_post_approval_run(
@@ -428,5 +512,15 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         reconciliation_count=len(recon_results),
         stats=result["stats"],
         errors=ingestion_result.errors,
+    )
+    await update_runtime_run(
+        db,
+        runtime_run_id,
+        status=PartnerRuntimeRunStatus.COMPLETED,
+        message="Reconciliation completed successfully.",
+        source_file_id=str(ingestion_result.file_record.id),
+        stats={"resultCount": len(recon_results), **result["stats"]},
+        reconciliation_count=len(recon_results),
+        finished_at=datetime.now(timezone.utc),
     )
     return result

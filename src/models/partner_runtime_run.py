@@ -22,6 +22,7 @@ class PartnerRuntimeRunStatus(str, Enum):
     QUEUED = "QUEUED"
     FETCHING = "FETCHING"
     INGESTING = "INGESTING"
+    WAITING_REVIEW = "WAITING_REVIEW"
     WAITING_RECONCILE = "WAITING_RECONCILE"
     RECONCILING = "RECONCILING"
     COMPLETED = "COMPLETED"
@@ -38,10 +39,13 @@ class PartnerRuntimeRun(BaseModel):
     partner: str
     date: str
     trigger_type: PartnerRuntimeTriggerType = Field(alias="triggerType")
+    triggered_by: Optional[str] = Field(default=None, alias="triggeredBy")
     status: PartnerRuntimeRunStatus = PartnerRuntimeRunStatus.QUEUED
     message: Optional[str] = None
     source_file_id: Optional[str] = Field(default=None, alias="sourceFileId")
     file_name: Optional[str] = Field(default=None, alias="fileName")
+    mapping_version: Optional[str] = Field(default=None, alias="mappingVersion")
+    validation_state: Optional[str] = Field(default=None, alias="validationState")
     stats: dict[str, Any] = Field(default_factory=dict)
     reconciliation_count: Optional[int] = Field(default=None, alias="reconciliationCount")
     started_at: Optional[datetime] = Field(default=None, alias="startedAt")

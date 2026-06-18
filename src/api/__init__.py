@@ -11,8 +11,6 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from src.analysis.config import AnalysisConfig
-from src.analysis.provider import create_provider
 from src.config.settings import settings
 
 
@@ -90,5 +88,8 @@ def create_app() -> FastAPI:
 
     from src.api.automation import router as automation_router
     app.include_router(automation_router)
+
+    from src.api.audit import router as audit_router
+    app.include_router(audit_router)
 
     return app

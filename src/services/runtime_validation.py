@@ -5,7 +5,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 
-from src.core.enums import FileType
 from src.models.review_packet import ReviewPacketRepository
 from src.normalizer.normalizer import TransactionNormalizer
 from src.readers import create_reader
@@ -103,11 +102,33 @@ def upsert_validation_gate(packet, gate: dict) -> list[dict]:
     return gates
 
 
+def derive_validation_state(gate: dict) -> str:
+    details = gate.get("details") or {}
+    status = str(gate.get("status", "")).lower()
+    success_rate = details.get("successRate")
+    validated_mapping_version = details.get("validatedMappingVersion")
+    current_mapping_version = details.get("currentMappingVersion")
+    if (
+        validated_mapping_version
+        and current_mapping_version
+        and validated_mapping_version != current_mapping_version
+    ):
+        return "STALE"
+    if status == "pass":
+        if isinstance(success_rate, (int, float)) and success_rate < 1:
+            return "PASSED_WITH_WARNINGS"
+        return "CURRENT"
+    if status == "fail":
+        return "FAILED"
+    return "NOT_RUN"
+
+
 async def run_runtime_validation(db, packet, config) -> dict:
     """Execute dry-run runtime validation using Excel file or sample previews."""
     source_file_path = getattr(packet, "source_file_path", None)
     validated_at = datetime.now(timezone.utc)
     validated_mapping_version = getattr(config, "config_version", None) or str(getattr(config, "id", ""))
+    current_mapping_version = validated_mapping_version
     sampled_rows = 0
     success_rows = 0
     failed_rows = 0
@@ -173,6 +194,7 @@ async def run_runtime_validation(db, packet, config) -> dict:
                     "sampledRows": 0,
                     "validatedAt": validated_at.isoformat(),
                     "validatedMappingVersion": validated_mapping_version,
+                    "currentMappingVersion": current_mapping_version,
                     "successRate": 0,
                     "riskLevel": "HIGH",
                 },
@@ -198,6 +220,7 @@ async def run_runtime_validation(db, packet, config) -> dict:
                     "sampledRows": 0,
                     "validatedAt": validated_at.isoformat(),
                     "validatedMappingVersion": validated_mapping_version,
+                    "currentMappingVersion": current_mapping_version,
                     "successRate": 0,
                     "riskLevel": "HIGH",
                 },
@@ -236,6 +259,7 @@ async def run_runtime_validation(db, packet, config) -> dict:
             "traceSamples": trace_samples,
             "validatedAt": validated_at.isoformat(),
             "validatedMappingVersion": validated_mapping_version,
+            "currentMappingVersion": current_mapping_version,
             "successRate": success_rate,
             "riskLevel": risk_level,
         },

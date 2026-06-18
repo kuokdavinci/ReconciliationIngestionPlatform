@@ -12,10 +12,9 @@ from src.config.loader import ConfigLoader
 from src.core.enums import FileType, ProcessingStatus
 from src.core.error_formatting import summarize_runtime_error
 from src.fetchers import create_fetcher
-from src.fetchers.base import BaseFetcher, FetchResult
+from src.fetchers.base import BaseFetcher
 from src.logging import StructuredLogger
 from src.models.fetch_config import FetchConfig, FetchConfigRepository
-from src.pipeline.ingestion_pipeline import IngestionPipeline
 from src.reconciliation.engine import ReconciliationEngine
 from src.services.runtime_runs import create_runtime_run, update_runtime_run
 from src.models.partner_runtime_run import (
@@ -126,6 +125,7 @@ async def run_fetch_config_once(
         partner=partner,
         date=reconciliation_date.strftime("%Y-%m-%d"),
         trigger_type=PartnerRuntimeTriggerType.SCHEDULER,
+        triggered_by="system:scheduler",
         status=PartnerRuntimeRunStatus.FETCHING,
         message="Fetching partner file.",
     )
@@ -208,6 +208,10 @@ async def run_fetch_config_once(
             "value",
             ingestion_result.file_record.processing_status,
         )
+        waiting_for_review = any(
+            "configuration approval required" in str(err.get("reason", "")).lower()
+            for err in (ingestion_result.errors or [])
+        )
         stats = {
             "totalRows": ingestion_result.stats.total_rows,
             "successRows": ingestion_result.stats.success_rows,
@@ -216,8 +220,20 @@ async def run_fetch_config_once(
         await update_runtime_run(
             db,
             str(run.id),
-            status=PartnerRuntimeRunStatus.WAITING_RECONCILE if processing_status == ProcessingStatus.COMPLETED.value else PartnerRuntimeRunStatus.FAILED,
-            message="Ingestion completed. Waiting to start reconciliation." if processing_status == ProcessingStatus.COMPLETED.value else "Ingestion failed.",
+            status=(
+                PartnerRuntimeRunStatus.WAITING_RECONCILE
+                if processing_status == ProcessingStatus.COMPLETED.value
+                else PartnerRuntimeRunStatus.WAITING_REVIEW
+                if waiting_for_review
+                else PartnerRuntimeRunStatus.FAILED
+            ),
+            message=(
+                "Ingestion completed. Waiting to start reconciliation."
+                if processing_status == ProcessingStatus.COMPLETED.value
+                else "A draft mapping is waiting for review before reconciliation can continue."
+                if waiting_for_review
+                else "Ingestion failed."
+            ),
             source_file_id=str(ingestion_result.file_record.id),
             stats=stats,
         )
@@ -260,14 +276,20 @@ async def run_fetch_config_once(
                 logger.info("Cleaned up file for %s: %s", partner, fetch_result.local_path)
 
         return {
-            "success": True,
+            "success": processing_status == ProcessingStatus.COMPLETED.value or waiting_for_review,
             "partner": partner,
             "filePath": fetch_result.local_path,
             "fileSize": fetch_result.file_size,
             "processingStatus": processing_status,
             "runtimeRun": {
                 "id": str(run.id),
-                "status": PartnerRuntimeRunStatus.COMPLETED.value if processing_status == ProcessingStatus.COMPLETED.value else PartnerRuntimeRunStatus.FAILED.value,
+                "status": (
+                    PartnerRuntimeRunStatus.COMPLETED.value
+                    if processing_status == ProcessingStatus.COMPLETED.value
+                    else PartnerRuntimeRunStatus.WAITING_REVIEW.value
+                    if waiting_for_review
+                    else PartnerRuntimeRunStatus.FAILED.value
+                ),
                 "reconciliationCount": reconciliation_count,
             },
         }

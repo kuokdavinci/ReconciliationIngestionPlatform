@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from src.api.actor import require_actor
 from src.api.mappings import (
     MappingReviewPayload,
     approve_mapping_config_action,
@@ -108,6 +109,7 @@ async def execute_copilot_action(
         return {"ok": True, "target": target, "context": resolution.context}
 
     if action_key == "approve_keep_current":
+        payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
         if not review_item_id:
             raise HTTPException(status_code=400, detail="No review packet is available for this action.")
         result = await approve_keep_current_packet_action(
@@ -119,6 +121,7 @@ async def execute_copilot_action(
         return {"ok": True, "result": result, "context": context}
 
     if action_key == "approve_activate_next_runtime":
+        payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
         if review_item_id:
             result = await approve_activate_packet_action(
                 request,
@@ -137,6 +140,7 @@ async def execute_copilot_action(
         return {"ok": True, "result": result, "context": context}
 
     if action_key == "reject_proposal":
+        payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
         if review_item_id:
             result = await reject_packet_action(
                 request,
@@ -176,6 +180,7 @@ async def list_actions(
 
 
 async def _review_action(request: Request, action_id: str, status: CopilotActionStatus):
+    actor = require_actor(request, payload_field_name="actor")
     repo = _get_repo(request)
     action = await repo.find_one({"_id": action_id})
     if action is None:
@@ -183,10 +188,11 @@ async def _review_action(request: Request, action_id: str, status: CopilotAction
     now = datetime.now(timezone.utc)
     await repo.collection.update_one(
         {"_id": action_id},
-        {"$set": {"status": status.value, "reviewedAt": now}},
+        {"$set": {"status": status.value, "reviewedAt": now, "reviewedBy": actor}},
     )
     action.status = status
     action.reviewed_at = now
+    action.reviewed_by = actor
     return {"ok": True, "action": _serialize(action)}
 
 

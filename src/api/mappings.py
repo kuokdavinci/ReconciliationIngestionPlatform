@@ -8,10 +8,13 @@ from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from src.api.actor import require_actor
+from src.analysis.insights import invalidate_insight_cache
 from src.config.ai_generator import generate_config_from_samples
-from src.config.signature import compute_signature, read_raw_rows
+from src.config.settings import settings
+from src.config.signature import compute_signature
 from src.core.enums import FileType
 from src.models.copilot_action import (
     CopilotAction,
@@ -31,16 +34,14 @@ from src.models.review_packet import (
     ReviewPacketSourceType,
 )
 from src.reconciliation.scope import classify_scope
-
-logger = logging.getLogger(__name__)
-
-from src.analysis.insights import invalidate_insight_cache
-from src.core.constants import DEFAULT_CURRENCY
+from src.services.audit import record_audit_event
 from src.services.mapping_contract import (
     canonicalize_field_mappings,
     serialize_field_mappings,
     validate_mapping_contract,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/mappings")
 router_v2 = APIRouter(prefix="/api/v1/mapping")
@@ -50,6 +51,12 @@ try:
     _MULTIPART_AVAILABLE = True
 except ImportError:
     _MULTIPART_AVAILABLE = False
+
+
+def _get_upload_tmp_dir() -> Path:
+    temp_dir = Path(settings.upload_tmp_dir)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return temp_dir
 
 
 def _validate_partner(partner: Optional[str]) -> Optional[str]:
@@ -129,7 +136,7 @@ async def _sync_review_packets_for_config(
 class MappingReviewPayload(BaseModel):
     confidence: float | None = None
     reasoning: str | None = None
-    reviewed_by: str | None = None
+    reviewed_by: str | None = Field(default=None, alias="reviewedBy")
 
 
 @router.get("")
@@ -160,6 +167,7 @@ async def approve_mapping_config_action(
     config_id: str,
     payload: MappingReviewPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _get_repo(request)
     config = await repo.find_one({"_id": config_id})
     if config is None:
@@ -224,6 +232,20 @@ async def approve_mapping_config_action(
     except Exception as cache_exc:
         logger.error(f"Failed to invalidate insight cache for {config.partner}: {cache_exc}")
 
+    await record_audit_event(
+        _get_db(request),
+        entity_type="MAPPING_CONFIG",
+        entity_id=config_id,
+        action="APPROVED",
+        actor=payload.reviewed_by,
+        metadata={
+            "partner": config.partner,
+            "reference": getattr(config, "config_version", None) or str(config.id),
+            "mappingVersion": getattr(config, "config_version", None) or str(config.id),
+            "status": config.status.value,
+        },
+    )
+
     return {"ok": True, "mapping": _serialize_config(config)}
 
 
@@ -241,6 +263,7 @@ async def reject_mapping_config_action(
     config_id: str,
     payload: MappingReviewPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _get_repo(request)
     config = await repo.find_one({"_id": config_id})
     if config is None:
@@ -267,6 +290,19 @@ async def reject_mapping_config_action(
     )
     config.status = MappingConfigStatus.REJECTED
     config.config_health = health
+    await record_audit_event(
+        _get_db(request),
+        entity_type="MAPPING_CONFIG",
+        entity_id=config_id,
+        action="REJECTED",
+        actor=payload.reviewed_by,
+        metadata={
+            "partner": config.partner,
+            "reference": getattr(config, "config_version", None) or str(config.id),
+            "mappingVersion": getattr(config, "config_version", None) or str(config.id),
+            "status": config.status.value,
+        },
+    )
     return {"ok": True, "mapping": _serialize_config(config)}
 
 
@@ -479,9 +515,9 @@ async def _create_mapping_proposal_from_source_file(
     return {
         "ok": True,
         "mapping": field_mappings_serialized,
-        "confidence_scores": confidence_scores,
+        "confidenceScores": confidence_scores,
         "warnings": mapping_warnings,
-        "suggested_constants": [
+        "suggestedConstants": [
             {"path": "currency", "constant": "VND", "reason": "Default settlement currency"}
         ],
         "config": response_config,
@@ -496,7 +532,7 @@ async def _create_mapping_proposal_from_source_file(
             "fieldMappingCount": len(field_mappings_serialized),
         },
         "headers": sig.headers,
-        "sample_rows": sig.sample_rows[:10],
+        "sampleRows": sig.sample_rows[:10],
     }
 
 
@@ -519,8 +555,7 @@ if _MULTIPART_AVAILABLE:
         partner: str = Query(...),
         file: UploadFile = File(...),
     ):
-        temp_dir = Path("/home/kuokdavinci/AdapterService/scratch/temp_uploads")
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir = _get_upload_tmp_dir()
         temp_file_path = temp_dir / file.filename
         try:
             with open(temp_file_path, "wb") as buffer:
@@ -560,9 +595,9 @@ async def validate_mapping(payload: dict):
         "errors": validation.errors,
         "warnings": warnings,
         "score": validation.score,
-        "score_breakdown": {
-            "required_fields": "Passed" if not validation.errors else "Failed",
-            "warnings_count": len(warnings),
+        "scoreBreakdown": {
+            "requiredFields": "Passed" if not validation.errors else "Failed",
+            "warningsCount": len(warnings),
         },
     }
 
@@ -675,8 +710,7 @@ if _MULTIPART_AVAILABLE:
         partner: str = Query(...),
         file: UploadFile = File(...),
     ):
-        temp_dir = Path("/home/kuokdavinci/AdapterService/scratch/temp_uploads")
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir = _get_upload_tmp_dir()
         temp_file_path = temp_dir / file.filename
         try:
             with open(temp_file_path, "wb") as buffer:

@@ -1,5 +1,7 @@
 """Application settings loaded from environment variables."""
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +14,7 @@ class Settings(BaseSettings):
     log_format: str = "json"
     app_name: str = "reconciliation-ingestion"
     strict_mapping_approval_enabled: bool = True
+    upload_tmp_dir: str = str(Path.cwd() / "scratch" / "temp_uploads")
 
     model_config = SettingsConfigDict(
         env_prefix="APP_",

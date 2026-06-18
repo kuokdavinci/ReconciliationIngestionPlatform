@@ -75,6 +75,10 @@ INDEXES: dict[str, list[IndexModel]] = {
             [("status", ASCENDING), ("updatedAt", ASCENDING)],
             name="idx_partner_runtime_run_status_updated",
         ),
+        IndexModel(
+            [("sourceFileId", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_partner_runtime_run_source_file_created",
+        ),
     ],
     "data_container": [
         IndexModel(
@@ -143,16 +147,6 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel(
             [("partner", ASCENDING), ("date", ASCENDING), ("createdAt", ASCENDING)],
             name="idx_reconciliation_run_partner_date_created",
-        ),
-    ],
-    "partner_runtime_run": [
-        IndexModel(
-            [("partner", ASCENDING), ("date", ASCENDING), ("createdAt", ASCENDING)],
-            name="idx_partner_runtime_run_partner_date_created",
-        ),
-        IndexModel(
-            [("sourceFileId", ASCENDING), ("createdAt", ASCENDING)],
-            name="idx_partner_runtime_run_source_file_created",
         ),
     ],
     "audit_event": [

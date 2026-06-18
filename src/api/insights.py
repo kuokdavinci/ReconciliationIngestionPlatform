@@ -18,7 +18,6 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from src.api.response_utils import camelize
 from src.analysis.config import AnalysisConfig
 from src.analysis.provider import create_provider
-from src.analysis.schemas import AnalysisResult
 
 logger = logging.getLogger(__name__)
 

@@ -10,9 +10,10 @@ from uuid import uuid4
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
+from src.analysis.insights import invalidate_insight_cache
 from src.config.ai_generator import generate_config_from_samples
 from src.config.settings import settings
-from src.config.signature import compute_signature, read_raw_rows
+from src.config.signature import compute_signature
 from src.core.enums import FileType
 from src.models.copilot_action import (
     CopilotAction,
@@ -32,17 +33,14 @@ from src.models.review_packet import (
     ReviewPacketSourceType,
 )
 from src.reconciliation.scope import classify_scope
-
-logger = logging.getLogger(__name__)
-
-from src.analysis.insights import invalidate_insight_cache
-from src.core.constants import DEFAULT_CURRENCY
 from src.services.audit import record_audit_event
 from src.services.mapping_contract import (
     canonicalize_field_mappings,
     serialize_field_mappings,
     validate_mapping_contract,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/mappings")
 router_v2 = APIRouter(prefix="/api/v1/mapping")

@@ -134,9 +134,11 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
     }
   }, [open, localPacket?._id, step, scopeClassification, scopeLoading]);
 
-  // Fetch AI suggestion in Step 2
+  // Fetch AI suggestion in Step 2 (or Step 3 if not yet loaded)
   useEffect(() => {
-    if (open && localPacket?._id && step === 2 && !aiMapping && !aiMappingLoading) {
+    const shouldLoad = open && localPacket?._id && !aiMapping && !aiMappingLoading &&
+      (step === 2 || (step === 3 && fieldMappings.length === 0));
+    if (shouldLoad) {
       const loadMapping = async () => {
         setAiMappingLoading(true);
         setAiMappingError("");
@@ -160,7 +162,7 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
       };
       void loadMapping();
     }
-  }, [open, localPacket?._id, step, aiMapping, aiMappingLoading]);
+  }, [open, localPacket?._id, step, aiMapping, aiMappingLoading, fieldMappings.length]);
 
   // Step 1: Save scope
   const handleContinueFromScope = async () => {

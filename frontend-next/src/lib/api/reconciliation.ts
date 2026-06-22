@@ -81,7 +81,7 @@ function normalizeInsight(item: Record<string, unknown>): InsightItem {
     severity: String(item.severity || "MEDIUM").toUpperCase(),
     title: String(item.title || "Insight"),
     shortSummary: String(item.shortSummary || item.summary || "Review the selected evidence for details."),
-    affectedCount: Number(item.affectedCount ?? item.affected_records ?? 0),
+    affectedCount: Number(item.affectedCount ?? item.affected_count ?? (item.evidence as Record<string, unknown>)?.["affectedRecords"] ?? 0),
     partner: item.partner ? String(item.partner) : undefined,
     confidence: item.confidence != null ? Number(item.confidence) : undefined,
     metrics: Array.isArray(item.metrics)

@@ -86,6 +86,15 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
     pollingIntervalRef.current = setInterval(() => { void tick(); }, 1500);
   }, [onRefresh, onClose, showToast]);
 
+  // Fetch initial run state for already-approved packets (no polling, no toast)
+  useEffect(() => {
+    if (localPacket && String(localPacket.status).toUpperCase() === "APPROVED") {
+      void api.getPostApproveRun(localPacket._id).then(res => {
+        if (res.run) setPostApprovalRun(res.run as any);
+      });
+    }
+  }, [localPacket]);
+
   const handleClose = () => {
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
@@ -98,19 +107,6 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
     setPostApprovalRun(null);
     onClose();
   };
-
-  // Start polling if packet is already approved
-  useEffect(() => {
-    if (localPacket && String(localPacket.status).toUpperCase() === "APPROVED") {
-      startPolling(localPacket._id);
-    }
-    return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-    };
-  }, [localPacket, startPolling]);
 
   // Fetch scope classification in Step 1
   useEffect(() => {

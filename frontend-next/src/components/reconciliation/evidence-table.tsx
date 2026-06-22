@@ -66,7 +66,6 @@ export function EvidenceTable({
             <th className={styles.ledgerHeadCell} style={{ textAlign: "right" }}>Internal Amt</th>
             <th className={styles.ledgerHeadCell} style={{ textAlign: "right" }}>Partner Amt</th>
             <th className={styles.ledgerHeadCell} style={{ textAlign: "right" }}>Delta</th>
-            <th className={styles.ledgerHeadCell} style={{ width: 60, textAlign: "center" }}>Detail</th>
           </tr>
         </thead>
         <tbody>
@@ -100,7 +99,7 @@ export function EvidenceTable({
                 </td>
                 <td className={styles.ledgerCell}>
                   {row.internalStatus ? (
-                    <Badge severity={String(row.internalStatus).toUpperCase() === "SETTLED" ? "low" : "medium"}>
+                    <Badge severity={String(row.internalStatus).toUpperCase() !== "MISSING" ? "low" : "medium"}>
                       {row.internalStatus}
                     </Badge>
                   ) : (
@@ -109,7 +108,7 @@ export function EvidenceTable({
                 </td>
                 <td className={styles.ledgerCell}>
                   {row.partnerStatus ? (
-                    <Badge severity={String(row.partnerStatus).toUpperCase() === "SETTLED" ? "low" : "medium"}>
+                    <Badge severity={String(row.partnerStatus).toUpperCase() !== "MISSING" ? "low" : "medium"}>
                       {row.partnerStatus}
                     </Badge>
                   ) : (
@@ -132,8 +131,6 @@ export function EvidenceTable({
                       </span>
                     </span>
                   ) : "-"}
-                </td>
-                <td className={styles.ledgerCell} style={{ textAlign: "center" }}>
                 </td>
               </tr>
             );
@@ -172,12 +169,12 @@ export function EvidenceTable({
               <div className={styles.mobileCompare}>
                 <div>
                   <div className={styles.compareLabel}>Internal</div>
-                  <div>{row.internalStatus ? <Badge severity={String(row.internalStatus).toUpperCase() === "SETTLED" ? "low" : "medium"}>{row.internalStatus}</Badge> : <Badge severity="high">MISSING</Badge>}</div>
+                  <div>{row.internalStatus ? <Badge severity={String(row.internalStatus).toUpperCase() !== "MISSING" ? "low" : "medium"}>{row.internalStatus}</Badge> : <Badge severity="high">MISSING</Badge>}</div>
                   <div className={styles.compareAmount}>{row.internalAmount != null ? `${row.internalAmount.toLocaleString()}` : "-"}</div>
                 </div>
                 <div>
                   <div className={styles.compareLabel}>Partner</div>
-                  <div>{row.partnerStatus ? <Badge severity={String(row.partnerStatus).toUpperCase() === "SETTLED" ? "low" : "medium"}>{row.partnerStatus}</Badge> : <Badge severity="high">MISSING</Badge>}</div>
+                  <div>{row.partnerStatus ? <Badge severity={String(row.partnerStatus).toUpperCase() !== "MISSING" ? "low" : "medium"}>{row.partnerStatus}</Badge> : <Badge severity="high">MISSING</Badge>}</div>
                   <div className={styles.compareAmount}>{row.partnerAmount != null ? `${row.partnerAmount.toLocaleString()}` : "-"}</div>
                 </div>
               </div>

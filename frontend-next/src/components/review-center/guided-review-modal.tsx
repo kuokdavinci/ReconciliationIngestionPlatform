@@ -172,7 +172,15 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
       await api.setScope(localPacket._id, selectedScope);
       const refreshed = await api.getReviewPacket(localPacket._id);
       setLocalPacket(refreshed.packet);
-      setStep(2);
+      
+      const pkt = refreshed.packet;
+      if (String(pkt.status).toUpperCase() === "APPROVED") {
+        setStep(4);
+      } else {
+        const runtimeGate = (pkt.validationGates || []).find(g => g.gateKey === "runtime_validation");
+        const alreadyValidated = runtimeGate && ["PASS", "PASSED", "FAIL", "FAILED"].includes(String(runtimeGate.status).toUpperCase());
+        setStep(alreadyValidated ? 3 : 2);
+      }
     } catch (err: any) {
       showToast(err.message || "Failed to save file scope.", "error");
     } finally {

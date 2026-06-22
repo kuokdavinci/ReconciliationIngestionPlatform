@@ -74,5 +74,6 @@ progress:
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260605-ji5 | MOMO E2E canonical seed + Quick Start + 3 regression tests | 2026-06-05 | f0d15b9 | [260605-ji5-c-p-nh-t-e2e-tooling-fixture-momo-cho-sc](./quick/260605-ji5-c-p-nh-t-e2e-tooling-fixture-momo-cho-sc/) |
+| 260622-gf6 | migrate mapping studio từ legacy frontend sang frontend-next với đầy đủ 3-step wizard | 2026-06-22 | 8c0ec90 | [260622-gf6-migrate-mapping-studio-t-legacy-frontend](./quick/260622-gf6-migrate-mapping-studio-t-legacy-frontend/) |
 
-Last activity: 2026-06-05 - Completed quick task 260605-ji5: MOMO E2E canonical seed + Quick Start + 3 regression tests
+Last activity: 2026-06-22 - Completed quick task 260622-gf6: migrate mapping studio từ legacy frontend sang frontend-next với đầy đủ 3-step wizard (Upload Sample → Review Draft → Validate Output)

@@ -546,6 +546,7 @@
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
+  color: #fff;
 }
 
 .sectionCardTitle {
@@ -721,6 +722,7 @@
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.015);
   border: 1px solid rgba(255, 255, 255, 0.06);
+  color: #fff;
 }
 .progressLabel {
   display: flex;
@@ -894,6 +896,7 @@
   max-height: calc(100vh - 48px);
   overflow-y: auto;
   border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #fff;
 }
 .traceDetailHeader {
   display: flex;
@@ -932,6 +935,7 @@
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.015);
+  color: #fff;
 }
 .traceDetailSectionTitle {
   font-size: 11px;
@@ -959,6 +963,7 @@
 .traceTable td {
   padding: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: #fff;
 }
 .traceTable tr:last-child td {
   border-bottom: none;
@@ -969,6 +974,7 @@
   border: 1px solid rgba(239, 68, 68, 0.18);
   border-radius: 8px;
   background: rgba(239, 68, 68, 0.05);
+  color: #fff;
 }
 
 /* ── Freshness section (inline in progress bar area) ── */

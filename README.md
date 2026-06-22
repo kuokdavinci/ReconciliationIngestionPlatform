@@ -1,12 +1,13 @@
 # Reconciliation Ingestion Platform
 
-Config-driven reconciliation platform for ingesting partner settlement files, normalizing them into a canonical model, reviewing mapping changes with human approval, and exposing operations/reconciliation workflows through FastAPI and a small Vite dashboard.
+Config-driven reconciliation platform for ingesting partner settlement files, normalizing them into a canonical model, reviewing mapping changes with human approval, and exposing operations/reconciliation workflows through FastAPI and a Next.js dashboard.
 
 ## What Is In This Repo
 
 - Python backend under `src/` for ingestion, reconciliation, approvals, automation, and AI-assisted analysis
 - CLI entrypoint in `run.py` for ingestion, reconciliation, scheduler control, and API serving
-- Vanilla JS dashboard in `frontend/`
+- Active Next.js dashboard in `frontend-next/`
+- Legacy Vite dashboard in `frontend/` kept only as reference
 - MongoDB-backed persistence for files, mappings, review packets, copilot actions, and reconciliation results
 
 ## Current Architecture
@@ -30,7 +31,7 @@ More detail:
 
 ## Prerequisites
 
-- Python `3.14+` for local development via `uv`
+- Python `3.11+` for local development via `uv`
 - `uv`
 - Docker and Docker Compose for MongoDB/SFTP and optional full local stack
 - Node.js for the dashboard
@@ -55,6 +56,9 @@ cp .env.example .env
 docker compose up -d mongodb sftp mongo-express
 ```
 
+`mongo-express` in `docker-compose.yml` is configured for local development convenience and currently runs with `ME_CONFIG_BASICAUTH: "false"`.
+Do not expose it beyond localhost or reuse that setting as a production default.
+
 4. Start the backend API:
 
 ```bash
@@ -64,14 +68,13 @@ uv run python run.py --serve --port 8000
 5. Start the frontend:
 
 ```bash
-cd frontend
-npm install
+npm --prefix frontend-next install
 npm run dev
 ```
 
 6. Open:
 
-- Dashboard: `http://localhost:5173`
+- Dashboard: `http://localhost:3000`
 - API docs: `http://localhost:8000/docs`
 - OpenAPI JSON: `http://localhost:8000/openapi.json`
 - Mongo Express: `http://localhost:8081`
@@ -172,8 +175,6 @@ Use `/docs` for the current request/response schema.
 
 Current views reflected in `frontend/app.js`:
 
-- `#command-center`
-- `#data-intake`
 - `#review-center`
 - `#reconciliation`
 - `#mapping-studio`

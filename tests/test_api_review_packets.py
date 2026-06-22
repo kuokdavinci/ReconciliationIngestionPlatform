@@ -9,19 +9,38 @@ from src.api.review_packets import (
     ReviewDecisionPayload,
     approve_activate_packet,
     approve_keep_current_packet,
+    get_post_approve_run,
     list_review_packets,
     save_draft_mapping_for_packet,
     validate_runtime_packet,
     SaveDraftMappingPayload,
 )
+from src.services.runtime_validation import run_runtime_validation
+from src.models.mapping_config import MappingConfig
 
 
-def _make_request(db: MagicMock):
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))
+def _make_request(db: MagicMock, headers: dict | None = None):
+    return SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=db)),
+        headers=headers or {},
+    )
 
 
-def _make_db(review_collection=None, action_collection=None, mapping_collection=None):
+def _make_db(
+    review_collection=None,
+    action_collection=None,
+    mapping_collection=None,
+    post_approval_run_collection=None,
+    audit_collection=None,
+):
     db = MagicMock()
+    resolved_audit_collection = audit_collection or MagicMock()
+    if not hasattr(resolved_audit_collection, "insert_one") or isinstance(
+        resolved_audit_collection.insert_one, MagicMock
+    ):
+        resolved_audit_collection.insert_one = AsyncMock(
+            return_value=SimpleNamespace(inserted_id="audit-001")
+        )
 
     def _get_collection(name):
         if name == "review_packet":
@@ -30,6 +49,10 @@ def _make_db(review_collection=None, action_collection=None, mapping_collection=
             return action_collection or MagicMock()
         if name == "reconciliation_mapping_config":
             return mapping_collection or MagicMock()
+        if name == "post_approval_run":
+            return post_approval_run_collection or MagicMock()
+        if name == "audit_event":
+            return resolved_audit_collection
         return MagicMock()
 
     db.__getitem__ = MagicMock(side_effect=_get_collection)
@@ -132,7 +155,11 @@ async def test_approve_keep_current_packet():
     action_collection.update_one = AsyncMock()
     request = _make_request(_make_db(review_collection=review_collection, action_collection=action_collection))
 
-    data = await approve_keep_current_packet(request, "pkt-001", ReviewDecisionPayload())
+    data = await approve_keep_current_packet(
+        request,
+        "pkt-001",
+        ReviewDecisionPayload(reviewedBy="admin"),
+    )
 
     assert data["ok"] is True
     assert data["packet"]["decisionMode"] == "APPROVE_KEEP_CURRENT_FOR_FILE"
@@ -185,15 +212,14 @@ async def test_approve_activate_packet_triggers_post_approve_processing():
     ))
 
     with patch(
-        "src.api.review_packets._reprocess_and_reconcile",
+        "src.api.review_packets.approve_packet_mapping_and_reprocess",
         new=AsyncMock(return_value={
-            "ok": True,
-            "stage": "reconciliation",
-            "processingStatus": "COMPLETED",
-            "reconciliationCount": 12,
-            "insightCacheInvalidated": 3,
-            "stats": {"totalRows": 12, "successRows": 12, "failedRows": 0},
-            "errors": [],
+            "_id": "run-001",
+            "packetId": "pkt-activate-001",
+            "status": "QUEUED",
+            "stage": "approval",
+            "message": "Approved. Post-approval processing is queued.",
+            "sourceFileId": "file-001",
         }),
     ), patch(
         "src.models.mapping_config.MappingConfigRepository.find_by_partner_and_type",
@@ -202,13 +228,13 @@ async def test_approve_activate_packet_triggers_post_approve_processing():
         data = await approve_activate_packet(
             request,
             "pkt-activate-001",
-            ReviewDecisionPayload(),
+            ReviewDecisionPayload(reviewedBy="admin"),
         )
 
     assert data["ok"] is True
     assert data["packet"]["decisionMode"] == "APPROVE_ACTIVATE_NEXT_RUNTIME"
-    assert data["postApproveRun"]["stage"] == "reconciliation"
-    assert data["postApproveRun"]["reconciliationCount"] == 12
+    assert data["postApproveRun"]["stage"] == "approval"
+    assert data["postApproveRun"]["status"] == "QUEUED"
 
 
 @pytest.mark.asyncio
@@ -228,8 +254,67 @@ async def test_approve_activate_requires_runtime_validation():
     request = _make_request(_make_db(review_collection=review_collection))
 
     with pytest.raises(Exception) as exc:
-        await approve_activate_packet(request, "pkt-002", ReviewDecisionPayload())
+        await approve_activate_packet(
+            request,
+            "pkt-002",
+            ReviewDecisionPayload(reviewedBy="admin"),
+        )
     assert "Runtime validation must pass" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_approve_keep_current_requires_actor():
+    review_collection = MagicMock()
+    action_collection = MagicMock()
+    review_collection.find_one = AsyncMock(return_value={
+        "_id": "pkt-001",
+        "sourceType": "UPLOAD",
+        "partner": "MOMO",
+        "fileName": "momo.xlsx",
+        "fileTypeDetected": "SETTLEMENT",
+        "targetActionId": "act-001",
+        "recommendedAction": {"actionType": "APPROVE_REQUIRED_BEFORE_RUNTIME"},
+        "parseStrategy": {},
+        "validationGates": [{"gateKey": "runtime_validation", "status": "pass"}],
+        "samplePreview": [],
+        "riskSummary": {},
+        "status": "PENDING",
+        "createdAt": "2024-01-01T00:00:00+00:00",
+    })
+    request = _make_request(_make_db(review_collection=review_collection, action_collection=action_collection))
+
+    with pytest.raises(Exception) as exc:
+        await approve_keep_current_packet(request, "pkt-001", ReviewDecisionPayload())
+
+    assert "Actor is required" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_get_post_approve_run():
+    post_approval_run_collection = MagicMock()
+    post_approval_run_collection.find_one = AsyncMock(return_value={
+        "_id": "run-001",
+        "packetId": "pkt-activate-001",
+        "partner": "MOMO",
+        "date": "2024-06-05",
+        "status": "RECONCILING",
+        "stage": "reconciliation",
+        "message": "Reconciling ingested partner rows against internal transactions.",
+        "sourceFileId": "file-001",
+        "outputFileId": "file-002",
+        "reconciliationCount": 12,
+        "stats": {"totalRows": 12, "successRows": 12, "failedRows": 0},
+        "errors": [],
+        "createdAt": "2024-01-01T00:00:00+00:00",
+        "updatedAt": "2024-01-01T00:01:00+00:00",
+    })
+    request = _make_request(_make_db(post_approval_run_collection=post_approval_run_collection))
+
+    data = await get_post_approve_run(request, "pkt-activate-001")
+
+    assert data["run"]["packetId"] == "pkt-activate-001"
+    assert data["run"]["status"] == "RECONCILING"
+    assert data["run"]["stage"] == "reconciliation"
 
 
 @pytest.mark.asyncio
@@ -263,12 +348,20 @@ async def test_validate_runtime_packet_updates_gate():
     })
     request = _make_request(_make_db(review_collection=review_collection, mapping_collection=mapping_collection))
 
-    with patch("src.api.review_packets._run_runtime_validation", new=AsyncMock(return_value={
+    with patch("src.api.review_packets.run_runtime_validation", new=AsyncMock(return_value={
         "gateKey": "runtime_validation",
         "label": "Runtime validation",
         "status": "pass",
         "reason": "Validated successfully on 20/20 sampled rows.",
-        "details": {"sampledRows": 20, "successRows": 20, "failedRows": 0},
+        "details": {
+            "sampledRows": 20,
+            "successRows": 20,
+            "failedRows": 0,
+            "validatedAt": "2024-01-01T00:00:00+00:00",
+            "validatedMappingVersion": "MOMO_v01",
+            "successRate": 1.0,
+            "riskLevel": "LOW",
+        },
     })):
         data = await validate_runtime_packet(request, "pkt-003")
 
@@ -312,7 +405,11 @@ async def test_save_draft_mapping_for_packet_attaches_real_draft_id():
         ],
     })
 
-    data = await save_draft_mapping_for_packet(request, "pkt-004", payload)
+    with patch(
+        "src.api.review_packets._next_pending_version",
+        new=AsyncMock(return_value="MOMO-V004"),
+    ):
+        data = await save_draft_mapping_for_packet(request, "pkt-004", payload)
 
     assert data["ok"] is True
     assert data["draftMappingId"]
@@ -402,3 +499,112 @@ async def test_validate_runtime_packet_uses_sample_preview_when_source_file_miss
 
     assert data["ok"] is True
     assert data["gate"]["status"] == "pass"
+    assert data["gate"]["details"]["validatedAt"]
+    assert data["gate"]["details"]["validatedMappingVersion"] == "cfg-005"
+    assert data["gate"]["details"]["successRate"] == 1
+    assert data["gate"]["details"]["riskLevel"] == "LOW"
+    trace_samples = data["gate"]["details"]["traceSamples"]
+    assert len(trace_samples) == 2
+    assert trace_samples[0]["row"] == 2
+    assert any(
+        item["path"] == "id"
+        and item["sourceValue"] == "TXN001"
+        and item["outputValue"] == "TXN001"
+        and item["status"] == "ok"
+        and item["errorCode"] is None
+        and item["errorMessage"] is None
+        for item in trace_samples[0]["fieldTraces"]
+    )
+    assert any(
+        item["path"] == "currency"
+        and item["sourceValue"] == "VND"
+        and item["outputValue"] == "VND"
+        and item["status"] == "ok"
+        for item in trace_samples[0]["fieldTraces"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_runtime_validation_returns_medium_risk_for_partial_pass():
+    review_collection = MagicMock()
+    review_collection.update_one = AsyncMock()
+    packet = SimpleNamespace(
+        id="pkt-007",
+        source_file_path=None,
+        sample_preview=[
+            {"rowIndex": 2, "values": ["TXN001", "1000", "2024-06-05"]},
+            {"rowIndex": 3, "values": ["TXN002", "2500", "2024-06-05"]},
+            {"rowIndex": 4, "values": ["TXN003", "3750", "2024-06-05"]},
+            {"rowIndex": 5, "values": ["TXN004", "4100", "2024-06-05"]},
+            {"rowIndex": 6, "values": ["TXN005", "bad-amount", "2024-06-05"]},
+        ],
+        validation_gates=[],
+    )
+    config = MappingConfig.model_validate({
+        "_id": "cfg-007",
+        "partner": "MOMO",
+        "workflowType": "UPC",
+        "fileType": "SETTLEMENT",
+        "sheetName": "Sheet1",
+        "startRow": 2,
+        "configVersion": "MOMO_v07",
+        "fieldMappings": [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
+            {"path": "transDate", "column": 3, "type": "DATE", "required": True},
+            {"path": "currency", "type": "CONSTANT", "constant": "VND", "required": True},
+            {"path": "status", "type": "CONSTANT", "constant": "SUCCESS", "required": True},
+        ],
+        "status": "PENDING_APPROVAL",
+        "configHealth": {},
+    })
+    db = _make_db(review_collection=review_collection)
+    gate = await run_runtime_validation(db, packet, config)
+
+    assert gate["status"] == "pass"
+    assert gate["details"]["riskLevel"] == "MEDIUM"
+    assert gate["details"]["validatedMappingVersion"] == "MOMO_v07"
+    amount_trace = next(item for item in gate["details"]["traceSamples"][4]["fieldTraces"] if item["path"] == "amount")
+    assert amount_trace["status"] == "error"
+    assert amount_trace["errorCode"] == "INVALID_DECIMAL"
+    assert amount_trace["errorMessage"]
+
+
+@pytest.mark.asyncio
+async def test_run_runtime_validation_returns_high_risk_for_failed_validation():
+    review_collection = MagicMock()
+    review_collection.update_one = AsyncMock()
+    packet = SimpleNamespace(
+        id="pkt-008",
+        source_file_path=None,
+        sample_preview=[
+            {"rowIndex": 2, "values": ["TXN001", "1000", "bad-date"]},
+        ],
+        validation_gates=[],
+    )
+    config = MappingConfig.model_validate({
+        "_id": "cfg-008",
+        "partner": "MOMO",
+        "workflowType": "UPC",
+        "fileType": "SETTLEMENT",
+        "sheetName": "Sheet1",
+        "startRow": 2,
+        "configVersion": "MOMO_v08",
+        "fieldMappings": [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
+            {"path": "transDate", "column": 3, "type": "DATE", "required": True},
+            {"path": "currency", "type": "CONSTANT", "constant": "VND", "required": True},
+            {"path": "status", "type": "CONSTANT", "required": True},
+        ],
+        "status": "PENDING_APPROVAL",
+        "configHealth": {},
+    })
+    db = _make_db(review_collection=review_collection)
+    gate = await run_runtime_validation(db, packet, config)
+
+    assert gate["status"] == "fail"
+    assert gate["details"]["riskLevel"] == "HIGH"
+    codes = {item["errorCode"] for item in gate["details"]["traceSamples"][0]["fieldTraces"] if item["errorCode"]}
+    assert "INVALID_DATE" in codes
+    assert "MAPPING_RULE_MISSING" in codes

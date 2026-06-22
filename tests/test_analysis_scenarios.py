@@ -23,7 +23,6 @@ import pytest
 from src.analysis.schemas import (
     AnalysisInput,
     AnalysisResult,
-    GroupResult,
     SummaryResult,
     TopAnomaly,
 )
@@ -32,15 +31,12 @@ from src.analysis.services import (
     parse_llm_insights,
     format_findings,
     rule_based_pre_process,
-    extract_operational_anomalies,
-    extract_partner_anomalies,
     extract_inconsistency_anomalies,
 )
 from src.analysis.grouping import GroupingEngine
 from src.analysis.metrics import MetricsService
 from src.analysis.insights import (
     _rule_based_fallback,
-    generate_insights,
     get_summary,
     get_discrepancies,
     _query_reconciliation_results,
@@ -936,6 +932,49 @@ class TestRuleBasedPreProcessingAllFocusTypes:
 # Scenario 10: End-to-end orchestration with diverse data
 # ---------------------------------------------------------------------------
 
+def _make_mock_collection(
+    docs: list[dict],
+    aggregate_results: list[dict] | None = None,
+) -> MagicMock:
+    """Create a mock collection that handles both find().limit() and aggregate().
+
+    Args:
+        docs: Documents returned by find().to_list() and find().limit().to_list()
+        aggregate_results: Documents yielded by aggregate() async iteration.
+            If None, counts from docs are used to synthesize aggregate results.
+
+    Returns:
+        MagicMock configured for both find and aggregate paths.
+    """
+    # Cursor that supports both .to_list() and .limit() returning self
+    mock_cursor = MagicMock()
+    mock_cursor.to_list = AsyncMock(return_value=docs)
+    mock_cursor.limit = MagicMock(return_value=mock_cursor)
+
+    mock_collection = MagicMock()
+    mock_collection.find = MagicMock(return_value=mock_cursor)
+
+    if aggregate_results is None:
+        # Auto-synthesize aggregate results from docs
+        from collections import Counter
+        status_counts: Counter = Counter()
+        for d in docs:
+            status = d.get("reconciliationStatus") or d.get("reconciliation_status", "MATCHED")
+            status_counts[status] += 1
+        aggregate_results = [
+            {"_id": s, "count": c, "mismatch_amount": 0.0}
+            for s, c in status_counts.items()
+        ]
+
+    async def _aggregate_iter():
+        for doc in aggregate_results:
+            yield doc
+
+    mock_collection.aggregate = MagicMock(return_value=_aggregate_iter())
+
+    return mock_collection
+
+
 class TestEndToEndOrchestration:
     """Test full orchestration flow with realistic diverse data."""
 
@@ -958,10 +997,14 @@ class TestEndToEndOrchestration:
             make_mongo_doc("STATUS_MISMATCH", partner_amount="200000", internal_amount="200000", camel_case=True),
         ]
 
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=docs)
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
+        aggregate_results = [
+            {"_id": "MATCHED", "count": 2, "mismatch_amount": 0.0},
+            {"_id": "AMOUNT_MISMATCH", "count": 1, "mismatch_amount": 10000.0},
+            {"_id": "MISSING_INTERNAL", "count": 1, "mismatch_amount": 0.0},
+            {"_id": "MISSING_PARTNER", "count": 1, "mismatch_amount": 0.0},
+            {"_id": "STATUS_MISMATCH", "count": 1, "mismatch_amount": 0.0},
+        ]
+        mock_collection = _make_mock_collection(docs, aggregate_results)
 
         result = await get_summary("MOMO", "2024-07-07", mock_collection, provider)
 
@@ -995,10 +1038,7 @@ class TestEndToEndOrchestration:
             make_mongo_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
         ]
 
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=docs)
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_collection = _make_mock_collection(docs)
 
         results = await get_discrepancies("MOMO", "2024-07-07", "operational", mock_collection, provider)
 
@@ -1021,10 +1061,7 @@ class TestEndToEndOrchestration:
             make_mongo_doc("MATCHED", partner_amount="50000", internal_amount="50000", camel_case=True),
         ]
 
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=docs)
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_collection = _make_mock_collection(docs)
 
         results = await get_discrepancies("MOMO", "2024-07-07", "partner", mock_collection, provider)
 
@@ -1047,10 +1084,7 @@ class TestEndToEndOrchestration:
             make_mongo_doc("MATCHED", partner_amount="75000", internal_amount="75000", camel_case=True),
         ]
 
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=docs)
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_collection = _make_mock_collection(docs)
 
         results = await get_discrepancies("MOMO", "2024-07-07", "inconsistency", mock_collection, provider)
 
@@ -1069,10 +1103,7 @@ class TestEndToEndOrchestration:
             make_mongo_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
         ]
 
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=docs)
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_collection = _make_mock_collection(docs)
 
         result = await get_summary("MOMO", "2024-07-07", mock_collection, provider)
 
@@ -1210,7 +1241,6 @@ class TestDailyReportWithAlerts:
     async def test_report_includes_alerts_for_breached_thresholds(self) -> None:
         """Daily report should include alerts when thresholds are breached."""
         from src.analysis.reporter import DailyReporter
-        from src.analysis.alerter import ThresholdAlerter
 
         mock_collection = MagicMock()
         mock_collection.distinct = AsyncMock(return_value=["MOMO", "VIETTEL"])

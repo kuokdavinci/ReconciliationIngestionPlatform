@@ -2,7 +2,6 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 
@@ -179,7 +178,7 @@ class TestGetFile:
         assert response.status_code == 200
         data = response.json()
         assert data["file"]["_id"] == "file-1"
-        assert data["transaction_count"] == 50
+        assert data["transactionCount"] == 50
 
     def test_non_existing_returns_404(self):
         app, mock_db, _ = _create_test_app()
@@ -202,6 +201,6 @@ class TestDataStats:
         assert response.status_code == 200
         data = response.json()
         assert data["partner"] == "MOMO"
-        assert "total_transactions" in data
-        assert "total_files" in data
-        assert "by_partner" in data
+        assert "totalTransactions" in data
+        assert "totalFiles" in data
+        assert "byPartner" in data

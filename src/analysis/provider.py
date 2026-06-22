@@ -173,7 +173,7 @@ def _create_single_provider(
 
     if provider_type == "ollama":
         raise NotImplementedError(
-            f"OllamaProvider is not yet implemented. Use AI_PROVIDER=openai."
+            "OllamaProvider is not yet implemented. Use AI_PROVIDER=openai."
         )
 
     raise ValueError(

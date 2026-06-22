@@ -1,11 +1,8 @@
 """Tests for ConfigCache — TTL-based in-memory cache for MappingConfig."""
 
-import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
-from uuid import UUID
 
-import pytest
 
 from src.core.enums import FileType
 from src.core.types import FieldMapping, FieldMappingType

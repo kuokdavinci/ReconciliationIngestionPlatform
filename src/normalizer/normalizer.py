@@ -10,7 +10,6 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
-from src.core.constants import DEFAULT_CURRENCY
 from src.core.enums import TransactionStatus
 from src.core.types import FieldMapping, FieldMappingType, ValidationError, CanonicalTransaction
 
@@ -26,6 +25,19 @@ class NormalizationResult:
 
     data: dict[str, Any] = field(default_factory=dict)
     errors: list[ValidationError] = field(default_factory=list)
+
+
+@dataclass
+class FieldNormalizationTrace:
+    """Debug trace for a single field mapping evaluation."""
+
+    path: str
+    mapping_type: str
+    column: Any = None
+    source_field: Optional[str] = None
+    source_value: Any = None
+    output_value: Any = None
+    error: Optional[ValidationError] = None
 
 
 class TransactionNormalizer:
@@ -124,6 +136,74 @@ class TransactionNormalizer:
                 result.data[fm.path] = value
 
         return result
+
+    def normalize_with_trace(
+        self,
+        row: Any,
+        row_number: Optional[int] = None,
+    ) -> tuple[NormalizationResult, list[FieldNormalizationTrace]]:
+        """Normalize a row and capture field-level mapping trace data."""
+        result = NormalizationResult(data={}, errors=[])
+        traces: list[FieldNormalizationTrace] = []
+
+        for fm in self._field_mappings:
+            value: Any = None
+            error: Optional[ValidationError] = None
+            source_value: Any = None
+
+            if fm.type == FieldMappingType.CONSTANT:
+                source_value = fm.constant
+                value, error = self._convert_constant(fm, row_number)
+            else:
+                source_value = self._resolve_source(row, fm)
+                if isinstance(source_value, ValidationError):
+                    error = source_value
+                    source_value = None
+                elif source_value is None:
+                    error = ValidationError(
+                        field=fm.path,
+                        reason="source field value is None",
+                        row=row_number,
+                    )
+                elif fm.type == FieldMappingType.STRING:
+                    value, error = self._convert_string(source_value, fm, row_number)
+                elif fm.type == FieldMappingType.DECIMAL:
+                    value, error = self._convert_decimal(source_value, fm, row_number)
+                elif fm.type == FieldMappingType.DATE:
+                    value, error = self._convert_date(source_value, fm, row_number)
+                elif fm.type == FieldMappingType.MAPPING:
+                    if fm.mapping is None:
+                        error = ValidationError(
+                            field=fm.path,
+                            reason=f"mapping dict not configured for {fm.path}",
+                            row=row_number,
+                        )
+                    else:
+                        value, error = self._convert_mapping(source_value, fm, row_number)
+                else:
+                    error = ValidationError(
+                        field=fm.path,
+                        reason=f"unknown mapping type '{fm.type}' for path '{fm.path}'",
+                        row=row_number,
+                    )
+
+            traces.append(
+                FieldNormalizationTrace(
+                    path=fm.path,
+                    mapping_type=str(fm.type),
+                    column=fm.column,
+                    source_field=fm.sourceField,
+                    source_value=source_value,
+                    output_value=value,
+                    error=error,
+                )
+            )
+            if error is not None:
+                result.errors.append(error)
+            elif value is not None:
+                result.data[fm.path] = value
+
+        return result, traces
 
     def _resolve_source(
         self,
@@ -255,7 +335,7 @@ class TransactionNormalizer:
 
         try:
             return Decimal(str(value)), None
-        except InvalidOperation as exc:
+        except InvalidOperation:
             return None, ValidationError(
                 field=fm.path,
                 reason=f"invalid decimal value: {value!r}",

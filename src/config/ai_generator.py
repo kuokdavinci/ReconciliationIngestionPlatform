@@ -70,6 +70,34 @@ def _format_sample_table(rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
+def _collect_candidate_columns(headers: list[str], sample_rows: list[list[str]]) -> list[dict[str, Any]]:
+    max_cols = max([len(headers), *(len(row) for row in sample_rows)], default=len(headers))
+    candidates: list[dict[str, Any]] = []
+    for idx in range(max_cols):
+        header = headers[idx] if idx < len(headers) else None
+        header_text = str(header).strip() if header is not None else ""
+        values = []
+        non_empty = 0
+        for row in sample_rows[:10]:
+            value = row[idx] if idx < len(row) else None
+            text = str(value).strip() if value is not None else ""
+            values.append(text)
+            if text:
+                non_empty += 1
+        if not header_text and non_empty == 0:
+            continue
+        meaningful_header = bool(re.search(r"[A-Za-zÀ-ỹ0-9]", header_text))
+        candidates.append({
+            "index": idx + 1,
+            "header": header_text or f"Column {idx + 1}",
+            "non_empty_count": non_empty,
+            "sample_values": [value for value in values if value][:3],
+            "priority": (2 if meaningful_header else 0) + min(non_empty, 3),
+        })
+    candidates.sort(key=lambda item: (-item["priority"], -item["non_empty_count"], item["index"]))
+    return candidates
+
+
 def _parse_ai_response(text: str) -> Optional[dict[str, Any]]:
     """Parse LLM response, handling JSON code blocks."""
     cleaned = text.strip()
@@ -224,6 +252,13 @@ async def generate_config_from_samples(
     provider = create_provider(config)
 
     table = _format_sample_table([headers] + sample_rows)
+    candidate_columns = _collect_candidate_columns(headers, sample_rows)
+    candidate_hint = ""
+    if candidate_columns:
+      candidate_hint = "\nCANDIDATE COLUMNS FOR RECONCILIATION (prioritize these before sparse/empty columns):\n"
+      for item in candidate_columns[:10]:
+          sample_hint = ", ".join(item["sample_values"]) if item["sample_values"] else "no sample values"
+          candidate_hint += f"- Column {item['index']}: {item['header']} (non-empty rows: {item['non_empty_count']}; samples: {sample_hint})\n"
 
     constants_hint = ""
     if known_constants:
@@ -237,6 +272,7 @@ async def generate_config_from_samples(
 Sample data (headers row + {len(sample_rows)} data rows):
 
 {constants_hint}
+{candidate_hint}
 --- DATA TABLE ---
 Row 1 (headers): {headers}
 {sample_rows[:10] if len(str(sample_rows)) > 1000 else table}

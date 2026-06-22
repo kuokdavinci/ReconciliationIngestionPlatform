@@ -1,6 +1,5 @@
 """Tests for AI Analysis Layer prompt templates."""
 
-import json
 
 from src.analysis.prompts import (
     build_analysis_prompt,

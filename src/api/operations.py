@@ -85,7 +85,7 @@ def _build_activity_items(files, mappings, actions, packets):
                 "timestamp": mapping.get("approvedAt") or mapping.get("createdAt"),
                 "title": f"Config {mapping.get('configVersion') or 'latest'}",
                 "status": mapping.get("status"),
-                "detail": mapping.get("configHealth", {}).get("reasoning") or mapping.get("sheetName") or "-"
+                "detail": (mapping.get("configHealth") or {}).get("reasoning") or mapping.get("sheetName") or "-"
             }
         )
     for action in actions:
@@ -223,7 +223,7 @@ async def get_partner_intake(
                 pending_items.append({
                     "kind": "MAPPING_CONFIG",
                     "title": "Pending Draft Mapping",
-                    "reason": m.get("configHealth", {}).get("reasoning") or "AI generated draft mapping awaits approval.",
+                    "reason": (m.get("configHealth") or {}).get("reasoning") or "AI generated draft mapping awaits approval.",
                     "draftMappingId": m.get("_id"),
                     "reviewItemId": None,
                     "fileName": m.get("sheetName") or "Default Sheet",

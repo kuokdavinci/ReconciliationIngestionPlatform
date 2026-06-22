@@ -2,12 +2,10 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi import HTTPException
 from types import SimpleNamespace
 
 from src.api.reconciliation import reconciliation_insights
 from src.api.copilot import get_context
-from src.services.copilot_context import CopilotContextService
 
 def _make_request(db: MagicMock):
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))
@@ -47,7 +45,10 @@ async def test_reconciliation_insights_summary():
         "key_findings": []
     }
     
-    with patch("src.analysis.insights.get_summary", new_callable=AsyncMock) as mock_get_summary:
+    with (
+        patch("src.analysis.insights.get_summary", new_callable=AsyncMock) as mock_get_summary,
+        patch("src.api.reconciliation._resolve_latest_run_filters", new_callable=AsyncMock, return_value={}) as mock_filters,
+    ):
         mock_get_summary.return_value = mock_summary
         
         result = await reconciliation_insights(
@@ -73,7 +74,10 @@ async def test_reconciliation_insights_discrepancies():
         "title": "Mismatch"
     }
     
-    with patch("src.analysis.insights.get_discrepancies", new_callable=AsyncMock) as mock_get_discrepancies:
+    with (
+        patch("src.analysis.insights.get_discrepancies", new_callable=AsyncMock) as mock_get_discrepancies,
+        patch("src.api.reconciliation._resolve_latest_run_filters", new_callable=AsyncMock, return_value={}) as mock_filters,
+    ):
         mock_get_discrepancies.return_value = [mock_result_item]
         
         result = await reconciliation_insights(
@@ -91,7 +95,8 @@ async def test_reconciliation_insights_discrepancies():
             date="2026-06-05",
             focus="inconsistency",
             collection=db["reconciliation_result"],
-            llm_provider=ANY
+            llm_provider=ANY,
+            extra_query={}
         )
 
 @pytest.mark.asyncio

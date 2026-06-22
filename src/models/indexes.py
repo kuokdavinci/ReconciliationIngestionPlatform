@@ -5,7 +5,7 @@ Per requirement.md section 11 (index recommendations) and section 10
 """
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pymongo import ASCENDING, IndexModel
+from pymongo import ASCENDING, DESCENDING, IndexModel
 
 INDEXES: dict[str, list[IndexModel]] = {
     "reconciliation_file": [
@@ -56,6 +56,30 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_review_packet_draft_mapping",
         ),
     ],
+    "post_approval_run": [
+        IndexModel(
+            [("packetId", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_post_approval_run_packet_created",
+        ),
+        IndexModel(
+            [("status", ASCENDING), ("updatedAt", ASCENDING)],
+            name="idx_post_approval_run_status_updated",
+        ),
+    ],
+    "partner_runtime_run": [
+        IndexModel(
+            [("partner", ASCENDING), ("date", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_partner_runtime_run_partner_date_created",
+        ),
+        IndexModel(
+            [("status", ASCENDING), ("updatedAt", ASCENDING)],
+            name="idx_partner_runtime_run_status_updated",
+        ),
+        IndexModel(
+            [("sourceFileId", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_partner_runtime_run_source_file_created",
+        ),
+    ],
     "data_container": [
         IndexModel(
             "partnerData.trace",
@@ -90,12 +114,49 @@ INDEXES: dict[str, list[IndexModel]] = {
     ],
     "reconciliation_result": [
         IndexModel(
+            [("partner", ASCENDING), ("date", ASCENDING), ("_id", ASCENDING)],
+            name="idx_recon_partner_date_id",
+        ),
+        IndexModel(
+            [
+                ("partner", ASCENDING),
+                ("date", ASCENDING),
+                ("reconciliationStatus", ASCENDING),
+                ("_id", ASCENDING),
+            ],
+            name="idx_recon_partner_date_status_id",
+        ),
+        IndexModel(
             "partnerTxnId",
             name="idx_recon_partner_txn_id",
         ),
         IndexModel(
             "reconciliationStatus",
             name="idx_recon_status",
+        ),
+        IndexModel(
+            [("reconciliationRunId", ASCENDING), ("_id", ASCENDING)],
+            name="idx_recon_run_id",
+        ),
+        IndexModel(
+            [("sourceFileId", ASCENDING), ("reconciliationStatus", ASCENDING)],
+            name="idx_recon_source_file_status",
+        ),
+    ],
+    "reconciliation_run": [
+        IndexModel(
+            [("partner", ASCENDING), ("date", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_reconciliation_run_partner_date_created",
+        ),
+    ],
+    "audit_event": [
+        IndexModel(
+            [("entityType", ASCENDING), ("entityId", ASCENDING), ("createdAt", DESCENDING)],
+            name="idx_audit_entity_created",
+        ),
+        IndexModel(
+            [("action", ASCENDING), ("createdAt", DESCENDING)],
+            name="idx_audit_action_created",
         ),
     ],
     "reconciliation_review_record": [

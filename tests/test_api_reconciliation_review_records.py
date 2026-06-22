@@ -21,14 +21,17 @@ class _AsyncCursor:
         return item
 
 
-def _make_request(db):
+def _make_request(db, actor=None):
     app = FastAPI()
     app.state.db = db
+    headers = []
+    if actor:
+        headers.append((b"x-actor", actor.encode()))
     scope = {
         "type": "http",
         "method": "GET",
         "path": "/",
-        "headers": [],
+        "headers": headers,
         "app": app,
         "query_string": b"",
         "client": ("testclient", 50000),
@@ -111,21 +114,21 @@ async def test_list_review_records():
 @pytest.mark.asyncio
 async def test_add_note_upserts_review_record():
     db = _DB()
-    request = _make_request(db)
-    payload = type("Payload", (), {"partner": "MOMO", "date": "2026-06-10", "note": "checked mismatch"})()
+    request = _make_request(db, actor="test_user")
+    payload = type("Payload", (), {"partner": "MOMO", "date": "2026-06-10", "note": "checked mismatch", "actor": "test_user"})()
     body = await add_review_note(request, "txn-1", payload)
     assert body["ok"] is True
     doc = db["reconciliation_review_record"].docs[0]
     assert doc["recordKey"] == "txn-1"
     assert doc["reviewed"] is True
-    assert doc["notes"][0]["event"] == "User Review Note: checked mismatch"
+    assert doc["notes"][0]["event"] == "test_user: checked mismatch"
 
 
 @pytest.mark.asyncio
 async def test_resolve_record_upserts_resolved_status():
     db = _DB()
-    request = _make_request(db)
-    payload = type("Payload", (), {"partner": "MOMO", "date": "2026-06-10", "resolved_status": "MATCHED"})()
+    request = _make_request(db, actor="test_user")
+    payload = type("Payload", (), {"partner": "MOMO", "date": "2026-06-10", "resolved_status": "MATCHED", "actor": "test_user"})()
     body = await resolve_review_record(request, "txn-1", payload)
     assert body["ok"] is True
     doc = db["reconciliation_review_record"].docs[0]

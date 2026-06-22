@@ -1,0 +1,42 @@
+name: Backend Quality
+
+on:
+  push:
+    branches: [main, "feature/*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Lint
+        run: >
+          uv run ruff check
+          src/api
+          src/config
+          src/models/audit_event.py
+          src/models/indexes.py
+          src/models/partner_runtime_run.py
+          src/models/reconciliation_result.py
+          src/reconciliation/engine.py
+          src/services
+          scripts/seeding/seed_vnpay_audit_flow.py
+
+      - name: Run test suite
+        run: uv run pytest -v --tb=short

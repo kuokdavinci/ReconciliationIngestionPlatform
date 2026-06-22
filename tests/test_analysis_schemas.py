@@ -1,7 +1,5 @@
 """Tests for AI Analysis Layer schemas."""
 
-import pytest
-from pydantic import ValidationError
 
 from src.analysis.schemas import (
     AnalysisInput,

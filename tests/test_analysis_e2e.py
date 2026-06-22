@@ -22,10 +22,7 @@ Tests verify:
 - Privacy contract: no raw transaction data in prompts
 """
 
-import json
 import os
-from decimal import Decimal
-from typing import Any
 
 import pytest
 
@@ -37,7 +34,6 @@ from src.analysis.prompts import build_system_prompt, build_analysis_prompt
 from src.analysis.provider import create_provider
 from src.analysis.schemas import AnalysisInput, AnalysisResult
 from src.analysis.services import parse_llm_insights, build_analysis_input
-from src.core.enums import ReconciliationStatus
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +295,7 @@ async def test_ai_analyzes_amount_mismatch_patterns():
     results = await get_discrepancies("ZALOPAY", "2024-07-07", "inconsistency", collection, llm_provider, config)
 
     assert isinstance(results, list)
-    print(f"\n  LLM Status: success (direct LLM call for discrepancies)")
+    print("\n  LLM Status: success (direct LLM call for discrepancies)")
     if results:
         # Each result should be a valid AnalysisResult
         for r in results:

@@ -1,6 +1,4 @@
 import openpyxl
-import sys
-from pathlib import Path
 
 def inspect_xlsx(path):
     print(f"=== Inspecting {path} ===")

@@ -1,6 +1,5 @@
 """Tests for CopilotContextService compact decision-mode fields."""
 
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4

@@ -38,3 +38,8 @@ scratch/
 # Generated reports
 report.md
 reports/
+
+frontend/node_modules/
+frontend/.vite/
+.agents/
+test_data/

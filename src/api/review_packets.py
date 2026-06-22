@@ -1,32 +1,41 @@
 """Approval desk review packet endpoints."""
 
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from src.analysis.insights import invalidate_insight_cache
+from src.api.actor import require_actor
 from src.config.ai_generator import generate_config_from_samples
-from src.config.cache import ConfigCache
-from src.config.loader import ConfigLoader
-from src.config.validator import ConfigValidator
-from src.core.constants import DEFAULT_CURRENCY
-from src.core.enums import ProcessingStatus
 from src.core.enums import FileType
-from src.models.copilot_action import CopilotActionRepository, CopilotActionStatus
 from src.models.mapping_config import MappingConfig, MappingConfigRepository, MappingConfigStatus
-from src.models.reconciliation_file import ReconciliationFileRepository
+from src.models.post_approval_run import PostApprovalRunRepository
 from src.models.review_packet import (
+    ReviewPacket,
     ReviewDecisionMode,
     ReviewPacketRepository,
+    ReviewPacketSourceType,
     ReviewPacketStatus,
 )
-from src.normalizer.normalizer import TransactionNormalizer
-from src.pipeline.ingestion_pipeline import IngestionPipeline
-from src.readers import create_reader
-from src.reconciliation.engine import ReconciliationEngine
+from src.services.mapping_contract import (
+    canonicalize_field_mappings,
+    serialize_field_mappings,
+    validate_mapping_contract,
+)
+from src.services.review_packet_actions import (
+    approve_packet_mapping_and_reprocess,
+    build_config_loader,
+    mark_packet,
+    serialize_post_approval_run,
+    update_packet_scope,
+)
+from src.services.ai_mapping_context import resolve_ai_generation_context
+from src.services.runtime_validation import (
+    derive_validation_state,
+    run_runtime_validation,
+)
+
 
 router = APIRouter(prefix="/api/v1/review-packets")
 
@@ -42,24 +51,21 @@ def _repo(request: Request) -> ReviewPacketRepository:
     return ReviewPacketRepository(_get_db(request))
 
 
-def _config_loader(request: Request) -> ConfigLoader:
-    db = _get_db(request)
-    return ConfigLoader(
-        MappingConfigRepository(db),
-        ConfigCache(),
-        ConfigValidator(),
-    )
+def _config_loader(request: Request):
+    return build_config_loader(request)
 
 
 def _serialize(packet) -> dict:
     data = packet.model_dump(by_alias=True)
     data["_id"] = str(data["_id"])
     data["reviewItemId"] = data["_id"]
+    data["validationState"] = _derive_validation_state(packet.validation_gates or [])
     return data
 
 
+
 class ReviewDecisionPayload(BaseModel):
-    reviewed_by: Optional[str] = None
+    reviewed_by: Optional[str] = Field(default=None, alias="reviewedBy")
     scope_type: Optional[str] = Field(default=None, alias="scopeType")
 
 
@@ -92,12 +98,14 @@ def _has_passing_runtime_gate(packet) -> bool:
     return False
 
 
-async def _sync_action_status(request: Request, action_id: Optional[str], status: str) -> None:
-    if not action_id:
-        return
-    repo = CopilotActionRepository(_get_db(request))
-    update = {"status": status, "reviewedAt": datetime.now(timezone.utc)}
-    await repo.collection.update_one({"_id": action_id}, {"$set": update})
+def _derive_validation_state(validation_gates: list[dict]) -> str:
+    runtime_gate = next(
+        (gate for gate in validation_gates if gate.get("gateKey") == "runtime_validation"),
+        None,
+    )
+    if runtime_gate is None:
+        return "NOT_RUN"
+    return derive_validation_state(runtime_gate)
 
 
 @router.get("")
@@ -124,341 +132,28 @@ async def get_review_packet(request: Request, packet_id: str):
     return {"packet": _serialize(packet)}
 
 
-async def _mark_packet(
-    request: Request,
-    packet_id: str,
-    status: ReviewPacketStatus,
-    decision_mode: ReviewDecisionMode,
-    reviewed_by: Optional[str],
-):
-    repo = _repo(request)
-    packet = await repo.find_one({"_id": packet_id})
-    if packet is None:
-        raise HTTPException(status_code=404, detail="Review packet not found.")
-    if packet.status != ReviewPacketStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Only pending review packets can be processed.")
-
-    now = datetime.now(timezone.utc)
-    await repo.collection.update_one(
-        {"_id": packet_id},
-        {"$set": {
-            "status": status.value,
-            "decisionMode": decision_mode.value,
-            "reviewedAt": now,
-            "reviewedBy": reviewed_by,
-        }},
-    )
-    await _sync_action_status(
-        request,
-        packet.target_action_id,
-        CopilotActionStatus.APPROVED.value if status == ReviewPacketStatus.APPROVED else CopilotActionStatus.REJECTED.value,
-    )
-    packet.status = status
-    packet.decision_mode = decision_mode
-    packet.reviewed_at = now
-    packet.reviewed_by = reviewed_by
-    return {"ok": True, "packet": _serialize(packet)}
+@router.get("/{packet_id}/post-approve-run")
+async def get_post_approve_run(request: Request, packet_id: str):
+    run = await PostApprovalRunRepository(_get_db(request)).find_latest_by_packet_id(packet_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Post-approval run not found.")
+    return {"run": serialize_post_approval_run(run)}
 
 
 async def _next_pending_version(request: Request, partner: str) -> str:
     mapping_repo = MappingConfigRepository(_get_db(request))
-    count = await mapping_repo.collection.count_documents({"partner": partner})
-    return f"{partner}_v{count + 1:02d}"
-
-
-def _canonicalize_guided_field_mappings(
-    raw_mappings: list[dict],
-) -> tuple[list[dict], list[str]]:
-    normalized = [dict(item) for item in raw_mappings]
-    warnings: list[str] = []
-    paths = {item.get("path") for item in normalized if item.get("path")}
-
-    if "currency" not in paths:
-        normalized.append({
-            "path": "currency",
-            "type": "CONSTANT",
-            "constant": DEFAULT_CURRENCY,
-            "required": True,
-        })
-        warnings.append(f"Currency was not mapped, so a CONSTANT '{DEFAULT_CURRENCY}' mapping was added.")
-
-    for item in normalized:
-        if item.get("path") == "status" and str(item.get("type", "")).upper() == "STRING":
-            item["type"] = "MAPPING"
-            item["mapping"] = {
-                "SUCCESS": "SUCCESS",
-                "FAILED": "FAILED",
-                "PENDING": "PENDING",
-                "REVERSED": "REVERSED",
-            }
-            warnings.append("Status mapping was upgraded from STRING to MAPPING. Adjust status normalization if partner values differ.")
-
-    return normalized, warnings
-
-
-def _validate_guided_mapping_contract(config: MappingConfig) -> list[str]:
-    errors = [err.reason for err in ConfigValidator.validate(config)]
-    errors.extend(
-        err.reason
-        for err in ConfigValidator.validate_required_coverage(
-            config, {"id", "amount", "status"} # currency is implicitly VND and not required
-        )
-    )
-    return errors
+    return await mapping_repo.allocate_next_version(partner)
 
 
 def _serialize_mapping(config: MappingConfig) -> dict:
     data = config.model_dump(by_alias=True)
     data["_id"] = str(data["_id"])
     data["draftMappingId"] = data["_id"]
+    data["draftMappingVersion"] = data.get("configVersion") or data["_id"]
     if data.get("fileType") is not None:
         data["fileType"] = str(data["fileType"])
     return data
 
-
-async def _resolve_ai_generation_context(request: Request, packet, existing_draft: MappingConfig | None):
-    headers = []
-    sample_rows = []
-    header_row_index = None
-    first_data_row_index = None
-
-    packet_signature = getattr(packet, "structure_signature", None) or {}
-    if packet_signature:
-        headers = list(packet_signature.get("headers") or [])
-        sample_rows = list(packet_signature.get("sampleRows") or [])
-        header_row_index = packet_signature.get("headerRowIndex")
-        first_data_row_index = packet_signature.get("firstDataRowIndex")
-
-    if existing_draft is not None and not headers:
-        draft_signature = getattr(existing_draft, "structure_signature", None) or {}
-        headers = list(draft_signature.get("headers") or [])
-        sample_rows = sample_rows or list(draft_signature.get("sampleRows") or [])
-        header_row_index = header_row_index if header_row_index is not None else draft_signature.get("headerRowIndex")
-        first_data_row_index = first_data_row_index if first_data_row_index is not None else draft_signature.get("firstDataRowIndex")
-
-    if not headers:
-        mapping_repo = MappingConfigRepository(_get_db(request))
-        file_type_value = getattr(packet, "file_type_detected", None) or FileType.SETTLEMENT.value
-        try:
-            file_type = FileType(file_type_value)
-        except ValueError:
-            file_type = FileType.SETTLEMENT
-        approved = await mapping_repo.find_by_partner_and_type(packet.partner, "UPC", file_type)
-        if approved is not None:
-            approved_signature = getattr(approved, "structure_signature", None) or {}
-            headers = list(approved_signature.get("headers") or [])
-            sample_rows = sample_rows or list(approved_signature.get("sampleRows") or [])
-            header_row_index = header_row_index if header_row_index is not None else approved_signature.get("headerRowIndex")
-            first_data_row_index = first_data_row_index if first_data_row_index is not None else approved_signature.get("firstDataRowIndex")
-
-    if not sample_rows:
-        packet_preview = getattr(packet, "sample_preview", None) or []
-        sample_rows = [
-            list(item.get("values") or [])
-            for item in packet_preview
-            if isinstance(item, dict) and isinstance(item.get("values"), list)
-        ]
-
-    return {
-        "headers": headers,
-        "sample_rows": sample_rows,
-        "header_row_index": header_row_index,
-        "first_data_row_index": first_data_row_index,
-    }
-
-
-async def _reprocess_and_reconcile(request: Request, packet, config) -> dict | None:
-    source_file_path = getattr(packet, "source_file_path", None)
-    source_file_id = getattr(packet, "source_file_id", None)
-    if not source_file_path or not source_file_id:
-        return None
-
-    path = Path(source_file_path)
-    if not path.exists():
-        return {
-            "ok": False,
-            "stage": "reprocess",
-            "reason": f"Source file is no longer available at {source_file_path}.",
-        }
-
-    db = _get_db(request)
-    file_repo = ReconciliationFileRepository(db)
-    source_file = await file_repo.find_one({"_id": source_file_id})
-    if source_file is None:
-        return {
-            "ok": False,
-            "stage": "reprocess",
-            "reason": f"Source file record {source_file_id} was not found.",
-        }
-
-    if source_file.processing_status == ProcessingStatus.FAILED:
-        await db["data_container"].delete_many({"sourceFileId": source_file_id})
-        await file_repo.delete_one({"_id": source_file_id})
-
-    pipeline = IngestionPipeline(
-        db=db,
-        config_loader=_config_loader(request),
-        batch_size=100,
-        logger=None,
-    )
-    ingestion_result = await pipeline.process_file(
-        file_path=source_file_path,
-        partner=config.partner,
-        workflow_type=config.workflow_type,
-        file_type=config.file_type,
-        reconciliation_date=source_file.reconciliation_date,
-        config_version=config.config_version,
-        enable_config_health_check=False,
-    )
-    processing_status = getattr(
-        ingestion_result.file_record.processing_status,
-        "value",
-        ingestion_result.file_record.processing_status,
-    )
-    result = {
-        "ok": processing_status == ProcessingStatus.COMPLETED.value,
-        "stage": "ingestion",
-        "partner": config.partner,
-        "date": source_file.reconciliation_date.strftime("%Y-%m-%d"),
-        "processingStatus": processing_status,
-        "fileId": str(ingestion_result.file_record.id),
-        "stats": {
-            "totalRows": ingestion_result.stats.total_rows,
-            "successRows": ingestion_result.stats.success_rows,
-            "failedRows": ingestion_result.stats.failed_rows,
-        },
-        "errors": ingestion_result.errors,
-    }
-    if processing_status != ProcessingStatus.COMPLETED.value:
-        return result
-
-    if packet.scope_type:
-        await file_repo.update_one(
-            {"_id": str(ingestion_result.file_record.id)},
-            {"scopeType": packet.scope_type}
-        )
-
-    recon_date = source_file.reconciliation_date
-    recon_results = await ReconciliationEngine(db).reconcile(
-        config.partner,
-        recon_date,
-        source_file_id=str(ingestion_result.file_record.id),
-    )
-    invalidated = await invalidate_insight_cache(
-        config.partner,
-        recon_date.strftime("%Y-%m-%d"),
-    )
-    result.update({
-        "stage": "reconciliation",
-        "reconciliationCount": len(recon_results),
-        "insightCacheInvalidated": invalidated,
-    })
-    return result
-
-
-async def _run_runtime_validation(request: Request, packet, config) -> dict:
-    source_file_path = getattr(packet, "source_file_path", None)
-    sampled_rows = 0
-    success_rows = 0
-    failed_rows = 0
-    failed_examples: list[dict] = []
-    normalizer = TransactionNormalizer(config.field_mappings)
-
-    def _consume_row(row: list, row_number: int) -> None:
-        nonlocal sampled_rows, success_rows, failed_rows, failed_examples
-        sampled_rows += 1
-        norm_result = normalizer.normalize(row, row_number)
-        if norm_result.errors:
-            failed_rows += 1
-            failed_examples.append({
-                "row": row_number,
-                "reason": norm_result.errors[0].reason,
-                "field": norm_result.errors[0].field,
-            })
-            return
-        txn, build_errors = TransactionNormalizer.build_canonical(
-            norm_result.data, [], row_number
-        )
-        if txn is None:
-            failed_rows += 1
-            failed_examples.append({
-                "row": row_number,
-                "reason": build_errors[0].reason,
-                "field": build_errors[0].field,
-            })
-        else:
-            success_rows += 1
-
-    if source_file_path:
-        path = Path(source_file_path)
-        if path.exists():
-            with create_reader(source_file_path, config) as reader:
-                for row in reader.iter_rows():
-                    row_number = config.start_row + sampled_rows
-                    _consume_row(row, row_number)
-                    if sampled_rows >= 20:
-                        break
-        else:
-            return {
-                "gateKey": "runtime_validation",
-                "label": "Runtime validation",
-                "status": "fail",
-                "reason": f"Source file is not available at {source_file_path}.",
-                "details": {"successRows": 0, "failedRows": 0, "sampledRows": 0},
-            }
-    else:
-        sample_preview = getattr(packet, "sample_preview", None) or []
-        for idx, sample in enumerate(sample_preview[:20]):
-            row = sample.get("values") if isinstance(sample, dict) else None
-            if not isinstance(row, list):
-                continue
-            row_number = int(sample.get("rowIndex") or (config.start_row + idx)) if isinstance(sample, dict) else (config.start_row + idx)
-            _consume_row(row, row_number)
-
-        if sampled_rows == 0:
-            return {
-                "gateKey": "runtime_validation",
-                "label": "Runtime validation",
-                "status": "fail",
-                "reason": "No source file path or sample preview is attached to this review packet.",
-                "details": {"successRows": 0, "failedRows": 0, "sampledRows": 0},
-            }
-
-    if sampled_rows == 0:
-        status = "fail"
-        reason = "No readable data rows were produced by the proposed mapping."
-    elif success_rows == 0:
-        status = "fail"
-        reason = "The proposed mapping could not normalize any sampled rows."
-    elif failed_rows == 0:
-        status = "pass"
-        reason = f"Validated successfully on {success_rows}/{sampled_rows} sampled rows."
-    else:
-        success_rate = success_rows / sampled_rows
-        status = "pass" if success_rate >= 0.8 else "fail"
-        reason = (
-            f"Validated {success_rows}/{sampled_rows} sampled rows successfully."
-            if status == "pass"
-            else f"Only {success_rows}/{sampled_rows} sampled rows normalized successfully."
-        )
-
-    gate = {
-        "gateKey": "runtime_validation",
-        "label": "Runtime validation",
-        "status": status,
-        "reason": reason,
-        "details": {
-            "sampledRows": sampled_rows,
-            "successRows": success_rows,
-            "failedRows": failed_rows,
-            "failedExamples": failed_examples[:3],
-        },
-    }
-    await _repo(request).collection.update_one(
-        {"_id": str(packet.id)},
-        {"$set": {"validationGates": _upsert_validation_gate(packet, gate)}},
-    )
-    return gate
 
 
 @router.post("/{packet_id}/validate-runtime")
@@ -475,9 +170,9 @@ async def validate_runtime_packet(request: Request, packet_id: str):
     if config is None:
         raise HTTPException(status_code=404, detail="Draft mapping not found.")
 
-    gate = await _run_runtime_validation(request, packet, config)
+    gate = await run_runtime_validation(_get_db(request), packet, config)
     ok = gate["status"] == "pass"
-    return {"ok": ok, "gate": gate}
+    return {"ok": ok, "validationState": derive_validation_state(gate), "gate": gate}
 
 
 @router.post("/{packet_id}/generate-ai-mapping")
@@ -494,7 +189,7 @@ async def generate_ai_mapping_for_packet(request: Request, packet_id: str):
     if packet.draft_mapping_id:
         existing = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
 
-    context = await _resolve_ai_generation_context(request, packet, existing)
+    context = await resolve_ai_generation_context(_get_db(request), packet, existing)
     headers = context["headers"]
     sample_rows = context["sample_rows"]
     if not headers:
@@ -513,11 +208,8 @@ async def generate_ai_mapping_for_packet(request: Request, packet_id: str):
     if error or config_dict is None:
         raise HTTPException(status_code=500, detail=f"AI mapping generation failed: {error}")
 
-    field_mappings, mapping_warnings = _canonicalize_guided_field_mappings(
-        [
-            item.model_dump(by_alias=True) if hasattr(item, "model_dump") else dict(item)
-            for item in (config_dict.get("fieldMappings") or [])
-        ]
+    field_mappings, mapping_warnings = canonicalize_field_mappings(
+        serialize_field_mappings(config_dict.get("fieldMappings") or [])
     )
 
     file_type_value = getattr(packet, "file_type_detected", None) or FileType.SETTLEMENT.value
@@ -575,16 +267,24 @@ async def generate_ai_mapping_for_packet(request: Request, packet_id: str):
         )
         await mapping_repo.create(mapping)
         draft_id = str(mapping.id)
-        await repo.collection.update_one({"_id": packet_id}, {"$set": {"draftMappingId": draft_id}})
+        await repo.collection.update_one(
+            {"_id": packet_id},
+            {"$set": {
+                "draftMappingId": draft_id,
+                "draftMappingVersion": getattr(mapping, "config_version", None) or draft_id,
+            }},
+        )
 
     validation_gates = [
         dict(gate) for gate in (packet.validation_gates or [])
         if gate.get("gateKey") != "runtime_validation"
     ]
+    mapping_payload = _serialize_mapping(mapping if isinstance(mapping, MappingConfig) else updated)
     await repo.collection.update_one(
         {"_id": packet_id},
         {"$set": {
             "draftMappingId": draft_id,
+            "draftMappingVersion": mapping_payload["draftMappingVersion"],
             "parseStrategy": {
                 **(packet.parse_strategy or {}),
                 "sheetName": config_dict.get("sheetName") or packet.parse_strategy.get("sheetName") or "Sheet1",
@@ -595,11 +295,10 @@ async def generate_ai_mapping_for_packet(request: Request, packet_id: str):
             "validationGates": validation_gates,
         }},
     )
-
-    mapping_payload = _serialize_mapping(mapping if isinstance(mapping, MappingConfig) else updated)
     return {
         "ok": True,
         "draftMappingId": draft_id,
+        "draftMappingVersion": mapping_payload["draftMappingVersion"],
         "mapping": mapping_payload,
         "warnings": mapping_warnings,
         "validationGates": validation_gates,
@@ -634,7 +333,7 @@ async def save_draft_mapping_for_packet(
         workflow_type = existing.workflow_type
     workflow_type = workflow_type or packet.parse_strategy.get("workflowType") or "UPC"
 
-    field_mappings, mapping_warnings = _canonicalize_guided_field_mappings(
+    field_mappings, mapping_warnings = canonicalize_field_mappings(
         [item.model_dump(by_alias=True) for item in payload.field_mappings]
     )
     now = datetime.now(timezone.utc)
@@ -658,14 +357,17 @@ async def save_draft_mapping_for_packet(
         status=MappingConfigStatus.PENDING_APPROVAL,
         configHealth=config_health,
     )
-    validation_errors = _validate_guided_mapping_contract(candidate_config)
-    if validation_errors:
+    contract_validation = validate_mapping_contract(candidate_config)
+    validation_warnings = [
+        warning for warning in contract_validation.warnings if warning not in mapping_warnings
+    ]
+    if contract_validation.errors:
         raise HTTPException(
             status_code=400,
             detail={
                 "message": "Draft mapping is incomplete or invalid.",
-                "errors": validation_errors,
-                "warnings": mapping_warnings,
+                "errors": contract_validation.errors,
+                "warnings": mapping_warnings + validation_warnings,
             },
         )
 
@@ -700,11 +402,17 @@ async def save_draft_mapping_for_packet(
         await mapping_repo.create(proposal)
         draft_mapping_id = str(proposal.id)
 
+    draft_mapping_version = (
+        getattr(existing, "config_version", None)
+        if existing is not None
+        else getattr(proposal, "config_version", None)
+    ) or draft_mapping_id
     validation_gates = [dict(gate) for gate in (packet.validation_gates or []) if gate.get("gateKey") != "runtime_validation"]
     await repo.collection.update_one(
         {"_id": packet_id},
         {"$set": {
             "draftMappingId": draft_mapping_id,
+            "draftMappingVersion": draft_mapping_version,
             "parseStrategy.sheetName": payload.sheet_name,
             "parseStrategy.startRow": payload.start_row,
             "parseStrategy.fieldMappingCount": len(field_mappings),
@@ -714,20 +422,21 @@ async def save_draft_mapping_for_packet(
     return {
         "ok": True,
         "draftMappingId": draft_mapping_id,
+        "draftMappingVersion": draft_mapping_version,
         "fieldMappingCount": len(field_mappings),
         "sheetName": payload.sheet_name,
         "startRow": payload.start_row,
-        "warnings": mapping_warnings,
+        "warnings": mapping_warnings + validation_warnings,
         "validationGates": validation_gates,
     }
 
 
-@router.post("/{packet_id}/approve-activate")
-async def approve_activate_packet(
+async def approve_activate_packet_action(
     request: Request,
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _repo(request)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
@@ -737,70 +446,58 @@ async def approve_activate_packet(
     if not _has_passing_runtime_gate(packet):
         raise HTTPException(status_code=400, detail="Runtime validation must pass before approval.")
 
-    if payload.scope_type:
-        packet.scope_type = payload.scope_type
-        await repo.collection.update_one(
-            {"_id": packet_id},
-            {"$set": {"scopeType": payload.scope_type}}
-        )
-        if packet.source_file_id:
-            db = _get_db(request)
-            file_repo = ReconciliationFileRepository(db)
-            await file_repo.update_one(
-                {"_id": packet.source_file_id},
-                {"scopeType": payload.scope_type}
-            )
+    await update_packet_scope(request, packet_id, packet, payload.scope_type)
 
-    post_approve_run = None
-    if packet.draft_mapping_id:
-        mapping_repo = MappingConfigRepository(_get_db(request))
-        config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
-        if config is not None and config.status == MappingConfigStatus.PENDING_APPROVAL:
-            now = datetime.now(timezone.utc)
-            current_approved = await mapping_repo.find_by_partner_and_type(
-                config.partner, config.workflow_type, config.file_type
-            )
-            if current_approved is not None:
-                await mapping_repo.collection.update_one(
-                    {"_id": str(current_approved.id)},
-                    {"$set": {
-                        "status": MappingConfigStatus.SUPERSEDED.value,
-                        "supersededAt": now,
-                        "supersededByConfigId": str(config.id),
-                    }},
-                )
-            health = dict(config.config_health or {})
-            health.update({
-                "stale": False,
-                "status": MappingConfigStatus.APPROVED.value,
-                "approvedAt": now,
-                "reasoning": (health.get("reasoning") or "Approved from review packet."),
-            })
-            await mapping_repo.collection.update_one(
-                {"_id": packet.draft_mapping_id},
-                {"$set": {
-                    "status": MappingConfigStatus.APPROVED.value,
-                    "approvedAt": now,
-                    "approvedBy": payload.reviewed_by,
-                    "configHealth": health,
-                }},
-            )
-            post_approve_run = await _reprocess_and_reconcile(request, packet, config)
-    response = await _mark_packet(
+    post_approve_run = await approve_packet_mapping_and_reprocess(
+        request,
+        packet,
+        payload.reviewed_by,
+    )
+    response = await mark_packet(
         request,
         packet_id,
         ReviewPacketStatus.APPROVED,
         ReviewDecisionMode.APPROVE_ACTIVATE_NEXT_RUNTIME,
         payload.reviewed_by,
+        _serialize,
     )
     if post_approve_run is not None:
         response["postApproveRun"] = post_approve_run
-        if not post_approve_run.get("ok", False):
-            response["warning"] = (
-                post_approve_run.get("reason")
-                or "Approved, but post-approve processing did not complete."
-            )
     return response
+
+
+@router.post("/{packet_id}/approve-activate")
+async def approve_activate_packet(
+    request: Request,
+    packet_id: str,
+    payload: ReviewDecisionPayload,
+):
+    return await approve_activate_packet_action(request, packet_id, payload)
+
+
+async def approve_keep_current_packet_action(
+    request: Request,
+    packet_id: str,
+    payload: ReviewDecisionPayload,
+):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
+    repo = _repo(request)
+    packet = await repo.find_one({"_id": packet_id})
+    if packet is None:
+        raise HTTPException(status_code=404, detail="Review packet not found.")
+    if not _has_passing_runtime_gate(packet):
+        raise HTTPException(status_code=400, detail="Runtime validation must pass before approval.")
+
+    await update_packet_scope(request, packet_id, packet, payload.scope_type)
+
+    return await mark_packet(
+        request,
+        packet_id,
+        ReviewPacketStatus.APPROVED,
+        ReviewDecisionMode.APPROVE_KEEP_CURRENT_FOR_FILE,
+        payload.reviewed_by,
+        _serialize,
+    )
 
 
 @router.post("/{packet_id}/approve-keep-current")
@@ -809,33 +506,22 @@ async def approve_keep_current_packet(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
-    repo = _repo(request)
-    packet = await repo.find_one({"_id": packet_id})
-    if packet is None:
-        raise HTTPException(status_code=404, detail="Review packet not found.")
-    if not _has_passing_runtime_gate(packet):
-        raise HTTPException(status_code=400, detail="Runtime validation must pass before approval.")
+    return await approve_keep_current_packet_action(request, packet_id, payload)
 
-    if payload.scope_type:
-        packet.scope_type = payload.scope_type
-        await repo.collection.update_one(
-            {"_id": packet_id},
-            {"$set": {"scopeType": payload.scope_type}}
-        )
-        if packet.source_file_id:
-            db = _get_db(request)
-            file_repo = ReconciliationFileRepository(db)
-            await file_repo.update_one(
-                {"_id": packet.source_file_id},
-                {"scopeType": payload.scope_type}
-            )
 
-    return await _mark_packet(
+async def reject_packet_action(
+    request: Request,
+    packet_id: str,
+    payload: ReviewDecisionPayload,
+):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
+    return await mark_packet(
         request,
         packet_id,
-        ReviewPacketStatus.APPROVED,
-        ReviewDecisionMode.APPROVE_KEEP_CURRENT_FOR_FILE,
+        ReviewPacketStatus.REJECTED,
+        ReviewDecisionMode.REJECT,
         payload.reviewed_by,
+        _serialize,
     )
 
 
@@ -845,13 +531,7 @@ async def reject_packet(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
-    return await _mark_packet(
-        request,
-        packet_id,
-        ReviewPacketStatus.REJECTED,
-        ReviewDecisionMode.REJECT,
-        payload.reviewed_by,
-    )
+    return await reject_packet_action(request, packet_id, payload)
 
 
 @router.post("/{packet_id}/send-to-studio")
@@ -860,6 +540,7 @@ async def send_packet_to_studio(
     packet_id: str,
     payload: ReviewDecisionPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _repo(request)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
@@ -916,3 +597,148 @@ async def create_review_packet_from_mapping(
     repo = _repo(request)
     created = await repo.create(packet)
     return {"ok": True, "packet": _serialize(created)}
+
+
+@router.post("/{packet_id}/classify-scope-llm")
+async def classify_scope_llm_for_packet(request: Request, packet_id: str):
+    import re
+    import os
+    import json
+    import logging
+    from datetime import datetime, time as datetime_time
+    from src.analysis.config import AnalysisConfig
+    from src.analysis.provider import create_provider
+    from src.readers import create_reader
+    from src.models.mapping_config import MappingConfigRepository
+    
+    logger = logging.getLogger(__name__)
+    repo = _repo(request)
+    packet = await repo.find_one({"_id": packet_id})
+    if packet is None:
+        raise HTTPException(status_code=404, detail="Review packet not found.")
+        
+    db = _get_db(request)
+    
+    # 1. Determine date
+    recon_date = getattr(packet, "reconciliation_date", None)
+    if not recon_date:
+        match = re.search(r'(\d{4})[-_]?(\d{2})[-_]?(\d{2})', packet.file_name)
+        if match:
+            try:
+                recon_date = datetime.strptime(f"{match.group(1)}-{match.group(2)}-{match.group(3)}", "%Y-%m-%d")
+            except ValueError:
+                recon_date = datetime.utcnow()
+        else:
+            recon_date = datetime.utcnow()
+            
+    # 2. Count internal transactions
+    start_of_day = datetime.combine(recon_date, datetime_time.min)
+    end_of_day = datetime.combine(recon_date, datetime_time.max)
+    
+    internal_count = await db["internal_transaction"].count_documents({
+        "partner": packet.partner,
+        "transactionTime": {
+            "$gte": start_of_day,
+            "$lte": end_of_day
+        }
+    })
+    
+    # 3. Count received records
+    received_count = 0
+    source_file_path = getattr(packet, "source_file_path", None)
+    if source_file_path and os.path.exists(source_file_path):
+        try:
+            mapping_repo = MappingConfigRepository(db)
+            config = None
+            if packet.draft_mapping_id:
+                config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
+            with create_reader(source_file_path, config) as reader:
+                received_count = sum(1 for _ in reader.iter_rows())
+        except Exception as exc:
+            logger.error(f"Error counting rows in file: {exc}")
+            received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
+    else:
+        received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
+        
+    # 4. Invoke LLM for classification probabilities
+    llm_provider = create_provider(AnalysisConfig())
+    system_prompt = (
+        "You are an expert reconciliation assistant. Your task is to analyze the file metadata and database status "
+        "and classify the reconciliation file scope. You must respond ONLY with a valid JSON object."
+    )
+    
+    prompt = f"""Classify the reconciliation file's scope into one of these types:
+1. FULL_SNAPSHOT: The file contains the full set of transactions for the day, replacing the existing state. Usually if internal DB has 0 records, or matches the file count.
+2. INCREMENTAL_APPEND: The file contains a new batch/wave of transactions for the day, to be appended to existing ones. Usually if internal DB already has records and this file adds more.
+3. REPLACEMENT: The file contains corrections/retry records for transactions that already exist, which should overwrite them.
+
+Metadata:
+- Partner: {packet.partner}
+- File Name: {packet.file_name}
+- Received Record Count: {received_count}
+- Internal DB Record Count (same day): {internal_count}
+
+Analyze the filename hints (e.g., words like 'append', 'snapshot', 'replace', 'delta', 'correction', 'retry') and compare Received Record Count vs Internal DB Record Count.
+Return a JSON object containing:
+- probabilities: a dictionary with keys "FULL_SNAPSHOT", "INCREMENTAL_APPEND", "REPLACEMENT" and float values (probabilities summing to 1.0 or 100%)
+- suggested_scope: one of the three category strings
+- reasoning: a brief explanation in English
+
+JSON format:
+{{
+  "probabilities": {{
+    "FULL_SNAPSHOT": 0.8,
+    "INCREMENTAL_APPEND": 0.15,
+    "REPLACEMENT": 0.05
+  }},
+  "suggested_scope": "FULL_SNAPSHOT",
+  "reasoning": "<explanation>"
+}}
+"""
+    try:
+        response_text = await llm_provider.generate(prompt=prompt, system_prompt=system_prompt)
+        clean_text = response_text.strip()
+        if clean_text.startswith("```"):
+            parts = clean_text.split("```")
+            if len(parts) >= 3:
+                clean_text = parts[1]
+                if clean_text.startswith("json"):
+                    clean_text = clean_text[4:]
+        clean_text = clean_text.strip()
+        result = json.loads(clean_text)
+    except Exception as exc:
+        logger.error(f"LLM classification failed: {exc}")
+        result = {
+            "probabilities": {
+                "FULL_SNAPSHOT": 0.34,
+                "INCREMENTAL_APPEND": 0.33,
+                "REPLACEMENT": 0.33
+            },
+            "suggested_scope": "FULL_SNAPSHOT",
+            "reasoning": f"Fallback suggestion due to LLM error: {str(exc)}"
+        }
+        
+    return {
+        "ok": True,
+        "internalDbRecordCount": internal_count,
+        "receivedRecordCount": received_count,
+        "probabilities": result.get("probabilities", {}),
+        "suggestedScope": result.get("suggested_scope", "FULL_SNAPSHOT"),
+        "reasoning": result.get("reasoning", "")
+    }
+
+
+class ScopeUpdatePayload(BaseModel):
+    scope_type: str = Field(alias="scopeType")
+
+
+@router.post("/{packet_id}/scope")
+async def update_packet_scope_endpoint(request: Request, packet_id: str, payload: ScopeUpdatePayload):
+    from src.services.review_packet_actions import update_packet_scope
+    repo = _repo(request)
+    packet = await repo.find_one({"_id": packet_id})
+    if packet is None:
+        raise HTTPException(status_code=404, detail="Review packet not found.")
+        
+    await update_packet_scope(request, packet_id, packet, payload.scope_type)
+    return {"ok": True, "scopeType": payload.scope_type}

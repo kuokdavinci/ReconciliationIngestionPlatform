@@ -12,7 +12,6 @@ Collects ALL errors — never fail-fast.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
 from src.core.enums import TransactionStatus

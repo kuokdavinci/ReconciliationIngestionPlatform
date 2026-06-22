@@ -12,6 +12,7 @@ Orchestration flow:
 Fallback chain: primary provider → fallback provider → rule-based
 """
 
+import asyncio
 import logging
 import time
 from typing import Any, Optional
@@ -21,7 +22,6 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from src.analysis.cache import build_cache_key, get_insight_cache
 from src.analysis.config import AnalysisConfig
 from src.analysis.grouping import GroupingEngine
-from src.analysis.metrics import MetricsService
 from src.analysis.prompts import build_analysis_prompt, build_system_prompt
 from src.analysis.provider import AIProviderRouter, LLMProvider
 from src.analysis.providers.openai_compat import OpenAICompatProvider
@@ -30,6 +30,7 @@ from src.analysis.schemas import (
     AnalysisInput,
     AnalysisResult,
     GroupResult,
+    SelectedErrorSignal,
     SummaryResult,
 )
 from src.analysis.guardrails import validate_insights
@@ -44,6 +45,17 @@ from src.core.enums import ReconciliationStatus
 logger = logging.getLogger(__name__)
 
 
+def _normalize_extra_query_for_mongo(extra_query: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    if not extra_query:
+        return {}
+    normalized = dict(extra_query)
+    if "source_file_id" in normalized and "sourceFileId" not in normalized:
+        normalized["sourceFileId"] = normalized.pop("source_file_id")
+    if "reconciliation_run_id" in normalized and "reconciliationRunId" not in normalized:
+        normalized["reconciliationRunId"] = normalized.pop("reconciliation_run_id")
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # MongoDB query helper
 # ---------------------------------------------------------------------------
@@ -52,6 +64,10 @@ async def _query_reconciliation_results(
     collection: AsyncIOMotorCollection,
     partner: str,
     date: str,
+    *,
+    extra_query: Optional[dict[str, Any]] = None,
+    mismatch_only: bool = False,
+    limit: int | None = None,
 ) -> list[Any]:
     """Query reconciliation results from MongoDB for a partner on a date.
 
@@ -63,29 +79,226 @@ async def _query_reconciliation_results(
     Returns:
         List of reconciliation result objects (as SimpleNamespace-like dicts).
     """
-    from types import SimpleNamespace
+    query: dict[str, Any] = {"partner": partner, "date": date}
+    query.update(_normalize_extra_query_for_mongo(extra_query))
+    if mismatch_only:
+        query["reconciliationStatus"] = {
+            "$in": [
+                ReconciliationStatus.AMOUNT_MISMATCH.value,
+                ReconciliationStatus.STATUS_MISMATCH.value,
+                ReconciliationStatus.MULTIPLE_MISMATCH.value,
+                ReconciliationStatus.MISSING_INTERNAL.value,
+                ReconciliationStatus.MISSING_PARTNER.value,
+                ReconciliationStatus.UNMAPPED_SKIPPED.value,
+            ]
+        }
 
-    cursor = collection.find({"partner": partner, "date": date})
-    docs = await cursor.to_list(length=None)
+    cursor = collection.find(query)
+    if limit is not None:
+        cursor = cursor.limit(limit)
+    docs = await cursor.to_list(length=limit)
+    return _docs_to_results(docs, partner, date)
+
+
+def _docs_to_results(docs: list[dict[str, Any]], partner: str, date: str) -> list[Any]:
+    from types import SimpleNamespace
 
     results = []
     for doc in docs:
         result = SimpleNamespace()
         result.partner = doc.get("partner", partner)
         result.date = doc.get("date", date)
-
         result.partner_amount = doc.get("partnerAmount") if "partnerAmount" in doc else doc.get("partner_amount")
         result.internal_amount = doc.get("internalAmount") if "internalAmount" in doc else doc.get("internal_amount")
-
         status_str = doc.get("reconciliationStatus") if "reconciliationStatus" in doc else doc.get("reconciliation_status", "MATCHED")
         try:
             result.reconciliation_status = ReconciliationStatus(status_str)
         except ValueError:
             result.reconciliation_status = ReconciliationStatus.MATCHED
-
         results.append(result)
-
     return results
+
+
+async def _query_summary_metrics(
+    collection: AsyncIOMotorCollection,
+    partner: str,
+    date: str,
+    *,
+    extra_query: Optional[dict[str, Any]] = None,
+) -> SummaryResult:
+    match_query: dict[str, Any] = {"partner": partner, "date": date}
+    match_query.update(_normalize_extra_query_for_mongo(extra_query))
+    pipeline = [
+        {"$match": match_query},
+        {
+            "$group": {
+                "_id": "$reconciliationStatus",
+                "count": {"$sum": 1},
+                "mismatch_amount": {
+                    "$sum": {
+                        "$cond": [
+                            {"$in": ["$reconciliationStatus", [
+                                ReconciliationStatus.AMOUNT_MISMATCH.value,
+                                ReconciliationStatus.MULTIPLE_MISMATCH.value,
+                                ReconciliationStatus.STATUS_MISMATCH.value,
+                            ]]},
+                            {"$abs": {"$subtract": ["$partnerAmount", "$internalAmount"]}},
+                            0,
+                        ]
+                    }
+                },
+            }
+        },
+    ]
+    by_status: dict[str, int] = {}
+    total_transactions = 0
+    matched = 0
+    total_amount_mismatch = 0.0
+    cursor = collection.aggregate(pipeline)
+    async for doc in cursor:
+        status = str(doc["_id"])
+        count = int(doc["count"])
+        by_status[status] = count
+        total_transactions += count
+        if status in (
+            ReconciliationStatus.MATCHED.value,
+            ReconciliationStatus.MATCHED_FAILED.value,
+            ReconciliationStatus.MATCHED_REVERSED.value,
+        ):
+            matched += count
+        mismatch_amount = doc.get("mismatch_amount")
+        if mismatch_amount is not None:
+            try:
+                total_amount_mismatch += float(
+                    mismatch_amount.to_decimal() if hasattr(mismatch_amount, "to_decimal") else mismatch_amount
+                )
+            except Exception:
+                pass
+
+    mismatch_count = max(0, total_transactions - matched)
+    mismatch_rate = round((mismatch_count * 100 / total_transactions), 2) if total_transactions else 0.0
+    return SummaryResult(
+        partner=partner,
+        date=date,
+        total_transactions=total_transactions,
+        matched=matched,
+        mismatch_rate=mismatch_rate,
+        total_amount_mismatch=total_amount_mismatch,
+        by_status=by_status,
+    )
+
+
+def _build_group_results_from_summary(summary: SummaryResult) -> list[GroupResult]:
+    total = summary.total_transactions or 0
+    groups: list[GroupResult] = []
+    for status, count in summary.by_status.items():
+        percentage = round((count / total) * 100, 2) if total else 0.0
+        groups.append(
+            GroupResult(
+                key=status,
+                count=count,
+                percentage=percentage,
+                total_amount=0.0,
+                details={},
+            )
+        )
+    return groups
+
+
+def _compute_summary_hash(summary: SummaryResult) -> str:
+    import hashlib
+
+    ordered_counts = "|".join(f"{status}:{summary.by_status[status]}" for status in sorted(summary.by_status.keys()))
+    payload = f"{summary.partner}|{summary.date}|{summary.total_transactions}|{summary.matched}|{summary.mismatch_rate}|{summary.total_amount_mismatch}|{ordered_counts}"
+    return hashlib.md5(payload.encode("utf-8")).hexdigest()
+
+
+async def _query_selected_error_results(
+    collection: AsyncIOMotorCollection,
+    partner: str,
+    date: str,
+    *,
+    extra_query: Optional[dict[str, Any]] = None,
+    per_status_limit: int = 50,
+) -> list[Any]:
+    selected_docs: list[dict[str, Any]] = []
+    mongo_extra_query = _normalize_extra_query_for_mongo(extra_query)
+    status_order = [
+        ReconciliationStatus.MISSING_INTERNAL.value,
+        ReconciliationStatus.MISSING_PARTNER.value,
+        ReconciliationStatus.AMOUNT_MISMATCH.value,
+        ReconciliationStatus.MULTIPLE_MISMATCH.value,
+        ReconciliationStatus.STATUS_MISMATCH.value,
+        ReconciliationStatus.UNMAPPED_SKIPPED.value,
+    ]
+    for status in status_order:
+        cursor = collection.find(
+            {
+                "partner": partner,
+                "date": date,
+                "reconciliationStatus": status,
+                **mongo_extra_query,
+            }
+        ).limit(per_status_limit)
+        docs = await cursor.to_list(length=per_status_limit)
+        selected_docs.extend(docs)
+    return _docs_to_results(selected_docs, partner, date)
+
+
+def _format_amount_band(amount: float) -> str:
+    if amount < 100_000:
+        return "0-100k"
+    if amount < 1_000_000:
+        return "100k-1M"
+    return "1M+"
+
+
+def _build_selected_error_signals(results: list[Any]) -> list[SelectedErrorSignal]:
+    grouped: dict[str, list[Any]] = {}
+    for result in results:
+        status = result.reconciliation_status.value if hasattr(result.reconciliation_status, "value") else str(result.reconciliation_status)
+        grouped.setdefault(status, []).append(result)
+
+    signals: list[SelectedErrorSignal] = []
+    for status, items in grouped.items():
+        amount_range = "N/A"
+        pattern_hint = "Sampled bounded error records"
+        if status in {
+            ReconciliationStatus.AMOUNT_MISMATCH.value,
+            ReconciliationStatus.MULTIPLE_MISMATCH.value,
+        }:
+            diffs: list[float] = []
+            for item in items:
+                partner_amount = getattr(item, "partner_amount", None)
+                internal_amount = getattr(item, "internal_amount", None)
+                if partner_amount is None or internal_amount is None:
+                    continue
+                try:
+                    diffs.append(abs(float(partner_amount) - float(internal_amount)))
+                except Exception:
+                    continue
+            if diffs:
+                avg_diff = sum(diffs) / len(diffs)
+                amount_range = _format_amount_band(avg_diff)
+                pattern_hint = "Selected from amount-difference mismatches"
+        elif status == ReconciliationStatus.STATUS_MISMATCH.value:
+            pattern_hint = "Selected from status mapping inconsistencies"
+        elif status == ReconciliationStatus.MISSING_INTERNAL.value:
+            pattern_hint = "Selected from partner-only records"
+        elif status == ReconciliationStatus.MISSING_PARTNER.value:
+            pattern_hint = "Selected from internal-only records"
+        elif status == ReconciliationStatus.UNMAPPED_SKIPPED.value:
+            pattern_hint = "Selected from skipped unmapped partner rows"
+
+        signals.append(
+            SelectedErrorSignal(
+                status=status,
+                sample_count=len(items),
+                amount_range=amount_range,
+                pattern_hint=pattern_hint,
+            )
+        )
+    return signals
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +417,7 @@ async def get_summary(
     collection: AsyncIOMotorCollection,
     llm_provider: LLMProvider,
     config: Optional[AnalysisConfig] = None,
+    extra_query: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Generate summary insights for a partner on a given date.
 
@@ -227,18 +441,15 @@ async def get_summary(
     start_time = time.monotonic()
     cfg = config or AnalysisConfig()
 
-    # Step 1: Query MongoDB
-    results = await _query_reconciliation_results(collection, partner, date)
+    # Step 1: Query aggregated metrics from MongoDB
+    summary = await _query_summary_metrics(collection, partner, date, extra_query=extra_query)
     logger.info(
-        f"Queried {len(results)} reconciliation results for {partner} on {date}",
-        extra={"event": "ai_insight_query", "partner": partner, "date": date, "count": len(results)},
+        f"Queried aggregated reconciliation metrics for {partner} on {date}",
+        extra={"event": "ai_insight_query", "partner": partner, "date": date, "count": summary.total_transactions},
     )
 
-    # Step 2: Compute metrics
-    summary = MetricsService.compute_summary(results, partner, date)
-
-    # Step 3: Group results
-    groups = GroupingEngine.group(results)
+    # Step 2: Build grouped stats from aggregated status counts only
+    groups = _build_group_results_from_summary(summary)
 
     # Step 4: Build AnalysisInput for summary (operational focus)
     analysis_input = build_analysis_input(
@@ -247,12 +458,13 @@ async def get_summary(
         focus="operational",
         metrics_result=summary,
         grouped_results=groups,
+        selected_error_signals=[],
     )
 
     # Step 5: Check cache if enabled
     cache_enabled = cfg.cache_enabled
     model_name = _get_model_name(llm_provider)
-    results_hash = _compute_results_hash(results)
+    results_hash = _compute_summary_hash(summary)
     cache_key = build_cache_key(partner, date, "operational", model_name, reconciliation_run_id=results_hash)
     insight_cache = get_insight_cache() if cache_enabled and model_name else None
 
@@ -350,6 +562,7 @@ async def get_discrepancies(
     collection: AsyncIOMotorCollection,
     llm_provider: LLMProvider,
     config: Optional[AnalysisConfig] = None,
+    extra_query: Optional[dict[str, Any]] = None,
 ) -> list[AnalysisResult]:
     """Generate discrepancy insights for a partner on a given date.
 
@@ -376,14 +589,18 @@ async def get_discrepancies(
     cfg = config or AnalysisConfig()
 
     # Step 1: Query MongoDB
-    results = await _query_reconciliation_results(collection, partner, date)
+    summary = await _query_summary_metrics(collection, partner, date, extra_query=extra_query)
+    results = await _query_selected_error_results(
+        collection,
+        partner,
+        date,
+        extra_query=extra_query,
+        per_status_limit=50,
+    )
     logger.info(
         f"Queried {len(results)} results for discrepancies ({focus}) for {partner} on {date}",
         extra={"event": "ai_insight_discrepancy_query", "partner": partner, "date": date, "focus": focus, "count": len(results)},
     )
-
-    # Step 2: Compute metrics
-    summary = MetricsService.compute_summary(results, partner, date)
 
     # Step 3: Group results
     groups = GroupingEngine.group(results)
@@ -398,6 +615,7 @@ async def get_discrepancies(
         "partner": partner,
     }
     anomalies = rule_based_pre_process(results, focus, summary_metrics_dict)
+    selected_error_signals = _build_selected_error_signals(results)
 
     # Step 5: Build AnalysisInput
     analysis_input = build_analysis_input(
@@ -407,6 +625,7 @@ async def get_discrepancies(
         metrics_result=summary,
         grouped_results=groups,
         anomalies=anomalies,
+        selected_error_signals=selected_error_signals,
     )
 
     # Step 6: Check cache if enabled
@@ -428,7 +647,10 @@ async def get_discrepancies(
         )
     else:
         insights, schema_valid, guardrail_result = await _generate_insights_with_fallback(
-            analysis_input, llm_provider, start_time
+            analysis_input,
+            llm_provider,
+            start_time,
+            timeout_seconds=float(cfg.timeout),
         )
 
         if insight_cache and schema_valid and insights:
@@ -490,7 +712,11 @@ async def generate_insights(
     Returns:
         List of AnalysisResult objects (LLM-enriched or rule-based fallback).
     """
-    results, _, _ = await _generate_insights_with_fallback(analysis_input, llm_provider, time.monotonic())
+    results, _, _ = await _generate_insights_with_fallback(
+        analysis_input,
+        llm_provider,
+        time.monotonic(),
+    )
     return results
 
 
@@ -568,6 +794,7 @@ async def _generate_insights_with_fallback(
     analysis_input: AnalysisInput,
     llm_provider: LLMProvider,
     start_time: float,
+    timeout_seconds: float = 30.0,
 ) -> tuple[list[AnalysisResult], bool, dict | None]:
     """Generate insights with structured output, fallback chain, and schema validation.
 
@@ -603,9 +830,15 @@ async def _generate_insights_with_fallback(
         # If provider is AIProviderRouter, it handles fallback internally.
         # If it's a plain LLMProvider (backward compat), call generate directly.
         if isinstance(llm_provider, AIProviderRouter):
-            llm_response = await llm_provider.generate(user_prompt, system_prompt)
+            llm_response = await asyncio.wait_for(
+                llm_provider.generate(user_prompt, system_prompt),
+                timeout=timeout_seconds,
+            )
         else:
-            llm_response = await llm_provider.generate(user_prompt, system_prompt)
+            llm_response = await asyncio.wait_for(
+                llm_provider.generate(user_prompt, system_prompt),
+                timeout=timeout_seconds,
+            )
 
         if not llm_response:
             logger.warning("LLM returned no response, falling back to rule-based")
@@ -676,8 +909,6 @@ def _rule_based_fallback(analysis_input: AnalysisInput) -> list[AnalysisResult]:
     """
     results = []
     metrics = analysis_input.summary_metrics
-    focus = analysis_input.focus
-
     mismatch_rate = metrics.get("mismatch_rate", 0)
     if mismatch_rate > 0:
         severity = "critical" if mismatch_rate > 20 else "high" if mismatch_rate > 10 else "medium" if mismatch_rate > 5 else "low"

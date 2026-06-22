@@ -1,5 +1,4 @@
 import openpyxl
-import os
 from pathlib import Path
 
 sftp_dir = Path("/home/kuokdavinci/AdapterService/sftp_data")

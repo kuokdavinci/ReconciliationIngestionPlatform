@@ -1,7 +1,7 @@
 .PHONY: test test-eval ci clean \
 	momo-e2e-run momo-e2e-job momo-e2e-rebuild \
 	momo-e2e-phase2-file momo-e2e-help momo-e2e-reset momo-e2e-phase2 \
-	momo-e2e-missing-partner-demo
+	momo-e2e-missing-partner-demo momo-sprint6-setup momo-sprint6-wave2
 
 # ── Test ──────────────────────────────────────────────────────────
 test:
@@ -42,6 +42,12 @@ momo-e2e-phase2:
 momo-e2e-missing-partner-demo:
 	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py missing_partner_demo
 
+momo-sprint6-setup:
+	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py sprint6-setup
+
+momo-sprint6-wave2:
+	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py sprint6-wave2
+
 momo-e2e-run:
 	curl -s -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .
 
@@ -61,12 +67,23 @@ momo-e2e-help:
 	@echo ""
 	@echo "Optional:"
 	@echo "  make momo-e2e-missing-partner-demo  # inject MOMO_TXN_90_MISSING_PARTNER for engine demo"
+	@echo "  make momo-sprint6-setup             # full MOMO cleanup + Sprint 6 dataset (20 internal wave1, wave2 hold)"
+	@echo "  make momo-sprint6-wave2             # activate Sprint 6 wave 2 file"
 	@echo ""
 	@echo "Inspection / ops:"
 	@echo "  make momo-e2e-run         # trigger MOMO automation run"
 	@echo "  make momo-e2e-job         # inspect MOMO automation job"
 	@echo "  make momo-e2e-phase2-file # write Wave 2 partner file (9100-9119) only"
 	@echo "  make momo-e2e-rebuild     # rebuild api + scheduler containers"
+
+# ── Frontend (Next.js) ────────────────────────────────────────────
+.PHONY: frontend-dev frontend-build
+
+frontend-dev:
+	cd frontend-next && npm run dev
+
+frontend-build:
+	cd frontend-next && npm run build
 
 # ── Clean ─────────────────────────────────────────────────────────
 clean:

@@ -8,8 +8,6 @@ import glob
 import os
 import time
 from datetime import datetime
-from pathlib import Path
-from typing import Optional
 
 from src.fetchers.base import BaseFetcher, FetchResult
 from src.models.fetch_config import FileDropConfig

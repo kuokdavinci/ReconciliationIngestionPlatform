@@ -1,6 +1,5 @@
 """Tests for Partner Mapping Studio v2 endpoints."""
 
-import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import MagicMock, AsyncMock
 
@@ -45,7 +44,8 @@ def test_validate_mapping_valid():
         "fieldMappings": [
             {"path": "id", "column": 1, "type": "STRING", "required": True},
             {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
-            {"path": "transDate", "column": 3, "type": "DATE", "required": True}
+            {"path": "transDate", "column": 3, "type": "DATE", "required": True},
+            {"path": "status", "column": 4, "type": "STRING", "required": True}
         ]
     }
     response = client.post("/api/v1/mapping/validate", json=payload)

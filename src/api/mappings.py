@@ -8,10 +8,13 @@ from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from src.api.actor import require_actor
+from src.analysis.insights import invalidate_insight_cache
 from src.config.ai_generator import generate_config_from_samples
-from src.config.signature import compute_signature, read_raw_rows
+from src.config.settings import settings
+from src.config.signature import compute_signature
 from src.core.enums import FileType
 from src.models.copilot_action import (
     CopilotAction,
@@ -31,11 +34,14 @@ from src.models.review_packet import (
     ReviewPacketSourceType,
 )
 from src.reconciliation.scope import classify_scope
+from src.services.audit import record_audit_event
+from src.services.mapping_contract import (
+    canonicalize_field_mappings,
+    serialize_field_mappings,
+    validate_mapping_contract,
+)
 
 logger = logging.getLogger(__name__)
-
-from src.analysis.insights import invalidate_insight_cache
-from src.core.constants import DEFAULT_CURRENCY
 
 router = APIRouter(prefix="/api/v1/mappings")
 router_v2 = APIRouter(prefix="/api/v1/mapping")
@@ -45,6 +51,12 @@ try:
     _MULTIPART_AVAILABLE = True
 except ImportError:
     _MULTIPART_AVAILABLE = False
+
+
+def _get_upload_tmp_dir() -> Path:
+    temp_dir = Path(settings.upload_tmp_dir)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return temp_dir
 
 
 def _validate_partner(partner: Optional[str]) -> Optional[str]:
@@ -124,7 +136,7 @@ async def _sync_review_packets_for_config(
 class MappingReviewPayload(BaseModel):
     confidence: float | None = None
     reasoning: str | None = None
-    reviewed_by: str | None = None
+    reviewed_by: str | None = Field(default=None, alias="reviewedBy")
 
 
 @router.get("")
@@ -150,12 +162,12 @@ async def list_mappings(
         )
 
 
-@router.post("/{config_id}/approve")
-async def approve_mapping_config(
+async def approve_mapping_config_action(
     request: Request,
     config_id: str,
     payload: MappingReviewPayload,
 ):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _get_repo(request)
     config = await repo.find_one({"_id": config_id})
     if config is None:
@@ -220,15 +232,38 @@ async def approve_mapping_config(
     except Exception as cache_exc:
         logger.error(f"Failed to invalidate insight cache for {config.partner}: {cache_exc}")
 
+    await record_audit_event(
+        _get_db(request),
+        entity_type="MAPPING_CONFIG",
+        entity_id=config_id,
+        action="APPROVED",
+        actor=payload.reviewed_by,
+        metadata={
+            "partner": config.partner,
+            "reference": getattr(config, "config_version", None) or str(config.id),
+            "mappingVersion": getattr(config, "config_version", None) or str(config.id),
+            "status": config.status.value,
+        },
+    )
+
     return {"ok": True, "mapping": _serialize_config(config)}
 
 
-@router.post("/{config_id}/reject")
-async def reject_mapping_config(
+@router.post("/{config_id}/approve")
+async def approve_mapping_config(
     request: Request,
     config_id: str,
     payload: MappingReviewPayload,
 ):
+    return await approve_mapping_config_action(request, config_id, payload)
+
+
+async def reject_mapping_config_action(
+    request: Request,
+    config_id: str,
+    payload: MappingReviewPayload,
+):
+    payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
     repo = _get_repo(request)
     config = await repo.find_one({"_id": config_id})
     if config is None:
@@ -255,12 +290,29 @@ async def reject_mapping_config(
     )
     config.status = MappingConfigStatus.REJECTED
     config.config_health = health
+    await record_audit_event(
+        _get_db(request),
+        entity_type="MAPPING_CONFIG",
+        entity_id=config_id,
+        action="REJECTED",
+        actor=payload.reviewed_by,
+        metadata={
+            "partner": config.partner,
+            "reference": getattr(config, "config_version", None) or str(config.id),
+            "mappingVersion": getattr(config, "config_version", None) or str(config.id),
+            "status": config.status.value,
+        },
+    )
     return {"ok": True, "mapping": _serialize_config(config)}
 
 
-async def _get_next_version_string(repo: MappingConfigRepository, partner: str) -> str:
-    count = await repo.collection.count_documents({"partner": partner})
-    return f"{partner}_v{count + 1:02d}"
+@router.post("/{config_id}/reject")
+async def reject_mapping_config(
+    request: Request,
+    config_id: str,
+    payload: MappingReviewPayload,
+):
+    return await reject_mapping_config_action(request, config_id, payload)
 
 
 @router.post("")
@@ -277,7 +329,7 @@ async def save_mapping_config(request: Request, config: MappingConfig):
     
     # Generate dynamic version if it's missing or generic
     if not config.config_version or config.config_version in ("v_manual", "v_ai_generated", "latest"):
-        config_dict["configVersion"] = await _get_next_version_string(repo, config.partner)
+        config_dict["configVersion"] = await repo.allocate_next_version(config.partner)
         
     health = {
         "stale": False,
@@ -324,21 +376,18 @@ async def _create_mapping_proposal_from_source_file(
         raise HTTPException(status_code=500, detail=f"AI mapping generation failed: {error}")
 
     field_mappings_raw = config_dict.get("fieldMappings") or []
-    field_mappings_serialized = []
-    for mapping in field_mappings_raw:
-        if hasattr(mapping, "model_dump"):
-            field_mappings_serialized.append(mapping.model_dump(by_alias=True))
-        else:
-            field_mappings_serialized.append(mapping)
+    field_mappings_serialized, mapping_warnings = canonicalize_field_mappings(
+        serialize_field_mappings(field_mappings_raw)
+    )
 
-    next_ver = await _get_next_version_string(_get_repo(request), partner)
+    next_ver = await _get_repo(request).allocate_next_version(partner)
     proposal = MappingConfig(
         partner=partner,
         workflowType="UPC",
         fileType=FileType.SETTLEMENT,
         sheetName=config_dict.get("sheetName") or "Sheet1",
         startRow=config_dict.get("startRow") or 2,
-        fieldMappings=field_mappings_raw,
+        fieldMappings=field_mappings_serialized,
         configVersion=next_ver,
         structureSignature=sig.to_dict(),
         status=MappingConfigStatus.PENDING_APPROVAL,
@@ -466,9 +515,9 @@ async def _create_mapping_proposal_from_source_file(
     return {
         "ok": True,
         "mapping": field_mappings_serialized,
-        "confidence_scores": confidence_scores,
-        "warnings": [],
-        "suggested_constants": [
+        "confidenceScores": confidence_scores,
+        "warnings": mapping_warnings,
+        "suggestedConstants": [
             {"path": "currency", "constant": "VND", "reason": "Default settlement currency"}
         ],
         "config": response_config,
@@ -483,7 +532,7 @@ async def _create_mapping_proposal_from_source_file(
             "fieldMappingCount": len(field_mappings_serialized),
         },
         "headers": sig.headers,
-        "sample_rows": sig.sample_rows[:10],
+        "sampleRows": sig.sample_rows[:10],
     }
 
 
@@ -506,8 +555,7 @@ if _MULTIPART_AVAILABLE:
         partner: str = Query(...),
         file: UploadFile = File(...),
     ):
-        temp_dir = Path("/home/kuokdavinci/AdapterService/scratch/temp_uploads")
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir = _get_upload_tmp_dir()
         temp_file_path = temp_dir / file.filename
         try:
             with open(temp_file_path, "wb") as buffer:
@@ -525,45 +573,31 @@ if _MULTIPART_AVAILABLE:
 
 @router_v2.post("/validate")
 async def validate_mapping(payload: dict):
-    errors = []
-    warnings = []
-    mappings = payload.get("fieldMappings", [])
-    mapped_paths = {m.get("path") for m in mappings if m.get("path")}
-
-    status_mapping = next((m for m in mappings if m.get("path") == "status"), None)
-    if status_mapping and str(status_mapping.get("type", "")).upper() == "STRING":
-        warnings.append("Status is mapped as STRING. Runtime validation expects normalized values SUCCESS, FAILED, PENDING, or REVERSED; use MAPPING when partner values differ.")
-
-    if not ("id" in mapped_paths or "transaction_id" in mapped_paths):
-        errors.append("Missing required field mapping: transaction_id (or id)")
-    if "amount" not in mapped_paths:
-        errors.append("Missing required field mapping: amount")
-    
-    # Currency is not required to be mapped explicitly; pipeline defaults to VND.
-    # We only issue an informative warning if it's missing, not a blocking error.
-    if "currency" not in mapped_paths:
-        warnings.append("No currency mapping specified. Defaulting transaction currency to VND.")
-
-    source_cols = {}
-    for mapping in mappings:
-        col = mapping.get("column")
-        if col is not None:
-            source_cols.setdefault(col, []).append(mapping.get("path"))
-    for col, paths in source_cols.items():
-        if len(paths) > 1:
-            warnings.append(f"Column {col} is mapped to multiple fields: {', '.join(paths)}")
-    for mapping in mappings:
-        if mapping.get("column") is None and mapping.get("constant") is None:
-            warnings.append(f"Field '{mapping.get('path')}' has neither a source column nor a constant value.")
-    score = max(0, min(100, 100 - len(errors) * 15 - len(warnings) * 5))
+    raw_mappings = payload.get("fieldMappings", [])
+    field_mappings, normalization_warnings = canonicalize_field_mappings(
+        serialize_field_mappings(raw_mappings)
+    )
+    candidate_config = MappingConfig(
+        partner=payload.get("partner") or "VALIDATION",
+        workflowType=payload.get("workflowType") or "UPC",
+        fileType=payload.get("fileType") or FileType.SETTLEMENT,
+        sheetName=payload.get("sheetName") or "Sheet1",
+        startRow=payload.get("startRow") or 2,
+        fieldMappings=field_mappings,
+        configVersion=payload.get("configVersion"),
+    )
+    validation = validate_mapping_contract(candidate_config)
+    warnings = normalization_warnings + [
+        warning for warning in validation.warnings if warning not in normalization_warnings
+    ]
     return {
-        "valid": len(errors) == 0,
-        "errors": errors,
+        "valid": validation.valid,
+        "errors": validation.errors,
         "warnings": warnings,
-        "score": score,
-        "score_breakdown": {
-            "required_fields": "Passed" if not errors else "Failed",
-            "warnings_count": len(warnings),
+        "score": validation.score,
+        "scoreBreakdown": {
+            "requiredFields": "Passed" if not validation.errors else "Failed",
+            "warningsCount": len(warnings),
         },
     }
 
@@ -676,8 +710,7 @@ if _MULTIPART_AVAILABLE:
         partner: str = Query(...),
         file: UploadFile = File(...),
     ):
-        temp_dir = Path("/home/kuokdavinci/AdapterService/scratch/temp_uploads")
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir = _get_upload_tmp_dir()
         temp_file_path = temp_dir / file.filename
         try:
             with open(temp_file_path, "wb") as buffer:

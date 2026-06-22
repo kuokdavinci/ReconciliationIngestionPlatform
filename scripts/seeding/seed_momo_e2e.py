@@ -136,6 +136,8 @@ def _write_partner_file(
 
     for index, txn_id in enumerate(keys, start=1):
         amount = _amount_for_key(txn_id)
+        if txn_id in ("MOMO_TXN_9000", "MOMO_TXN_9001"):
+            amount += Decimal("5000")
         row = [""] * 30
         row[0] = str(index)
         row[1] = txn_id
@@ -270,6 +272,47 @@ async def _full_wipe(db) -> None:
     await db["reconciliation_mapping_config"].delete_many({"partner": PARTNER})
     await db["reconciliation_mapping_config_history"].delete_many({"partner": PARTNER})
     await db["fetch_config"].delete_many({"partner": PARTNER})
+    await db["internal_transaction"].delete_many({"partner": PARTNER})
+    await db["partner_runtime_run"].delete_many({"partner": PARTNER})
+    await db["post_approval_run"].delete_many({"partner": PARTNER})
+    await db["reconciliation_review_record"].delete_many({"partner": PARTNER})
+    await db["copilot_action"].delete_many({"partner": PARTNER})
+    await db["audit_event"].delete_many({"metadata.partner": PARTNER})
+
+
+async def _ensure_mapping_config(db, status: str = "APPROVED") -> None:
+    """Ensure a valid mapping configuration with given status is present for MOMO."""
+    from src.models.mapping_config import MappingConfigStatus
+    from src.core.enums import FileType
+    collection = db["reconciliation_mapping_config"]
+    await collection.delete_many({"partner": PARTNER})
+
+    config_doc = {
+        "_id": "77777777-7777-7777-7777-777777777777",
+        "partner": PARTNER,
+        "workflowType": "UPC",
+        "fileType": FileType.SETTLEMENT.value,
+        "sheetName": "Sheet1",
+        "startRow": 8,
+        "fieldMappings": [
+            { "path": "id", "column": 2, "type": "STRING", "required": True },
+            { "path": "trace", "column": 11, "type": "STRING" },
+            { "path": "amount", "column": 5, "type": "DECIMAL" },
+            { "path": "currency", "constant": "VND", "type": "CONSTANT" },
+            { "path": "status", "column": 18, "type": "MAPPING", "mapping": { "Thành công": "SUCCESS", "others": "FAILED" } },
+            { "path": "transDate", "column": 8, "type": "DATE" },
+            { "path": "extra.service", "constant": "PAYMENT", "type": "CONSTANT" },
+            { "path": "extra.portal", "constant": "PaymentGateway", "type": "CONSTANT" },
+            { "path": "extra.provider", "constant": "MOMO", "type": "CONSTANT" }
+        ],
+        "configVersion": "v_template",
+        "status": status,
+        "createdAt": datetime.now(timezone.utc)
+    }
+    if status == MappingConfigStatus.APPROVED.value:
+        config_doc["approvedAt"] = datetime.now(timezone.utc)
+        config_doc["approvedBy"] = "admin"
+    await collection.insert_one(config_doc)
 
 
 async def _ensure_fetch_config(db) -> None:
@@ -289,6 +332,59 @@ async def _ensure_fetch_config(db) -> None:
         filedrop=FileDropConfig(directory="./sftp_data", pattern="settlement_MOMO_*.xlsx"),
     )
     await repo.create(fetch_config)
+
+
+async def _setup_sprint6(db, day: datetime) -> int:
+    # 1. Full wipe
+    await _full_wipe(db)
+    
+    # 2. Seed configs
+    from src.models.mapping_config import MappingConfigStatus
+    await _ensure_mapping_config(db, status=MappingConfigStatus.PENDING_APPROVAL.value)
+    await _ensure_fetch_config(db)
+    
+    # 3. Seed only Wave 1 internal transactions.
+    # Wave 2 must stay out of reconciliation until it is explicitly activated.
+    collection = db["internal_transaction"]
+    await collection.delete_many({"partner": PARTNER})
+    inserted = await _seed_internal(db, _wave1_keys(), day=day)
+    
+    # 4. Generate Wave 1 partner file (20 keys: MOMO_TXN_9000..MOMO_TXN_9019)
+    sftp_dir = Path("./sftp_data")
+    sftp_dir.mkdir(exist_ok=True)
+    for old_file in sftp_dir.glob("settlement_MOMO_*.xlsx*"):
+        old_file.unlink()
+        
+    date_compact = day.strftime("%Y%m%d")
+    wave1_file_path = sftp_dir / f"settlement_MOMO_{date_compact}_wave1.xlsx"
+    wave1_keys = _wave1_keys()
+    _write_partner_file(wave1_file_path, wave1_keys, day=day)
+    
+    # 5. Generate Wave 2 partner file (20 keys: MOMO_TXN_9100..MOMO_TXN_9119)
+    wave2_file_path = sftp_dir / f"settlement_MOMO_{date_compact}_wave2.xlsx.hold"
+    wave2_keys = _wave2_keys()
+    _write_partner_file(wave2_file_path, wave2_keys, day=day)
+    
+    return inserted
+
+
+async def _activate_sprint6_wave2(db, day: datetime) -> tuple[Path, Path, int]:
+    sftp_dir = Path("./sftp_data")
+    date_compact = day.strftime("%Y%m%d")
+
+    inserted = await _seed_internal(db, _wave2_keys(), day=day)
+
+    # Remove any existing active wave1 files
+    for old_file in sftp_dir.glob("*_wave1.xlsx*"):
+        old_file.unlink()
+
+    hold_file = sftp_dir / f"settlement_MOMO_{date_compact}_wave2.xlsx.hold"
+    active_file = sftp_dir / f"settlement_MOMO_{date_compact}_wave2.xlsx"
+
+    if hold_file.exists():
+        hold_file.rename(active_file)
+
+    return hold_file, active_file, inserted
 
 
 # ── CLI entry point ──────────────────────────────────────────────────────────
@@ -320,10 +416,21 @@ async def main(mode: str) -> None:
             print(f"Missing-partner demo prepared for {PARTNER} on {_date_str(day)}")
             print(f"Inserted MISSING_PARTNER internal row: {inserted}")
             print(f"Wrote partner file (wave1 only, 20 keys): {partner_file_path}")
+        elif mode == "sprint6-setup":
+            inserted = await _setup_sprint6(db, day)
+            print(f"Sprint 6 test setup completed for {PARTNER} on {_date_str(day)}")
+            print(f"Seeded Wave 1 internal transactions: {inserted}")
+            print(f"Active partner file (wave 1, 20 keys): sftp_data/settlement_MOMO_{day.strftime('%Y%m%d')}_wave1.xlsx")
+            print(f"Held partner file (wave 2, 20 keys): sftp_data/settlement_MOMO_{day.strftime('%Y%m%d')}_wave2.xlsx.hold")
+        elif mode == "sprint6-wave2":
+            hold, active, inserted = await _activate_sprint6_wave2(db, day)
+            print("Sprint 6 Wave 2 activated!")
+            print(f"Added Wave 2 internal transactions: {inserted}")
+            print(f"Moved {hold.name} -> {active.name}")
         else:
             raise ValueError(
                 f"Unsupported mode: {mode!r}. "
-                f"Expected one of: reset, phase2, missing_partner_demo"
+                f"Expected one of: reset, phase2, missing_partner_demo, sprint6-setup, sprint6-wave2"
             )
     finally:
         client.close()
@@ -335,8 +442,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "mode",
-        choices=["reset", "phase2", "missing_partner_demo"],
-        help="reset=clean Phase 1; phase2=add Wave 2; missing_partner_demo=inject MISSING_PARTNER row",
+        choices=["reset", "phase2", "missing_partner_demo", "sprint6-setup", "sprint6-wave2"],
+        help="reset=clean Phase 1; phase2=add Wave 2; missing_partner_demo=inject MISSING_PARTNER row; sprint6-setup=Sprint 6 setup; sprint6-wave2=Sprint 6 wave 2 activation",
     )
     args = parser.parse_args()
     asyncio.run(main(args.mode))

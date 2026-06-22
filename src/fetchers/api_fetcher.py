@@ -7,7 +7,6 @@ Responses are saved as Excel/CSV files for ingestion.
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import httpx
 

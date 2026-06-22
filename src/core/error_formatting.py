@@ -1,6 +1,5 @@
 """Helpers to keep operational error messages concise in UI-facing status fields."""
 
-from typing import Any
 
 
 def summarize_runtime_error(exc: Exception) -> str:

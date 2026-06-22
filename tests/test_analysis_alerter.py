@@ -1,6 +1,5 @@
 """Tests for ThresholdAlerter — check only, no duplicate computation."""
 
-import pytest
 
 from src.analysis.alerter import Alert, ThresholdAlerter
 from src.analysis.config import AnalysisConfig

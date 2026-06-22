@@ -5,7 +5,7 @@
 ## Prerequisites
 
 - Python `>=3.11` (xem `pyproject.toml`)
-- Node.js (không có engines ràng buộc trong `frontend/package.json`)
+- Node.js (không có engines ràng buộc trong `frontend-next/package.json`)
 - Docker và Docker Compose
 - `uv` (recommended) hoặc `pip`
 
@@ -54,8 +54,7 @@ uv run uvicorn src.api:create_app --factory --host 0.0.0.0 --port 8000
 ## Run Frontend
 
 ```bash
-cd frontend
-npm install
+npm --prefix frontend-next install
 npm run dev
 ```
 
@@ -226,7 +225,8 @@ make momo-e2e-run
 | Đường dẫn | Mô tả |
 |---|---|
 | `src/` | Backend Python code (FastAPI) |
-| `frontend/` | Dashboard (Vite) |
+| `frontend-next/` | Dashboard chính (Next.js) |
+| `frontend/` | Dashboard cũ (legacy reference only) |
 | `tests/` | Automated tests (pytest) |
 | `docs/` | Project documentation |
 | `docker/` | Docker support files |

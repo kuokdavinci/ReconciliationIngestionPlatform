@@ -11,14 +11,14 @@ Tests cover:
 
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
 
-from src.fetchers.base import BaseFetcher, FetchResult
+from src.fetchers.base import BaseFetcher
 from src.fetchers.sftp_fetcher import SFTPFetcher
 from src.fetchers.api_fetcher import APIFetcher
 from src.fetchers.filedrop_fetcher import FileDropFetcher

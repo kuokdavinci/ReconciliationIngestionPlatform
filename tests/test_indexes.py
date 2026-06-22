@@ -2,10 +2,7 @@
 
 import inspect
 
-import pytest
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import IndexModel
-from pymongo import ASCENDING, DESCENDING
 
 
 class TestIndexesDefinition:

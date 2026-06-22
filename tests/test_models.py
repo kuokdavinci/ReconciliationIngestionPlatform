@@ -6,10 +6,9 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from bson.decimal128 import Decimal128 as BsonDecimal128
 from pydantic import ValidationError
 
-from src.core.enums import FileType, ProcessingStatus, TransactionStatus
+from src.core.enums import FileType, ProcessingStatus
 
 
 class TestReconciliationFile:
@@ -431,12 +430,10 @@ class TestModelImports:
         """All model imports succeed."""
         from src.models.reconciliation_file import (
             ReconciliationFile,
-            ReconciliationFileRepository,
         )
-        from src.models.mapping_config import MappingConfig, MappingConfigRepository
+        from src.models.mapping_config import MappingConfig
         from src.models.data_container import (
             DataContainer,
-            DataContainerRepository,
             PartnerData,
         )
         from src.models.repository import BaseRepository

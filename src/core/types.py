@@ -7,7 +7,6 @@ from typing import Any, Optional, Union
 
 from pydantic import BaseModel, field_validator
 
-from src.core.constants import DEFAULT_CURRENCY
 from src.core.enums import TransactionStatus
 
 

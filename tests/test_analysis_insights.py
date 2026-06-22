@@ -3,11 +3,11 @@
 import json
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.analysis.schemas import AnalysisInput, AnalysisResult, SummaryResult, TopAnomaly
+from src.analysis.schemas import AnalysisInput, TopAnomaly
 from src.analysis.insights import (
     _rule_based_fallback,
     generate_insights,

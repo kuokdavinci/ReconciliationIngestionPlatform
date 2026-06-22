@@ -2,7 +2,6 @@
 
 from decimal import Decimal
 
-import pytest
 
 from src.analysis.grouping import GroupingEngine
 from src.analysis.metrics import MetricsService

@@ -23,7 +23,6 @@ import pytest
 from src.analysis.schemas import (
     AnalysisInput,
     AnalysisResult,
-    GroupResult,
     SummaryResult,
     TopAnomaly,
 )
@@ -32,15 +31,12 @@ from src.analysis.services import (
     parse_llm_insights,
     format_findings,
     rule_based_pre_process,
-    extract_operational_anomalies,
-    extract_partner_anomalies,
     extract_inconsistency_anomalies,
 )
 from src.analysis.grouping import GroupingEngine
 from src.analysis.metrics import MetricsService
 from src.analysis.insights import (
     _rule_based_fallback,
-    generate_insights,
     get_summary,
     get_discrepancies,
     _query_reconciliation_results,
@@ -1245,7 +1241,6 @@ class TestDailyReportWithAlerts:
     async def test_report_includes_alerts_for_breached_thresholds(self) -> None:
         """Daily report should include alerts when thresholds are breached."""
         from src.analysis.reporter import DailyReporter
-        from src.analysis.alerter import ThresholdAlerter
 
         mock_collection = MagicMock()
         mock_collection.distinct = AsyncMock(return_value=["MOMO", "VIETTEL"])

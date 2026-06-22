@@ -1,6 +1,6 @@
 """Tests for core enums, constants, and canonical types."""
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 import pytest
 
 from src.core.enums import ProcessingStatus, TransactionStatus, FileType

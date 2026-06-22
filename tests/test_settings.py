@@ -1,7 +1,5 @@
 """Tests for project structure, configuration, and settings."""
 
-import os
-import pytest
 
 
 class TestSettingsDefaults:

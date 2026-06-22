@@ -2,12 +2,10 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi import HTTPException
 from types import SimpleNamespace
 
 from src.api.reconciliation import reconciliation_insights
 from src.api.copilot import get_context
-from src.services.copilot_context import CopilotContextService
 
 def _make_request(db: MagicMock):
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))

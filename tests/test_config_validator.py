@@ -1,9 +1,6 @@
 """Tests for ConfigValidator — field mapping integrity checks."""
 
-import uuid
-from datetime import datetime, timezone
 
-import pytest
 
 from src.core.enums import FileType
 from src.core.types import FieldMapping, FieldMappingType

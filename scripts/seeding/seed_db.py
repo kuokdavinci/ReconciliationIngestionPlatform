@@ -23,9 +23,8 @@ from bson import Decimal128
 from src.config.settings import settings
 from src.models.data_container import DataContainer, PartnerData
 from src.models.internal_transaction import InternalTransaction
-from src.models.reconciliation_result import ReconciliationResult
 from src.models.reconciliation_file import ReconciliationFile
-from src.core.enums import FileType, ProcessingStatus, ReconciliationStatus
+from src.core.enums import FileType, ProcessingStatus
 
 # --- constants ---
 PARTNERS = ["MOMO", "VNPAY", "ZALOPAY"]
@@ -221,7 +220,6 @@ async def seed(args):
         # and some will be AMOUNT_MISMATCH/STATUS_MISMATCH (intentionally altered)
         matched_count_local = int(internal_count * 0.85)
         amt_mismatch_local = int(internal_count * 0.10)
-        status_mismatch_local = internal_count - matched_count_local - amt_mismatch_local
 
         internal_txns = []
         for i in range(internal_count):
@@ -324,7 +322,7 @@ async def seed(args):
     total_missing_int = missing_int_per_partner * 2
     total_missing_ptnr = missing_ptnr_per_partner * 2
 
-    print(f"\n--- Seed Summary ---")
+    print("\n--- Seed Summary ---")
     print(f"  MATCHED:          {total_matched}")
     print(f"  AMOUNT_MISMATCH:  {total_amt}")
     print(f"  STATUS_MISMATCH:  {total_status}")
@@ -338,7 +336,7 @@ async def seed(args):
     print(f"  MISSING_PARTNER:  {(total_missing_ptnr/tracked_count)*100:.1f}%")
     print(f"\n  Total data_container:  {total_dc}")
     print(f"  Total internal_txn:  {total_it}")
-    print(f"\n✅ Done. Run `uv run python run.py --reconcile 2024-07-07 --partner MOMO` to test reconciliation.")
+    print("\n✅ Done. Run `uv run python run.py --reconcile 2024-07-07 --partner MOMO` to test reconciliation.")
 
     client.close()
 

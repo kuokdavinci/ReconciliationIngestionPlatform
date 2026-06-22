@@ -4,10 +4,8 @@ import json
 from decimal import Decimal
 from unittest.mock import MagicMock
 
-import pytest
 
 from src.analysis.schemas import (
-    AnalysisInput,
     AnalysisResult,
     GroupResult,
     SummaryResult,
@@ -15,9 +13,6 @@ from src.analysis.schemas import (
 )
 from src.analysis.services import (
     build_analysis_input,
-    extract_inconsistency_anomalies,
-    extract_operational_anomalies,
-    extract_partner_anomalies,
     format_findings,
     parse_llm_insights,
     rule_based_pre_process,

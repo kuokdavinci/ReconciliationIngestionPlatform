@@ -164,7 +164,6 @@ class TestLoadByPartnerType:
     @pytest.mark.asyncio
     async def test_cache_invalidated_when_different_config_approved(self):
         """load_by_partner_type invalidates cache if a different config is approved in DB."""
-        from unittest.mock import MagicMock
         config = _make_config()
         key = "MOMO:UPC:SETTLEMENT:latest"
         self.cache.put(key, config)
@@ -222,7 +221,6 @@ class TestLoadByPartnerType:
     @pytest.mark.asyncio
     async def test_validation_errors_raises_config_load_error_with_details(self):
         """load_by_partner_type raises ConfigLoadError with validation_errors on invalid config."""
-        from src.config.validator import ConfigValidationError
 
         # Config with empty field_mappings (will fail validation)
         bad_config = MappingConfig(

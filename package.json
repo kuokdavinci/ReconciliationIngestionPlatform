@@ -1,0 +1,10 @@
+{
+  "name": "adapter-service",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend-next run dev",
+    "build": "npm --prefix frontend-next run build",
+    "start": "npm --prefix frontend-next run start",
+    "lint": "npm --prefix frontend-next run lint"
+  }
+}

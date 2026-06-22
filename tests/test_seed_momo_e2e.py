@@ -7,12 +7,10 @@ helpers or the engine surface as test failures.
 Per must_haves: test_reset_seeds_wave1_only | test_phase2_adds_wave2_only | test_missing_partner_demo
 """
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import openpyxl
-import pytest
 
 from scripts.seeding.seed_momo_e2e import (
     MISSING_PARTNER_KEY,

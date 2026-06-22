@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.analysis.schemas import SummaryResult
 
 
 def _make_mock_result(status: str = "MATCHED", partner: str = "MOMO") -> SimpleNamespace:

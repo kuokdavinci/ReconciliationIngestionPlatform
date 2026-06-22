@@ -1,11 +1,9 @@
 """Tests for AI insight guardrail validation."""
 
-from decimal import Decimal
 
-import pytest
 
 from src.analysis.guardrails import validate_insights
-from src.analysis.schemas import AnalysisInput, AnalysisResult, GroupResult, SummaryResult, TopAnomaly
+from src.analysis.schemas import AnalysisInput, AnalysisResult, TopAnomaly
 
 
 def _make_input(

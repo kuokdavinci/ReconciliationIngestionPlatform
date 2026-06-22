@@ -1,0 +1,18 @@
+.header {
+  padding: 32px 40px 0;
+}
+
+.title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text-primary, #f1f3f5);
+}
+
+.description {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted, #98a2ad);
+}

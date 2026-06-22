@@ -12,22 +12,17 @@ Tests cover:
 - StructuredLogger integration (lifecycle events emitted)
 """
 
-import hashlib
-import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.core.enums import FileType, ProcessingStatus, TransactionStatus
+from src.core.enums import FileType, ProcessingStatus
 from src.core.types import (
-    CanonicalTransaction,
     FieldMapping,
     FieldMappingType,
     ProcessingStats,
-    ValidationError,
 )
 
 
@@ -174,7 +169,6 @@ class TestProcessFileHappyPath:
         """process_file processes all rows successfully with correct stats."""
         from src.pipeline import IngestionPipeline, IngestionResult
         from src.models.reconciliation_file import (
-            ReconciliationFile,
             ReconciliationFileRepository,
         )
         from src.models.data_container import DataContainerRepository

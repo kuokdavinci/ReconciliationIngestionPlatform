@@ -76,6 +76,15 @@ momo-e2e-help:
 	@echo "  make momo-e2e-phase2-file # write Wave 2 partner file (9100-9119) only"
 	@echo "  make momo-e2e-rebuild     # rebuild api + scheduler containers"
 
+# ── Frontend (Next.js) ────────────────────────────────────────────
+.PHONY: frontend-dev frontend-build
+
+frontend-dev:
+	cd frontend-next && npm run dev
+
+frontend-build:
+	cd frontend-next && npm run build
+
 # ── Clean ─────────────────────────────────────────────────────────
 clean:
 	rm -rf .pytest_cache __pycache__

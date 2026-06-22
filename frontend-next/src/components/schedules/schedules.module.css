@@ -1,0 +1,126 @@
+.packetsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.packetCard {
+  padding: 20px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 60px -28px rgba(0, 0, 0, 0.7);
+}
+
+.packetHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+  gap: 12px;
+}
+
+.packetEyebrow {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.packetPartner {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+  color: #fff;
+}
+
+.packetFile {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+
+.packetBadgeRow {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.packetRecommendation {
+  background: rgba(240, 185, 11, 0.06);
+  border: 1px solid rgba(240, 185, 11, 0.12);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  flex: 1;
+}
+
+.packetRecommendationTitle {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+  color: #fff;
+}
+
+.packetRecommendationText {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.headCell {
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.cell {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 12.5px;
+  vertical-align: top;
+}
+
+.statusCell {
+  display: grid;
+  gap: 6px;
+}
+
+.statusBadges {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.statusText {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.actionRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}

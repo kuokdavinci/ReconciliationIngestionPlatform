@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useState, useCallback, useRef } from "react";
@@ -353,7 +354,10 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
   };
 
   const renderFilePreview = () => {
-    if (!wizard.headers.length) return null;
+    const displayHeaders = wizard.headers.length > 0
+      ? wizard.headers
+      : (wizard.config?.fieldMappings || []).filter(fm => fm.column != null).map(fm => `Col ${fm.column}: ${fm.path}`);
+    if (!displayHeaders.length) return null;
     return (
       <div style={{ marginBottom: 24 }}>
         <h3 style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>
@@ -364,7 +368,7 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
             <thead>
               <tr style={{ background: "var(--bg-surface-hover)" }}>
                 <th style={{ width: 40, padding: 10, textAlign: "left" }}>Row</th>
-                {wizard.headers.map((h, i) => (
+                {displayHeaders.map((h, i) => (
                   <th key={i} style={{ textAlign: "left", padding: 10 }}>{h}</th>
                 ))}
               </tr>
@@ -388,7 +392,7 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
   };
 
   const renderMappingTable = () => {
-    const fieldMappings = (wizard.config?.fieldMappings || []).filter((fm: FieldMapping) => fm.path !== "currency");
+    const fieldMappings = (wizard.config?.fieldMappings || []);
     if (!fieldMappings.length) {
       return (
         <div className={styles.emptyBlock}>
@@ -634,7 +638,7 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
       )
       : (
         <div style={{ padding: 24, textAlign: "center", color: "var(--text-muted)" }}>
-          Click "Run Transformation Test" to verify output layout.
+          Click &quot;Run Transformation Test&quot; to verify output layout.
         </div>
       );
 

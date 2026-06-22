@@ -6,10 +6,6 @@ Uses FastAPI TestClient with mocked orchestration layer to verify:
 - Error handling (400, 500 responses)
 """
 
-import json
-from datetime import datetime, timezone
-from decimal import Decimal
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

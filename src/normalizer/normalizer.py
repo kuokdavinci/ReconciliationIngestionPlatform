@@ -10,7 +10,6 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
-from src.core.constants import DEFAULT_CURRENCY
 from src.core.enums import TransactionStatus
 from src.core.types import FieldMapping, FieldMappingType, ValidationError, CanonicalTransaction
 
@@ -336,7 +335,7 @@ class TransactionNormalizer:
 
         try:
             return Decimal(str(value)), None
-        except InvalidOperation as exc:
+        except InvalidOperation:
             return None, ValidationError(
                 field=fm.path,
                 reason=f"invalid decimal value: {value!r}",

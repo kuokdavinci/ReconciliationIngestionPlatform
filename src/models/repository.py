@@ -3,7 +3,6 @@
 from typing import Any, Generic, Optional, TypeVar
 from uuid import UUID
 
-from bson import UuidRepresentation
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
@@ -37,7 +36,6 @@ class BaseRepository(Generic[T]):
     @staticmethod
     def _convert_special_types(obj: Any) -> Any:
         """Recursively convert UUIDs to strings and Decimals to Decimal128."""
-        from uuid import UUID
         from decimal import Decimal
         from bson.decimal128 import Decimal128
 
@@ -97,7 +95,6 @@ class BaseRepository(Generic[T]):
     def _convert_from_mongo_types(obj: Any) -> Any:
         """Recursively convert MongoDB types (like Decimal128) back to Python/Pydantic types."""
         from bson.decimal128 import Decimal128
-        from decimal import Decimal
 
         if isinstance(obj, Decimal128):
             return obj.to_decimal()

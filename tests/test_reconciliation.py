@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock
 from src.core.enums import ReconciliationStatus, TransactionStatus
 from src.models.data_container import DataContainer, PartnerData
 from src.models.internal_transaction import InternalTransaction
-from src.models.reconciliation_result import ReconciliationResult
 from src.reconciliation.engine import ReconciliationEngine
 
 

@@ -18,6 +18,7 @@ export function createReviewCenterRenderer(deps) {
     collectValidationIssues,
     getPostApprovalRunForPacket,
     isTerminalPostApprovalRun,
+    renderPageFilters,
     statusLabel,
     summarizeReviewPacket,
     table,
@@ -40,27 +41,62 @@ export function createReviewCenterRenderer(deps) {
     const shortTitle = selectedPacket.isVirtual ? "Draft mapping update" : "Format verification required";
     const shortReason = selectedPacket.recommendedAction?.reason || "Awaiting reviewer decision.";
     const risk = selectedPacket.riskSummary?.severity || "medium";
+    const gates = Array.isArray(selectedPacket.validationGates) ? selectedPacket.validationGates : [];
+
+    const gateRowsHtml = gates.length ? gates.map(gate => {
+      const gStatus = String(gate.status || 'pending').toLowerCase();
+      const gIcon = gStatus === 'pass' ? 'check_circle' : gStatus === 'fail' ? 'cancel' : 'hourglass_top';
+      const gColor = gStatus === 'pass' ? '#10B981' : gStatus === 'fail' ? '#EF4444' : '#F59E0B';
+      const gClass = gStatus === 'pass' ? '' : gStatus === 'fail' ? 'fail' : 'warn';
+      return `
+        <div class="gate-row ${gClass}">
+          <div style="display:flex; gap:8px; align-items:center; min-width:0;">
+            <span class="material-symbols-outlined" style="font-size:18px; color:${gColor};">${gIcon}</span>
+            <div style="min-width:0;">
+              <strong style="display:block; font-size:13px;">${escapeHtml(gate.gateKey?.replace(/_/g, ' ') || 'Gate')}</strong>
+              <span class="muted" style="font-size:11px;">${escapeHtml(gate.message || gStatus)}</span>
+            </div>
+          </div>
+          <span class="badge ${gStatus === 'pass' ? 'matched' : gStatus === 'fail' ? 'failed' : 'warning'}" style="font-size:10px; flex-shrink:0;">${gStatus.toUpperCase()}</span>
+        </div>
+      `;
+    }).join('') : `<div class="muted" style="font-size:12px; padding:8px 0;">No validation gates recorded.</div>`;
 
     return `
-      <aside class="review-drawer review-summary-drawer" style="padding: 20px;">
-        <div class="brief-section" style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;">
-          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-            <span class="badge ${risk === "critical" || risk === "high" ? "failed" : "warning"}">${escapeHtml(risk.toUpperCase())} RISK</span>
-            ${reviewSummary.runtimeValidated ? '<span class="badge matched">Runtime validated</span>' : '<span class="badge warning">Runtime validate pending</span>'}
+      <aside class="review-drawer review-summary-drawer">
+        <div class="review-drawer-header">
+          <div>
+            <h3 style="margin:0 0 6px 0; font-size:16px; font-weight:700;">${escapeHtml(shortTitle)}</h3>
+            <p class="muted" style="margin:0; font-size:13px; line-height:1.5;">${escapeHtml(shortReason)}</p>
           </div>
-          <h3 class="brief-title" style="font-size: 16px; margin: 10px 0 6px 0;">${escapeHtml(shortTitle)}</h3>
-          <p class="brief-subtitle" style="font-size: 13px; margin-bottom: 12px;">${escapeHtml(shortReason)}</p>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; flex-shrink:0;">
+            <span class="badge ${risk === 'critical' || risk === 'high' ? 'failed' : 'warning'}" style="font-size:10px;">${escapeHtml(risk.toUpperCase())} RISK</span>
+            ${reviewSummary.runtimeValidated ? '<span class="badge matched" style="font-size:10px;">Validated</span>' : '<span class="badge warning" style="font-size:10px;">Pending</span>'}
+          </div>
         </div>
-        <div class="review-summary-list">
-          <div><strong>File:</strong> ${escapeHtml(selectedPacket.fileName || "-")}</div>
-          <div><strong>Runtime:</strong> ${selectedPacket.activeRuntimeConfigId ? "Current runtime available" : "No active runtime"}</div>
-          <div><strong>Draft mapping:</strong> ${reviewSummary.mappingReady ? "Ready" : "Missing"}</div>
+
+        <div class="drawer-section">
+          <h4>Overview</h4>
+          <div class="drawer-meta-grid">
+            <div><span class="muted" style="font-size:11px;">FILE</span><strong style="font-size:13px; word-break:break-all;">${escapeHtml(selectedPacket.fileName || '-')}</strong></div>
+            <div><span class="muted" style="font-size:11px;">RISK LEVEL</span><strong style="font-size:13px;">${escapeHtml(risk.charAt(0).toUpperCase() + risk.slice(1))}</strong></div>
+            <div><span class="muted" style="font-size:11px;">RUNTIME</span><strong style="font-size:13px;">${selectedPacket.activeRuntimeConfigId ? 'Active' : 'None'}</strong></div>
+            <div><span class="muted" style="font-size:11px;">DRAFT MAPPING</span><strong style="font-size:13px;">${reviewSummary.mappingReady ? 'Ready' : 'Missing'}</strong></div>
+          </div>
         </div>
-        <div style="margin-top: 16px; display:flex; gap:10px; flex-direction:column;">
-          <button class="button primary" data-action="open-guided-review" style="width: 100%; justify-content: center;">
+
+        <div class="drawer-section">
+          <h4>Validation gates</h4>
+          <div class="gate-list">
+            ${gateRowsHtml}
+          </div>
+        </div>
+
+        <div style="margin-top:20px; display:flex; gap:10px; flex-direction:column;">
+          <button class="button primary" data-action="open-guided-review" style="width:100%; justify-content:center;">
             <span class="material-symbols-outlined" style="font-size:18px; margin-right:4px;">quickreply</span> Open Review Panel
           </button>
-          <button class="button secondary-action" data-action="go-mapping-studio" style="width: 100%; justify-content: center;">
+          <button class="button secondary-action" data-action="go-mapping-studio" style="width:100%; justify-content:center;">
             <span class="material-symbols-outlined" style="font-size:18px; margin-right:4px;">schema</span> Open Mapping Studio
           </button>
         </div>
@@ -766,6 +802,7 @@ export function createReviewCenterRenderer(deps) {
     }
 
     return `
+      ${renderPageFilters({ showDate: false, showClear: false })}
       ${headerHtml}
       ${tabsNavHtml}
       ${tabContentHtml}

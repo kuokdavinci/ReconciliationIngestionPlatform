@@ -17,7 +17,6 @@ from src.core.types import FieldMapping, FieldMappingType
 from src.models.mapping_config import MappingConfig, MappingConfigRepository
 from src.pipeline.ingestion_pipeline import IngestionPipeline
 from src.scheduler import PartnerDataScheduler, SchedulerConfig, daily_partner_fetch_job
-from src.logging import get_structured_logger
 
 def parse_excel_template(template_path: str) -> dict:
     """Parses a MappingConfig dynamically from an Excel template file (e.g. RequestTemplate.xlsx).
@@ -121,8 +120,6 @@ async def _handle_scheduler_mode(
         run_job_now: Whether to manually trigger the job now.
         list_jobs: Whether to list scheduled jobs.
     """
-    structured_logger = get_structured_logger()
-    config_loader = _create_config_loader(db)
 
     scheduler_config = SchedulerConfig(
         job_store_type="mongodb",

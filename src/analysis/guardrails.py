@@ -11,7 +11,6 @@ Checks performed:
 4. Anomaly count consistency against pre-computed TopAnomaly values
 """
 
-import re
 from typing import Any
 
 from src.analysis.schemas import AnalysisInput, AnalysisResult

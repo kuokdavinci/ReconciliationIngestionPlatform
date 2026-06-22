@@ -5,11 +5,8 @@ and date interpolation support.
 """
 
 import asyncio
-import glob
-import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import paramiko
 

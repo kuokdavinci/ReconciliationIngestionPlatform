@@ -129,18 +129,21 @@ export function renderAuditLog({
   }, 0);
 
   return `
-    <section class="panel">
-      ${renderPageFilters({ showDate: true, showClear: false })}
-      <div class="panel-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom: 16px;">
-        <div>
-          <h3 style="margin:0;">Audit Log</h3>
-          <p class="muted" style="margin:6px 0 0 0;">Read-only timeline for mapping approvals, review decisions, and reconciliation runs.</p>
-        </div>
-        <div style="display:flex; align-items:center; gap:10px;">
-          <span class="muted" style="font-size:11px;">Loaded ${escapeHtml(state.audit.lastLoadedAt ? formatDisplayDateTime(state.audit.lastLoadedAt) : "-")}</span>
-          <button class="button secondary-action" data-action="refresh-audit">Refresh</button>
+    <div class="compact-page-header">
+      <div class="compact-header-info">
+        <h2>Audit Log</h2>
+        <div class="compact-header-meta">
+          <strong>${escapeHtml(state.partner || '-')}</strong> ·
+          <span>${formatNumber(filtered.length)} matched event${filtered.length !== 1 ? 's' : ''}</span> ·
+          <span>Loaded ${escapeHtml(state.audit.lastLoadedAt ? formatDisplayDateTime(state.audit.lastLoadedAt) : '-')}</span>
         </div>
       </div>
+      <div class="compact-header-actions">
+        <button class="button secondary-action" data-action="refresh-audit">Refresh</button>
+      </div>
+    </div>
+    <section class="panel">
+      ${renderPageFilters({ showDate: true, showClear: false })}
       <div class="page-filters" style="margin-bottom: 16px;">
         <div class="filter-group">
           <span class="filter-label">ENTITY</span>

@@ -174,7 +174,7 @@ export function renderReconciliation(state, data) {
   const run = state.reconciliationRun;
   const runStatus = String(run?.status || "IDLE").toUpperCase();
   const runStatusPanelHtml = `
-    <section class="panel" style="margin-bottom:12px;">
+    <section class="panel recon-section-panel">
       <div class="panel-header with-icon">
         <div>
           <h2 class="section-title">Reconciliation Run Status</h2>
@@ -209,22 +209,22 @@ export function renderReconciliation(state, data) {
 
   // 2. Semantic Risk Summary Strip
   const summaryStripHtml = `
-    <div class="summary-strip" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px;">
-      <div class="metric" style="padding: 20px; border-radius: 4px; display: flex; flex-direction: column; justify-content: space-between; min-height: 100px; border: 1px solid var(--border-color); background: var(--bg-card);">
-        <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.05em;">Review Status</span>
-        <strong style="font-size: 24px; font-weight: 800; margin-top: 8px; color: ${reviewStatus === 'NEEDS_REVIEW' ? '#f59e0b' : '#10b981'}">${reviewStatus === 'NEEDS_REVIEW' ? 'Needs Review' : 'Passed'}</strong>
+    <div class="summary-strip recon-summary-strip">
+      <div class="metric recon-summary-card">
+        <span class="recon-summary-label">Review Status</span>
+        <strong class="recon-summary-value ${reviewStatus === 'NEEDS_REVIEW' ? 'warning' : 'success'}">${reviewStatus === 'NEEDS_REVIEW' ? 'Needs Review' : 'Passed'}</strong>
       </div>
-      <div class="metric" style="padding: 20px; border-radius: 4px; display: flex; flex-direction: column; justify-content: space-between; min-height: 100px; border: 1px solid var(--border-color); background: var(--bg-card);">
-        <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.05em;">Total Records</span>
-        <strong style="font-size: 24px; font-weight: 800; margin-top: 8px;">${totalRows}</strong>
+      <div class="metric recon-summary-card">
+        <span class="recon-summary-label">Total Records</span>
+        <strong class="recon-summary-value">${totalRows}</strong>
       </div>
-      <div class="metric" style="padding: 20px; border-radius: 4px; display: flex; flex-direction: column; justify-content: space-between; min-height: 100px; border: 1px solid var(--border-color); background: var(--bg-card);">
-        <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.05em;">Missing Records</span>
-        <strong style="font-size: 24px; font-weight: 800; margin-top: 8px; color: ${missingRows > 0 ? '#ef4444' : 'var(--text-main)'}">${missingRows}</strong>
+      <div class="metric recon-summary-card">
+        <span class="recon-summary-label">Missing Records</span>
+        <strong class="recon-summary-value ${missingRows > 0 ? 'danger' : ''}">${missingRows}</strong>
       </div>
-      <div class="metric" style="padding: 20px; border-radius: 4px; display: flex; flex-direction: column; justify-content: space-between; min-height: 100px; border: 1px solid var(--border-color); background: var(--bg-card);">
-        <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.05em;">Amount Delta</span>
-        <strong style="font-size: 24px; font-weight: 800; margin-top: 8px; color: ${totalAmountDiff > 0 ? '#ef4444' : 'var(--text-main)'}">${formatAmount(totalAmountDiff)}</strong>
+      <div class="metric recon-summary-card">
+        <span class="recon-summary-label">Amount Delta</span>
+        <strong class="recon-summary-value ${totalAmountDiff > 0 ? 'danger' : ''}">${formatAmount(totalAmountDiff)}</strong>
       </div>
     </div>
   `;
@@ -267,16 +267,16 @@ export function renderReconciliation(state, data) {
   const previewHeaders = ["Sev", "Issue Type", "Trace / TXN ID", "Internal Status", "Partner Status", "Internal Amount", "Partner Amount", "Delta", "Action"];
 
   const affectedPreviewHtml = `
-    <div class="panel" style="margin-bottom: 12px; padding: 8px 12px;">
-      <div style="margin-bottom: 8px;">
-        <h4 style="margin: 0; font-size: 12.5px; font-weight: 700; color: white;">Affected Records Preview</h4>
-        <p style="margin: 2px 0 0 0; font-size: 11px; color: var(--text-muted);">Records that caused the current verdict.</p>
+    <div class="panel recon-preview-panel">
+      <div class="recon-preview-header">
+        <h4 class="recon-preview-title">Affected Records Preview</h4>
+        <p class="recon-preview-subtitle">Records that caused the current verdict.</p>
       </div>
       ${previewRows.length ? table(previewHeaders, previewRows) : `
-        <div class="empty-state-card" style="text-align: center; padding: 32px 16px; background: rgba(0,0,0,0.1); border-radius: 8px; border: 1px dashed var(--border);">
-          <span class="material-symbols-outlined" style="font-size: 48px; color: var(--success); margin-bottom: 12px;">check_circle</span>
-          <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: white;">Perfect Balance</h3>
-          <p style="margin: 6px 0 0 0; font-size: 13px; color: var(--text-muted);">All records are matched for this selection. No discrepancies found.</p>
+        <div class="empty-state-card recon-empty-card">
+          <span class="material-symbols-outlined recon-empty-icon success">check_circle</span>
+          <h3 class="recon-empty-title">Perfect Balance</h3>
+          <p class="recon-empty-copy">All records are matched for this selection. No discrepancies found.</p>
         </div>
       `}
     </div>
@@ -295,31 +295,31 @@ export function renderReconciliation(state, data) {
     if (sectionLoading) {
       bodyHtml = renderInsightLoadingState(key);
     } else if (sectionError) {
-      bodyHtml = `<div class="insight-content empty"><p class="muted">Unavailable.</p><p class="muted" style="font-size:11px;">${escapeHtml(sectionError)}</p></div>`;
+      bodyHtml = `<div class="insight-content empty"><p class="muted">Unavailable.</p><p class="muted recon-insight-error">${escapeHtml(sectionError)}</p></div>`;
     } else if (!sectionItems.length) {
       bodyHtml = `<div class="insight-content empty"><p class="muted">No notable signals.</p></div>`;
     } else {
       bodyHtml = `
-        <div style="display:flex; flex-direction:column; gap:12px;">
+        <div class="recon-insight-column">
           ${sectionItems.slice(0, 2).map((rawItem, index) => {
             const item = normalizeInsight(rawItem, key.slice(0, -1));
             return `
-            <div class="review-card" style="cursor: default; display: flex; flex-direction: column; gap: 10px; background:linear-gradient(180deg, rgba(239,68,68,0.20), rgba(239,68,68,0.10)); border:1px solid rgba(248,113,113,0.62); box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 12px 28px rgba(0,0,0,0.22); min-height: 220px; height: 100%;">
-              ${index === 0 ? `<div style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:white; font-weight:800;">${escapeHtml(label)}</div>` : ""}
-              <div class="review-card-top" style="display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;">
-                <div style="display:flex; align-items:center; gap:8px; min-width:0;">
-                  <span class="badge ${item.severity === 'CRITICAL' || item.severity === 'HIGH' ? 'failed' : item.severity === 'MEDIUM' ? 'warning' : 'matched'}" style="font-size: 10px; padding: 2px 8px; border: none; border-radius: 999px; font-weight: 700; flex-shrink:0;">
+            <div class="review-card recon-insight-card">
+              ${index === 0 ? `<div class="recon-insight-label">${escapeHtml(label)}</div>` : ""}
+              <div class="review-card-top recon-insight-top">
+                <div class="recon-insight-title-row">
+                  <span class="badge ${item.severity === 'CRITICAL' || item.severity === 'HIGH' ? 'failed' : item.severity === 'MEDIUM' ? 'warning' : 'matched'} recon-insight-severity">
                     ${escapeHtml(item.severity)}
                   </span>
-                  <h3 style="margin:0; font-size:14px; font-weight:700; color:white; line-height:1.35;">${highlightInsightText(item.title)}</h3>
+                  <h3 class="recon-insight-title">${highlightInsightText(item.title)}</h3>
                 </div>
-                <span style="font-size: 11px; color: white; font-weight: 500; white-space:nowrap;">${formatNumber(item.affectedCount)} affected</span>
+                <span class="recon-insight-count">${formatNumber(item.affectedCount)} affected</span>
               </div>
-              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:11px; color:white;">
+              <div class="recon-insight-metrics">
                 ${item.metrics.slice(0, 3).map(metric => `<span><strong style="color:white;">${escapeHtml(String(metric.value || "-"))}</strong>${metric.label ? ` ${escapeHtml(metric.label)}` : ""}</span>`).join('<span style="opacity:0.45;">·</span>')}
               </div>
-              <p style="margin:0; font-size:12px; line-height:1.5; color:white;">${highlightInsightText(item.shortSummary)}</p>
-              <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:auto;">
+              <p class="recon-insight-summary">${highlightInsightText(item.shortSummary)}</p>
+              <div class="recon-insight-actions">
                 <button class="button tertiary compact" data-action="open-copilot-explain" data-insight-payload="${escapeHtml(JSON.stringify(item))}">
                   Explain
                 </button>
@@ -333,7 +333,7 @@ export function renderReconciliation(state, data) {
   };
 
   const tabsSectionHtml = `
-    <div style="display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px;">
+    <div class="recon-insight-grid">
       ${insightSections.map(renderInsightColumn).join("")}
     </div>
   `;
@@ -347,7 +347,7 @@ export function renderReconciliation(state, data) {
     ["MISSING_INTERNAL", "Missing Internal"],
     ["MISSING_PARTNER", "Missing Partner"]
   ].map(([value, label]) => `
-    <button class="status-tab ${state.reconStatus === value ? "active" : ""}" data-action="set-recon-status" data-status="${escapeHtml(value)}" style="padding: 4px 10px; font-size: 11.5px;">
+    <button class="status-tab recon-status-tab ${state.reconStatus === value ? "active" : ""}" data-action="set-recon-status" data-status="${escapeHtml(value)}">
       ${escapeHtml(label)}
     </button>
   `).join("");
@@ -452,36 +452,36 @@ export function renderReconciliation(state, data) {
     }
 
     return `
-      <div class="mobile-recon-card" style="padding: 14px; border-radius: 10px; background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)); border: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow);">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div style="display: flex; align-items: center; gap: 8px;">
+      <div class="mobile-recon-card recon-mobile-card">
+        <div class="recon-mobile-card-head">
+          <div class="recon-mobile-card-head-left">
             ${isMatched ? "" : `<input type="checkbox" data-action="toggle-recon-row" data-row-id="${escapeHtml(rowId)}" ${isBatchChecked ? "checked" : ""} />`}
-            <span class="badge severity-${sev.toLowerCase()}" style="font-size: 9px; padding: 1px 6px; border: none; font-weight: 700;">${sev}</span>
-            <code style="font-size: 11.5px; color: #fff;">${escapeHtml(rowId)}</code>
+            <span class="badge severity-${sev.toLowerCase()} recon-mobile-severity">${sev}</span>
+            <code class="recon-mobile-trace">${escapeHtml(rowId)}</code>
           </div>
           ${isMatched ? '-' : `
-            <button class="button tertiary compact" data-action="open-evidence-detail" data-row-id="${escapeHtml(rowId)}" style="padding: 6px; min-width: unset; height: unset; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--brand-primary); background: transparent; border: none;">
-              <span class="material-symbols-outlined" style="font-size: 20px;">visibility</span>
+            <button class="button tertiary compact recon-icon-button recon-icon-button-lg" data-action="open-evidence-detail" data-row-id="${escapeHtml(rowId)}">
+              <span class="material-symbols-outlined recon-icon-lg">visibility</span>
             </button>
           `}
         </div>
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <span style="font-size: 12px; font-weight: 600;">
+        <div class="recon-mobile-card-status-row">
+          <span class="recon-mobile-status">
             ${escapeHtml(item.reconciliationStatus || "MISMATCH")}
-            ${isReviewed ? `<span class="badge matched" style="font-size: 9px; padding: 1px 4px; border:none; margin-left: 6px; background: rgba(16, 185, 129, 0.15); color: #10b981;">Reviewed</span>` : ""}
+            ${isReviewed ? `<span class="badge matched recon-reviewed-badge">Reviewed</span>` : ""}
           </span>
-          <span style="font-weight: 700; font-size: 13px; color: ${delta > 0 ? '#ef4444' : 'var(--text-muted)'}">${delta > 0 ? `Δ ${formatAmount(delta)}` : "No Delta"}${diffBadgeHtml}</span>
+          <span class="recon-mobile-delta ${delta > 0 ? 'has-delta' : ''}">${delta > 0 ? `Δ ${formatAmount(delta)}` : "No Delta"}${diffBadgeHtml}</span>
         </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 11.5px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.03);">
+        <div class="recon-mobile-compare-grid">
           <div>
-            <div style="color: var(--text-secondary); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Internal</div>
-            <div>${item.internalStatus ? `<span class="badge matched" style="font-size: 9px; padding: 1px 4px; border:none;">${escapeHtml(item.internalStatus)}</span>` : '<span class="badge warning" style="font-size:9px; padding:1px 4px; border:none;">MISSING</span>'}</div>
-            <div style="margin-top: 4px; font-weight: 600; color: #fff;">${item.internalAmount ? formatAmount(item.internalAmount) : "-"}</div>
+            <div class="recon-mobile-compare-label">Internal</div>
+            <div>${item.internalStatus ? `<span class="badge matched recon-mobile-mini-badge">${escapeHtml(item.internalStatus)}</span>` : '<span class="badge warning recon-mobile-mini-badge">MISSING</span>'}</div>
+            <div class="recon-mobile-amount">${item.internalAmount ? formatAmount(item.internalAmount) : "-"}</div>
           </div>
           <div>
-            <div style="color: var(--text-secondary); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Partner</div>
-            <div>${item.partnerStatus ? `<span class="badge matched" style="font-size: 9px; padding: 1px 4px; border:none;">${escapeHtml(item.partnerStatus)}</span>` : '<span class="badge warning" style="font-size:9px; padding:1px 4px; border:none;">MISSING</span>'}</div>
-            <div style="margin-top: 4px; font-weight: 600; color: #fff;">${item.partnerAmount ? formatAmount(item.partnerAmount) : "-"}</div>
+            <div class="recon-mobile-compare-label">Partner</div>
+            <div>${item.partnerStatus ? `<span class="badge matched recon-mobile-mini-badge">${escapeHtml(item.partnerStatus)}</span>` : '<span class="badge warning recon-mobile-mini-badge">MISSING</span>'}</div>
+            <div class="recon-mobile-amount">${item.partnerAmount ? formatAmount(item.partnerAmount) : "-"}</div>
           </div>
         </div>
       </div>
@@ -502,12 +502,12 @@ export function renderReconciliation(state, data) {
   `;
 
   const tableFiltersHtml = `
-    <div class="page-filters explorer-filters" style="margin-top: 10px; margin-bottom: 12px; padding: 8px 12px; border-radius: 6px; background: rgba(0,0,0,0.15); display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
-      <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">Explorer Filters:</span>
-      <input id="amount-min" type="text" placeholder="Min Delta" value="${escapeHtml(ef.amountMin || '')}" style="width: 90px; height: 26px; font-size: 12px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); padding: 2px 6px; border-radius: 4px;">
-      <input id="amount-max" type="text" placeholder="Max Delta" value="${escapeHtml(ef.amountMax || '')}" style="width: 90px; height: 26px; font-size: 12px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); padding: 2px 6px; border-radius: 4px;">
-      <button class="button primary" data-action="apply-recon-filters" style="height: 26px; font-size: 11px; padding: 2px 8px;">Apply</button>
-      <button class="button secondary" data-action="clear-recon-filters" style="height: 26px; font-size: 11px; padding: 2px 8px;">Clear</button>
+    <div class="page-filters explorer-filters recon-filter-bar">
+      <span class="recon-filter-label">Explorer Filters:</span>
+      <input id="amount-min" class="recon-filter-input" type="text" placeholder="Min Delta" value="${escapeHtml(ef.amountMin || '')}">
+      <input id="amount-max" class="recon-filter-input" type="text" placeholder="Max Delta" value="${escapeHtml(ef.amountMax || '')}">
+      <button class="button primary recon-filter-button" data-action="apply-recon-filters">Apply</button>
+      <button class="button secondary recon-filter-button" data-action="clear-recon-filters">Clear</button>
     </div>
   `;
 
@@ -550,18 +550,18 @@ export function renderReconciliation(state, data) {
   if (filteredItems.length === 0) {
     if (state.reconStatus === "MATCHED") {
       emptyStateHtml = `
-        <div class="empty-state-card" style="text-align: center; padding: 48px 24px; background: rgba(0,0,0,0.15); border-radius: 8px; border: 1px dashed var(--border); margin: 20px 0;">
-          <span class="material-symbols-outlined" style="font-size: 56px; color: var(--status-matched); margin-bottom: 16px;">task_alt</span>
-          <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: white;">Perfect Match</h3>
-          <p style="margin: 8px 0 0 0; font-size: 14px; color: var(--text-muted);">All records matched perfectly for this period.</p>
+        <div class="empty-state-card recon-empty-card recon-empty-card-lg">
+          <span class="material-symbols-outlined recon-empty-icon success lg">task_alt</span>
+          <h3 class="recon-empty-title recon-empty-title-lg">Perfect Match</h3>
+          <p class="recon-empty-copy recon-empty-copy-lg">All records matched perfectly for this period.</p>
         </div>
       `;
     } else {
       emptyStateHtml = `
-        <div class="empty-state-card" style="text-align: center; padding: 48px 24px; background: rgba(0,0,0,0.15); border-radius: 8px; border: 1px dashed var(--border); margin: 20px 0;">
-          <span class="material-symbols-outlined" style="font-size: 56px; color: var(--brand-primary); margin-bottom: 16px;">search_off</span>
-          <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: white;">No Mismatches Found</h3>
-          <p style="margin: 8px 0 0 0; font-size: 14px; color: var(--text-muted);">No mismatch records found with current filters.</p>
+        <div class="empty-state-card recon-empty-card recon-empty-card-lg">
+          <span class="material-symbols-outlined recon-empty-icon brand lg">search_off</span>
+          <h3 class="recon-empty-title recon-empty-title-lg">No Mismatches Found</h3>
+          <p class="recon-empty-copy recon-empty-copy-lg">No mismatch records found with current filters.</p>
         </div>
       `;
     }
@@ -601,12 +601,12 @@ export function renderReconciliation(state, data) {
   const evidenceTableHtml = `
     <section class="panel evidence-table-section">
       ${responsiveStyleHtml}
-      <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 8px; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+      <div class="recon-ledger-header">
         <div>
-          <h2 class="section-title" style="margin: 0; font-size: 14px;">Reconciliation Evidence Ledger</h2>
-          <p class="section-subtitle" style="margin: 2px 0 0 0; font-size: 11px;">Select a row to inspect full comparison detail and trigger adjustment options.</p>
+          <h2 class="section-title recon-ledger-title">Reconciliation Evidence Ledger</h2>
+          <p class="section-subtitle recon-ledger-subtitle">Select a row to inspect full comparison detail and trigger adjustment options.</p>
         </div>
-        <div style="display: flex; gap: 6px;">
+        <div class="recon-ledger-status-tabs">
           ${statusTabs}
         </div>
       </div>
@@ -797,14 +797,14 @@ export function renderReconciliation(state, data) {
     ${toolbarHtml}
     ${runStatusPanelHtml}
     ${summaryStripHtml}
-    <div class="reconciliation-container" style="display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start;">
+    <div class="reconciliation-container recon-layout">
       <div>
         ${state.reconciliationDeferredReady ? tabsSectionHtml : `
-          <section class="panel" style="margin-bottom:12px;">
-            <div class="empty-state-panel" style="min-height:140px;">
-              <span class="material-symbols-outlined" style="font-size:32px; color: var(--text-muted); margin-bottom: 12px;">hourglass_top</span>
-              <h3 style="margin:0 0 8px 0;">Rendering non-critical widgets</h3>
-              <p class="muted" style="margin:0;">AI insights and analytical widgets are loading after the ledger for faster first paint.</p>
+          <section class="panel recon-section-panel">
+            <div class="empty-state-panel recon-deferred-panel">
+              <span class="material-symbols-outlined recon-deferred-icon">hourglass_top</span>
+              <h3 class="recon-deferred-title">Rendering non-critical widgets</h3>
+              <p class="muted recon-deferred-copy">AI insights and analytical widgets are loading after the ledger for faster first paint.</p>
             </div>
           </section>
         `}

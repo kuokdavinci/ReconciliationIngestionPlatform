@@ -3,7 +3,7 @@
 Defines configuration for the APScheduler and job settings.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 

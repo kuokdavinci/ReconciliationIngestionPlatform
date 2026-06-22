@@ -6,6 +6,7 @@ export function renderAutomation({
   formatDisplayDateTime,
   formatNumber,
   metrics,
+  renderPageFilters,
   severityBadge,
   table,
 }) {
@@ -53,6 +54,17 @@ export function renderAutomation({
   }).join("") : `<tr><td colspan="6" style="text-align:center; padding: 24px 0;">No enabled automation jobs found.</td></tr>`;
 
   return `
+    <div class="compact-page-header">
+      <div class="compact-header-info">
+        <h2>Scheduler & Automation</h2>
+        <div class="compact-header-meta">
+          <strong>${escapeHtml(state.partner || '-')}</strong> ·
+          <span>${formatNumber(jobs.filter(j => j.enabled).length)} enabled job${jobs.filter(j => j.enabled).length !== 1 ? 's' : ''}</span> ·
+          <span>${formatNumber(jobs.filter(j => j.hasPendingFile).length)} pending file${jobs.filter(j => j.hasPendingFile).length !== 1 ? 's' : ''}</span>
+        </div>
+      </div>
+    </div>
+    ${renderPageFilters({ showDate: false, showClear: false })}
     ${metrics([
       ["Enabled Jobs", formatNumber(jobs.filter(job => job.enabled).length), "Scheduler-connected fetch configs"],
       ["Pending Review Items", formatNumber(jobs.reduce((sum, job) => sum + Number(job.pendingReviewPackets || 0), 0)), "Review items waiting after automation runs"],

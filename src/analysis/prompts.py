@@ -12,7 +12,6 @@ Design principles:
 - Concrete, quantified recommendations — not generic platitudes
 """
 
-import json
 from typing import Any
 
 from src.analysis.schemas import AnalysisInput
@@ -306,7 +305,7 @@ def build_analysis_prompt(analysis_input: AnalysisInput) -> str:
     focus_instruction = _FOCUS_INSTRUCTIONS.get(focus, _DEFAULT_FOCUS_INSTRUCTION)
 
     sections = [
-        f"# Reconciliation Analysis Request",
+        "# Reconciliation Analysis Request",
         "",
         f"**Partner:** {analysis_input.partner}",
         f"**Date:** {analysis_input.date}",

@@ -3,9 +3,7 @@
 import json
 import logging
 from io import StringIO
-from unittest.mock import patch
 
-import pytest
 
 from src.logging.logger import (
     JSONFormatter,

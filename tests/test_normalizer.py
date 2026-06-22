@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from src.core.enums import TransactionStatus
-from src.core.types import FieldMapping, FieldMappingType, ValidationError, CanonicalTransaction
+from src.core.types import FieldMapping, FieldMappingType, ValidationError
 from src.normalizer import TransactionNormalizer, NormalizationResult
 
 

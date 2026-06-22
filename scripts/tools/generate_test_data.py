@@ -20,7 +20,6 @@ import asyncio
 import csv
 import json
 import random
-import os
 import sys
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -78,7 +77,6 @@ def _generate_internal_distribution(count: int) -> dict:
 
 
 def write_xlsx(filepath: str, records: list[dict]):
-    import openpyxl
     from openpyxl import Workbook
 
     wb = Workbook()
@@ -355,8 +353,8 @@ def main():
     print(f"  3. Reconcile:       uv run python run.py --reconcile {args.date} --partner {args.partner}")
     print(f"  4. Seed internal:   uv run python scripts/generate_test_data.py "
           f"--seed-db --partner {args.partner} --date {args.date} --count {args.count}")
-    print(f"  5. Start API:       uv run python run.py --serve")
-    print(f"  6. Start dash:      python frontend/server.py --port 5173 --api http://localhost:8000")
+    print("  5. Start API:       uv run python run.py --serve")
+    print("  6. Start dash:      python frontend/server.py --port 5173 --api http://localhost:8000")
 
 
 if __name__ == "__main__":

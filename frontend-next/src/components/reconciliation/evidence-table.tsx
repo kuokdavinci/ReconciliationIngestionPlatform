@@ -117,18 +117,18 @@ export function EvidenceTable({
                   )}
                 </td>
                 <td className={styles.ledgerCell} style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                  {row.internalAmount != null ? `₫${row.internalAmount.toLocaleString()}` : "-"}
+                  {row.internalAmount != null ? `${row.internalAmount.toLocaleString()}` : "-"}
                 </td>
                 <td className={styles.ledgerCell} style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                  {row.partnerAmount != null ? `₫${row.partnerAmount.toLocaleString()}` : "-"}
+                  {row.partnerAmount != null ? `${row.partnerAmount.toLocaleString()}` : "-"}
                 </td>
                 <td className={`${styles.ledgerCell} ${styles.deltaCell}`} style={{ color: delta > 0 ? "#ef4444" : "var(--text-muted)" }}>
                   {delta > 0 ? (
                     <span className={styles.deltaBadge}>
-                      <span>{`₫${delta.toLocaleString()}`}</span>
+                      <span>{`${delta.toLocaleString()}`}</span>
                       <span className={`${styles.diffBadge} ${deltaDirection > 0 ? styles.diffBadgeNegative : ""}`}>
                         {deltaDirection > 0 ? "▲" : "▼"}
-                        {`₫${delta.toLocaleString()}`}
+                        {`${delta.toLocaleString()}`}
                       </span>
                     </span>
                   ) : "-"}
@@ -182,19 +182,19 @@ export function EvidenceTable({
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 600 }}>{row.reconciliationStatus}</div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: delta > 0 ? "#ef4444" : "var(--text-muted)" }}>
-                  {delta > 0 ? `Δ ₫${delta.toLocaleString()}` : "No Delta"}
+                  {delta > 0 ? `Δ ${delta.toLocaleString()}` : "No Delta"}
                 </div>
               </div>
               <div className={styles.mobileCompare}>
                 <div>
                   <div className={styles.compareLabel}>Internal</div>
                   <div>{row.internalStatus ? <Badge severity={row.internalStatus === "SETTLED" ? "low" : "medium"}>{row.internalStatus}</Badge> : <Badge severity="high">MISSING</Badge>}</div>
-                  <div className={styles.compareAmount}>{row.internalAmount != null ? `₫${row.internalAmount.toLocaleString()}` : "-"}</div>
+                  <div className={styles.compareAmount}>{row.internalAmount != null ? `${row.internalAmount.toLocaleString()}` : "-"}</div>
                 </div>
                 <div>
                   <div className={styles.compareLabel}>Partner</div>
                   <div>{row.partnerStatus ? <Badge severity={row.partnerStatus === "SETTLED" ? "low" : "medium"}>{row.partnerStatus}</Badge> : <Badge severity="high">MISSING</Badge>}</div>
-                  <div className={styles.compareAmount}>{row.partnerAmount != null ? `₫${row.partnerAmount.toLocaleString()}` : "-"}</div>
+                  <div className={styles.compareAmount}>{row.partnerAmount != null ? `${row.partnerAmount.toLocaleString()}` : "-"}</div>
                 </div>
               </div>
             </div>

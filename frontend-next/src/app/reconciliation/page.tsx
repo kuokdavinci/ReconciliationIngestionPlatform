@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useCallback } from "react";
+import { useEffect, useMemo, useCallback, useState } from "react";
 import { Topbar } from "@/components/layout/topbar";
 import { PageSection } from "@/components/ui/page-section";
 import { Panel } from "@/components/ui/panel";
@@ -50,6 +50,17 @@ export default function ReconciliationPage() {
   } = store;
 
   const { showToast } = useToast();
+
+  const [tableType, setTableType] = useState("all");
+
+  const tableTypeOptions = [
+    { value: "all", label: "All Records" },
+    { value: "matched", label: "Matched" },
+    { value: "unmatched", label: "Unmatched" },
+    { value: "missing", label: "Missing Data" },
+  ];
+
+  const statusOptions = ["", "MATCHED", "AMOUNT_MISMATCH", "MISSING_PARTNER", "MISSING_INTERNAL", "STATUS_MISMATCH"];
 
   const loadPage = useCallback(async (partner: string, date: string) => {
     setLoading(true);
@@ -137,6 +148,13 @@ export default function ReconciliationPage() {
 
   const filteredRows = useMemo(() => {
     let items = results;
+    if (tableType === "matched") {
+      items = items.filter((r) => r.reconciliationStatus === "MATCHED");
+    } else if (tableType === "unmatched") {
+      items = items.filter((r) => r.reconciliationStatus === "AMOUNT_MISMATCH" || r.reconciliationStatus === "STATUS_MISMATCH");
+    } else if (tableType === "missing") {
+      items = items.filter((r) => r.reconciliationStatus === "MISSING_PARTNER" || r.reconciliationStatus === "MISSING_INTERNAL");
+    }
     if (reconStatus) {
       items = items.filter((r) => r.reconciliationStatus === reconStatus);
     }
@@ -154,7 +172,7 @@ export default function ReconciliationPage() {
       });
     }
     return items;
-  }, [results, reconStatus, filters]);
+  }, [results, reconStatus, filters, tableType]);
 
   const paginatedRows = useMemo(() => {
     const start = pagination.offset;
@@ -178,8 +196,6 @@ export default function ReconciliationPage() {
 
   const selectedCount = Object.keys(selectedRows).length;
 
-  // Filter bar status options
-  const statusOptions = ["", "MATCHED", "AMOUNT_MISMATCH", "MISSING_PARTNER", "MISSING_INTERNAL", "STATUS_MISMATCH"];
 
   return (
     <div>
@@ -243,6 +259,18 @@ export default function ReconciliationPage() {
           }
         >
           <div className={styles.ledgerFilters}>
+            <div className={styles.toolbarField}>
+              <label className={styles.toolbarLabel}>Table</label>
+              <select
+                value={tableType}
+                onChange={(e) => { setTableType(e.target.value); setPagination((prev: { limit: number; offset: number }) => ({ ...prev, offset: 0 })); }}
+                className={styles.toolbarControl}
+              >
+                {tableTypeOptions.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+            </div>
             <div className={styles.toolbarField}>
               <label className={styles.toolbarLabel}>Status</label>
               <select

@@ -35,7 +35,7 @@ export function EvidenceDetailDialog({ row, open, onClose }: Props) {
           <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-primary)" }}>
             {isMissing
               ? "This transaction exists on only one side of the ledger and needs review before the batch can be considered complete."
-              : `A monetary discrepancy was detected for this transaction. ${deltaDirection} by ₫${delta.toLocaleString()}.`}
+              : `A monetary discrepancy was detected for this transaction. ${deltaDirection} by ${delta.toLocaleString()}.`}
           </p>
         </section>
 
@@ -47,15 +47,15 @@ export function EvidenceDetailDialog({ row, open, onClose }: Props) {
               <span>Partner</span>
             </div>
             <div className={styles.evidenceCompareRow}>
-              <span>{row.internalAmount != null ? `₫${row.internalAmount.toLocaleString()}` : "—"}</span>
-              <span>{row.partnerAmount != null ? `₫${row.partnerAmount.toLocaleString()}` : "—"}</span>
+              <span>{row.internalAmount != null ? `${row.internalAmount.toLocaleString()}` : "—"}</span>
+              <span>{row.partnerAmount != null ? `${row.partnerAmount.toLocaleString()}` : "—"}</span>
             </div>
             <div className={styles.evidenceCompareRow}>
               <span>{row.internalStatus ?? "—"}</span>
               <span>{row.partnerStatus ?? "—"}</span>
             </div>
             {delta > 0 && (
-              <div className={styles.evidenceDelta}>Delta: ₫{delta.toLocaleString()}</div>
+              <div className={styles.evidenceDelta}>Delta: {delta.toLocaleString()}</div>
             )}
           </div>
         </section>

@@ -3,8 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_phase: 15
-status: ready to plan
-last_updated: "2026-06-02T05:00:00.000Z"
+status: planning
+last_updated: "2026-06-22T05:10:39.852Z"
+last_activity: "2026-06-22 - Completed quick task 260622-gf6: migrate mapping studio từ legacy frontend sang frontend-next với đầy đủ 3-step wizard (Upload Sample → Review Draft → Validate Output)"
 progress:
   total_phases: 15
   completed_phases: 9
@@ -75,5 +76,6 @@ progress:
 |---|-------------|------|--------|-----------|
 | 260605-ji5 | MOMO E2E canonical seed + Quick Start + 3 regression tests | 2026-06-05 | f0d15b9 | [260605-ji5-c-p-nh-t-e2e-tooling-fixture-momo-cho-sc](./quick/260605-ji5-c-p-nh-t-e2e-tooling-fixture-momo-cho-sc/) |
 | 260622-gf6 | migrate mapping studio từ legacy frontend sang frontend-next với đầy đủ 3-step wizard | 2026-06-22 | 8c0ec90 | [260622-gf6-migrate-mapping-studio-t-legacy-frontend](./quick/260622-gf6-migrate-mapping-studio-t-legacy-frontend/) |
+| 260622-grp | migrate review runtime helpers + Step 3 progress bar, trace gallery, detail modal | 2026-06-22 | 62c3f53, 6a4822a | [260622-grp-migrate-review-runtime-t-legacy-frontend](./quick/260622-grp-migrate-review-runtime-t-legacy-frontend/) |
 
-Last activity: 2026-06-22 - Completed quick task 260622-gf6: migrate mapping studio từ legacy frontend sang frontend-next với đầy đủ 3-step wizard (Upload Sample → Review Draft → Validate Output)
+Last activity: 2026-06-22 - Completed quick task 260622-grp: migrate review runtime helpers from legacy render.js + enhance Step 3 with progress bar, before/after trace gallery, and 7-column field-level trace detail modal: migrate review runtime helpers from legacy render.js + enhance Step 3 with progress bar, before/after trace gallery, and 7-column field-level trace detail modal

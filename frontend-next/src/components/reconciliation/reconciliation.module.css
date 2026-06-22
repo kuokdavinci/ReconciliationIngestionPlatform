@@ -183,6 +183,7 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   white-space: nowrap;
   text-align: left;
+  color: var(--text-primary);
 }
 
 .ledgerHeadCell {
@@ -203,6 +204,7 @@
 .ledgerCode {
   font-family: var(--font-mono);
   font-size: 11.5px;
+  color: var(--text-primary);
 }
 
 .deltaCell {

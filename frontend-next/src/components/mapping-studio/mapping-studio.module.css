@@ -51,8 +51,8 @@
 .outputTextarea { width: 100%; min-height: 180px; font-family: monospace; background: var(--bg-primary); border: 1px solid var(--border); padding: 12px; border-radius: 6px; color: #5bc0be; outline: none; line-height: 1.4; font-size: 13px; }
 
 .versionTable { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
-.versionTable th { padding: 10px 12px; background: var(--bg-surface-hover); }
-.versionTable td { padding: 10px 12px; border-top: 1px solid var(--border); }
+.versionTable th { padding: 10px 12px; background: var(--bg-surface-hover); color: var(--text-muted); }
+.versionTable td { padding: 10px 12px; border-top: 1px solid var(--border); color: var(--text-primary); }
 
 .emptyBlock { text-align: center; padding: 32px; color: var(--text-muted); }
 

@@ -175,6 +175,7 @@
 .metaLabel {
   font-size: 12px;
   font-weight: 700;
+  color: var(--text-primary);
 }
 
 .metaValue {
@@ -216,6 +217,7 @@
 .gateLabel {
   font-size: 12px;
   display: block;
+  color: var(--text-primary);
 }
 
 .gateMessage {

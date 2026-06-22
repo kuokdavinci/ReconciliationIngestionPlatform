@@ -175,7 +175,7 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
           ) : (
             <div>
               <div style={{ fontSize: 48, color: "var(--brand-primary)", marginBottom: 12 }}>🧠</div>
-              <h3 style={{ margin: "0 0 8px 0" }}>Upload Partner Sample</h3>
+              <h3 style={{ margin: "0 0 8px 0", color: "#fff" }}>Upload Partner Sample</h3>
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
                 Upload a spreadsheet (.xlsx, .xls, .csv) to generate a draft mapping.
               </p>
@@ -217,7 +217,7 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
         <div className={styles.optionCard}>
           <div>
             <div style={{ fontSize: 48, color: "var(--text-muted)", marginBottom: 12 }}>📄</div>
-            <h3 style={{ margin: "0 0 8px 0" }}>Upload Existing Schema</h3>
+              <h3 style={{ margin: "0 0 8px 0", color: "#fff" }}>Upload Existing Schema</h3>
             <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 24 }}>
               Start from an existing JSON schema and send a revised version for review.
             </p>
@@ -244,7 +244,7 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
         <div className={styles.optionCard}>
           <div>
             <div style={{ fontSize: 48, color: "var(--text-muted)", marginBottom: 12 }}>✏️</div>
-            <h3 style={{ margin: "0 0 8px 0" }}>Manual Setup</h3>
+            <h3 style={{ margin: "0 0 8px 0", color: "#fff" }}>Manual Setup</h3>
             <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 24 }}>
               Start configuration manually by pasting JSON mapping template.
             </p>
@@ -479,7 +479,7 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
     const configJsonStr = wizard.config ? JSON.stringify(wizard.config, null, 2) : "";
     return (
       <div>
-        <h2>Review Draft Mapping</h2>
+        <h2 style={{ color: "#fff" }}>Review Draft Mapping</h2>
         <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 20 }}>
           Inspect the detected file structure and adjust the draft before it moves through Review Center.
         </p>
@@ -644,7 +644,7 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
 
     return (
       <div>
-        <h2>Validate & Prepare Review Handoff</h2>
+        <h2 style={{ color: "#fff" }}>Validate & Prepare Review Handoff</h2>
         <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 20 }}>
           Resolve blocking issues, inspect warnings, test the transformed output, and then hand the draft to Review Center.
         </p>
@@ -780,7 +780,7 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
         {/* Test Mapping Transformation Result */}
         <div style={{ padding: 20, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 8, marginBottom: 24 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Test Mapping Transformation Result</h3>
+            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#fff" }}>Test Mapping Transformation Result</h3>
             <Button variant="primary" onClick={handleRunTest}>
               Run Transformation Test
             </Button>

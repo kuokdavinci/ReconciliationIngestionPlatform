@@ -128,7 +128,7 @@ export default function MappingStudioPage() {
             <p style={{ margin: 0, fontSize: 11, color: "var(--text-muted)", fontWeight: 700, letterSpacing: "0.05em" }}>
               Draft Workflow
             </p>
-            <h2 style={{ margin: 0, fontSize: 20 }}>Mapping Studio</h2>
+            <h2 style={{ margin: 0, fontSize: 20, color: "#fff" }}>Mapping Studio</h2>
             <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--text-muted)" }}>
               Select sample, review the draft mapping, validate output, then submit for review.
             </p>

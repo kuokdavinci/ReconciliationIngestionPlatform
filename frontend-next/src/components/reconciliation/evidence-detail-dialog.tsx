@@ -25,7 +25,7 @@ export function EvidenceDetailDialog({ row, open, onClose }: Props) {
     <Dialog open={open} onClose={onClose} title="Evidence Detail" panelClassName={dialogStyles.wide}>
       <div className={styles.dialogBadgeRow}>
         <Badge severity={sev}>{sev.toUpperCase()} RISK</Badge>
-        <Badge severity="neutral">{row.reconciliationStatus}</Badge>
+        <Badge severity={row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium"}>{row.reconciliationStatus}</Badge>
         <Badge severity="neutral">Trace {traceId}</Badge>
       </div>
 

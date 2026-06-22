@@ -93,7 +93,7 @@ export function EvidenceTable({
                   <Badge severity={sev as "low" | "medium" | "high" | "critical"}>{sev}</Badge>
                 </td>
                 <td className={styles.ledgerCell}>
-                  <span style={{ fontSize: 11.5, fontWeight: 500 }}>{row.reconciliationStatus}</span>
+                  <Badge severity={row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium"}>{row.reconciliationStatus}</Badge>
                 </td>
                 <td className={styles.ledgerCell}>
                   <code className={styles.ledgerCode}>{id}</code>
@@ -134,14 +134,6 @@ export function EvidenceTable({
                   ) : "-"}
                 </td>
                 <td className={styles.ledgerCell} style={{ textAlign: "center" }}>
-                  {row.reconciliationStatus !== "MATCHED" && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onSelectEvidence(id); }}
-                      className={styles.detailButton}
-                    >
-                      <span className="material-symbols-outlined" style={{ fontSize: 18 }}>visibility</span>
-                    </button>
-                  )}
                 </td>
               </tr>
             );
@@ -170,17 +162,9 @@ export function EvidenceTable({
                   <Badge severity={sev as "low" | "medium" | "high" | "critical"}>{sev}</Badge>
                   <code className={styles.ledgerCode} style={{ color: "#fff", overflow: "hidden", textOverflow: "ellipsis" }}>{id}</code>
                 </div>
-                {row.reconciliationStatus !== "MATCHED" && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onSelectEvidence(id); }}
-                    className={styles.detailButton}
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: 20 }}>visibility</span>
-                  </button>
-                )}
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>{row.reconciliationStatus}</div>
+                <Badge severity={row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium"}>{row.reconciliationStatus}</Badge>
                 <div style={{ fontSize: 13, fontWeight: 700, color: delta > 0 ? "#ef4444" : "var(--text-muted)" }}>
                   {delta > 0 ? `Δ ${delta.toLocaleString()}` : "No Delta"}
                 </div>

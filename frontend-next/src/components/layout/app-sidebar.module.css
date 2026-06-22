@@ -1,0 +1,108 @@
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 24px 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%),
+    var(--bg-sidebar, #0b0e11);
+  border-right: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  display: flex;
+  flex-direction: column;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px 20px;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  margin-bottom: 20px;
+  flex-shrink: 0;
+}
+
+.brandMark {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--brand-gradient, linear-gradient(135deg, #f6cf3c 0%, #f0b90b 52%, #b78500 100%));
+  color: #12161a;
+  box-shadow: 0 0 15px rgba(240, 185, 11, 0.25);
+  flex-shrink: 0;
+}
+
+.brandName {
+  display: block;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #f8f5ef;
+}
+
+.brandSubtitle {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #d8c6a6;
+  margin-top: 1px;
+}
+
+.nav {
+  display: grid;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: rgba(236, 234, 227, 0.68);
+  text-decoration: none;
+  font-size: 14px;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.navItem:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f8f5ef;
+}
+
+.navItemActive {
+  background: rgba(255, 247, 235, 0.1);
+  color: #fff5e9;
+  border-color: rgba(255, 219, 182, 0.16);
+  font-weight: 600;
+}
+
+.footer {
+  padding: 12px 8px 0;
+  margin-top: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-matched, #0ecb81);
+  box-shadow: 0 0 12px var(--status-matched, #0ecb81);
+}
+
+.statusText {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(236, 234, 227, 0.64);
+}

@@ -74,7 +74,6 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
             if (run.status === "COMPLETED") {
               showToast("Ingestion and reconciliation completed!", "success");
               onRefresh();
-              onClose();
             }
           }
         }
@@ -391,10 +390,12 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
           <h4 className={styles.modalTitle}>Confirm file scope</h4>
           
           {scopeLoading && (
-            <div className={styles.emptyBlock}>
-              <div className={styles.spinner} style={{ margin: "0 auto 16px" }} />
-              <h3>Running LLM Scope Analysis</h3>
-              <p className={styles.introText}>Analyzing file name hints, received record counts, and database status...</p>
+            <div className={styles.loadingBlock}>
+              <div className={styles.loadingSpinner} />
+              <div className={styles.loadingText}>
+                <h3>Running LLM Scope Analysis</h3>
+                <p className={styles.introText}>Analyzing file name hints, received record counts, and database status...</p>
+              </div>
             </div>
           )}
 
@@ -482,10 +483,12 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
           </div>
 
           {aiMappingLoading && (
-            <div className={styles.emptyBlock}>
-              <div className={styles.spinner} style={{ margin: "0 auto 16px" }} />
-              <h3>Generating Draft Mapping</h3>
-              <p className={styles.introText}>Building partner-to-canonical field suggestions from the current sample rows...</p>
+            <div className={styles.loadingBlock}>
+              <div className={styles.loadingSpinner} />
+              <div className={styles.loadingText}>
+                <h3>Generating Draft Mapping</h3>
+                <p className={styles.introText}>Building partner-to-canonical field suggestions from the current sample rows...</p>
+              </div>
             </div>
           )}
 
@@ -511,7 +514,7 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
                 </div>
               </div>
 
-              <div className={styles.scopeCard} style={{ backgroundColor: "rgba(16, 185, 129, 0.1)", borderColor: "#10b981" }}>
+              <div className={styles.scopeCard} style={{ borderColor: "#10b981" }}>
                 <div className={styles.scopeHeader}>
                   <div>
                     <div className={styles.scopeLabel} style={{ color: "#10b981" }}>Recommended mapping setup</div>

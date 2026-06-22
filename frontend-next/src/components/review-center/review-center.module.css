@@ -325,7 +325,7 @@
 .scopeCard {
   padding: 16px;
   border-radius: 14px;
-  background: rgba(16, 185, 129, 0.1);
+  background: rgba(16, 185, 129, 0.18);
   border: 1px solid #10b981;
 }
 
@@ -714,6 +714,46 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+.loadingBlock {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  animation: loadingPulse 2s ease-in-out infinite;
+}
+
+@keyframes loadingPulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+.loadingSpinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--brand-primary);
+  animation: reviewSpin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+
+.loadingText {
+  flex: 1;
+}
+
+.loadingText h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: #fff;
+}
+
+.loadingText p {
+  margin: 0;
 }
 
 /* ── Progress bar (3-segment: green / amber / red) ── */

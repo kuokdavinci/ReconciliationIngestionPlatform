@@ -1,4 +1,112 @@
+import {
+  formatDisplayDate,
+  formatDisplayDateTime,
+  parseFlexibleDateInput,
+} from "./src/core/date.js";
+import {
+  getActorName as _getActorName,
+  withActorHeaders as _withActorHeaders,
+  fetchJson,
+  executeCopilotAction as _executeCopilotAction,
+} from "./src/core/api.js";
+import {
+  percent,
+  formatNumber,
+  formatAmount,
+  escapeHtml,
+  boldNumbers,
+} from "./src/core/format.js";
+import {
+  statusLabel,
+  badge,
+  severityBadge,
+  reconciliationRowClass,
+} from "./src/core/status.js";
+import {
+  loadingPanel,
+  renderSkeletonMetrics,
+  renderError,
+  metrics,
+  table,
+  bars,
+  donut,
+  showToast,
+} from "./src/core/dom.js";
+import { renderAuditLog } from "./src/features/audit/render.js";
+import { renderAutomation } from "./src/features/automation/render.js";
+import { bindMappingStudioViewActions } from "./src/features/mapping-studio/bind.js";
+import { createMappingStudioRenderer } from "./src/features/mapping-studio/render.js";
+import { createReviewCenterRenderer } from "./src/features/review-center/render.js";
+import { createReviewRuntimeHelpers } from "./src/features/review-runtime/render.js";
+import {
+  getReviewCenterPendingItems as _getReviewCenterPendingItems,
+  getSelectedReviewPacket as _getSelectedReviewPacket,
+  getTrackedReviewPacket as _getTrackedReviewPacket,
+  getReviewPacketById as _getReviewPacketById,
+  summarizeReviewPacket,
+} from "./src/features/review-center/selectors.js";
+import { handleReviewCenterAction } from "./src/features/review-center/bind.js";
+import {
+  handleGuidedReviewAction,
+  loadGuidedReviewAIMapping as _loadGuidedReviewAIMapping,
+  loadGuidedReviewScopeLLM as _loadGuidedReviewScopeLLM,
+} from "./src/features/review-center/guided-review.js";
+import { renderReconciliation } from "./src/features/reconciliation/render.js";
+import {
+  renderAiObservation,
+  insightCard,
+  highlightInsightText,
+  renderInsightLoadingState,
+} from "./src/features/reconciliation/insights.js";
+import { renderEvidencePopup } from "./src/features/reconciliation/evidence.js";
+import { bindReconciliationFilters, bindReconciliationEnhancedUi, handleReconciliationAction } from "./src/features/reconciliation/bind.js";
+import {
+  bindFilters as _bindFilters,
+  fetchPartners as _fetchPartners,
+} from "./src/shared/filters/bind.js";
+import {
+  pollAutomationOverview as _pollAutomationOverview,
+  pollReconciliationRun as _pollReconciliationRun,
+  pollPostApprovalRun as _pollPostApprovalRun,
+} from "./src/core/polling.js";
+import {
+  renderPageFilters,
+  getPartnerOptions,
+  syncPartnerFilterOptions,
+} from "./src/shared/filters/render.js";
+import {
+  isActiveRuntimeStatus,
+  isTerminalPostApprovalRun,
+  isTerminalReconciliationRun,
+  isLiveReconciliationRunStatus,
+  getActivePostApprovalRunForContext,
+  getPostApprovalRunForPacket,
+  hasMeaningfulRunChange,
+  updateReviewPacketLocally as _updateReviewPacketLocally,
+  syncLocalReviewPacket as _syncLocalReviewPacket,
+  upsertPostApprovalRun as _upsertPostApprovalRun,
+} from "./src/core/state-helpers.js";
+
+
+
+
+
 (function () {
+  // Pure JavaScript typeWriter helper function
+  window.typeWriter = function (element, text, speed = 15) {
+    if (!element) return;
+    element.innerHTML = "";
+    let i = 0;
+    function type() {
+      if (i < text.length) {
+        element.innerHTML += text.charAt(i);
+        i++;
+        setTimeout(type, speed);
+      }
+    }
+    type();
+  };
+
   const state = {
     route: "review-center",
     partner: "MOMO",
@@ -7,6 +115,7 @@
     focus: "operational",
     reconStatus: "",
     explorerFilters: { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" },
+    reconciliationPagination: { limit: 25, offset: 0 },
     evidenceHistory: {},
     reviewedRecords: {},
     resolvedReconStatuses: {},
@@ -33,22 +142,171 @@
     copilotContext: null,
     selectedReviewPacketId: null,
     reviewPackets: [],
-    utilityRoute: "submit-sample",
+    postApprovalRuns: {},
+    automationRunningPartners: {},
+    automationNewPacketIds: [],
+    automationKnownPacketIds: [],
+    reconciliationRun: null,
+    reconciliationInsightsLoading: false,
+    reconciliationInsightsError: "",
+    reconciliationInsightTabData: {
+      anomalies: null,
+      patterns: null,
+      recommendations: null
+    },
+    reconciliationInsightTabLoading: "",
+    reconciliationInsightTabErrors: {},
+    selectedReconRows: {},
+    reconciliationVirtual: {
+      startIndex: 0,
+      rowHeight: 56,
+      visibleCount: 40,
+    },
+    reconciliationDeferredReady: false,
+    copilotExplainItem: null,
+    reviewTab: "pending",
+    reviewHistoryCache: null,
+    reviewHistoryLoading: false,
     preservedScrollTop: null,
     briefOpen: false,
+    briefStep: 0,
+    shortcutHelpOpen: false,
+    guidedReviewScopeChoice: "",
     localDraftMappingIds: {},
     guidedReviewAI: {
       loading: false,
       error: "",
       mapping: null,
       packetId: null
+    },
+    guidedReviewTraceModal: {
+      open: false,
+      sampleIndex: null
+    },
+    audit: {
+      events: [],
+      entityType: "",
+      action: "",
+      lastLoadedAt: "",
+      selectedEventId: null,
     }
   };
+  state.actor = "Administrator";
+
+  window.updateGuidedScopeChoice = function (value) {
+    state.guidedReviewScopeChoice = value;
+    document.querySelectorAll(".scope-select-card").forEach(card => {
+      card.classList.toggle("selected", card.dataset.scopeValue === value);
+      const input = card.querySelector('input[name="guided-scope-choice"]');
+      if (input) {
+        input.checked = input.value === value;
+      }
+    });
+    const summary = document.getElementById("guided-scope-summary");
+    if (!summary) return;
+    let probabilities = {};
+    try {
+      probabilities = JSON.parse(summary.dataset.probabilities || "{}");
+    } catch (_) {
+      probabilities = {};
+    }
+    const confidence = Math.round(Number(probabilities[value] || 0) * 100);
+    const tone = confidence >= 85 ? {
+      border: "#10B981",
+      bg: "rgba(16,185,129,0.10)",
+      badge: "matched",
+      label: "High confidence"
+    } : confidence >= 60 ? {
+      border: "#F59E0B",
+      bg: "rgba(245,158,11,0.10)",
+      badge: "warning",
+      label: "Medium confidence"
+    } : {
+      border: "#EF4444",
+      bg: "rgba(239,68,68,0.10)",
+      badge: "failed",
+      label: "Low confidence"
+    };
+    const scopeOptionMeta = {
+      FULL_SNAPSHOT: "File covers the full day, so the safest action is to replace the existing day snapshot with the uploaded partner file.",
+      INCREMENTAL_APPEND: "File looks like a delta feed, so new rows should be appended without wiping previously ingested data.",
+      REPLACEMENT: "File appears to contain correction/update rows, so matching records should be updated instead of appended.",
+    };
+    summary.style.borderColor = tone.border;
+    summary.style.background = tone.bg;
+    const labelEl = document.getElementById("guided-scope-summary-label");
+    const titleEl = document.getElementById("guided-scope-summary-title");
+    const badgeEl = document.getElementById("guided-scope-summary-badge");
+    const confidenceEl = document.getElementById("guided-scope-summary-confidence");
+    const metaEl = document.getElementById("guided-scope-summary-meta");
+    const reasoningEl = document.getElementById("guided-scope-summary-reasoning");
+    if (labelEl) labelEl.style.color = tone.border;
+    if (titleEl) titleEl.textContent = value.replace(/_/g, " ");
+    if (badgeEl) {
+      badgeEl.className = `badge ${tone.badge}`;
+      badgeEl.textContent = tone.label;
+    }
+    if (confidenceEl) {
+      confidenceEl.textContent = `${confidence}%`;
+      confidenceEl.style.color = tone.border;
+    }
+    if (metaEl) metaEl.textContent = scopeOptionMeta[value] || "This is the suggested operating mode for the uploaded file based on record shape and count alignment.";
+    if (reasoningEl) reasoningEl.textContent = summary.dataset.reasoning || "";
+  };
+
+  const getActorName = () => _getActorName(state);
+  const withActorHeaders = (headers) => _withActorHeaders(state, headers);
+  const executeCopilotAction = (actionKey) => _executeCopilotAction(state, actionKey);
+  const getReviewCenterPendingItems = (data) => _getReviewCenterPendingItems(state, data);
+  const getSelectedReviewPacket = (items) => _getSelectedReviewPacket(state, items);
+  const getTrackedReviewPacket = (data) => _getTrackedReviewPacket(state, data);
+  const getReviewPacketById = (packetId) => _getReviewPacketById(state, packetId);
+  const loadGuidedReviewAIMapping = (packet) => _loadGuidedReviewAIMapping(state, packet, fetchJson, withActorHeaders, syncLocalReviewPacket, render);
+  const loadGuidedReviewScopeLLM = (packet) => _loadGuidedReviewScopeLLM(state, packet, withActorHeaders, renderPreserveScroll);
+  const syncLocalReviewPacket = (packetId, updates) => _syncLocalReviewPacket(state, packetId, updates);
+  const updateReviewPacketLocally = (packetId, updater) => _updateReviewPacketLocally(state, packetId, updater);
+  const upsertPostApprovalRun = (run) => _upsertPostApprovalRun(state, run);
+  const bindFilters = () => _bindFilters({ state, render, showToast });
+  const fetchPartners = (container) => _fetchPartners({ state, render, container });
+  const pollAutomationOverview = () => _pollAutomationOverview({
+    state,
+    view,
+    fetchJson,
+    renderAutomation,
+    bindViewActions,
+    isActiveRuntimeStatus,
+    pollers,
+    badge,
+    escapeHtml,
+    formatDisplayDateTime,
+    formatNumber,
+    metrics,
+    severityBadge,
+    table
+  });
+  const pollReconciliationRun = () => _pollReconciliationRun({
+    state,
+    render,
+    hasMeaningfulRunChange,
+    isLiveReconciliationRunStatus,
+    isTerminalReconciliationRun,
+    pollers
+  });
+  const pollPostApprovalRun = (packetId) => _pollPostApprovalRun({
+    state,
+    render,
+    packetId,
+    upsertPostApprovalRun,
+    isTerminalPostApprovalRun,
+    syncLocalReviewPacket,
+    pollers
+  });
 
   const routes = [
     ["review-center", "Review Center", "fact_check"],
     ["reconciliation", "Reconciliation", "receipt_long"],
-    ["automation", "Automation", "smart_toy"],
+    ["automation", "Schedules", "smart_toy"],
+    ["audit-log", "Audit Log", "history"],
   ];
   const utilityRoutes = {
     "mapping-studio": { title: "Mapping Studio", icon: "schema" }
@@ -61,8 +319,8 @@
   const toast = document.getElementById("toast");
   let activeRenderToken = 0;
   let activePartnerFetchToken = 0;
-  let briefStep = 0;
-  const BRIEF_STEPS = ["Brief", "Review", "Decision"];
+  const pollers = { automation: null, reconciliation: null, postApproval: {} };
+
   const INLINE_FIELD_LABELS = {
     id: "partner_txn_id",
     amount: "amount",
@@ -83,22 +341,355 @@
     currency: "STRING",
     description: "STRING"
   };
+  const {
+    collectCandidateColumns,
+    collectValidationIssues,
+    getRuntimeValidationState,
+    renderGuidedRuntimeDetailModal,
+    renderGuidedSampleRuntimePanel,
+    renderRuntimeVisualSummary,
+  } = createReviewRuntimeHelpers({ state, escapeHtml });
+  const { renderApprovals } = createReviewCenterRenderer({
+    state,
+    badge,
+    escapeHtml,
+    formatDisplayDateTime,
+    formatNumber,
+    getReviewCenterPendingItems,
+    getSelectedReviewPacket,
+    getTrackedReviewPacket,
+    getRuntimeValidationState,
+    loadingPanel,
+    loadGuidedReviewScopeLLM,
+    renderGuidedRuntimeDetailModal,
+    renderGuidedSampleRuntimePanel,
+    renderRuntimeVisualSummary,
+    collectCandidateColumns,
+    collectValidationIssues,
+    getPostApprovalRunForPacket,
+    isTerminalPostApprovalRun,
+    statusLabel,
+    summarizeReviewPacket,
+    table,
+  });
+
+  const {
+    renderApprovalUploadEntry,
+    renderMappings,
+    renderSettings,
+    renderSubmitSamplePage,
+  } = createMappingStudioRenderer({
+    state,
+    badge,
+    escapeHtml,
+    formatDisplayDate,
+    formatDisplayDateTime,
+    renderPageFilters,
+  });
+
 
   function init() {
     renderNav();
     window.addEventListener("hashchange", onRouteChange);
     onRouteChange();
 
-    view.addEventListener("click", (e) => {
-      const tab = e.target.closest(".segmented-tab");
-      if (tab) {
-        state.focus = tab.dataset.focus;
-        view.innerHTML = renderCommandCenter();
-        fetchPartners();
-        bindFilters();
-        bindViewActions();
+    // Responsive sidebar collapse & toggle events
+    const sidebarToggle = document.getElementById("sidebar-toggle");
+    const sidebar = document.querySelector(".sidebar");
+    const appShell = document.querySelector(".app-shell");
+    const collapseBtn = document.getElementById("sidebar-collapse-btn");
+
+    // Initialize sidebar state from localStorage
+    const isCollapsed = localStorage.getItem("sidebarCollapsed") === "true";
+    if (isCollapsed && appShell && collapseBtn) {
+      appShell.classList.add("sidebar-collapsed");
+      const icon = collapseBtn.querySelector(".material-symbols-outlined");
+      if (icon) icon.textContent = "chevron_right";
+    }
+    
+    if (sidebarToggle && sidebar) {
+      sidebarToggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        sidebar.classList.toggle("sidebar-open");
+      });
+
+      // Close sidebar when clicking outside on mobile
+      document.addEventListener("click", (e) => {
+        if (sidebar.classList.contains("sidebar-open") && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
+          sidebar.classList.remove("sidebar-open");
+        }
+      });
+    }
+
+    // Toggle collapse on desktop button click
+    if (collapseBtn && appShell) {
+      collapseBtn.addEventListener("click", () => {
+        const collapsing = appShell.classList.toggle("sidebar-collapsed");
+        localStorage.setItem("sidebarCollapsed", collapsing ? "true" : "false");
+        const icon = collapseBtn.querySelector(".material-symbols-outlined");
+        if (icon) {
+          icon.textContent = collapsing ? "chevron_right" : "chevron_left";
+        }
+      });
+    }
+
+    // Toggle shortcut (Cmd/Ctrl + B)
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        if (collapseBtn) collapseBtn.click();
       }
     });
+
+    // Mobile swipe actions delegation on dynamically rendered cards
+    let swipeStartX = 0;
+    let swipeActiveCard = null;
+
+    document.addEventListener("touchstart", (e) => {
+      const card = e.target.closest(".mobile-recon-card");
+      if (!card) return;
+      swipeStartX = e.touches[0].clientX;
+      swipeActiveCard = card;
+      card.style.transition = "none";
+    }, { passive: true });
+
+    document.addEventListener("touchmove", (e) => {
+      if (!swipeActiveCard) return;
+      const currentX = e.touches[0].clientX;
+      const diffX = currentX - swipeStartX;
+      
+      // Allow minor vertical scroll wiggle room
+      if (Math.abs(diffX) > 10) {
+        // Clamp swipe movement visually
+        const visualTranslate = Math.max(-120, Math.min(120, diffX));
+        swipeActiveCard.style.transform = `translateX(${visualTranslate}px)`;
+        if (diffX > 40) {
+          swipeActiveCard.style.background = "rgba(14, 203, 129, 0.15)";
+        } else if (diffX < -40) {
+          swipeActiveCard.style.background = "rgba(180, 67, 67, 0.15)";
+        } else {
+          swipeActiveCard.style.background = "";
+        }
+      }
+    }, { passive: true });
+
+    document.addEventListener("touchend", (e) => {
+      if (!swipeActiveCard) return;
+      swipeActiveCard.style.transition = "transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), background 0.3s ease";
+      
+      const currentX = e.changedTouches[0].clientX;
+      const diffX = currentX - swipeStartX;
+      const rowId = swipeActiveCard.querySelector("input[type='checkbox']")?.dataset.rowId;
+
+      if (diffX > 80 && rowId) {
+        // Swipe Right -> Resolve as MATCHED
+        showToast(`Resolving ${rowId} as MATCHED via swipe...`);
+        resolveReviewRecord(rowId, "MATCHED")
+          .then(async () => {
+            if (state.activeReconData && state.activeReconData.results) {
+              const item = state.activeReconData.results.find(r => (r.partnerTxnId || r.internalTxnId || r.id) === rowId);
+              if (item) item.reconciliationStatus = "MATCHED";
+            }
+            await loadReconciliationReviewRecords();
+            showToast(`Record ${rowId} matched successfully.`);
+            render();
+          })
+          .catch(() => {
+            showToast("Failed to match transaction.");
+            swipeActiveCard.style.transform = "";
+            swipeActiveCard.style.background = "";
+          });
+      } else if (diffX < -80 && rowId) {
+        // Swipe Left -> Flag/Mark as exception
+        showToast(`Marking ${rowId} as Exception via swipe...`);
+        swipeActiveCard.style.transform = "";
+        swipeActiveCard.style.background = "";
+        const triggerBtn = swipeActiveCard.querySelector("[data-action='open-evidence-detail']");
+        if (triggerBtn) triggerBtn.click();
+      } else {
+        // Reset card visually if swipe threshold not met
+        swipeActiveCard.style.transform = "";
+        swipeActiveCard.style.background = "";
+      }
+      
+      swipeActiveCard = null;
+    });
+
+    // Command Center implementation
+    const commandCenterModal = document.getElementById("command-center-modal");
+    const commandInput = document.getElementById("command-center-input");
+    const commandResults = document.getElementById("command-center-results");
+    const shortcutHelpModal = document.getElementById("shortcut-help-modal");
+    const shortcutHelpClose = document.getElementById("shortcut-help-close");
+
+    const availableCommands = [
+      { key: "/review", title: "Go to Review Center", subtitle: "Review pending ingestion changes", icon: "fact_check", route: "review-center" },
+      { key: "/recon", title: "Go to Reconciliation Ledger", subtitle: "Deterministic reconciliation mismatch ledger", icon: "receipt_long", route: "reconciliation" },
+      { key: "/auto", title: "Go to Automation Visibility", subtitle: "Job queues and automation logs", icon: "smart_toy", route: "automation" },
+      { key: "/mapping", title: "Go to Mapping Studio", subtitle: "Create and validate partner mappings", icon: "schema", route: "mapping-studio" },
+      { key: "/audit", title: "Go to Audit Trail", subtitle: "Activity trail and operational logs", icon: "history", route: "audit-log" }
+    ];
+
+    function toggleCommandCenter(show) {
+      if (!commandCenterModal) return;
+      if (show) {
+        commandCenterModal.style.display = "flex";
+        commandInput.value = "";
+        commandInput.focus();
+        renderCommandResults("");
+      } else {
+        commandCenterModal.style.display = "none";
+      }
+    }
+
+    function toggleShortcutHelp(show) {
+      if (!shortcutHelpModal) return;
+      state.shortcutHelpOpen = Boolean(show);
+      shortcutHelpModal.style.display = show ? "flex" : "none";
+    }
+
+    function renderCommandResults(query) {
+      if (!commandResults) return;
+      const cleanQuery = query.trim().toLowerCase();
+      let html = "";
+
+      // Filter default commands
+      const filteredCommands = availableCommands.filter(cmd => 
+        cmd.key.includes(cleanQuery) || 
+        cmd.title.toLowerCase().includes(cleanQuery) ||
+        cmd.subtitle.toLowerCase().includes(cleanQuery)
+      );
+
+      filteredCommands.forEach((cmd, idx) => {
+        html += `
+          <div class="command-center-item ${idx === 0 ? 'selected' : ''}" data-type="route" data-route="${cmd.route}">
+            <span class="material-symbols-outlined item-icon">${cmd.icon}</span>
+            <div class="item-info">
+              <span class="item-title">${cmd.title}</span>
+              <span class="item-subtitle">${cmd.subtitle}</span>
+            </div>
+            <span class="item-shortcut">${cmd.key}</span>
+          </div>
+        `;
+      });
+
+      // Search Transaction ID in reconciliation results if on reconciliation screen or query looks like a txn/trace
+      const results = (state.activeReconData && state.activeReconData.results) || [];
+      if (cleanQuery.length > 2 && results.length) {
+        const matches = results.filter(item => {
+          const rowId = (item.partnerTxnId || item.internalTxnId || item.id || "").toLowerCase();
+          return rowId.includes(cleanQuery);
+        }).slice(0, 5);
+
+        matches.forEach((item, idx) => {
+          const rowId = item.partnerTxnId || item.internalTxnId || item.id;
+          const isMatched = item.reconciliationStatus === "MATCHED";
+          const offsetIdx = filteredCommands.length + idx;
+          html += `
+            <div class="command-center-item ${offsetIdx === 0 ? 'selected' : ''}" data-type="evidence" data-row-id="${escapeHtml(rowId)}">
+              <span class="material-symbols-outlined item-icon">visibility</span>
+              <div class="item-info">
+                <span class="item-title">Inspect TXN ID: ${escapeHtml(rowId)}</span>
+                <span class="item-subtitle">Status: ${escapeHtml(item.reconciliationStatus)} | Delta: ${formatAmount(Math.abs((item.partnerAmount || 0) - (item.internalAmount || 0)))}</span>
+              </div>
+              <span class="item-shortcut" style="background: rgba(240, 185, 11, 0.15); color: var(--brand-primary);">Ledger Row</span>
+            </div>
+          `;
+        });
+      }
+
+      if (!html) {
+        html = `<div style="padding: 16px; text-align: center; color: var(--text-muted); font-size: 13px;">No commands or transactions found.</div>`;
+      }
+      commandResults.innerHTML = html;
+      bindCommandItems();
+    }
+
+    function bindCommandItems() {
+      commandResults.querySelectorAll(".command-center-item").forEach(item => {
+        item.addEventListener("click", () => {
+          executeCommandItem(item);
+        });
+      });
+    }
+
+    function executeCommandItem(item) {
+      if (item.dataset.type === "route") {
+        location.hash = item.dataset.route;
+      } else if (item.dataset.type === "evidence") {
+        state.selectedEvidenceRowId = item.dataset.rowId;
+        render();
+      }
+      toggleCommandCenter(false);
+    }
+
+    if (commandInput) {
+      commandInput.addEventListener("input", (e) => {
+        renderCommandResults(e.target.value);
+      });
+
+      commandInput.addEventListener("keydown", (e) => {
+        const items = commandResults.querySelectorAll(".command-center-item");
+        let activeIdx = Array.from(items).findIndex(item => item.classList.contains("selected"));
+
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          if (items.length) {
+            if (activeIdx !== -1) items[activeIdx].classList.remove("selected");
+            activeIdx = (activeIdx + 1) % items.length;
+            items[activeIdx].classList.add("selected");
+            items[activeIdx].scrollIntoView({ block: "nearest" });
+          }
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          if (items.length) {
+            if (activeIdx !== -1) items[activeIdx].classList.remove("selected");
+            activeIdx = (activeIdx - 1 + items.length) % items.length;
+            items[activeIdx].classList.add("selected");
+            items[activeIdx].scrollIntoView({ block: "nearest" });
+          }
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          if (activeIdx !== -1 && items[activeIdx]) {
+            executeCommandItem(items[activeIdx]);
+          }
+        }
+      });
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        const isOpen = commandCenterModal && commandCenterModal.style.display === "flex";
+        toggleCommandCenter(!isOpen);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+        e.preventDefault();
+        toggleShortcutHelp(!state.shortcutHelpOpen);
+      } else if (e.key === "Escape") {
+        toggleCommandCenter(false);
+        toggleShortcutHelp(false);
+      }
+    });
+
+    if (commandCenterModal) {
+      commandCenterModal.addEventListener("click", (e) => {
+        if (e.target === commandCenterModal) {
+          toggleCommandCenter(false);
+        }
+      });
+    }
+
+    if (shortcutHelpModal) {
+      shortcutHelpModal.addEventListener("click", (e) => {
+        if (e.target === shortcutHelpModal) {
+          toggleShortcutHelp(false);
+        }
+      });
+    }
+
+    if (shortcutHelpClose) {
+      shortcutHelpClose.addEventListener("click", () => toggleShortcutHelp(false));
+    }
 
     // Handle clicks inside the modal-root and global data-action elements (modal dialogs + table eye icon clicks)
     document.addEventListener("click", (e) => {
@@ -107,6 +698,13 @@
       if (openDetailEl) {
         const rowId = openDetailEl.dataset.rowId;
         state.selectedEvidenceRowId = rowId;
+        rerenderReconciliationLocally();
+        return;
+      }
+
+      const openAuditDetailEl = e.target.closest("[data-action='open-audit-detail']");
+      if (openAuditDetailEl) {
+        state.audit.selectedEventId = openAuditDetailEl.dataset.eventId || null;
         render();
         return;
       }
@@ -115,15 +713,25 @@
       const modalActionEl = e.target.closest("#modal-root [data-action]");
       if (modalActionEl) {
         const action = modalActionEl.dataset.action;
+        if (action === "close-copilot-explain") {
+          state.copilotExplainItem = null;
+          rerenderReconciliationLocally();
+          return;
+        }
         if (action === "close-evidence-drawer") {
           state.selectedEvidenceRowId = null;
+          rerenderReconciliationLocally();
+          return;
+        }
+        if (action === "close-audit-detail") {
+          state.audit.selectedEventId = null;
           render();
           return;
         }
         if (action === "mark-exception") {
           showToast("Record marked as exception.");
           state.selectedEvidenceRowId = null;
-          render();
+          rerenderReconciliationLocally();
           return;
         }
         if (action === "create-adjustment") {
@@ -131,7 +739,7 @@
           const amount = modalActionEl.dataset.amount || "";
           state.adjustmentModalData = { txnId, amount };
           state.selectedEvidenceRowId = null;
-          render();
+          rerenderReconciliationLocally();
           return;
         }
         if (action === "submit-anomaly-note") {
@@ -144,9 +752,10 @@
           saveReviewNote(rowId, noteText.trim())
             .then(async () => {
               await loadReconciliationReviewRecords();
+              await refreshAuditLogIfVisible();
               showToast("Note saved and record marked as reviewed.");
               state.selectedEvidenceRowId = null;
-              render();
+              rerenderReconciliationLocally();
             })
             .catch(() => {
               showToast("Failed to save review note.");
@@ -174,10 +783,42 @@
     state.resolvedReconStatuses = resolvedReconStatuses;
   }
 
+  async function loadReviewHistoryData(force = false) {
+    const cacheKey = `${state.partner}:${state.date}`;
+    if (!force && state.reviewHistoryCache && state.reviewHistoryCache.key === cacheKey) {
+      return state.reviewHistoryCache;
+    }
+
+    state.reviewHistoryLoading = true;
+    render();
+    try {
+      await loadReconciliationReviewRecords();
+      const decisions = (state.reviewPackets || [])
+        .filter(item => ["APPROVED", "REJECTED", "SUPERSEDED"].includes(String(item.status || "").toUpperCase()))
+        .slice(0, 20);
+      const reconNotes = [];
+      Object.entries(state.evidenceHistory || {}).forEach(([rowId, historyList]) => {
+        historyList.forEach(entry => {
+          reconNotes.push({
+            rowId,
+            time: entry.time,
+            event: entry.event
+          });
+        });
+      });
+      reconNotes.sort((a, b) => new Date(String(b.time || "").replace(/-/g, "/")) - new Date(String(a.time || "").replace(/-/g, "/")));
+      state.reviewHistoryCache = { key: cacheKey, decisions, reconNotes };
+      return state.reviewHistoryCache;
+    } finally {
+      state.reviewHistoryLoading = false;
+      render();
+    }
+  }
+
   async function saveReviewNote(rowId, noteText) {
     const response = await fetch(`/api/v1/reconciliation/review-records/${encodeURIComponent(rowId)}/note`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: withActorHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         partner: state.partner,
         date: state.date,
@@ -193,7 +834,7 @@
   async function resolveReviewRecord(rowId, resolvedStatus = "MATCHED") {
     const response = await fetch(`/api/v1/reconciliation/review-records/${encodeURIComponent(rowId)}/resolve`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: withActorHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         partner: state.partner,
         date: state.date,
@@ -206,8 +847,9 @@
     return response.json();
   }
 
+
   async function openPacketInStudio(packetId) {
-    const packet = state.reviewPackets.find(item => item._id === packetId);
+    const packet = getReviewPacketById(packetId);
     if (!packet) {
       state.studio.reviewItemId = packetId || null;
       location.hash = "mapping-studio";
@@ -247,140 +889,7 @@
     location.hash = "mapping-studio";
   }
 
-  function getPartnerOptions() {
-    const base = state.partnerOptions && state.partnerOptions.length
-      ? state.partnerOptions
-      : ["MOMO", "VNPAY", "ZALOPAY", "ACMEPAY"];
-    return Array.from(new Set([...(state.partner ? [state.partner] : []), ...base]));
-  }
 
-  function syncPartnerFilterOptions(container) {
-    const partners = getPartnerOptions();
-    const elements = (container || document).querySelectorAll("#partner-filter");
-    elements.forEach(el => {
-      const currentValue = state.partner && partners.includes(state.partner)
-        ? state.partner
-        : partners[0] || "";
-      el.innerHTML = partners.map(p =>
-        `<option value="${p}" ${p === currentValue ? "selected" : ""}>${p}</option>`
-      ).join("");
-      el.value = currentValue;
-    });
-  }
-
-  function fetchPartners(container) {
-    const requestToken = ++activePartnerFetchToken;
-    fetch("/api/v1/data/stats?date=" + state.date)
-      .then(r => r.json())
-      .then(data => {
-        if (requestToken !== activePartnerFetchToken) return;
-        const found = Object.keys(data.by_partner || {});
-        const defaultPartners = ["MOMO", "VNPAY", "ZALOPAY", "ACMEPAY"];
-        const partners = Array.from(new Set([...found, ...defaultPartners]));
-        state.partnerOptions = partners;
-        if (!partners.includes(state.partner) && partners.length) {
-          state.partner = partners[0];
-          render();
-          return;
-        }
-        syncPartnerFilterOptions(container);
-      })
-      .catch(() => {
-        if (requestToken !== activePartnerFetchToken) return;
-        state.partnerOptions = ["MOMO", "VNPAY", "ZALOPAY", "ACMEPAY"];
-        if (!state.partnerOptions.includes(state.partner)) {
-          state.partner = state.partnerOptions[0];
-        }
-        syncPartnerFilterOptions(container);
-      });
-  }
-
-  function parseIsoDate(value) {
-    const [year, month, day] = String(value || "").split("-").map(Number);
-    if (!year || !month || !day) return null;
-    const utcDate = new Date(Date.UTC(year, month - 1, day));
-    return Number.isNaN(utcDate.getTime()) ? null : utcDate;
-  }
-
-  function formatIsoDate(date) {
-    const year = date.getUTCFullYear();
-    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(date.getUTCDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  }
-
-  function formatDisplayDate(value) {
-    const parsed = parseIsoDate(value);
-    if (!parsed) return String(value || "-");
-    const day = String(parsed.getUTCDate()).padStart(2, "0");
-    const month = String(parsed.getUTCMonth() + 1).padStart(2, "0");
-    const year = parsed.getUTCFullYear();
-    return `${day}/${month}/${year}`;
-  }
-
-  function formatDisplayDateTime(value) {
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return value || "-";
-    const day = String(parsed.getDate()).padStart(2, "0");
-    const month = String(parsed.getMonth() + 1).padStart(2, "0");
-    const year = parsed.getFullYear();
-    const hours = String(parsed.getHours()).padStart(2, "0");
-    const minutes = String(parsed.getMinutes()).padStart(2, "0");
-    const seconds = String(parsed.getSeconds()).padStart(2, "0");
-    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
-  }
-
-  function shiftIsoDate(value, offsetDays) {
-    const base = parseIsoDate(value) || new Date();
-    const shifted = new Date(base.getTime());
-    shifted.setUTCDate(shifted.getUTCDate() + offsetDays);
-    return formatIsoDate(shifted);
-  }
-
-  function parseFlexibleDateInput(value, fallbackDate = state.date) {
-    const raw = String(value || "").trim();
-    if (!raw) return null;
-
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-      return parseIsoDate(raw) ? raw : null;
-    }
-
-    const fallback = parseIsoDate(fallbackDate) || new Date();
-    const fallbackYear = fallback.getUTCFullYear();
-    let year;
-    let month;
-    let day;
-
-    if (/^\d{4}$/.test(raw)) {
-      month = Number(raw.slice(0, 2));
-      day = Number(raw.slice(2, 4));
-      year = fallbackYear;
-    } else {
-      const normalized = raw.replace(/[.\s-]+/g, "/");
-      const parts = normalized.split("/").filter(Boolean);
-      if (parts.length === 2) {
-        [day, month] = parts.map(Number);
-        year = fallbackYear;
-      } else if (parts.length === 3) {
-        [day, month, year] = parts.map(Number);
-      } else {
-        return null;
-      }
-    }
-
-    if (!year || !month || !day) return null;
-    const parsed = new Date(Date.UTC(year, month - 1, day));
-    if (
-      Number.isNaN(parsed.getTime()) ||
-      parsed.getUTCFullYear() !== year ||
-      parsed.getUTCMonth() !== month - 1 ||
-      parsed.getUTCDate() !== day
-    ) {
-      return null;
-    }
-
-    return formatIsoDate(parsed);
-  }
 
   function renderNav() {
     const primary = routes.map(([key, label, icon]) => `
@@ -404,67 +913,19 @@
     });
   }
 
-  function bindFilters() {
-    document.querySelectorAll("#partner-filter").forEach(pf => {
-      pf.addEventListener("change", () => {
-        state.partner = pf.value;
-        render();
-      });
-    });
 
-    const applyMainDateInput = (input) => {
-      if (!input) return;
-      const parsed = parseFlexibleDateInput(input.value, state.date);
-      if (!parsed) {
-        showToast("Ngay khong hop le. Dung dd/mm/yyyy, dd/mm, 0707 hoac yyyy-mm-dd.");
-        input.value = formatDisplayDate(state.date);
-        return;
-      }
-      state.date = parsed;
-      render();
-    };
-
-    document.querySelectorAll("#date-filter").forEach(input => {
-      input.addEventListener("change", () => applyMainDateInput(input));
-      input.addEventListener("blur", () => applyMainDateInput(input));
-      input.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") applyMainDateInput(input);
-      });
-    });
-
-    document.querySelectorAll("#date-picker").forEach(input => {
-      input.addEventListener("change", () => {
-        if (!input.value) return;
-        state.date = input.value;
-        render();
-      });
-    });
-
-    document.querySelectorAll("[data-action='open-date-picker']").forEach(button => {
-      button.addEventListener("click", () => {
-        const picker = button.parentElement?.querySelector("#date-picker");
-        if (!picker) return;
-        if (typeof picker.showPicker === "function") {
-          picker.showPicker();
-          return;
-        }
-        picker.focus();
-        picker.click();
-      });
-    });
-
-  }
 
   function onRouteChange() {
+    if (pollers.automation) {
+      clearInterval(pollers.automation);
+      pollers.automation = null;
+    }
     const key = location.hash.replace("#", "") || "review-center";
     const aliases = {
-      overview: "review-center",
-      "command-center": "review-center",
-      intake: "review-center",
-      "data-intake": "review-center",
-      approvals: "review-center",
       "review-queue": "review-center",
-      "submit-sample": "mapping-studio"
+      "reconcilliation": "reconciliation",
+      "reconcillation": "reconciliation",
+      "reconcilation": "reconciliation"
     };
     const normalized = aliases[key] || key;
     state.route = (routes.some(([route]) => route === normalized) || utilityRoutes[normalized]) ? normalized : "review-center";
@@ -477,8 +938,308 @@
         icon.style.fontVariationSettings = active ? "'FILL' 1" : "'FILL' 0";
       }
     });
+
+    // Close mobile sidebar on navigate
+    document.querySelector(".sidebar")?.classList.remove("sidebar-open");
     
     render();
+  }
+
+  async function renderReviewCenterPage(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    const cachedReviewCenter = state.reviewCenterCache
+      && state.reviewCenterCache.partner === state.partner
+      && state.reviewCenterCache.date === state.date;
+
+    const applyReviewCenterData = (data, copilot = state.copilotContext) => {
+      state.copilotContext = copilot;
+      state.reviewPackets = data.packets || [];
+      const historyKey = `${state.partner}:${state.date}`;
+      if (!state.reviewHistoryCache || state.reviewHistoryCache.key !== historyKey) {
+        state.reviewHistoryCache = null;
+      }
+      const pendingPacketIds = (data.packets || [])
+        .filter(packet => String(packet.status || "").toUpperCase() === "PENDING")
+        .map(packet => packet._id);
+      const pendingMappingIds = (data.mappings || [])
+        .filter(mapping => String(mapping.status || "").toUpperCase() === "PENDING_APPROVAL")
+        .map(mapping => mapping._id);
+      const selectableIds = [...pendingPacketIds, ...pendingMappingIds];
+      const trackedPostApprovalRun = state.selectedReviewPacketId
+        ? state.postApprovalRuns?.[String(state.selectedReviewPacketId)] || null
+        : null;
+      const preserveTrackedGuidedReview = Boolean(
+        state.guidedReviewOpen &&
+        state.selectedReviewPacketId &&
+        trackedPostApprovalRun &&
+        !isTerminalPostApprovalRun(trackedPostApprovalRun)
+      );
+      if (!state.selectedReviewPacketId && selectableIds.length) {
+        state.selectedReviewPacketId = selectableIds[0];
+      }
+      if (
+        state.selectedReviewPacketId &&
+        !selectableIds.includes(state.selectedReviewPacketId) &&
+        !preserveTrackedGuidedReview
+      ) {
+        state.selectedReviewPacketId = selectableIds[0] || null;
+      }
+      view.innerHTML = renderApprovals(data);
+      if (typeof state.preservedScrollTop === "number") {
+        const viewport = document.scrollingElement || document.documentElement;
+        viewport.scrollTop = state.preservedScrollTop;
+        state.preservedScrollTop = null;
+      }
+    };
+
+    if (!cachedReviewCenter) {
+      view.innerHTML = `
+        ${renderSkeletonMetrics(3)}
+        ${loadingPanel("Loading review center data...")}
+      `;
+      const [packets, mappings, intake, copilot] = await Promise.all([
+        fetchJson(`/api/v1/review-packets?partner=${encodeURIComponent(state.partner)}`),
+        fetchJson(`/api/v1/mappings?partner=${encodeURIComponent(state.partner)}`),
+        fetchJson(`/api/v1/operations/intake?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`),
+        fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&screen=review`).catch(() => null)
+      ]);
+      if (
+        renderToken !== activeRenderToken ||
+        state.route !== routeAtStart ||
+        state.partner !== partnerAtStart ||
+        state.date !== dateAtStart
+      ) return;
+      const data = {
+        packets: packets.packets || [],
+        mappings: mappings.mappings || [],
+        intake: intake
+      };
+      state.reviewCenterCache = {
+        partner: state.partner,
+        date: state.date,
+        data
+      };
+      applyReviewCenterData(data, copilot);
+      return;
+    }
+
+    applyReviewCenterData(state.reviewCenterCache.data, state.copilotContext);
+  }
+
+  async function renderReconciliationPage(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    const isAlreadyOnRecon = view.querySelector(".summary-strip") !== null;
+    const contextChanged = state.lastPartner !== state.partner || state.lastDate !== state.date || !state.activeReconData;
+    if (!isAlreadyOnRecon || contextChanged) {
+      view.innerHTML = `
+        ${renderSkeletonMetrics(4)}
+        ${loadingPanel("Loading reconciliation results...")}
+      `;
+    } else {
+      state.preservedScrollTop = (document.scrollingElement || document.documentElement).scrollTop;
+    }
+
+    const pageState = state.reconciliationPagination || { limit: 25, offset: 0 };
+    let url = `/api/v1/reconciliation/results?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&limit=${encodeURIComponent(pageState.limit || 25)}&offset=${encodeURIComponent(pageState.offset || 0)}`;
+    if (state.reconStatus) {
+      url += `&status=${encodeURIComponent(state.reconStatus)}`;
+    }
+    const ef = state.explorerFilters || {};
+    if (ef.amountMin) url += `&amountMin=${encodeURIComponent(ef.amountMin)}`;
+    if (ef.amountMax) url += `&amountMax=${encodeURIComponent(ef.amountMax)}`;
+    if (ef.dateFrom) url += `&dateFrom=${encodeURIComponent(ef.dateFrom)}`;
+    if (ef.dateTo) url += `&dateTo=${encodeURIComponent(ef.dateTo)}`;
+    const data = await fetchJson(url);
+    await loadReconciliationReviewRecords();
+    if (data && data.results) {
+      data.results.forEach(item => {
+        const key = item.partnerTxnId || item.internalTxnId || item.id;
+        if (state.resolvedReconStatuses && state.resolvedReconStatuses[key]) {
+          item.reconciliationStatus = state.resolvedReconStatuses[key];
+        }
+      });
+    }
+    const [statsResponse, reconRunResponse] = await Promise.all([
+      fetchJson(`/api/v1/reconciliation/stats?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
+      fetchJson(`/api/v1/reconciliation/run-status?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null)
+    ]);
+    if (
+      renderToken !== activeRenderToken ||
+      state.route !== routeAtStart ||
+      state.partner !== partnerAtStart ||
+      state.date !== dateAtStart
+    ) return;
+    state.insightsSummary = statsResponse;
+    state.reconciliationInsightsLoading = true;
+    state.reconciliationInsightsError = "";
+    state.reconciliationInsightTabData = {
+      anomalies: null,
+      patterns: null,
+      recommendations: null
+    };
+    state.reconciliationInsightTabLoading = "all";
+    state.reconciliationInsightTabErrors = {};
+    state.selectedReconRows = {};
+    state.reconciliationVirtual.startIndex = 0;
+    state.reconciliationDeferredReady = true;
+    state.copilotExplainItem = null;
+    state.reconciliationRun = reconRunResponse?.run || null;
+    state.activeReconData = data;
+    state.lastPartner = state.partner;
+    state.lastDate = state.date;
+    view.innerHTML = renderReconciliation(state, data);
+    if (state.reconciliationRun && !isTerminalReconciliationRun(state.reconciliationRun)) {
+      pollReconciliationRun();
+    }
+    if (typeof state.preservedScrollTop === "number") {
+      const viewport = document.scrollingElement || document.documentElement;
+      viewport.scrollTop = state.preservedScrollTop;
+      state.preservedScrollTop = null;
+    }
+    loadReconciliationCopilot(renderToken, routeAtStart, partnerAtStart, dateAtStart);
+    loadReconciliationInsights(renderToken, routeAtStart, partnerAtStart, dateAtStart);
+  }
+
+  async function loadReconciliationCopilot(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    try {
+      const copilot = await fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(partnerAtStart)}&date=${encodeURIComponent(dateAtStart)}&screen=reconciliation`).catch(() => null);
+      if (
+        renderToken !== activeRenderToken ||
+        state.route !== routeAtStart ||
+        state.partner !== partnerAtStart ||
+        state.date !== dateAtStart
+      ) return;
+      state.copilotContext = copilot;
+    } catch (err) {
+      return;
+    }
+  }
+
+  async function loadReconciliationInsights(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    const tabKeys = ["anomalies", "patterns", "recommendations"];
+    state.reconciliationInsightsLoading = true;
+    await Promise.all(tabKeys.map(async (tabKey) => {
+      state.reconciliationInsightTabErrors = {
+        ...(state.reconciliationInsightTabErrors || {}),
+        [tabKey]: ""
+      };
+      try {
+        const tabData = await fetchJson(`/api/v1/reconciliation/insights?type=${encodeURIComponent(tabKey)}&partner=${encodeURIComponent(partnerAtStart)}&date=${encodeURIComponent(dateAtStart)}`);
+        if (
+          renderToken !== activeRenderToken ||
+          state.route !== routeAtStart ||
+          state.partner !== partnerAtStart ||
+          state.date !== dateAtStart
+        ) return;
+        state.reconciliationInsightTabData = {
+          ...(state.reconciliationInsightTabData || {}),
+          [tabKey]: Array.isArray(tabData) ? tabData : []
+        };
+        state.reconciliationInsightsError = "";
+      } catch (err) {
+        if (
+          renderToken !== activeRenderToken ||
+          state.route !== routeAtStart ||
+          state.partner !== partnerAtStart ||
+          state.date !== dateAtStart
+        ) return;
+        const message = err.message || "AI insights are unavailable right now.";
+        state.reconciliationInsightsError = message;
+        state.reconciliationInsightTabErrors = {
+          ...(state.reconciliationInsightTabErrors || {}),
+          [tabKey]: message
+        };
+      } finally {
+        if (
+          renderToken !== activeRenderToken ||
+          state.route !== routeAtStart ||
+          state.partner !== partnerAtStart ||
+          state.date !== dateAtStart
+        ) return;
+        rerenderReconciliationLocally();
+      }
+    }));
+    if (
+      renderToken !== activeRenderToken ||
+      state.route !== routeAtStart ||
+      state.partner !== partnerAtStart ||
+      state.date !== dateAtStart
+    ) return;
+    state.reconciliationInsightTabLoading = "";
+    state.reconciliationInsightsLoading = false;
+    rerenderReconciliationLocally();
+  }
+
+  function rerenderReconciliationLocally() {
+    if (state.route !== "reconciliation") {
+      render();
+      return;
+    }
+    const viewport = document.scrollingElement || document.documentElement;
+    const currentScrollTop = viewport ? viewport.scrollTop : 0;
+    view.innerHTML = renderReconciliation(state, state.activeReconData || { results: [] });
+    bindFilters();
+    bindViewActions();
+    if (viewport) {
+      viewport.scrollTop = currentScrollTop;
+    }
+  }
+
+  function renderMappingStudioPage() {
+    view.innerHTML = renderSubmitSamplePage();
+    bindViewActions();
+  }
+
+  async function renderAutomationPage(renderToken, routeAtStart) {
+    view.innerHTML = loadingPanel("Loading automation visibility...");
+    const [data, copilot] = await Promise.all([
+      fetchJson(`/api/v1/automation/jobs`),
+      fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&screen=automation`).catch(() => null)
+    ]);
+    if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
+    state.copilotContext = copilot;
+    view.innerHTML = renderAutomation({
+      state,
+      data,
+      badge,
+      escapeHtml,
+      formatDisplayDateTime,
+      formatNumber,
+      metrics,
+      severityBadge,
+      table,
+    });
+    pollAutomationOverview();
+    bindViewActions();
+  }
+
+  async function renderAuditPage(renderToken, routeAtStart, partnerAtStart, dateAtStart) {
+    view.innerHTML = loadingPanel("Loading audit log...");
+    const qs = new URLSearchParams({
+      limit: "200",
+      partner: partnerAtStart,
+      date: dateAtStart
+    });
+    if (state.audit.entityType) qs.set("entityType", state.audit.entityType);
+    if (state.audit.action) qs.set("action", state.audit.action);
+    const data = await fetchJson(`/api/v1/audit/events?${qs.toString()}`);
+    if (
+      renderToken !== activeRenderToken ||
+      state.route !== routeAtStart ||
+      state.partner !== partnerAtStart ||
+      state.date !== dateAtStart
+    ) return;
+    state.audit.events = Array.isArray(data.events) ? data.events : [];
+    state.audit.lastLoadedAt = new Date().toISOString();
+    view.innerHTML = renderAuditLog({
+      state,
+      badge,
+      escapeHtml,
+      formatDisplayDateTime,
+      formatNumber,
+      renderPageFilters,
+      table,
+    });
+    bindFilters();
+    bindViewActions();
   }
 
   async function render() {
@@ -494,11 +1255,11 @@
     const utility = utilityRoutes[state.route];
     title.textContent = route ? route[1] : utility ? utility.title : "Command Center";
     const routeSubtitle = {
-      "data-intake": `Track arrivals, processing state, and runtime readiness for ${state.partner}`,
       "review-center": `Review pending runtime changes for ${state.partner}`,
       reconciliation: `Deterministic reconciliation outcomes for ${state.partner} on ${formatDisplayDate(state.date)}`,
       automation: `Scheduler, job visibility, and automation context`,
-      "mapping-studio": `Create a draft mapping, validate it, then send it to Review Center`
+      "mapping-studio": `Create a draft mapping, validate it, then send it to Review Center`,
+      "audit-log": `Append-only activity trail for ${state.partner} on ${formatDisplayDate(state.date)}`
     };
     subtitle.textContent = routeSubtitle[state.route] || `Operations Console - ${state.partner}`;
 
@@ -507,79 +1268,9 @@
     void view.offsetWidth;
     view.classList.add("fade-in");
 
-    if (state.route === "command-center") {
-      view.innerHTML = loadingPanel("Loading command center...");
-      try {
-        const [summary, operational, partner, inconsistency] = await Promise.all([
-          fetchJson(`/api/v1/insights/summary?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`),
-          fetchJson(`/api/v1/insights/discrepancies?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&focus=operational`),
-          fetchJson(`/api/v1/insights/discrepancies?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&focus=partner`),
-          fetchJson(`/api/v1/insights/discrepancies?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&focus=inconsistency`),
-        ]);
-        if (
-          renderToken !== activeRenderToken ||
-          state.route !== routeAtStart ||
-          state.partner !== partnerAtStart ||
-          state.date !== dateAtStart
-        ) return;
-        state.insightsData = { summary, operational, partner, inconsistency };
-        view.innerHTML = renderCommandCenter();
-      } catch (err) {
-        if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
-        view.innerHTML = renderError(err);
-      }
-      fetchPartners();
-      bindFilters();
-      bindViewActions();
-      return;
-    }
-
     if (state.route === "review-center") {
-      view.innerHTML = loadingPanel("Loading review center...");
       try {
-        const [packets, mappings, intake, copilot] = await Promise.all([
-          fetchJson(`/api/v1/review-packets?partner=${encodeURIComponent(state.partner)}`),
-          fetchJson(`/api/v1/mappings?partner=${encodeURIComponent(state.partner)}`),
-          fetchJson(`/api/v1/operations/intake?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`),
-          fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&screen=review`).catch(() => null)
-        ]);
-        if (
-          renderToken !== activeRenderToken ||
-          state.route !== routeAtStart ||
-          state.partner !== partnerAtStart ||
-          state.date !== dateAtStart
-        ) return;
-        state.copilotContext = copilot;
-        const data = {
-          packets: packets.packets || [],
-          mappings: mappings.mappings || [],
-          intake: intake
-        };
-        state.reviewPackets = data.packets;
-        state.reviewCenterCache = {
-          partner: state.partner,
-          date: state.date,
-          data: data
-        };
-        const pendingPacketIds = (data.packets || [])
-          .filter(packet => String(packet.status || "").toUpperCase() === "PENDING")
-          .map(packet => packet._id);
-        const pendingMappingIds = (data.mappings || [])
-          .filter(mapping => String(mapping.status || "").toUpperCase() === "PENDING_APPROVAL")
-          .map(mapping => mapping._id);
-        const selectableIds = [...pendingPacketIds, ...pendingMappingIds];
-        if (!state.selectedReviewPacketId && selectableIds.length) {
-          state.selectedReviewPacketId = selectableIds[0];
-        }
-        if (state.selectedReviewPacketId && !selectableIds.includes(state.selectedReviewPacketId)) {
-          state.selectedReviewPacketId = selectableIds[0] || null;
-        }
-        view.innerHTML = renderApprovals(data);
-        if (typeof state.preservedScrollTop === "number") {
-          const viewport = document.scrollingElement || document.documentElement;
-          viewport.scrollTop = state.preservedScrollTop;
-          state.preservedScrollTop = null;
-        }
+        await renderReviewCenterPage(renderToken, routeAtStart, partnerAtStart, dateAtStart);
       } catch (err) {
         if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
         view.innerHTML = renderError(err);
@@ -591,59 +1282,8 @@
     }
 
     if (state.route === "reconciliation") {
-      const isAlreadyOnRecon = view.querySelector(".summary-strip") !== null;
-      if (!isAlreadyOnRecon) {
-        view.innerHTML = loadingPanel("Loading reconciliation results...");
-      } else {
-        state.preservedScrollTop = (document.scrollingElement || document.documentElement).scrollTop;
-      }
       try {
-        let url = `/api/v1/reconciliation/results?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&limit=100`;
-        if (state.reconStatus) {
-          url += `&status=${encodeURIComponent(state.reconStatus)}`;
-        }
-        const ef = state.explorerFilters || {};
-        if (ef.amountMin) url += `&amountMin=${encodeURIComponent(ef.amountMin)}`;
-        if (ef.amountMax) url += `&amountMax=${encodeURIComponent(ef.amountMax)}`;
-        if (ef.dateFrom) url += `&dateFrom=${encodeURIComponent(ef.dateFrom)}`;
-        if (ef.dateTo) url += `&dateTo=${encodeURIComponent(ef.dateTo)}`;
-        const data = await fetchJson(url);
-        await loadReconciliationReviewRecords();
-        if (data && data.results) {
-          data.results.forEach(item => {
-            const key = item.partnerTxnId || item.internalTxnId || item.id;
-            if (state.resolvedReconStatuses && state.resolvedReconStatuses[key]) {
-              item.reconciliationStatus = state.resolvedReconStatuses[key];
-            }
-          });
-        }
-        const [insightsSummary, anomalies, patterns, recommendations, copilot] = await Promise.all([
-          fetchJson(`/api/v1/reconciliation/insights?type=summary&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-          fetchJson(`/api/v1/reconciliation/insights?type=anomalies&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-          fetchJson(`/api/v1/reconciliation/insights?type=patterns&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-          fetchJson(`/api/v1/reconciliation/insights?type=recommendations&partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}`).catch(() => null),
-          fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&date=${encodeURIComponent(state.date)}&screen=reconciliation`).catch(() => null)
-        ]);
-        if (
-          renderToken !== activeRenderToken ||
-          state.route !== routeAtStart ||
-          state.partner !== partnerAtStart ||
-          state.date !== dateAtStart
-        ) return;
-        state.insightsSummary = insightsSummary;
-        state.insightsData = { anomalies, patterns, recommendations };
-        state.copilotContext = copilot;
-        if (!state.activeReconData || state.lastPartner !== state.partner || state.lastDate !== state.date) {
-          state.activeReconData = data;
-          state.lastPartner = state.partner;
-          state.lastDate = state.date;
-        }
-        view.innerHTML = renderReconciliation(state.activeReconData);
-        if (typeof state.preservedScrollTop === "number") {
-          const viewport = document.scrollingElement || document.documentElement;
-          viewport.scrollTop = state.preservedScrollTop;
-          state.preservedScrollTop = null;
-        }
+        await renderReconciliationPage(renderToken, routeAtStart, partnerAtStart, dateAtStart);
       } catch (err) {
         if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
         view.innerHTML = renderError(err);
@@ -655,2651 +1295,148 @@
     }
 
     if (state.route === "mapping-studio") {
-      view.innerHTML = renderSubmitSamplePage();
-      bindViewActions();
+      renderMappingStudioPage();
       return;
     }
 
     if (state.route === "automation") {
-      view.innerHTML = loadingPanel("Loading automation visibility...");
       try {
-        const [data, copilot] = await Promise.all([
-          fetchJson(`/api/v1/automation/jobs`),
-          fetchJson(`/api/v1/copilot/context?partner=${encodeURIComponent(state.partner)}&screen=automation`).catch(() => null)
-        ]);
-        if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
-        state.copilotContext = copilot;
-        view.innerHTML = renderAutomation(data);
+        await renderAutomationPage(renderToken, routeAtStart);
       } catch (err) {
         if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
         view.innerHTML = renderError(err);
       }
-      bindViewActions();
       return;
     }
 
-  }
-
-  function renderCopilotBrief(copilot = state.copilotContext, pendingItems = []) {
-    if (!copilot) return '';
-
-    const rawStatus = String(copilot.status || "healthy");
-    const riskLevel = copilot.riskLevel || "low";
-    const headline = copilot.headline || "";
-    const summary = copilot.summary || "";
-    const evidence = copilot.evidence || {};
-    const safeChecks = Array.isArray(evidence.safeChecks) ? evidence.safeChecks : [];
-    const latestFile = evidence.latestFile || null;
-    const runtime = evidence.runtime || {};
-    const proposal = evidence.proposal || {};
-    const primaryAction = copilot.primaryAction || null;
-    const secondaryActions = Array.isArray(copilot.secondaryActions) ? copilot.secondaryActions : [];
-    const decisionActions = Array.isArray(copilot.decisionActions) ? copilot.decisionActions : [];
-
-    const runtimeVersion = runtime.version || null;
-    const runtimeActive = runtime.state === "approved";
-    const latestFileName = latestFile?.name || null;
-    const latestFileFailed = latestFile && String(latestFile.status || "").toLowerCase() === "failed";
-    const hasProposal = proposal.state && proposal.state !== "none";
-    const hasDecision = decisionActions.length > 0;
-    const proposalReason = proposal.reason || "";
-
-    const verdictMap = {
-      healthy: "No approval needed",
-      monitor: "Monitor only",
-      needs_review: "Review required before approving",
-      blocked: "Blocked until mapping is fixed"
-    };
-    const verdict = verdictMap[rawStatus] || verdictMap.healthy;
-
-    const statusColor = rawStatus === "healthy" ? "var(--success)"
-      : rawStatus === "monitor" ? "var(--warning)"
-      : "var(--danger)";
-
-    const firstItem = pendingItems.length ? pendingItems[0] : null;
-
-    // Step 1: Brief — status + risk + verdict + 3 compact facts
-    const step1 = `
-      <div class="brief-hero">
-        <div class="brief-hero-badges">
-          ${badge(rawStatus.toUpperCase())}
-          ${severityBadge(riskLevel)}
-        </div>
-        <span class="brief-hero-verdict" style="color:${statusColor}">${escapeHtml(verdict)}</span>
-        <p class="brief-hero-line">${escapeHtml(headline || summary || "No issues detected.")}</p>
-      </div>
-      <div class="brief-facts">
-        <div class="brief-fact">
-          <span class="brief-fact-label">Runtime</span>
-          <span class="brief-fact-value">${escapeHtml(runtimeVersion || 'N/A')}${runtimeActive ? ' <span class="badge ok">active</span>' : ''}</span>
-        </div>
-        <div class="brief-fact${latestFileFailed ? ' fact-failed' : ''}">
-          <span class="brief-fact-label">Latest file</span>
-          <span class="brief-fact-value">${latestFileFailed ? 'Failed' : escapeHtml(latestFileName || 'None')}</span>
-        </div>
-        <div class="brief-fact${pendingItems.length ? ' fact-warn' : ''}">
-          <span class="brief-fact-label">Review</span>
-          <span class="brief-fact-value">${pendingItems.length ? `${pendingItems.length} item${pendingItems.length > 1 ? 's' : ''} waiting` : 'None'}</span>
-        </div>
-      </div>`;
-
-    // Step 2: Review — review item summary or monitoring summary
-    const step2 = firstItem ? `
-      <div class="brief-review-item">
-        <div class="brief-review-header">
-          <span class="brief-review-kind badge ${firstItem.kind === 'REVIEW_PACKET' ? 'warning' : 'neutral'}">${escapeHtml(firstItem.kind === 'REVIEW_PACKET' ? 'Review' : 'Draft Mapping')}</span>
-          <span class="badge ${firstItem.status === 'PENDING' ? 'warning' : 'neutral'}">${escapeHtml(firstItem.status || 'PENDING')}</span>
-        </div>
-        <h3 class="brief-review-title">${escapeHtml(firstItem.title || 'Review item')}</h3>
-        ${firstItem.reason ? `<p class="brief-review-reason">${escapeHtml(firstItem.reason)}</p>` : ''}
-        ${firstItem.fileName ? `<div class="brief-review-file"><span class="material-symbols-outlined">description</span> ${escapeHtml(firstItem.fileName)}</div>` : ''}
-      </div>
-      <div class="brief-review-impact">
-        ${safeChecks.length ? safeChecks.map(check => {
-          const label = check.label === "Latest file can continue" ? "Current runtime can continue"
-            : check.label === "Draft ready" ? "Draft mapping available"
-            : check.label;
-          return `<div class="brief-check ${escapeHtml(check.status || 'warn')}">
-            <span class="material-symbols-outlined">${check.status === "pass" ? "check_circle" : check.status === "fail" ? "cancel" : "warning"}</span>
-            <span>${escapeHtml(label)}</span>
-          </div>`;
-        }).join('') : ''}
-        ${summary ? `<p class="brief-review-impact-text">${escapeHtml(summary)}</p>` : ''}
-      </div>
-      <button class="button secondary-action brief-review-cta" data-action="go-mapping-studio"><span class="material-symbols-outlined">schema</span> Open Mapping Studio</button>` : `
-      <div class="brief-monitoring">
-        <div class="brief-monitoring-icon"><span class="material-symbols-outlined">visibility</span></div>
-        <p class="brief-monitoring-text">No review item is waiting.</p>
-        ${runtimeActive ? '<p class="brief-monitoring-text">Current runtime can continue.</p>' : ''}
-        ${latestFileFailed ? '<p class="brief-monitoring-text">Latest file needs investigation.</p>' : '<p class="brief-monitoring-text">All systems operational.</p>'}
-      </div>`;
-
-    // Step 3: Decision — recommendation + primary CTA + secondary + decision actions
-    const actionLabel = (key) => ({ review_proposal: "Open Review Center", approve_activate_next_runtime: "Approve & activate", approve_keep_current: "Keep current runtime", reject_proposal: "Reject change", open_mapping_details: "View mapping", refresh_context: "Refresh" })[key] || key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-    const actionIcon = (key) => ({ review_proposal: "fact_check", approve_activate_next_runtime: "check_circle", approve_keep_current: "pause_circle", reject_proposal: "cancel", open_mapping_details: "schema", refresh_context: "refresh" })[key] || "play_arrow";
-
-    const step3 = `
-      <div class="brief-decision-recommendation">
-        <span class="brief-rec-label">Recommendation</span>
-        <p class="brief-rec-text">${escapeHtml(summary || verdict)}</p>
-      </div>
-      ${primaryAction ? `
-      <div class="brief-decision-primary">
-        <button class="button primary brief-decision-cta" data-action="copilot-action" data-copilot-action="${escapeHtml(primaryAction.key)}">
-          <span class="material-symbols-outlined">${actionIcon(primaryAction.key)}</span>
-          ${escapeHtml(actionLabel(primaryAction.key))}
-        </button>
-      </div>` : ''}
-      <div class="brief-decision-links">
-        <button class="button-link" data-action="go-review-center">Open full Review Center</button>
-      </div>
-      ${hasDecision ? `
-      <div class="brief-decision-actions">
-        <p class="brief-decision-hint">Decide on the proposed change:</p>
-        <div class="brief-decision-buttons">
-          ${decisionActions.map(a => `
-            <button class="button brief-decision-btn ${a.key === 'reject_proposal' ? 'danger' : 'secondary-action'}" data-action="copilot-action" data-copilot-action="${escapeHtml(a.key)}">
-              <span class="material-symbols-outlined">${actionIcon(a.key)}</span>
-              ${escapeHtml(actionLabel(a.key))}
-            </button>`).join('')}
-        </div>
-      </div>` : ''}`;
-
-    const panes = [step1, step2, step3];
-
-    return `
-      <div class="brief-overlay" data-action="close-brief">
-        <div class="brief-modal">
-          <div class="brief-modal-header">
-            <div>
-              <span class="brief-eyebrow">COPILOT BRIEF</span>
-              <div class="brief-header-badges">
-                ${badge(rawStatus.toUpperCase())}
-                ${severityBadge(riskLevel)}
-              </div>
-            </div>
-            <button class="brief-close-btn" data-action="close-brief">&times;</button>
-          </div>
-          <div class="brief-steps-row">
-            ${BRIEF_STEPS.map((s, i) => `
-              <div class="brief-step ${i === briefStep ? 'active' : i < briefStep ? 'done' : ''}" data-index="${i}">
-                <span class="brief-step-dot">${i < briefStep ? '✓' : i + 1}</span>
-                <span class="brief-step-name">${s}</span>
-              </div>`).join('')}
-          </div>
-          <div class="brief-pane-container">
-            ${panes.map((p, i) => `<div class="brief-pane ${i === briefStep ? 'active' : ''}" data-pane="${i}">${p}</div>`).join('')}
-          </div>
-          <div class="brief-nav">
-            <button class="button" data-action="brief-prev" ${briefStep === 0 ? 'disabled' : ''}>Back</button>
-            <div class="brief-nav-right">
-              <button class="button secondary-action" data-action="close-brief">Close</button>
-              ${briefStep < BRIEF_STEPS.length - 1
-                ? '<button class="button primary" data-action="brief-next">Next</button>'
-                : `<button class="button primary" data-action="close-brief">Done</button>`}
-            </div>
-          </div>
-      </div>`;
-  }
-
-  function renderApprovals(data) {
-    function middleTruncate(str, maxLen = 30) {
-      if (!str) return "";
-      if (str.length <= maxLen) return str;
-      const half = Math.floor((maxLen - 3) / 2);
-      return str.substring(0, half) + "..." + str.substring(str.length - half);
-    }
-
-    if (!state.reviewTab) {
-      state.reviewTab = "pending";
-    }
-
-    const packets = (data.packets || []).filter(packet => !state.partner || packet.partner === state.partner);
-    const mappings = (data.mappings || []).filter(item => item.partner === state.partner);
-    const pendingPackets = packets.filter(item => String(item.status || "").toUpperCase() === "PENDING");
-
-    // Intake info
-    const intake = data.intake || {};
-    const partners = intake.partners || [];
-    const activePartnerInfo = partners.find(p => p.partner === state.partner) || {};
-
-    // Synthesize pending mapping configurations as virtual packets
-    const pendingMappings = mappings.filter(item => item.status === "PENDING_APPROVAL" && !pendingPackets.some(p => p.draftMappingId === item._id));
-    const virtualPackets = pendingMappings.map(m => ({
-      _id: m._id,
-      partner: m.partner,
-      fileName: m.sheetName || "Manual Configuration",
-      fileTypeDetected: m.fileType || "SETTLEMENT",
-      status: "PENDING",
-      draftMappingId: m._id,
-      recommendedAction: { actionType: "APPROVE_REQUIRED_BEFORE_RUNTIME", reason: m.configHealth?.reasoning || "Pending mapping review." },
-      parseStrategy: { sheetName: m.sheetName, startRow: m.startRow, fieldMappingCount: (m.fieldMappings || []).length },
-      validationGates: m.validationGates || [],
-      samplePreview: [],
-      riskSummary: { severity: "medium" },
-      createdAt: m.createdAt,
-      isVirtual: true
-    }));
-
-    const allPending = [...pendingPackets, ...virtualPackets].map(packet => {
-      const localDraftMappingId = state.localDraftMappingIds ? state.localDraftMappingIds[packet._id] : null;
-      if (state.localValidationGates && state.localValidationGates[packet._id]) {
-        return {
-          ...packet,
-          validationGates: state.localValidationGates[packet._id],
-          draftMappingId: localDraftMappingId || packet.draftMappingId || null
-        };
+    if (state.route === "audit-log") {
+      try {
+        await renderAuditPage(renderToken, routeAtStart, partnerAtStart, dateAtStart);
+      } catch (err) {
+        if (renderToken !== activeRenderToken || state.route !== routeAtStart) return;
+        view.innerHTML = renderError(err);
       }
-      if (localDraftMappingId) {
-        return {
-          ...packet,
-          draftMappingId: localDraftMappingId
-        };
-      }
-      return packet;
-    });
-    const selectedPacket = allPending.find(packet => packet._id === state.selectedReviewPacketId) || allPending[0] || null;
-
-    // Header info computation
-    const pendingCount = allPending.length;
-    const latestFile = activePartnerInfo.latestFileSummary?.fileName || activePartnerInfo.latestFileSummary?.file_name || "-";
-    const highestRisk = selectedPacket ? (selectedPacket.riskSummary?.severity || "medium") : "none";
-    const riskLabel = highestRisk === "none" ? "No risk" : `${highestRisk.charAt(0).toUpperCase() + highestRisk.slice(1)} risk`;
-
-    // 1. Compact Page Header
-    const headerHtml = `
-      <div class="compact-page-header">
-        <div class="compact-header-info">
-          <h2>Review Center</h2>
-          <div class="compact-header-meta">
-            <strong>${escapeHtml(state.partner)}</strong> · 
-            <span>${pendingCount} pending review${pendingCount !== 1 ? 's' : ''}</span> · 
-            <span class="badge ${highestRisk === 'critical' || highestRisk === 'high' ? 'failed' : 'warning'}" style="padding: 2px 6px; font-size: 11px;">${riskLabel.toUpperCase()}</span> · 
-            <span>Latest file: <span title="${escapeHtml(latestFile)}">${escapeHtml(middleTruncate(latestFile, 30))}</span></span>
-          </div>
-        </div>
-      </div>
-    `;
-
-    // Tabs navigation HTML
-    const tabsNavHtml = `
-      <div class="insights-tabs" style="margin-bottom: 20px;">
-        <button class="insight-tab ${state.reviewTab === 'pending' ? 'active' : ''}" data-action="set-review-tab" data-tab="pending">Pending Reviews</button>
-        <button class="insight-tab ${state.reviewTab === 'history' ? 'active' : ''}" data-action="set-review-tab" data-tab="history">Decision History</button>
-        <button class="insight-tab ${state.reviewTab === 'configs' ? 'active' : ''}" data-action="set-review-tab" data-tab="configs">Runtime Configs</button>
-      </div>
-    `;
-
-    // Build tabs content
-    let tabContentHtml = "";
-    if (state.reviewTab === "pending") {
-      // Left Column: Pending reviews cards
-      const needsReview = allPending.length ? allPending.map(packet => {
-        const risk = packet.riskSummary?.severity || "medium";
-        const title = packet.isVirtual ? "Draft mapping update" : "Format verification required";
-        const shortReason = packet.recommendedAction?.reason || "Awaiting reviewer decision.";
-        const dateStr = formatDisplayDateTime(packet.createdAt);
-        const activeClass = selectedPacket && selectedPacket._id === packet._id ? "active" : "";
-
-        return `
-          <article class="review-card ${activeClass}" data-action="select-review-packet" data-packet-id="${escapeHtml(packet._id)}">
-            <div class="review-card-top">
-              <h4 class="review-card-title">${escapeHtml(title)}</h4>
-              <span class="badge ${risk === 'critical' || risk === 'high' ? 'failed' : 'warning'}">${escapeHtml(risk.toUpperCase())} RISK</span>
-            </div>
-            <div class="review-card-meta">
-              <strong>${escapeHtml(packet.partner)}</strong> · <span class="review-status-label">Pending</span> · <span class="review-time">${escapeHtml(dateStr)}</span>
-            </div>
-            <p class="review-card-reason">${escapeHtml(shortReason)}</p>
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px; font-family: monospace;">
-              File: ${escapeHtml(middleTruncate(packet.fileName || '-', 35))}
-            </div>
-          </article>
-        `;
-      }).join("") : `
-        <div class="empty-state">
-          <span class="material-symbols-outlined">task_alt</span>
-          <h3>No reviews pending</h3>
-          <p class="muted">Review queue is clear for ${escapeHtml(state.partner)}.</p>
-        </div>
-      `;
-
-      // Right Column: Agent Brief Summary card
-      let briefSummaryHtml = "";
-      if (selectedPacket) {
-        const gateSummary = (selectedPacket.validationGates || []).reduce((acc, gate) => {
-          const status = String(gate.status || "").toLowerCase();
-          acc[status] = (acc[status] || 0) + 1;
-          return acc;
-        }, {});
-        const hasFailedGates = (gateSummary.fail || 0) > 0;
-        const validationStateText = hasFailedGates ? "failed" : "passed";
-
-        let copilotVerdict = "";
-        let copilotSummaryText = "";
-        if (selectedPacket.isVirtual) {
-          copilotVerdict = "Mapping needs adjustment";
-          copilotSummaryText = "Copilot detected a draft mapping created in Mapping Studio that has not been validated against incoming settlement records.";
-        } else {
-          copilotVerdict = "Format verification required";
-          copilotSummaryText = "Copilot found a possible column shift in transaction status values for the latest incoming file.";
-        }
-
-        briefSummaryHtml = `
-          <aside class="review-drawer" style="padding: 20px;">
-            <h4 style="margin: 0 0 10px 0; font-size: 11px; text-transform: uppercase; color: var(--brand-accent-blue);">Agent Brief Summary</h4>
-            <div class="brief-section" style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;">
-              <span class="badge ${selectedPacket.riskSummary?.severity === 'critical' || selectedPacket.riskSummary?.severity === 'high' ? 'failed' : 'warning'}">${selectedPacket.riskSummary?.severity?.toUpperCase()} RISK</span>
-              <h3 class="brief-title" style="font-size: 16px; margin: 8px 0 6px 0;">${escapeHtml(copilotVerdict)}</h3>
-              <p class="brief-subtitle" style="font-size: 13px; margin-bottom: 16px;">${escapeHtml(copilotSummaryText)}</p>
-            </div>
-            
-            <div class="brief-section" style="padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06);">
-              <h4 style="font-size: 10px; margin-bottom: 8px;">Readiness</h4>
-              <ul class="evidence-list" style="padding-left: 16px; font-size: 12.5px;">
-                <li><strong>Runtime:</strong> ${selectedPacket.activeRuntimeConfigId ? 'Approved configuration is available' : 'No approved runtime is available'}</li>
-                <li><strong>Draft mapping:</strong> ${selectedPacket.draftMappingId ? 'Draft mapping is ready' : 'Draft mapping is not ready'}</li>
-                <li><strong>Validation:</strong> <span style="color: ${hasFailedGates ? 'var(--danger)' : '#22c55e'}; font-weight: 600;">${validationStateText}</span></li>
-              </ul>
-            </div>
-
-            <div style="margin-top: 16px;">
-              <button class="button primary" data-action="open-guided-review" style="width: 100%; justify-content: center;">
-                <span class="material-symbols-outlined" style="font-size:18px; margin-right:4px;">quickreply</span> Open Guided Review
-              </button>
-            </div>
-          </aside>
-        `;
-      } else {
-        briefSummaryHtml = `
-          <aside class="review-drawer empty">
-            <div class="empty-state">
-              <span class="material-symbols-outlined">smart_toy</span>
-              <h3>No item selected</h3>
-              <p class="muted">Select a pending item to view its Agent Brief.</p>
-            </div>
-          </aside>
-        `;
-      }
-
-      tabContentHtml = `
-        <div class="approval-desk-layout">
-          <div class="review-card-grid">
-            ${needsReview}
-          </div>
-          ${briefSummaryHtml}
-        </div>
-      `;
-    } else if (state.reviewTab === "history") {
-      const recentDecisions = packets
-        .filter(item => ["APPROVED", "REJECTED", "SUPERSEDED"].includes(String(item.status || "").toUpperCase()))
-        .slice(0, 20);
-      const decisionRows = recentDecisions.length ? recentDecisions.map(item => `
-        <tr>
-          <td><strong>${escapeHtml(item.fileName || "-")}</strong></td>
-          <td>${badge(item.status || "-")}</td>
-          <td>${escapeHtml(item.decisionMode || "-")}</td>
-          <td>${escapeHtml(item.parseStrategy?.strategy || "-")}</td>
-          <td>${escapeHtml(formatDisplayDateTime(item.reviewedAt || item.createdAt || "-"))}</td>
-        </tr>
-      `).join("") : `<tr><td colspan="5" style="text-align:center; padding: 24px 0;">No recent packet decisions for this partner.</td></tr>`;
-
-      const reconNotes = [];
-      if (state.evidenceHistory) {
-        Object.entries(state.evidenceHistory).forEach(([rowId, historyList]) => {
-          historyList.forEach(entry => {
-            reconNotes.push({
-              rowId,
-              time: entry.time,
-              event: entry.event
-            });
-          });
-        });
-      }
-
-      // Sort by time descending so newest notes show up first
-      reconNotes.sort((a, b) => new Date(b.time.replace(/-/g, "/")) - new Date(a.time.replace(/-/g, "/")));
-
-      const reconNotesRows = reconNotes.length ? reconNotes.map(item => `
-        <tr>
-          <td><code>${escapeHtml(item.rowId)}</code></td>
-          <td><strong>${escapeHtml(item.event)}</strong></td>
-          <td style="font-variant-numeric: tabular-nums;">${escapeHtml(item.time)}</td>
-        </tr>
-      `).join("") : `<tr><td colspan="3" style="text-align:center; padding: 24px 0; color: var(--text-muted);">No reconciliation reviews recorded yet.</td></tr>`;
-
-      const reconHistoryTableHtml = `
-        <section class="panel" style="margin-top: 24px;">
-          <div class="panel-header" style="margin-bottom: 16px;">
-            <div>
-              <h2 style="margin: 0; font-size: 18px;">Reconciliation Review History</h2>
-              <p class="section-subtitle">Persisted investigation notes and comments for mismatched records.</p>
-            </div>
-          </div>
-          ${table(["Transaction ID", "Review Event / Note", "Recorded At"], reconNotesRows)}
-        </section>
-      `;
-
-      tabContentHtml = `
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 16px;">
-            <div>
-              <h2 style="margin: 0; font-size: 18px;">Recent Decisions</h2>
-              <p class="section-subtitle">Outcomes of recently processed and reviewed ingestion flows.</p>
-            </div>
-          </div>
-          ${table(["File", "Decision", "Decision Mode", "Parse Strategy", "Reviewed At"], decisionRows)}
-        </section>
-        ${reconHistoryTableHtml}
-      `;
-    } else if (state.reviewTab === "configs") {
-      const approvedConfigs = mappings.filter(item => item.status === "APPROVED");
-      const configRows = approvedConfigs.length ? approvedConfigs.map(c => `
-        <tr>
-          <td><strong>v${escapeHtml(String(c.configVersion || "1.0"))}</strong></td>
-          <td><code>${escapeHtml(c.sheetName || "Sheet1")}</code></td>
-          <td>Row ${formatNumber(c.startRow || 1)}</td>
-          <td>${formatNumber((c.fieldMappings || []).length)} fields</td>
-          <td><span class="badge matched">Active</span></td>
-          <td>${escapeHtml(formatDisplayDateTime(c.approvedAt || c.createdAt || "-"))}</td>
-        </tr>
-      `).join("") : `<tr><td colspan="6" style="text-align:center; padding: 24px 0;">No approved runtime configurations found for this partner.</td></tr>`;
-
-      tabContentHtml = `
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 16px;">
-            <div>
-              <h2 style="margin: 0; font-size: 18px;">Active Runtime Configurations</h2>
-              <p class="section-subtitle">Configurations approved for file parsing on the active engine.</p>
-            </div>
-          </div>
-          ${table(["Version", "Sheet / Target", "Start Row", "Mappings", "Status", "Approved At"], configRows)}
-        </section>
-      `;
-    }
-
-    // 6. Guided Review Modal Popup
-    let modalHtml = "";
-    if (state.guidedReviewOpen && selectedPacket) {
-      if (typeof state.guidedReviewStep !== "number") {
-        state.guidedReviewStep = 0;
-      }
-
-      const step = state.guidedReviewStep;
-      const stepsList = ["Brief", "Mapping", "Validation", "Decision"];
-      const packetGates = selectedPacket.validationGates || [];
-      function getGateStatus(gateKey, defaultStatus = "pending") {
-        const gate = packetGates.find(item => item.gateKey === gateKey || (item.name && item.name.toLowerCase().includes(gateKey.replace("_", " "))));
-        if (gate) {
-          return String(gate.status || "").toLowerCase();
-        }
-        return defaultStatus;
-      }
-      const progressSteps = stepsList.map((s, i) => `
-        <div class="brief-step ${i === step ? 'active' : i < step ? 'done' : ''}">
-          <span class="brief-step-dot">${i < step ? '✓' : i + 1}</span>
-          <span class="brief-step-name" style="font-size: 11px;">${s}</span>
-        </div>
-      `).join("");
-
-      let stepBodyHtml = "";
-      if (step === 0) {
-        // Step 1: Brief
-        let copilotVerdict = selectedPacket.isVirtual ? "Draft mapping update" : "Format verification required";
-        let copilotAnalysisText = selectedPacket.isVirtual 
-          ? `A draft mapping configuration was manually created or modified in Mapping Studio and requires formal activation. Activating this draft will update the runtime engine parsing rules for ${selectedPacket.partner} to ensure transaction alignment.`
-          : `The latest settlement file uploaded for ${selectedPacket.partner} uses a different column structure than the current active configuration. This structure mismatch may prevent accurate transaction status extraction and lead to incorrect reconciliation outcomes if processed without format updates.`;
-
-        stepBodyHtml = `
-          <div class="guided-step-content">
-            <span class="badge ${selectedPacket.riskSummary?.severity === 'critical' || selectedPacket.riskSummary?.severity === 'high' ? 'failed' : 'warning'}" style="margin-bottom: 8px;">${selectedPacket.riskSummary?.severity?.toUpperCase()} RISK</span>
-            <h3 style="margin: 0 0 12px 0; font-size: 18px;">${escapeHtml(copilotVerdict)}</h3>
-            
-            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); padding: 16px; border-radius: 8px; margin-bottom: 20px; line-height: 1.6;">
-              <strong>Copilot explanation:</strong>
-              <p style="margin: 8px 0 0 0; font-size: 13.5px; color: var(--text-muted);">${escapeHtml(copilotAnalysisText)}</p>
-            </div>
-
-            <h4 style="font-size: 12px; text-transform: uppercase; color: var(--brand-accent-blue); margin-bottom: 8px;">Key Facts</h4>
-            <table style="width: 100%; border-collapse: collapse; font-size: 13px; line-height: 2;">
-              <tr><td style="color: var(--text-muted); width: 150px;">Partner:</td><td><strong>${escapeHtml(selectedPacket.partner)}</strong></td></tr>
-              <tr><td style="color: var(--text-muted);">File reference:</td><td><code>${escapeHtml(selectedPacket.fileName)}</code></td></tr>
-              <tr><td style="color: var(--text-muted);">Current runtime:</td><td>${selectedPacket.activeRuntimeConfigId ? 'Approved configuration is available' : 'No approved runtime is available'}</td></tr>
-              <tr><td style="color: var(--text-muted);">Draft mapping:</td><td>${selectedPacket.draftMappingId ? 'Draft mapping is ready' : 'Draft mapping is not ready'}</td></tr>
-            </table>
-          </div>
-        `;
-      } else if (step === 1) {
-        // Step 2: Mapping
-        // Show the AI proposal directly instead of reconstructing mappings heuristically in the frontend.
-        const sigHeaders = selectedPacket.structureSignature?.headers || [];
-        const aiMapping = state.guidedReviewAI.mapping;
-        const aiReasoning = aiMapping?.configHealth?.reasoning || "";
-        const aiConfidence = aiMapping?.configHealth?.confidence;
-        const rawDraftFieldMappings = (aiMapping?.fieldMappings || []).filter(fm => fm.path !== "currency");
-        const idMapping = rawDraftFieldMappings.find(mapping => mapping.path === "id");
-        const draftFieldMappings = rawDraftFieldMappings.filter(mapping => {
-          if (mapping.path !== "trace") return true;
-          if (!idMapping) return true;
-          return Number(mapping.column || 0) !== Number(idMapping.column || 0);
-        });
-
-        let editableMappingRows = "";
-        if (!state.guidedReviewAI.loading && !state.guidedReviewAI.error && aiMapping) {
-          editableMappingRows = draftFieldMappings.map((mapping, i) => {
-            const sourceColumn = Number(mapping.column || 0);
-            const headerLabel = sourceColumn > 0 && sigHeaders[sourceColumn - 1] ? sigHeaders[sourceColumn - 1] : (mapping.sourceField || `Column ${sourceColumn || "?"}`);
-            const currentMap = mapping.path || "";
-            const hasKnownOption = ["", "id", "amount", "transDate", "status", "trace", "currency", "description"].includes(currentMap);
-            const conf = typeof aiConfidence === "number" ? Math.round(aiConfidence * 100) : Math.max(70, 95 - (i * 3));
-            const transformLabel =
-              mapping.type === "DATE" ? "Date fmt" :
-              mapping.type === "MAPPING" ? "Value map" :
-              mapping.type === "CONSTANT" ? "Constant" :
-              "None";
-            const noteLabel =
-              currentMap === "id" ? "Primary key" :
-              currentMap === "amount" ? "Required" :
-              currentMap === "status" ? "Needs normalize" :
-              "-";
-            return `
-              <tr>
-                <td>
-                  <div style="display:flex; flex-direction:column; gap:4px;">
-                    <code>${escapeHtml(headerLabel)}</code>
-                    <span class="muted" style="font-size:11px;">Column ${sourceColumn || "?"}</span>
-                  </div>
-                </td>
-                <td>
-                  <select
-                    class="inline-field-select"
-                    data-source-header="${escapeHtml(headerLabel)}"
-                    data-source-column="${sourceColumn || ""}"
-                    data-original-path="${escapeHtml(currentMap)}"
-                    data-original-type="${escapeHtml(mapping.type || "")}"
-                    data-original-required="${mapping.required ? "true" : "false"}"
-                    data-original-constant="${escapeHtml(mapping.constant || "")}"
-                    data-original-mapping="${escapeHtml(JSON.stringify(mapping.mapping || {}))}"
-                    style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: var(--font-mono); width: 100%;">
-                    <option value="" ${currentMap === "" ? "selected" : ""}>unmapped</option>
-                    <option value="id" ${currentMap === "id" ? "selected" : ""}>partner_txn_id</option>
-                    <option value="amount" ${currentMap === "amount" ? "selected" : ""}>amount</option>
-                    <option value="transDate" ${currentMap === "transDate" ? "selected" : ""}>transaction_time</option>
-                    <option value="status" ${currentMap === "status" ? "selected" : ""}>transaction_status</option>
-                    <option value="trace" ${currentMap === "trace" ? "selected" : ""}>trace</option>
-                    <option value="currency" ${currentMap === "currency" ? "selected" : ""}>currency</option>
-                    <option value="description" ${currentMap === "description" ? "selected" : ""}>description</option>
-                    ${!hasKnownOption && currentMap ? `<option value="${escapeHtml(currentMap)}" selected>${escapeHtml(currentMap)}</option>` : ""}
-                  </select>
-                </td>
-                <td style="text-align: center;">${conf}%</td>
-                <td><span class="badge neutral" style="font-size: 11px;">${escapeHtml(transformLabel)}</span></td>
-                <td style="font-size: 11px;" class="muted">${escapeHtml(noteLabel)}</td>
-              </tr>
-            `;
-          }).join("");
-        }
-
-        const mappingContent = state.guidedReviewAI.loading ? `
-          <div class="empty-state" style="padding: 36px 12px;">
-            <span class="spinner"></span>
-            <h3 style="margin-top: 14px;">AI is preparing the mapping proposal</h3>
-            <p class="muted">Loading the partner-specific draft mapping and confidence signals.</p>
-          </div>
-        ` : state.guidedReviewAI.error ? `
-          <div class="empty-state" style="padding: 36px 12px;">
-            <span class="material-symbols-outlined">psychology_alt</span>
-            <h3>AI mapping unavailable</h3>
-            <p class="muted">${escapeHtml(state.guidedReviewAI.error)}</p>
-          </div>
-        ` : `
-          ${aiReasoning ? `
-            <div style="margin-bottom: 14px; padding: 12px 14px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;">
-              <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
-                <div>
-                  <strong style="font-size:12px; text-transform:uppercase; color: var(--brand-accent-blue);">AI proposal reasoning</strong>
-                  <p style="margin:6px 0 0 0; font-size:12.5px; line-height:1.6; color: var(--text-muted);">${escapeHtml(aiReasoning)}</p>
-                </div>
-                ${typeof aiConfidence === "number" ? `<span class="badge neutral">${Math.round(aiConfidence * 100)}% confidence</span>` : ""}
-              </div>
-            </div>
-          ` : ""}
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom: 12px;">
-            <span class="muted" style="font-size:12px;">${draftFieldMappings.length} AI field suggestions loaded</span>
-            <span class="badge matched">AI proposal ready</span>
-          </div>
-          <div class="table-wrap guided-mapping-table">
-            <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
-              <thead>
-                <tr style="background: rgba(255,255,255,0.02);">
-                  <th style="width: 22%;">Partner field</th>
-                  <th style="width: 28%;">Internal field</th>
-                  <th style="width: 12%; text-align: center;">Confidence</th>
-                  <th style="width: 16%;">Transform</th>
-                  <th style="width: 22%;">Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${editableMappingRows || `<tr><td colspan="5" style="padding: 24px; text-align:center;" class="muted">AI draft mapping has no editable field suggestions.</td></tr>`}
-              </tbody>
-            </table>
-          </div>
-        `;
-
-        stepBodyHtml = `
-          <div class="guided-step-content">
-            <div class="guided-section-header">
-              <h4>Field Mapping Configuration</h4>
-              <p>Review the AI-generated mapping proposal directly. Adjust internal field assignments only after the AI draft has loaded.</p>
-            </div>
-            ${mappingContent}
-            <div class="guided-action-bar">
-              <button class="button-link" data-action="go-mapping-studio">
-                <span class="material-symbols-outlined">open_in_new</span>Open full Mapping Studio
-              </button>
-              <button class="button primary" data-action="save-inline-mapping" data-packet-id="${escapeHtml(selectedPacket._id)}" ${state.guidedReviewAI.loading || state.guidedReviewAI.error ? "disabled" : ""}>
-                <span class="material-symbols-outlined">play_arrow</span> Apply mapping
-              </button>
-            </div>
-          </div>
-        `;
-      } else if (step === 2) {
-        // Step 3: Validation
-        const gates = packetGates;
-        const runtimeGate = gates.find(g => g.gateKey === "runtime_validation");
-        const runtimeGateStatus = runtimeGate ? String(runtimeGate.status || "").toLowerCase() : "pending";
-        const hasFailedGates = gates.some(g => String(g.status || "").toLowerCase() === "fail" || String(g.status || "").toLowerCase() === "failed");
-        const allGatesPassed = gates.length > 0 && !hasFailedGates && gates.every(g => String(g.status || "").toLowerCase() === "pass");
-
-        function getStatusCard(label, desc, status) {
-          let tone = "fail";
-          let badgeClass = "failed";
-          let badgeText = "FAILED";
-          if (status === "pass" || status === "success" || status === "passed") {
-            tone = "pass";
-            badgeClass = "matched";
-            badgeText = "PASSED";
-          } else if (status === "pending") {
-            tone = "pending";
-            badgeClass = "warning";
-            badgeText = "PENDING";
-          } else if (status === "warn" || status === "warning") {
-            tone = "pending";
-            badgeClass = "warning";
-            badgeText = "WARNING";
-          }
-          return `
-            <div class="validation-gate-card ${tone}">
-              <div>
-                <strong>${label}</strong>
-                <p>${desc}</p>
-              </div>
-              <span class="badge ${badgeClass}">${badgeText}</span>
-            </div>
-          `;
-        }
-
-        const gateLabelMap = {
-          format_signature: {
-            label: "Format signature",
-            desc: "Header shape matches the expected partner file layout."
-          },
-          datatype_check: {
-            label: "Data type check",
-            desc: "Sample values can be parsed into the expected types."
-          },
-          runtime_validation: {
-            label: "Runtime validation",
-            desc: "The proposed mapping can normalize sampled rows successfully."
-          },
-          required_fields: {
-            label: "Required fields",
-            desc: "Required canonical fields are present in the proposal."
-          },
-          type_checks: {
-            label: "Type conversion",
-            desc: "Parsed values align with storage types."
-          },
-          status_normalization: {
-            label: "Status normalization",
-            desc: "Partner status values translate to internal statuses."
-          },
-          sample_dryrun: {
-            label: "Dry-run test",
-            desc: "Sample rows run through the parser successfully."
-          },
-          output_schema: {
-            label: "Output schema",
-            desc: "Normalized output satisfies canonical engine requirements."
-          }
-        };
-        const renderedGates = gates.map(gate => {
-          const meta = gateLabelMap[gate.gateKey] || {
-            label: gate.label || gate.gateKey,
-            desc: gate.reason || "Validation gate result."
-          };
-          return getStatusCard(meta.label, gate.reason || meta.desc, String(gate.status || "").toLowerCase());
-        }).join("");
-
-        stepBodyHtml = `
-          <div class="guided-step-content">
-            <div class="guided-section-header">
-              <h4>Validation Results</h4>
-              <p>Review parser readiness separately from mapping edits. This step shows whether the current configuration can move to activation safely.</p>
-            </div>
-            <div class="runtime-validation-panel">
-              <div class="runtime-validation-copy">
-                <strong>Runtime validation</strong>
-                <p>${escapeHtml(runtimeGate?.reason || "Run a live runtime validation on the current review packet before activation.")}</p>
-              </div>
-              <div class="runtime-validation-actions">
-                <span class="badge ${runtimeGateStatus === "pass" ? "matched" : runtimeGateStatus === "fail" ? "failed" : "warning"}">
-                  ${escapeHtml((runtimeGateStatus || "pending").toUpperCase())}
-                </span>
-                <button class="button primary" data-action="validate-runtime-packet" data-packet-id="${escapeHtml(selectedPacket._id)}">
-                  <span class="material-symbols-outlined">verified</span> Run runtime validate
-                </button>
-              </div>
-            </div>
-            ${allGatesPassed ? `
-              <div class="validation-summary pass">
-                <span class="material-symbols-outlined">check_circle</span>
-                <span>All checks passed. This configuration is ready for activation.</span>
-              </div>
-            ` : `
-              <div class="validation-summary pending">
-                <span class="material-symbols-outlined">info</span>
-                <span>Validation is still incomplete or has failures. Fix mapping first, then rerun validation before activation.</span>
-              </div>
-            `}
-            <div class="validation-gates-list">
-              ${renderedGates || getStatusCard("Runtime validation", "Run runtime validation to verify the proposal against sample rows.", runtimeGateStatus)}
-            </div>
-          </div>
-        `;
-      } else if (step === 3) {
-        // Step 4: Decision
-        const gateSummary = (selectedPacket.validationGates || []).reduce((acc, gate) => {
-          const status = String(gate.status || "").toLowerCase();
-          acc[status] = (acc[status] || 0) + 1;
-          return acc;
-        }, {});
-        const hasFailedGates = (gateSummary.fail || 0) > 0;
-        const isMappingReady = !!selectedPacket.draftMappingId;
-        const runtimeGate = (selectedPacket.validationGates || []).find(gate => gate.gateKey === "runtime_validation");
-        const runtimeValidated = String(runtimeGate?.status || "").toLowerCase() === "pass";
-        const isReady = isMappingReady && runtimeValidated && !hasFailedGates;
-
-        let copilotRecommendation = "";
-        let actionButtonsHtml = "";
-
-        if (!isReady) {
-          copilotRecommendation = "Copilot recommends adjusting the mapping configuration in Mapping Studio. Current sample row tests contain structural errors that will block active operations.";
-          actionButtonsHtml = `
-            <div style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
-              <button class="button primary" data-action="toggle-inline-edit" data-packet-id="${escapeHtml(selectedPacket._id)}" style="justify-content: center; height: 38px;">
-                <span class="material-symbols-outlined" style="font-size:16px; margin-right:4px;">edit</span> Adjust mapping
-              </button>
-              <div style="display: flex; gap: 8px; width: 100%;">
-                <button class="button secondary-action" data-action="approve-packet-keep-current" data-packet-id="${escapeHtml(selectedPacket._id)}" style="flex: 1; justify-content: center;">
-                  Keep current runtime
-                </button>
-                <button class="button secondary-action destructive" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}" style="flex: 1; justify-content: center;">
-                  Reject change
-                </button>
-              </div>
-              <button class="button primary disabled-cta" disabled style="opacity: 0.4; cursor: not-allowed; width: 100%; justify-content: center; height: 38px;">
-                Approve & Activate Config
-              </button>
-              <p class="decision-help-text" style="color: var(--danger); text-align: center; font-size: 12px; margin-top: 4px;">
-                Runtime validate must pass before activation.
-              </p>
-            </div>
-          `;
-        } else {
-          copilotRecommendation = "All validation checks passed successfully. Copilot recommends approving and activating this configuration to update the runtime engine parsing rules immediately.";
-          actionButtonsHtml = `
-            <div style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
-              <button class="button primary success-cta" data-action="approve-packet-activate" data-packet-id="${escapeHtml(selectedPacket._id)}" style="justify-content: center; height: 40px; font-weight: 600;">
-                Approve & Activate Config
-              </button>
-              <div style="display: flex; gap: 8px; width: 100%;">
-                <button class="button secondary-action" data-action="approve-packet-keep-current" data-packet-id="${escapeHtml(selectedPacket._id)}" style="flex: 1; justify-content: center;">
-                  Keep current runtime
-                </button>
-                <button class="button secondary-action destructive" data-action="reject-packet" data-packet-id="${escapeHtml(selectedPacket._id)}" style="flex: 1; justify-content: center;">
-                  Reject change
-                </button>
-              </div>
-            </div>
-          `;
-        }
-
-        stepBodyHtml = `
-          <div class="guided-step-content">
-            <h4 style="font-size: 12px; text-transform: uppercase; color: var(--brand-accent-blue); margin-bottom: 8px;">Copilot Recommendation</h4>
-            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); padding: 16px; border-radius: 8px; margin-bottom: 24px; line-height: 1.6;">
-              <p style="margin: 0; font-size: 13.5px; color: var(--text-muted);">${escapeHtml(copilotRecommendation)}</p>
-            </div>
-
-            <h4 style="font-size: 12px; text-transform: uppercase; color: var(--brand-accent-blue); margin-bottom: 12px;">Decision Actions</h4>
-            ${actionButtonsHtml}
-          </div>
-        `;
-      }
-
-      modalHtml = `
-        <div class="guided-review-backdrop" id="guided-review-backdrop">
-          <div class="guided-review-modal">
-            <div class="guided-review-header">
-              <div>
-                <p class="eyebrow guided-review-eyebrow">Guided Review</p>
-                <h3 class="guided-review-title">${escapeHtml(selectedPacket.fileName)}</h3>
-              </div>
-              <button class="button-link guided-review-close" data-action="close-guided-review">
-                <span class="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <div class="brief-steps-row guided-review-steps">
-              ${progressSteps}
-            </div>
-
-            <div class="guided-review-body">
-              ${stepBodyHtml}
-            </div>
-
-            <div class="guided-review-footer">
-              <button class="button" data-action="guided-prev" ${step === 0 ? 'disabled' : ''}>Back</button>
-              ${step < stepsList.length - 1 
-                ? `<button class="button primary" data-action="guided-next">Next</button>` 
-                : `<span class="muted guided-review-footer-note">Decision Step</span>`
-              }
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    return `
-      ${headerHtml}
-      ${tabsNavHtml}
-      ${tabContentHtml}
-      ${modalHtml}
-    `;
-  }
-
-  function renderSubmitSamplePage() {
-    return `
-      <section class="panel studio-shell" style="margin-bottom: 24px;">
-        <div class="panel-header" style="margin-bottom: 16px;">
-          <div>
-            <p class="eyebrow">Draft Workflow</p>
-            <h2 style="margin: 0;">Mapping Studio</h2>
-            <p class="section-subtitle">Select sample, review the draft mapping, validate output, then submit for review. Activation never happens here.</p>
-          </div>
-        </div>
-        ${renderSettings(true)}
-      </section>
-    `;
-  }
-
-  function renderApprovalUploadEntry(copy) {
-    return `
-      <div class="panel handoff-panel" style="margin-top: 16px;">
-        <div class="handoff-panel-header">
-          <div>
-            <h3 style="margin:0 0 8px 0;">Direct Intake Review</h3>
-            <p class="muted" style="margin:0;">${escapeHtml(copy)}</p>
-          </div>
-          <div class="handoff-badges">
-            <span class="badge neutral">${escapeHtml(state.partner)}</span>
-            <span class="badge neutral">${escapeHtml(formatDisplayDate(state.date))}</span>
-          </div>
-        </div>
-        <div class="handoff-actions">
-          <input type="file" class="review-upload-input" accept=".xlsx,.xls,.csv" style="display:none;">
-          <button class="button primary" data-action="open-review-upload">
-            <span class="material-symbols-outlined" style="font-size:18px;">upload</span> Upload File For Review
-          </button>
-          <button class="button secondary-action" data-action="go-mapping-studio">Open Mapping Studio</button>
-        </div>
-      </div>
-    `;
-  }
-
-  function renderAutomation(data) {
-    const jobs = data.jobs || [];
-    const recentPackets = jobs.flatMap(job => (job.recentPackets || []).map(packet => ({
-      ...packet,
-      partner: job.partner,
-      fetchMethod: job.fetchMethod,
-    }))).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))).slice(0, 8);
-    const rows = jobs.length ? jobs.map(job => `
-      <tr>
-        <td><strong>${escapeHtml(job.partner || "-")}</strong></td>
-        <td>${escapeHtml(job.fetchMethod || "-")}</td>
-        <td><code>${escapeHtml(job.schedule || "-")}</code></td>
-        <td>${escapeHtml(job.destination || "-")}</td>
-        <td>${job.enabled ? `<span class="badge matched">Enabled</span>` : `<span class="badge critical">Disabled</span>`}</td>
-        <td>
-          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-            <span class="badge neutral">${formatNumber(job.pendingReviewPackets || 0)} pending packets</span>
-            <button class="button secondary-action" data-action="run-job-now" data-partner="${escapeHtml(job.partner || "")}">Run Now</button>
-          </div>
-        </td>
-      </tr>
-    `).join("") : `<tr><td colspan="6" style="text-align:center; padding: 24px 0;">No enabled automation jobs found.</td></tr>`;
-    return `
-      ${metrics([
-        ["Enabled Jobs", formatNumber(jobs.filter(job => job.enabled).length), "Scheduler-connected fetch configs"],
-        ["Pending Review Items", formatNumber(jobs.reduce((sum, job) => sum + Number(job.pendingReviewPackets || 0), 0)), "Review items waiting after automation runs"],
-        ["Partners Covered", formatNumber(jobs.length), "Configured partner fetch routes"],
-        ["Mode", "Recommend Only", "Automation recommends but does not auto-approve"]
-      ])}
-      <section class="panel" style="margin-bottom: 24px;">
-        <div class="panel-header with-icon">
-          <div>
-            <h2 class="section-title">Scheduler Jobs</h2>
-            <p class="section-subtitle">Visibility into configured fetch routes and how many review items they are creating.</p>
-          </div>
-          <span class="material-symbols-outlined panel-header-icon">schedule</span>
-        </div>
-        ${table(["Partner", "Method", "Schedule", "Destination", "Status", "Review Output"], rows)}
-      </section>
-      <section class="panel">
-        <div class="panel-header with-icon">
-          <div>
-            <h2 class="section-title">Recent Automation Review Output</h2>
-            <p class="section-subtitle">Latest packets generated by automation-backed file fetches and format-drift checks.</p>
-          </div>
-          <span class="material-symbols-outlined panel-header-icon">smart_toy</span>
-        </div>
-        <div class="review-card-grid">
-          ${(recentPackets.length ? recentPackets : [{
-            partner: "Automation",
-            fileName: "No recent packets",
-            recommendedAction: { reason: "No job-created review packets are available yet." },
-            riskSummary: { severity: "low" },
-            _id: "",
-            status: "CLEAR",
-            fetchMethod: "-"
-          }]).map(packet => `
-            <article class="review-card ${packet._id ? "" : "empty-card"}">
-              <div class="review-card-top">
-                <div>
-                  <p class="eyebrow">${escapeHtml(packet.fetchMethod || packet.sourceType || "-")}</p>
-                  <h3>${escapeHtml(packet.partner || "-")}</h3>
-                </div>
-                ${severityBadge(packet.riskSummary?.severity || "medium")}
-              </div>
-              <p class="review-reason">${escapeHtml(packet.fileName || "-")}</p>
-              <div class="review-meta-row">
-                ${badge(packet.status || "-")}
-                ${packet.sourceType ? `<span class="badge neutral">${escapeHtml(packet.sourceType)}</span>` : ""}
-                ${packet.decisionMode ? `<span class="badge neutral">${escapeHtml(packet.decisionMode)}</span>` : ""}
-              </div>
-              <div class="review-impact-box">
-                <strong>Agent recommendation</strong>
-                <p>${escapeHtml(packet.recommendedAction?.reason || packet.riskSummary?.summary || "-")}</p>
-              </div>
-              ${packet.reviewedAt ? `<div class="muted" style="font-size:12px;">Reviewed by ${escapeHtml(packet.reviewedBy || "Administrator")} on ${escapeHtml(formatDisplayDateTime(packet.reviewedAt))}</div>` : ""}
-              ${packet._id ? `<button class="button" data-action="go-review-packet" data-packet-id="${escapeHtml(packet._id)}" data-partner="${escapeHtml(packet.partner)}" style="margin-top: 8px;">Open Approval Desk</button>` : ""}
-            </article>
-          `).join("")}
-        </div>
-      </section>
-    `;
-  }
-
-  function renderCommandCenter() {
-    const insights = state.insightsData ? state.insightsData.summary : null;
-    if (!insights) return '<div class="empty-state">No dashboard data loaded.</div>';
-
-    const m = insights.summary_metrics || {};
-    const byStatus = m.by_status || {};
-    const total = m.total_transactions || 0;
-    const matched = m.matched || 0;
-    const issueCount = Math.max(0, total - matched);
-    const mismatchRate = m.mismatch_rate || 0;
-    const mismatchAmount = m.total_amount_mismatch ? formatAmount(m.total_amount_mismatch) : "-";
-    const matchedPct = total ? Math.round((matched / total) * 100) : 0;
-    const obs = insights.ai_observation;
-
-    const anomalyCount = (byStatus.AMOUNT_MISMATCH || 0) + (byStatus.STATUS_MISMATCH || 0) + (byStatus.MULTIPLE_MISMATCH || 0) + (byStatus.MISSING_INTERNAL || 0) + (byStatus.UNMAPPED_SKIPPED || 0);
-
-    const data = state.insightsData;
-    const focusData = {
-      operational: data.operational || [],
-      partner: data.partner || [],
-      inconsistency: data.inconsistency || []
-    };
-
-    const activeFocus = state.focus;
-    const items = focusData[activeFocus] || [];
-    
-    // Sort anomalies: critical > high > medium > low
-    const severityWeight = { "critical": 4, "high": 3, "medium": 2, "low": 1 };
-    const processedItems = items.map(item => {
-      const copy = { ...item };
-      if (!copy.severity) {
-        copy.severity = (copy.affected_count > 100) ? "critical" : (copy.affected_count > 10) ? "medium" : "low";
-      }
-      return copy;
-    });
-
-    processedItems.sort((a, b) => {
-      const wA = severityWeight[String(a.severity).toLowerCase()] || 0;
-      const wB = severityWeight[String(b.severity).toLowerCase()] || 0;
-      return wB - wA;
-    });
-
-    const cards = processedItems.length
-      ? processedItems.slice(0, 3).map(item => insightCard(item)).join("")
-      : `<div class="empty-state" style="grid-column: span 3; text-align: center; padding: 40px 0;">No active anomalies found for this focus dimension.</div>`;
-
-    const actionQueueRows = processedItems.length
-      ? processedItems.slice(0, 5).map(item => `
-        <div class="action-queue-row">
-          <div class="action-queue-main">
-            <div class="action-queue-title-row">
-              <strong>${boldNumbers(escapeHtml(item.title || "Untitled issue"))}</strong>
-              ${severityBadge(item.severity || "medium")}
-            </div>
-            <p class="muted">${boldNumbers(escapeHtml(item.recommendation || item.description || "No recommendation available."))}</p>
-          </div>
-          <div class="action-queue-meta">
-            <span class="badge neutral"><strong>${formatNumber(item.affected_count || 0)}</strong> records</span>
-          </div>
-        </div>
-      `).join("")
-      : `
-        <div class="empty-state actionable">
-          <span class="material-symbols-outlined">task_alt</span>
-          <h3>No open action items</h3>
-          <p class="muted">The current reconciliation run does not require operator intervention.</p>
-        </div>
-      `;
-
-    const tabs = [
-      { id: "operational", label: "Ingestion & Operations", icon: "dns", count: focusData.operational.length },
-      { id: "partner", label: "Partner Trends", icon: "handshake", count: focusData.partner.length },
-      { id: "inconsistency", label: "Data Inconsistencies", icon: "rule", count: focusData.inconsistency.length }
-    ].map(tab => {
-      const active = tab.id === activeFocus ? "active" : "";
-      const badgeClass = tab.count > 0 ? "badge-has-anomalies" : "badge-clean";
-      return `
-        <button class="segmented-tab ${active}" data-focus="${tab.id}">
-          <span class="material-symbols-outlined tab-icon">${tab.icon}</span>
-          <span class="tab-label">${tab.label}</span>
-          <span class="tab-badge ${badgeClass}">${tab.count}</span>
-        </button>
-      `;
-    }).join("");
-
-    return `
-      ${metrics([
-        ["Data Intake Today", formatNumber(total), `${state.partner} records observed today`],
-        ["Needs Review", formatNumber(issueCount), `${matchedPct}% matched on current run`],
-        ["Priority Actions", formatNumber(anomalyCount), anomalyCount ? "Start with Review Center and mismatches" : "No immediate blockers detected"],
-        ["Financial Impact", mismatchAmount, "Amount exposed by visible mismatches"]
-      ])}
-
-      ${renderPageFilters({ showDate: true, showClear: false })}
-
-      <div class="grid cols-2 command-center-grid">
-        <section class="panel">
-          <div class="panel-header with-icon">
-            <div>
-              <h2 class="section-title">Risk Insight</h2>
-              <p class="section-subtitle">Switch the lens first, then interact with the resulting risk set.</p>
-            </div>
-            <span class="material-symbols-outlined panel-header-icon">troubleshoot</span>
-          </div>
-          <div class="segmented-tabs-container">
-            ${tabs}
-          </div>
-          <div class="command-center-copy">
-            <p class="muted">Severity stays above metadata. Use this to decide whether the next stop is Review Center, Data Intake, or Reconciliation.</p>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header with-icon">
-            <div>
-              <h2 class="section-title">Partner Risk Snapshot</h2>
-              <p class="section-subtitle">Scan partner-specific patterns and operational signals for the active lens.</p>
-            </div>
-            <span class="material-symbols-outlined panel-header-icon">partner_exchange</span>
-          </div>
-          <div class="grid cols-1">
-            ${cards}
-          </div>
-        </section>
-      </div>
-
-      <section class="panel">
-        <div class="panel-header with-icon">
-          <div>
-            <h2 class="section-title">Priority Action Queue</h2>
-            <p class="section-subtitle">This screen only answers whether the system is healthy, which partner is at risk, and what to do next.</p>
-          </div>
-          <span class="material-symbols-outlined panel-header-icon">assignment_late</span>
-        </div>
-        <div class="action-queue">${actionQueueRows}</div>
-      </section>
-
-      <div class="grid cols-2">
-        <section class="panel">
-          <div class="panel-header with-icon">
-            <div>
-              <h2 class="section-title">Reconciliation Quality</h2>
-              <p class="section-subtitle">Deterministic metrics stay primary; AI observations stay secondary.</p>
-            </div>
-            <span class="material-symbols-outlined panel-header-icon">monitoring</span>
-          </div>
-          ${bars([
-            ["Matched Transactions", matchedPct, "green"],
-            ["Total Mismatch Rate", Math.min(mismatchRate, 100), mismatchRate > 5 ? "red" : "amber"],
-            ["Missing Internal Records", percent(byStatus.MISSING_INTERNAL || 0, total), "amber"],
-            ["Missing Partner Records", percent(byStatus.MISSING_PARTNER || 0, total), "red"]
-          ])}
-        </section>
-
-        <section class="panel chart-panel">
-          <div class="panel-header with-icon">
-            <div>
-              <h2 class="section-title">Success Rate Distribution</h2>
-              <p class="section-subtitle">Overall match quality for the current reconciliation window.</p>
-            </div>
-            <span class="material-symbols-outlined panel-header-icon">pie_chart</span>
-          </div>
-          ${donut(Math.max(0, 100 - mismatchRate), "Total Match Quality")}
-        </section>
-      </div>
-
-      ${obs ? renderAiObservation(obs) : ''}
-    `;
-  }
-
-  function renderScheduler() {
-    return `
-      <div class="grid cols-3" style="margin-bottom: 24px;">
-        <div class="metric">
-          <span>Daemon Status</span>
-          <strong style="color: var(--green-primary);">ACTIVE</strong>
-          <small>Reconciliation Daemon</small>
-        </div>
-        <div class="metric">
-          <span>Job Trigger</span>
-          <strong>daily_partner_fetch</strong>
-          <small>Runs every day at midnight</small>
-        </div>
-        <div class="metric">
-          <span>Target Schedule</span>
-          <strong>0 0 * * * (Daily)</strong>
-          <small>APScheduler Cron Trigger</small>
-        </div>
-      </div>
-
-      <section class="panel" style="margin-bottom: 24px;">
-        <h2>Active Fetch Schedulers</h2>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Partner</th>
-                <th>Method</th>
-                <th>Schedule</th>
-                <th>Destination</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><strong>MOMO</strong></td>
-                <td><code>SFTP</code></td>
-                <td>Daily (00:00)</td>
-                <td><code>./downloads/MOMO</code></td>
-                <td><span class="badge matched">Enabled</span></td>
-                <td><button class="button" data-action="run-job" data-partner="MOMO">Run Now</button></td>
-              </tr>
-              <tr>
-                <td><strong>ZALOPAY</strong></td>
-                <td><code>API</code></td>
-                <td>Daily (00:05)</td>
-                <td><code>./downloads/ZALOPAY</code></td>
-                <td><span class="badge matched">Enabled</span></td>
-                <td><button class="button" data-action="run-job" data-partner="ZALOPAY">Run Now</button></td>
-              </tr>
-              <tr>
-                <td><strong>VIETTELPAY</strong></td>
-                <td><code>FileDrop</code></td>
-                <td>Watcher Active</td>
-                <td><code>/drops/viettelpay</code></td>
-                <td><span class="badge missing-internal">Paused</span></td>
-                <td><button class="button" data-action="run-job" data-partner="VIETTELPAY">Run Now</button></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Live Daemon Logs</h2>
-        <div class="terminal">
-00:00 scheduler started
-00:00 fetch window opened for daily_partner_fetch
-00:00 MOMO file received and validated
-00:00 ingestion completed: 15,200 rows
-00:05 ZALOPAY API fetch completed
-00:05 no approval blockers detected
-        </div>
-      </section>
-    `;
-  }
-
-  function renderReconciliation(data) {
-    const items = data.results || [];
-    
-    // 1. Compact toolbar inputs & status mapping
-    const totalAmountDiff = items.reduce((sum, item) => {
-      const partnerAmount = Number(item.partnerAmount || 0);
-      const internalAmount = Number(item.internalAmount || 0);
-      return sum + Math.abs(partnerAmount - internalAmount);
-    }, 0);
-    const matchedCount = items.filter(item => item.reconciliationStatus === "MATCHED").length;
-    const mismatchRows = items.filter(item => String(item.reconciliationStatus || "") !== "MATCHED" && !/MISSING_/.test(String(item.reconciliationStatus || ""))).length;
-    const missingRows = items.filter(item => /MISSING_/.test(String(item.reconciliationStatus || ""))).length;
-    const totalRows = data.total || items.length;
-
-    // Derived summary states
-    const unreviewedMismatchRows = items.filter(item => {
-      const isMatched = item.reconciliationStatus === "MATCHED";
-      const isReviewed = state.reviewedRecords && state.reviewedRecords[item.partnerTxnId || item.internalTxnId || item.id];
-      return !isMatched && !isReviewed && !/MISSING_/.test(item.reconciliationStatus || "");
-    }).length;
-    const unreviewedMissingRows = items.filter(item => {
-      const isReviewed = state.reviewedRecords && state.reviewedRecords[item.partnerTxnId || item.internalTxnId || item.id];
-      return /MISSING_/.test(item.reconciliationStatus || "") && !isReviewed;
-    }).length;
-    const reviewStatus = (unreviewedMismatchRows > 0 || unreviewedMissingRows > 0) ? "NEEDS_REVIEW" : "PASSED";
-    const riskLevel = (unreviewedMismatchRows > 0 || unreviewedMissingRows > 0) ? "HIGH" : "LOW";
-    const summary = state.insightsSummary || {};
-    
-    // Fallback confidence clarification
-    const aiSource = summary.llm_status || "Rule-based";
-    const isLLM = aiSource === "LLM";
-    const confidenceLabel = isLLM ? "AI Confidence" : "Rule Confidence";
-    const aiConfidence = (mismatchRows > 0 || missingRows > 0) ? "82%" : "98%";
-    const cacheStatus = summary.ai_observation?.cache_hit ? "HIT" : "MISS";
-
-    // 1. Improved Context Toolbar
-    const toolbarHtml = renderPageFilters({ showDate: true, showClear: false, showReconActions: true });
-
-    // 2. Semantic Risk Summary Strip (Left-border semantic highlights)
-    const riskBadgeClass = riskLevel === "HIGH" ? "failed" : "matched";
-
-    const summaryStripHtml = `
-      <div class="summary-strip" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px;">
-        <div class="metric" style="padding: 20px; border-radius: 4px; display: flex; flex-direction: column; justify-content: space-between; min-height: 100px; border: 1px solid var(--border-color); background: var(--bg-card);">
-          <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.05em;">Review Status</span>
-          <strong style="font-size: 24px; font-weight: 800; margin-top: 8px; color: ${reviewStatus === 'NEEDS_REVIEW' ? '#f59e0b' : '#10b981'}">${reviewStatus === 'NEEDS_REVIEW' ? 'Needs Review' : 'Passed'}</strong>
-        </div>
-        <div class="metric" style="padding: 20px; border-radius: 4px; display: flex; flex-direction: column; justify-content: space-between; min-height: 100px; border: 1px solid var(--border-color); background: var(--bg-card);">
-          <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.05em;">Total Records</span>
-          <strong style="font-size: 24px; font-weight: 800; margin-top: 8px;">${totalRows}</strong>
-        </div>
-        <div class="metric" style="padding: 20px; border-radius: 4px; display: flex; flex-direction: column; justify-content: space-between; min-height: 100px; border: 1px solid var(--border-color); background: var(--bg-card);">
-          <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.05em;">Missing Records</span>
-          <strong style="font-size: 24px; font-weight: 800; margin-top: 8px; color: ${missingRows > 0 ? '#ef4444' : 'var(--text-main)'}">${missingRows}</strong>
-        </div>
-        <div class="metric" style="padding: 20px; border-radius: 4px; display: flex; flex-direction: column; justify-content: space-between; min-height: 100px; border: 1px solid var(--border-color); background: var(--bg-card);">
-          <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.05em;">Amount Delta</span>
-          <strong style="font-size: 24px; font-weight: 800; margin-top: 8px; color: ${totalAmountDiff > 0 ? '#ef4444' : 'var(--text-main)'}">${formatAmount(totalAmountDiff)}</strong>
-        </div>
-      </div>
-    `;
-
-    // Compact Affected Records Preview
-    const previewItems = items.filter(item => item.reconciliationStatus !== "MATCHED").slice(0, 3);
-    const previewRows = previewItems.map(item => {
-      const isMissing = /MISSING_/.test(item.reconciliationStatus);
-      const sev = isMissing ? "HIGH" : "MEDIUM";
-      const delta = Math.abs(Number(item.partnerAmount || 0) - Number(item.internalAmount || 0));
-      const rowId = item.partnerTxnId || item.internalTxnId || item.id;
-      const isSelected = state.selectedEvidenceRowId === rowId;
-      const rowStyle = isSelected ? "background: rgba(240, 185, 11, 0.08); border-left: 3px solid var(--brand-primary);" : "";
-      const isReviewed = state.reviewedRecords && state.reviewedRecords[rowId];
-
-      return `
-        <tr style="${rowStyle}">
-          <td><span class="badge severity-${sev.toLowerCase()}" style="font-size: 10px; padding: 1px 6px; border: none; font-weight: 600;">${sev}</span></td>
-          <td>
-            <span style="font-size: 11.5px; font-weight: 500;">${escapeHtml(item.reconciliationStatus || "MISMATCH")}</span>
-            ${isReviewed ? `<span class="badge matched" style="font-size: 9px; padding: 1px 4px; border:none; margin-left: 6px; background: rgba(16, 185, 129, 0.15); color: #10b981;">Reviewed</span>` : ""}
-          </td>
-          <td><code>${escapeHtml(item.partnerTxnId || item.internalTxnId || "-")}</code></td>
-          <td>${item.internalStatus ? `<span class="badge matched" style="font-size: 10px; padding: 1px 6px; border:none;">${escapeHtml(item.internalStatus)}</span>` : '<span class="badge warning" style="font-size:10px; padding:1px 6px; border:none;">MISSING</span>'}</td>
-          <td>${item.partnerStatus ? `<span class="badge matched" style="font-size: 10px; padding: 1px 6px; border:none;">${escapeHtml(item.partnerStatus)}</span>` : '<span class="badge warning" style="font-size:10px; padding:1px 6px; border:none;">MISSING</span>'}</td>
-          <td style="font-variant-numeric: tabular-nums;">${item.internalAmount ? formatAmount(item.internalAmount) : "-"}</td>
-          <td style="font-variant-numeric: tabular-nums;">${item.partnerAmount ? formatAmount(item.partnerAmount) : "-"}</td>
-          <td style="font-variant-numeric: tabular-nums; font-weight: 600; color: ${delta > 0 ? '#ef4444' : 'var(--text-muted)'}">${delta > 0 ? formatAmount(delta) : "-"}</td>
-          <td style="text-align: center; width: 60px;">
-            <button class="button tertiary compact" data-action="open-evidence-detail" data-row-id="${escapeHtml(rowId)}" style="padding: 2px; min-width: unset; height: unset; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--brand-primary); background: transparent; border: none;">
-              <span class="material-symbols-outlined" style="font-size: 18px;">visibility</span>
-            </button>
-          </td>
-        </tr>
-      `;
-    }).join("");
-
-    const previewHeaders = ["Sev", "Issue Type", "Trace / TXN ID", "Internal Status", "Partner Status", "Internal Amount", "Partner Amount", "Delta", "Action"];
-
-    const affectedPreviewHtml = `
-      <div class="panel" style="margin-bottom: 12px; padding: 8px 12px;">
-        <div style="margin-bottom: 8px;">
-          <h4 style="margin: 0; font-size: 12.5px; font-weight: 700; color: white;">Affected Records Preview</h4>
-          <p style="margin: 2px 0 0 0; font-size: 11px; color: var(--text-muted);">Records that caused the current verdict.</p>
-        </div>
-        ${previewRows.length ? table(previewHeaders, previewRows) : `<div style="text-align: center; padding: 16px; color: var(--text-muted); font-size: 11.5px; background: rgba(255,255,255,0.01); border: 1px solid rgba(255,255,255,0.04); border-radius: 4px;">No affected records found.</div>`}
-      </div>
-    `;
-
-    // 4. Insight tabs markup
-    const insightsData = state.insightsData;
-    const insightTabs = ["Anomalies", "Patterns", "Recommendations"];
-    let insightContent = '<div class="insight-content empty"><p class="muted">No insights available.</p></div>';
-    if (insightsData) {
-      const activeTabKey = ["anomalies", "patterns", "recommendations"][state.activeInsightTab || 0];
-      const tabItems = Array.isArray(insightsData) ? insightsData : (insightsData[activeTabKey] || []);
-      if (tabItems.length === 0) {
-        insightContent = `<div class="insight-content empty"><p class="muted">No items found for this category.</p></div>`;
-      } else {
-        insightContent = `
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; padding-top: 8px;">
-            ${tabItems.map(item => `
-              <div class="review-card" style="cursor: default; display: flex; flex-direction: column; gap: 10px;">
-                <div class="review-card-top" style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-                  <span class="badge ${item.severity === 'critical' || item.severity === 'high' ? 'failed' : item.severity === 'medium' ? 'warning' : 'matched'}" style="font-size: 10px; padding: 2px 8px; border: none; border-radius: 4px; font-weight: 600;">
-                    ${escapeHtml(item.severity || 'medium').toUpperCase()}
-                  </span>
-                  <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Affected: ${formatNumber(item.affected_count || 0)}</span>
-                </div>
-                <h3 style="margin: 4px 0 0 0; font-size: 14px; font-weight: 700; color: white;">${highlightInsightText(item.title || '')}</h3>
-                <p style="margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-muted);">${highlightInsightText(item.description || '')}</p>
-                ${item.recommendation ? `
-                  <div class="review-impact-box" style="margin: 10px 0 0 0;">
-                    <strong style="color: var(--brand-primary); font-size: 11.5px; display: flex; align-items: center; gap: 4px;">
-                      <span class="material-symbols-outlined" style="font-size: 14px;">arrow_forward</span> Next step
-                    </strong>
-                    <p style="margin-top: 4px; font-size: 12px; line-height: 1.4; color: var(--text-main);">${highlightInsightText(item.recommendation)}</p>
-                  </div>
-                ` : ''}
-              </div>
-            `).join('')}
-          </div>
-        `;
-      }
-    }
-
-    const tabsSectionHtml = `
-      <div class="panel" style="margin-bottom: 12px; border: 1px solid var(--border-color); background: var(--bg-card); border-radius: 8px;">
-        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.06); cursor: default;">
-          <div style="display: flex; align-items: center; gap: 6px;">
-            <span class="material-symbols-outlined" style="font-size: 16px; color: var(--text-muted);">insights</span>
-            <span style="font-size: 12px; color: white;">Deep Dive Insights</span>
-            <span style="font-size: 11px; color: var(--text-muted); font-weight: normal; margin-left: 8px;">Structured AI findings, patterns, and recommendations.</span>
-          </div>
-        </div>
-        <div style="padding: 12px; cursor: default;">
-          <div class="insights-tabs" style="margin-top: 0; margin-bottom: 12px;">
-            ${insightTabs.map((tab, i) => `
-              <button class="insight-tab ${i === (state.activeInsightTab || 0) ? 'active' : ''}" data-action="set-insight-tab" data-tab-index="${i}">${tab}</button>
-            `).join('')}
-          </div>
-          ${insightContent}
-        </div>
-      </div>
-    `;
-
-    // 5. Evidence table markup
-    // Mismatch filters
-    const statusTabs = [
-      ["", "All"],
-      ["MATCHED", "Matched"],
-      ["AMOUNT_MISMATCH", "Amount Mismatch"],
-      ["STATUS_MISMATCH", "Status Mismatch"],
-      ["MISSING_INTERNAL", "Missing Internal"],
-      ["MISSING_PARTNER", "Missing Partner"]
-    ].map(([value, label]) => `
-      <button class="status-tab ${state.reconStatus === value ? "active" : ""}" data-action="set-recon-status" data-status="${escapeHtml(value)}" style="padding: 4px 10px; font-size: 11.5px;">
-        ${escapeHtml(label)}
-      </button>
-    `).join("");
-
-    const ef = state.explorerFilters || {};
-    const filteredItems = items.filter(item => {
-      if (state.reconStatus && item.reconciliationStatus !== state.reconStatus) return false;
-      
-      const pAmt = Number(item.partnerAmount || 0);
-      const iAmt = Number(item.internalAmount || 0);
-      const rowDelta = Math.abs(pAmt - iAmt);
-      if (ef.amountMin && rowDelta < Number(ef.amountMin)) return false;
-      if (ef.amountMax && rowDelta > Number(ef.amountMax)) return false;
-      
-      return true;
-    });
-
-    const headers = ["Sev", "Issue Type", "Trace / TXN ID", "Internal Status", "Partner Status", "Internal Amount", "Partner Amount", "Delta", "Action"];
-    const rows = filteredItems.map(item => {
-      const isMatched = item.reconciliationStatus === "MATCHED";
-      const isMissing = /MISSING_/.test(item.reconciliationStatus);
-      const sev = isMissing ? "HIGH" : (isMatched ? "LOW" : "MEDIUM");
-
-      const rowId = item.partnerTxnId || item.internalTxnId || item.id;
-      const delta = Math.abs(Number(item.partnerAmount || 0) - Number(item.internalAmount || 0));
-      const isSelected = !isMatched && state.selectedEvidenceRowId === rowId;
-      const rowStyle = isSelected ? "background: rgba(240, 185, 11, 0.08); border-left: 3px solid var(--brand-primary);" : "";
-      const isReviewed = state.reviewedRecords && state.reviewedRecords[rowId];
-
-      return `
-        <tr style="${rowStyle}">
-          <td><span class="badge severity-${sev.toLowerCase()}" style="font-size: 10px; padding: 1px 6px; border: none; font-weight: 600;">${sev}</span></td>
-          <td>
-            <span style="font-size: 11.5px; font-weight: 500;">${escapeHtml(item.reconciliationStatus || "MISMATCH")}</span>
-            ${isReviewed ? `<span class="badge matched" style="font-size: 9px; padding: 1px 4px; border:none; margin-left: 6px; background: rgba(16, 185, 129, 0.15); color: #10b981;">Reviewed</span>` : ""}
-          </td>
-          <td><code>${escapeHtml(item.partnerTxnId || item.internalTxnId || "-")}</code></td>
-          <td>${item.internalStatus ? `<span class="badge matched" style="font-size: 10px; padding: 1px 6px; border:none;">${escapeHtml(item.internalStatus)}</span>` : '<span class="badge warning" style="font-size:10px; padding:1px 6px; border:none;">MISSING</span>'}</td>
-          <td>${item.partnerStatus ? `<span class="badge matched" style="font-size: 10px; padding: 1px 6px; border:none;">${escapeHtml(item.partnerStatus)}</span>` : '<span class="badge warning" style="font-size:10px; padding:1px 6px; border:none;">MISSING</span>'}</td>
-          <td style="font-variant-numeric: tabular-nums;">${item.internalAmount ? formatAmount(item.internalAmount) : "-"}</td>
-          <td style="font-variant-numeric: tabular-nums;">${item.partnerAmount ? formatAmount(item.partnerAmount) : "-"}</td>
-          <td style="font-variant-numeric: tabular-nums; font-weight: 600; color: ${delta > 0 ? '#ef4444' : 'var(--text-muted)'}">${delta > 0 ? formatAmount(delta) : "-"}</td>
-          <td style="text-align: center; width: 60px;">
-            ${isMatched ? '-' : `
-              <button class="button tertiary compact" data-action="open-evidence-detail" data-row-id="${escapeHtml(rowId)}" style="padding: 2px; min-width: unset; height: unset; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--brand-primary); background: transparent; border: none;">
-                <span class="material-symbols-outlined" style="font-size: 18px;">visibility</span>
-              </button>
-            `}
-          </td>
-        </tr>
-      `;
-    }).join("");
-
-    const tableFiltersHtml = `
-      <div class="page-filters explorer-filters" style="margin-top: 10px; margin-bottom: 12px; padding: 8px 12px; border-radius: 6px; background: rgba(0,0,0,0.15); display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
-        <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">Explorer Filters:</span>
-        <input id="amount-min" type="text" placeholder="Min Delta" value="${escapeHtml(ef.amountMin || '')}" style="width: 90px; height: 26px; font-size: 12px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); padding: 2px 6px; border-radius: 4px;">
-        <input id="amount-max" type="text" placeholder="Max Delta" value="${escapeHtml(ef.amountMax || '')}" style="width: 90px; height: 26px; font-size: 12px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); padding: 2px 6px; border-radius: 4px;">
-        <button class="button primary" data-action="apply-recon-filters" style="height: 26px; font-size: 11px; padding: 2px 8px;">Apply</button>
-        <button class="button secondary" data-action="clear-recon-filters" style="height: 26px; font-size: 11px; padding: 2px 8px;">Clear</button>
-      </div>
-    `;
-
-    const evidenceTableHtml = `
-      <section class="panel evidence-table-section">
-        <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 8px; margin-bottom: 8px;">
-          <div>
-            <h2 class="section-title" style="margin: 0; font-size: 14px;">Reconciliation Evidence Ledger</h2>
-            <p class="section-subtitle" style="margin: 2px 0 0 0; font-size: 11px;">Select a row to inspect full comparison detail and trigger adjustment options.</p>
-          </div>
-          <div style="display: flex; gap: 6px;">
-            ${statusTabs}
-          </div>
-        </div>
-        ${tableFiltersHtml}
-        ${table(headers, rows)}
-      </section>
-    `;
-
-    // 6. Drawers and Modal layers
-    const selectedRow = items.find(item => 
-      (item.partnerTxnId || item.internalTxnId || item.id) === state.selectedEvidenceRowId
-    );
-
-    let modalHtml = "";
-    if (state.adjustmentModalData) {
-      modalHtml = `
-        <div class="guided-review-overlay" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000;">
-          <div class="brief-modal" style="padding: 24px; max-width: 500px; width: 100%;">
-             <div class="brief-modal-header" style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-start;">
-                <div>
-                   <span class="brief-eyebrow" style="color: var(--brand-primary); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing:0.05em;">Create Manual Adjustment</span>
-                   <h3 style="margin: 4px 0 0 0; color: white; font-size: 16px;">Prefilled Adjustment Form</h3>
-                </div>
-                <button class="button tertiary compact" data-action="close-adjustment-modal" style="padding: 4px; min-width: unset; height: unset;">
-                   <span class="material-symbols-outlined" style="font-size: 18px;">close</span>
-                </button>
-             </div>
-             <div style="padding: 10px 0 20px; color: var(--text-main); font-size: 13.5px;">
-                <div style="margin-bottom: 12px;">
-                   <label style="display: block; font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">Transaction ID / Trace ID</label>
-                   <input type="text" value="${escapeHtml(state.adjustmentModalData.txnId)}" readonly style="width: 100%; padding: 8px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); border-radius: 4px; font-family: monospace;">
-                </div>
-                <div style="margin-bottom: 12px;">
-                   <label style="display: block; font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">Adjustment Amount (VND)</label>
-                   <input type="text" value="${escapeHtml(state.adjustmentModalData.amount)}" style="width: 100%; padding: 8px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); border-radius: 4px;">
-                </div>
-                <div style="margin-bottom: 12px;">
-                   <label style="display: block; font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">Reason for Adjustment</label>
-                   <select style="width: 100%; padding: 8px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-main); border-radius: 4px; height: 34px;">
-                      <option>Fee reconciliation drift</option>
-                      <option>Late settlement batch processing</option>
-                      <option>Manual system exception override</option>
-                   </select>
-                </div>
-             </div>
-             <div style="display: flex; justify-content: flex-end; gap: 12px;">
-                <button class="button secondary" data-action="close-adjustment-modal">Cancel</button>
-                <button class="button primary" data-action="submit-adjustment">Submit Adjustment</button>
-             </div>
-          </div>
-        </div>
-      `;
-    }
-
-    // Render the popup outside the transform fade-in context (to document.body modal root)
-    setTimeout(() => {
-      let modalContainer = document.getElementById("modal-root");
-      if (!modalContainer) {
-        modalContainer = document.createElement("div");
-        modalContainer.id = "modal-root";
-        document.body.appendChild(modalContainer);
-      }
-      if (state.selectedEvidenceRowId && selectedRow) {
-        modalContainer.innerHTML = renderEvidencePopup(selectedRow);
-      } else {
-        modalContainer.innerHTML = "";
-      }
-    }, 0);
-
-    // Wrap in grid layout
-    return `
-      ${toolbarHtml}
-      ${summaryStripHtml}
-      <div class="reconciliation-container" style="display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start;">
-        <div>
-          ${tabsSectionHtml}
-          ${affectedPreviewHtml}
-          ${evidenceTableHtml}
-        </div>
-      </div>
-      ${modalHtml}
-    `;
-
-    // Internal Popup Helper
-    function renderEvidencePopup(item) {
-      if (!item) return "";
-      const fallbackId = item.partnerTxnId || item.internalTxnId || item.id || "";
-      
-      const mockEvidenceRows = [
-        {
-          id: "MOMO_TXN_90_MISSING_PARTNER",
-          aiExplanation: "The transaction is successfully registered on the internal ledger, but the partner settlement file contains no record of this Trace ID. This typically indicates a settlement lag or transaction drop on the partner side.",
-          auditTrail: [
-            { time: "2026-06-10 10:00", event: "Internal ledger created" },
-            { time: "2026-06-10 10:42", event: "Reconciliation run: MISSING_PARTNER anomaly flag set" }
-          ]
-        },
-        {
-          id: "MOMO_TXN_9005",
-          aiExplanation: "The transaction has matching identifiers on both sides, but the amount differs. Partner reports 999,999 VND while Internal DB reports 125,000 VND, leaving an absolute delta of 874,999 VND. This points to a mismatch in float mapping or commission configuration.",
-          auditTrail: [
-            { time: "2026-06-10 09:30", event: "Internal ledger created" },
-            { time: "2026-06-10 09:35", event: "Partner transaction ingested" },
-            { time: "2026-06-10 10:42", event: "Reconciliation run: AMOUNT_MISMATCH anomaly flag set" }
-          ]
-        },
-        {
-          id: "MOMO_TXN_9019",
-          aiExplanation: "The partner settlement file records a transaction of 125,000 VND, but no corresponding transaction could be located on the internal ledger. This suggests a failure in the transaction sync pipeline or SFTP file processing latency.",
-          auditTrail: [
-            { time: "2026-06-10 09:40", event: "Partner transaction ingested" },
-            { time: "2026-06-10 10:42", event: "Reconciliation run: MISSING_INTERNAL anomaly flag set" }
-          ]
-        }
-      ];
-
-      const detailFallback = mockEvidenceRows.find(r => r.id === fallbackId) || {
-        aiExplanation: "Discrepancy detected during the latest reconciliation sweep. Please review the values on both sides.",
-        auditTrail: [
-          { time: "2026-06-10 10:42", event: "Reconciliation run: anomaly flag set" }
-        ]
-      };
-
-      const statusBadge = (s) => {
-        if (!s || s === "MISSING") return `<span class="badge warning" style="padding: 1px 4px; font-size:10px; border:none; margin-left: 2px;">MISSING</span>`;
-        return `<span class="badge matched" style="padding: 1px 4px; font-size:10px; border:none; margin-left: 2px;">${escapeHtml(s)}</span>`;
-      };
-
-      const isMissing = /MISSING_/.test(item.reconciliationStatus);
-      const sev = isMissing ? "HIGH" : (item.reconciliationStatus === "MATCHED" ? "LOW" : "MEDIUM");
-      const sevColor = sev === "HIGH" ? "#ef4444" : (sev === "MEDIUM" ? "#f97316" : "#10b981");
-      const deltaVal = Math.abs(Number(item.internalAmount || 0) - Number(item.partnerAmount || 0));
-
-      return `
-        <div class="evidence-detail-overlay" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: center; z-index: 9999;">
-          <div class="brief-modal" style="margin: 0; max-width: 550px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 24px; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(30, 41, 59, 0.95); color: white; box-shadow: var(--shadow);">
-            <div class="review-drawer-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
-              <div>
-                <h4 style="margin: 0; font-size: 10px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Evidence Detail</h4>
-                <h3 style="margin: 4px 0 0 0; font-size: 16px; font-weight: 700; color: white;">${escapeHtml(fallbackId)}</h3>
-              </div>
-              <button class="button tertiary compact" data-action="close-evidence-drawer" style="padding: 4px; min-width: unset; height: unset;">
-                <span class="material-symbols-outlined" style="font-size: 20px;">close</span>
-              </button>
-            </div>
-
-            <div style="margin-bottom: 16px; display: flex; gap: 6px; align-items: center;">
-              <span class="badge severity-${sev.toLowerCase()}" style="font-size: 10px; padding: 2px 6px; font-weight: 700; border-radius: 4px;">${sev} RISK</span>
-              <span class="badge neutral" style="font-size: 10px; padding: 2px 6px; border: none;">${escapeHtml(item.reconciliationStatus || "MISMATCH")}</span>
-            </div>
-
-            <div class="drawer-section" style="margin-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
-              <h4 style="margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: var(--brand-primary); font-weight: 700; letter-spacing: 0.05em;">AI Explanation</h4>
-              <p style="margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--text-muted);">${highlightInsightText(detailFallback.aiExplanation)}</p>
-            </div>
-
-            <div class="drawer-section" style="margin-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
-              <h4 style="margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: var(--brand-primary); font-weight: 700; letter-spacing: 0.05em;">Field-by-Field Compare</h4>
-              <div style="background: rgba(0,0,0,0.25); border-radius: 6px; padding: 12px; font-family: var(--font-mono); font-size: 12px;">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 6px; margin-bottom: 6px; font-weight: bold; color: var(--text-muted);">
-                  <span>Internal</span>
-                  <span>Partner</span>
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 6px;">
-                  <span style="color: ${item.internalAmount ? 'white' : 'var(--text-muted)'}; font-variant-numeric: tabular-nums;">Amt: ${item.internalAmount ? formatAmount(item.internalAmount) : '-'}</span>
-                  <span style="color: ${item.partnerAmount ? 'white' : 'var(--text-muted)'}; font-variant-numeric: tabular-nums;">Amt: ${item.partnerAmount ? formatAmount(item.partnerAmount) : '-'}</span>
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 6px;">
-                  <span>Status: ${statusBadge(item.internalStatus)}</span>
-                  <span>Status: ${statusBadge(item.partnerStatus)}</span>
-                </div>
-                <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.05); color: #ef4444; font-weight: 600;">
-                  <span>Delta: ${formatAmount(deltaVal)}</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="drawer-section" style="margin-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
-              <h4 style="margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: var(--brand-primary); font-weight: 700; letter-spacing: 0.05em;">Review Notes & Comments</h4>
-              <textarea id="evidence-note-input" placeholder="Type your investigation findings, note, or comment for this mismatch..." style="width: 100%; height: 54px; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border-color); color: white; padding: 6px 10px; border-radius: 6px; font-size: 12px; resize: none; font-family: inherit; outline: none; margin-bottom: 8px;"></textarea>
-            </div>
-
-            <div class="drawer-section" style="margin-bottom: 20px;">
-              <h4 style="margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: var(--brand-primary); font-weight: 700; letter-spacing: 0.05em;">Audit Trail & History</h4>
-              <ul style="margin: 0; padding-left: 14px; font-size: 11px; color: var(--text-muted); line-height: 1.45;">
-                ${(() => {
-                  const customNotes = (state.evidenceHistory && state.evidenceHistory[fallbackId]) || [];
-                  const combinedAuditTrail = [...detailFallback.auditTrail, ...customNotes];
-                  return combinedAuditTrail.map(t => `
-                    <li style="margin-bottom: 4px;">
-                      <strong>${escapeHtml(t.time)}</strong>: ${escapeHtml(t.event)}
-                    </li>
-                  `).join("");
-                })()}
-              </ul>
-            </div>
-
-            <div style="display: flex; justify-content: flex-end; gap: 12px;">
-              <button class="button secondary" data-action="close-evidence-drawer">Cancel</button>
-              <button class="button primary" data-action="submit-anomaly-note" data-row-id="${escapeHtml(fallbackId)}" style="background: var(--brand-primary); color: black; font-weight: 600; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; box-shadow: var(--shadow);">
-                <span class="material-symbols-outlined" style="font-size: 16px;">bookmark_added</span> Save Note & Mark Reviewed
-              </button>
-            </div>
-          </div>
-        </div>
-      `;
+      fetchPartners();
+      bindFilters();
+      bindViewActions();
     }
   }
 
-  function renderDataExplorer(txsData, filesData) {
-    const transactions = txsData.transactions || [];
-    const files = filesData.files || [];
-
-    // Table rows for files
-    const fileRows = files.length
-      ? files.map(f => {
-          const formattedDate = f.reconciliationDate ? formatDisplayDateTime(f.reconciliationDate) : "-";
-          return `
-            <tr>
-              <td><strong>${escapeHtml(f.fileName || f.file_name || f.filename || "-")}</strong></td>
-              <td><code>${escapeHtml(f.partner || "-")}</code></td>
-              <td><span class="badge" style="background: rgba(240,185,11,.08); color: var(--brand-primary); border-color: rgba(240,185,11,.2);">${escapeHtml(f.fileType || "-")}</span></td>
-              <td style="font-variant-numeric: tabular-nums;">${formatNumber(f.recordsCount || f.totalRows || 0)}</td>
-              <td><span class="badge ${f.processingStatus === 'COMPLETED' ? 'matched' : f.processingStatus === 'PROCESSING' ? 'processing' : 'failed'}">${escapeHtml(f.processingStatus || "-")}</span></td>
-              <td>${formattedDate}</td>
-            </tr>
-          `;
-        }).join("")
-      : `<tr><td colspan="6" style="text-align: center; padding: 24px 0;" class="text-muted">No ingested files found for this period.</td></tr>`;
-
-    // Table rows for transactions
-    const txnRows = transactions.length
-      ? transactions.map(t => {
-          const pd = t.partnerData || {};
-          const trace = pd.trace || "-";
-          const amount = pd.amount ? formatAmount(parseFloat(pd.amount)) : "-";
-          const status = pd.status || "-";
-          const formattedDate = t.reconciliationDate ? formatDisplayDateTime(t.reconciliationDate) : "-";
-          return `
-            <tr>
-              <td><code>${escapeHtml(t.id || "-")}</code></td>
-              <td><code>${escapeHtml(trace)}</code></td>
-              <td style="font-variant-numeric: tabular-nums; font-weight: 600;">${amount}</td>
-              <td><span class="badge matched">${escapeHtml(status)}</span></td>
-              <td><code>${escapeHtml(t.identify || "-")}</code></td>
-              <td>${formattedDate}</td>
-            </tr>
-          `;
-        }).join("")
-      : `<tr><td colspan="6" style="text-align: center; padding: 24px 0;" class="text-muted">No transaction logs found for this period.</td></tr>`;
-
-    const ef = state.explorerFilters || {};
-    return `
-      ${renderPageFilters()}
-      <div class="page-filters explorer-filters" style="margin-top: -16px;">
-        <div class="filter-group">
-          <span class="filter-label">AMOUNT MIN</span>
-          <div class="filter-input-wrapper">
-            <input id="amount-min" type="text" placeholder="0" value="${escapeHtml(ef.amountMin || '')}">
-          </div>
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">AMOUNT MAX</span>
-          <div class="filter-input-wrapper">
-            <input id="amount-max" type="text" placeholder="∞" value="${escapeHtml(ef.amountMax || '')}">
-          </div>
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">DATE FROM</span>
-          <div class="filter-input-wrapper">
-            <input id="date-from" type="text" placeholder="dd/mm/yyyy" value="${escapeHtml(ef.dateFrom ? formatDisplayDate(ef.dateFrom) : '')}">
-          </div>
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">DATE TO</span>
-          <div class="filter-input-wrapper">
-            <input id="date-to" type="text" placeholder="dd/mm/yyyy" value="${escapeHtml(ef.dateTo ? formatDisplayDate(ef.dateTo) : '')}">
-          </div>
-        </div>
-        <div class="filter-group" style="align-self: flex-end;">
-          <button class="button primary" id="explorer-apply-btn" style="padding: 8px 20px; font-size: 12px;">
-            <span class="material-symbols-outlined" style="font-size: 14px;">search</span>
-            Apply
-          </button>
-        </div>
-      </div>
-      <div style="display: grid; gap: 32px;">
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
-            <span class="material-symbols-outlined" style="color: var(--brand-primary);">cloud_done</span>
-            <h2 style="margin: 0;">Ingested Reconciliation Files (${formatNumber(filesData.total || files.length)})</h2>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Filename</th>
-                  <th>Partner</th>
-                  <th>Type</th>
-                  <th>Records</th>
-                  <th>Status</th>
-                  <th>Ingestion Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${fileRows}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
-            <span class="material-symbols-outlined" style="color: var(--brand-primary);">receipt_long</span>
-            <h2 style="margin: 0;">Raw Ingested Transactions (${formatNumber(txsData.total || transactions.length)})</h2>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>System ID</th>
-                  <th>Trace ID</th>
-                  <th>Amount</th>
-                  <th>Status</th>
-                  <th>Identify</th>
-                  <th>Reconciliation Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${txnRows}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </div>
-    `;
+  async function refreshAuditLogIfVisible() {
+    if (state.route !== "audit-log") return;
+    await render();
   }
 
 
-  function renderMappings(data, actionData, embedded = false) {
-    const items = data.mappings || [];
-    const actions = (actionData && actionData.actions) || state.copilotActions || [];
-    const pendingActions = actions.filter(action => action.status === "PENDING_APPROVAL");
-
-    const actionCards = pendingActions.length ? pendingActions.map(action => {
-      const payload = action.payload || {};
-      const confidence = typeof payload.confidence === "number" ? Math.round(payload.confidence * 100) : null;
-      const mappingCount = Array.isArray(payload.proposedMappings) ? payload.proposedMappings.length : null;
-      const draftMappingId = action.draftMappingId || "";
-      return `
-        <section class="panel review-center-panel">
-          <div class="review-center-header">
-            <div>
-              <div class="review-center-title-row">
-                <strong>${escapeHtml(action.title || "Action item")}</strong>
-                ${action.status ? badge(action.status) : ""}
-              </div>
-              <p class="muted review-center-reason">${escapeHtml(action.reason || "Awaiting operator review.")}</p>
-            </div>
-            <div class="review-center-actions">
-              ${draftMappingId ? `<button class="button" data-action="approve-config" data-config-id="${escapeHtml(draftMappingId)}">Approve Draft</button>` : ""}
-              ${draftMappingId ? `<button class="button secondary-action" data-action="reject-config" data-config-id="${escapeHtml(draftMappingId)}">Reject Draft</button>` : ""}
-            </div>
-          </div>
-          <div class="review-center-meta">
-            <span class="badge neutral">${escapeHtml(action.partner || state.partner)}</span>
-            ${action.workflowType ? `<span class="badge neutral">${escapeHtml(action.workflowType)}</span>` : ""}
-            ${action.fileType ? `<span class="badge neutral">${escapeHtml(action.fileType)}</span>` : ""}
-            ${confidence !== null ? `<span class="badge neutral">Confidence ${confidence}%</span>` : ""}
-            ${mappingCount !== null ? `<span class="badge neutral">${mappingCount} field mappings</span>` : ""}
-            ${payload.sheetName ? `<span class="badge neutral">Sheet ${escapeHtml(payload.sheetName)}</span>` : ""}
-            ${payload.startRow ? `<span class="badge neutral">Start row ${escapeHtml(String(payload.startRow))}</span>` : ""}
-          </div>
-        </section>
-      `;
-    }).join("") : `
-      <section class="panel">
-        <div class="empty-state" style="text-align: center; padding: 32px 0;">
-          <span class="material-symbols-outlined" style="font-size: 40px; color: var(--text-muted); margin-bottom: 12px;">fact_check</span>
-          <h3>No Pending Review Items</h3>
-          <p class="muted">No human approvals are waiting for ${state.partner}.</p>
-        </div>
-      </section>
-    `;
-
-    if (!items.length) {
-      return `
-        ${embedded ? "" : renderPageFilters({ showDate: false, showClear: false })}
-        <section class="panel">
-          <div class="panel-header" style="margin-bottom: 16px;">
-            <h2 style="margin: 0;">Review Center</h2>
-          </div>
-          ${actionCards}
-        </section>
-        <section class="panel">
-          <div class="empty-state" style="text-align: center; padding: 40px 0;">
-            <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted); margin-bottom: 12px;">settings</span>
-            <h3>No Mapping Versions</h3>
-            <p class="muted">No mapping versions found for ${state.partner}.</p>
-          </div>
-        </section>
-      `;
-    }
-
-    const cards = items.map(config => {
-      const health = config.configHealth || {};
-      const status = String(config.status || health.status || (health.stale ? "STALE" : "APPROVED"));
-      const confidence = typeof health.confidence === "number" ? Math.round(health.confidence * 100) : null;
-      const statusClass =
-        status === "APPROVED" ? "matched" :
-        status === "PENDING_APPROVAL" ? "warning" :
-        status === "SUPERSEDED" ? "processing" :
-        "critical";
-      const mappingsHtml = (config.fieldMappings || []).map(fm => `
-        <div class="mapping-grid" style="margin-bottom: 8px;">
-          <div class="mapping-card" style="padding: 10px 16px;">
-            <div><strong>${escapeHtml(fm.path)}</strong></div>
-            <div style="font-size: 11px; color: var(--text-muted);">
-              ${fm.column ? `Col: ${escapeHtml(fm.column)}` : fm.constant ? `Const: ${escapeHtml(fm.constant)}` : '-'}
-            </div>
-          </div>
-          <div class="mapping-arrow"><span class="material-symbols-outlined" style="font-size: 18px;">arrow_forward</span></div>
-          <div class="mapping-card" style="padding: 10px 16px;">
-            <code style="font-size: 11px;">${escapeHtml(fm.type)}</code>
-            <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">
-              ${fm.required ? '<span style="color: var(--status-unmatched);">Required</span>' : 'Optional'}
-              ${fm.mapping ? `<span style="color: var(--brand-accent-blue); margin-left: 4px;">• ${Object.keys(fm.mapping).length} rules</span>` : ''}
-            </div>
-          </div>
-        </div>
-      `).join("");
-
-      return `
-        <section class="panel" style="margin-bottom: 24px;">
-          <div class="grid cols-4" style="margin-bottom: 20px; align-items: stretch;">
-            <div class="metric" style="padding: 16px;">
-              <span>Partner</span>
-              <strong style="font-size: 20px;">${escapeHtml(config.partner)}</strong>
-            </div>
-            <div class="metric" style="padding: 16px;">
-              <span>Version</span>
-              <strong style="font-size: 20px;">${escapeHtml(config.configVersion || 'latest')}</strong>
-            </div>
-            <div class="metric" style="padding: 16px;">
-              <span>File Type</span>
-              <strong style="font-size: 20px;">${escapeHtml(config.fileType || 'SETTLEMENT')}</strong>
-            </div>
-            <div class="metric" style="padding: 16px;">
-              <span>Sheet / Row</span>
-              <strong style="font-size: 20px;">${escapeHtml(config.sheetName || '-')} / ${config.startRow || 2}</strong>
-            </div>
-          </div>
-          <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom: 16px;">
-            ${badge(status)}
-            ${confidence !== null ? `<span class="badge neutral">Confidence ${confidence}%</span>` : ""}
-            ${config.approvedAt ? `<span class="badge neutral">Approved ${escapeHtml(formatDisplayDateTime(config.approvedAt))}</span>` : ""}
-            ${config.supersededByConfigId ? `<span class="badge neutral">Superseded by ${escapeHtml(config.supersededByConfigId)}</span>` : ""}
-            ${health.reasoning ? `<span class="muted" style="font-size: 12px;">${escapeHtml(String(health.reasoning))}</span>` : ""}
-            ${status === "PENDING_APPROVAL" ? `<button class="button" data-action="approve-config" data-config-id="${escapeHtml(config._id || "")}">Approve</button>` : ""}
-            ${status === "PENDING_APPROVAL" ? `<button class="button secondary-action" data-action="reject-config" data-config-id="${escapeHtml(config._id || "")}">Reject</button>` : ""}
-            ${status === "PENDING_APPROVAL" ? `<button class="button" data-action="refresh-config" data-config-id="${escapeHtml(config._id || "")}" style="background: transparent; border: 1px solid var(--border);">Re-run AI</button>` : ""}
-          </div>
-          <h3 style="font-size: 13px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 16px;">
-            Field Mappings (${(config.fieldMappings || []).length})
-          </h3>
-          ${mappingsHtml}
-        </section>
-      `;
-    }).join("");
-
-    return `
-      ${embedded ? "" : renderPageFilters({ showDate: false, showClear: false })}
-      <section class="panel">
-        <div class="panel-header" style="margin-bottom: 16px;">
-          <h2 style="margin: 0;">Review Center</h2>
-        </div>
-        ${actionCards}
-      </section>
-      ${cards}
-    `;
-  }
-
-  function renderSettings(embedded = false) {
-    const s = state.studio;
-    
-    const stepsHeader = `
-      <div class="studio-steps">
-        <div class="studio-step-item ${s.step === 1 ? 'active' : ''}">
-          <span class="studio-step-index">1</span>
-          Select Sample
-        </div>
-        <div class="studio-step-item ${s.step === 2 ? 'active' : ''} ${s.step >= 2 ? 'enabled' : ''}">
-          <span class="studio-step-index">2</span>
-          Review Draft
-        </div>
-        <div class="studio-step-item ${s.step === 3 ? 'active' : ''} ${s.step >= 3 ? 'enabled' : ''}">
-          <span class="studio-step-index">3</span>
-          Validate Output
-        </div>
-      </div>
-    `;
-
-    // Step 1: Choose Source View
-    if (s.step === 1) {
-      return `
-        <section class="panel" style="margin-bottom: 24px;">
-          ${embedded ? "" : `<h2>Create Draft Mapping</h2>
-          <p class="muted" style="margin-bottom: 24px;">Upload a partner sample, review the draft mapping, then send it to Review Center.</p>`}
-          
-          ${stepsHeader}
-
-          <div class="grid cols-3 studio-validation-grid">
-            <!-- Option A: Upload Spreadsheet -->
-            <div class="option-card" style="border: 1px dashed var(--border); border-radius: 8px; padding: 24px; text-align: center; background: rgba(240, 185, 11, 0.02); display: flex; flex-direction: column; justify-content: space-between; transition: var(--transition-smooth);">
-              <div>
-                ${state.studio.loading ? `
-                  <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">
-                    <div class="spinner" style="margin-bottom: 16px;"></div>
-                    <p style="font-size: 13px; font-weight: 600; color: var(--brand-primary); margin: 0;">AI is analyzing your file...</p>
-                    <p class="muted" style="font-size: 11px; margin-top: 4px;">Mapping structure extraction in progress</p>
-                  </div>
-                ` : `
-                  <span class="material-symbols-outlined" style="font-size: 48px; color: var(--brand-primary); margin-bottom: 12px;">psychology</span>
-                  <h3 style="margin: 0 0 8px 0;">Upload Partner Sample</h3>
-                  <p class="muted" style="font-size: 12px; margin-bottom: 16px;">Upload a spreadsheet (.xlsx, .xls, .csv) to generate a draft mapping.</p>
-                  
-                  <div style="margin-bottom: 16px; display: flex; gap: 8px; align-items: center; justify-content: center;">
-                    <span style="font-size:11px; font-weight:700; color: var(--text-muted);">PARTNER:</span>
-                    <select id="studio-partner-select" style="font-size: 11px; padding: 4px 18px 4px 8px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; color: var(--text-primary); cursor: pointer; outline: none; height: 28px;">
-                      <option value="VNPAY" ${state.partner === "VNPAY" ? "selected" : ""}>VNPAY</option>
-                      <option value="MOMO" ${state.partner === "MOMO" ? "selected" : ""}>MOMO</option>
-                      <option value="ZALOPAY" ${state.partner === "ZALOPAY" ? "selected" : ""}>ZALOPAY</option>
-                      <option value="ACMEPAY" ${state.partner === "ACMEPAY" ? "selected" : ""}>ACMEPAY</option>
-                    </select>
-                  </div>
-                `}
-              </div>
-              <div>
-                <input type="file" id="studio-excel-upload" accept=".xlsx,.xls,.csv" style="display: none;">
-                <button class="button primary" style="width: 100%;" onclick="document.getElementById('studio-excel-upload').click()" ${state.studio.loading ? "disabled" : ""}>
-                  <span class="material-symbols-outlined" style="font-size:18px;">upload</span> ${state.studio.loading ? "Processing..." : "Generate Draft"}
-                </button>
-              </div>
-            </div>
-
-            <!-- Option B: Upload JSON -->
-            <div class="option-card" style="border: 1px dashed var(--border); border-radius: 8px; padding: 24px; text-align: center; background: rgba(255,255,255,0.01); display: flex; flex-direction: column; justify-content: space-between; transition: var(--transition-smooth);">
-              <div>
-                <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted); margin-bottom: 12px;">upload_file</span>
-                <h3 style="margin: 0 0 8px 0;">Upload Existing Schema</h3>
-                <p class="muted" style="font-size: 12px; margin-bottom: 24px;">Start from an existing JSON schema and send a revised version for review.</p>
-              </div>
-              <div>
-                <input type="file" id="studio-json-upload" accept=".json" style="display: none;">
-                <button class="button" style="width: 100%;" onclick="document.getElementById('studio-json-upload').click()">
-                  <span class="material-symbols-outlined" style="font-size:18px;">folder_open</span> Browse JSON File
-                </button>
-              </div>
-            </div>
-
-            <!-- Option C: Paste JSON -->
-            <div class="option-card" style="border: 1px dashed var(--border); border-radius: 8px; padding: 24px; text-align: center; background: rgba(255,255,255,0.01); display: flex; flex-direction: column; justify-content: space-between; transition: var(--transition-smooth);">
-              <div>
-                <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-muted); margin-bottom: 12px;">edit_note</span>
-                <h3 style="margin: 0 0 8px 0;">Manual Setup</h3>
-                <p class="muted" style="font-size: 12px; margin-bottom: 24px;">Start configuration manually by pasting JSON mapping template.</p>
-              </div>
-              <div>
-                <button class="button" style="width: 100%;" id="studio-paste-btn">
-                  <span class="material-symbols-outlined" style="font-size:18px;">code</span> Paste Schema JSON
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
-      `;
-    }
-
-    // Step 2: Data Preview & AI Mapping
-    if (s.step === 2) {
-      // Build Excel Sheet preview if headers present
-      let previewHtml = '';
-      if (s.headers && s.headers.length) {
-        const previewHeaders = s.headers.map(h => `<th style="text-align: left; padding: 10px;">${escapeHtml(h)}</th>`).join("");
-        const previewRows = s.sampleRows.slice(0, 10).map((row, rIdx) => {
-          const cells = row.map(c => `<td style="padding: 10px; border-top: 1px solid var(--border); font-size:12px;">${escapeHtml(String(c || ''))}</td>`).join("");
-          return `<tr><td style="padding: 10px; border-top: 1px solid var(--border); font-size:12px; font-weight:700; color:var(--text-muted);">${rIdx + 1}</td>${cells}</tr>`;
-        }).join("");
-        
-        previewHtml = `
-          <div style="margin-bottom: 24px;">
-            <h3 style="font-size: 13px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 12px;">Detected File Structure Preview</h3>
-            <div class="table-wrap" style="overflow-x: auto; max-height: 250px; background: rgba(0,0,0,0.15); border: 1px solid var(--border); border-radius: 6px;">
-              <table style="width: 100%; border-collapse: collapse;">
-                <thead>
-                  <tr style="background: var(--bg-surface-hover);">
-                    <th style="width: 40px; padding: 10px; text-align: left;">Row</th>
-                    ${previewHeaders}
-                  </tr>
-                </thead>
-                <tbody>
-                  ${previewRows}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        `;
-      }
-
-      // Visual Field Mappings Table or JSON textarea
-      const configJsonStr = s.config ? JSON.stringify(s.config, null, 2) : '';
-      
-      // AI Mapping review table (Step 3/4)
-      const fieldMappings = (s.config?.fieldMappings || []).filter(fm => fm.path !== "currency");
-      const mappingRows = fieldMappings.map((fm, idx) => {
-        const path = fm.path || '';
-        const col = fm.column !== undefined ? fm.column : '';
-        const constVal = fm.constant !== undefined ? fm.constant : '';
-        const type = fm.type || 'STRING';
-        const isRequired = fm.required ? 'Yes' : 'No';
-        
-        // Confidence
-        const confidenceVal = s.config?.configHealth?.confidence || 0.85;
-        const confidencePct = Math.round(confidenceVal * 100);
-        let badgeClass = 'neutral';
-        let label = 'Medium';
-        if (confidencePct >= 90) {
-          badgeClass = 'matched';
-          label = 'High';
-        } else if (confidencePct < 80) {
-          badgeClass = 'critical';
-          label = 'Needs Review';
-        }
-        
-        return `
-          <tr>
-            <td style="padding: 12px 16px; font-weight:600; color: var(--text-primary); border-top:1px solid var(--border);">${escapeHtml(path)}</td>
-            <td style="padding: 12px 16px; border-top:1px solid var(--border);">
-              <select class="studio-mapping-col-select" data-idx="${idx}" style="font-size:12px; padding: 4px 8px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; outline:none; color:var(--text-primary);">
-                <option value="">-- Constant Only --</option>
-                ${s.headers.map((h, hIdx) => `<option value="${hIdx + 1}" ${col === (hIdx + 1) ? 'selected' : ''}>Col ${hIdx + 1}: ${h}</option>`).join("")}
-              </select>
-            </td>
-            <td style="padding: 12px 16px; border-top:1px solid var(--border);">
-              <input type="text" class="studio-mapping-const-input" data-idx="${idx}" value="${escapeHtml(String(constVal))}" style="font-size:12px; padding: 4px 8px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; outline:none; color:var(--text-primary); width:100px;" placeholder="Constant...">
-            </td>
-            <td style="padding: 12px 16px; border-top:1px solid var(--border);">
-              <select class="studio-mapping-type-select" data-idx="${idx}" style="font-size:12px; padding: 4px 8px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; outline:none; color:var(--text-primary);">
-                <option value="STRING" ${type === 'STRING' ? 'selected' : ''}>STRING</option>
-                <option value="DECIMAL" ${type === 'DECIMAL' ? 'selected' : ''}>DECIMAL</option>
-                <option value="DATE" ${type === 'DATE' ? 'selected' : ''}>DATE</option>
-                <option value="CONSTANT" ${type === 'CONSTANT' ? 'selected' : ''}>CONSTANT</option>
-              </select>
-            </td>
-            <td style="padding: 12px 16px; border-top:1px solid var(--border);"><span class="badge ${isRequired === 'Yes' ? 'warning' : 'neutral'}">${isRequired}</span></td>
-            <td style="padding: 12px 16px; border-top:1px solid var(--border);"><span class="badge ${badgeClass}">${confidencePct}% (${label})</span></td>
-          </tr>
-        `;
-      }).join("");
-
-      return `
-        <section class="panel" style="margin-bottom: 24px;">
-          <h2>Review Draft Mapping</h2>
-          <p class="muted" style="margin-bottom: 20px;">Inspect the detected file structure and adjust the draft before it moves through Review Center.</p>
-          
-          ${stepsHeader}
-          ${s.draftMappingId ? `
-            <div class="panel" style="margin-bottom: 20px; padding: 12px 16px; display: flex; align-items: center; gap: 12px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.18); border-radius: 6px;">
-              <span class="material-symbols-outlined" style="color: var(--brand-accent-blue);">info</span>
-              <div style="font-size: 13px; color: var(--text-primary); flex-grow: 1;">
-                This draft is currently pending review. Runtime eligibility: <strong>${s.isRuntimeEligible ? "Yes" : "No"}</strong>.
-              </div>
-              <div style="margin-left: auto;">
-                ${badge(s.configStatus || "PENDING_APPROVAL")}
-              </div>
-            </div>
-          ` : ""}
-          ${previewHtml}
-
-          <!-- Tabs header -->
-          <div class="studio-toolbar">
-            <div class="studio-toolbar-tabs">
-              <button class="button active studio-tab-button" id="studio-tab-visual">Visual Mapping</button>
-              <button class="button studio-tab-button" id="studio-tab-json">Schema JSON</button>
-            </div>
-            
-            <div>
-              <button class="button button-ghost" id="studio-add-field-btn" style="height:32px; padding:0 12px; font-size:12px;">+ Add Mapping Row</button>
-            </div>
-          </div>
-
-          <!-- Tab Content 1: Visual Mapper -->
-          <div id="studio-tab-visual-content" style="margin-bottom: 24px; border:1px solid var(--border); border-radius:6px; background:var(--bg-surface);">
-            <table style="width:100%; border-collapse:collapse; text-align:left;">
-              <thead>
-                <tr style="background:var(--bg-surface-hover);">
-                  <th style="padding:12px 16px;">Canonical Field</th>
-                  <th style="padding:12px 16px;">Source Column</th>
-                  <th style="padding:12px 16px;">Constant Value</th>
-                  <th style="padding:12px 16px;">Data Type</th>
-                  <th style="padding:12px 16px;">Required</th>
-                  <th style="padding:12px 16px;">AI Confidence</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${mappingRows}
-              </tbody>
-            </table>
-          </div>
-
-          <!-- Tab Content 2: Raw JSON -->
-          <div id="studio-tab-json-content" style="display:none; margin-bottom: 24px; display:flex; flex-direction:column; gap:10px;">
-            <textarea id="studio-json-textarea" style="width:100%; min-height: 280px; font-family: monospace; background: var(--bg-primary); border: 1px solid var(--border); padding: 12px; border-radius: 6px; color: #a8ffb2; outline: none; line-height: 1.4; font-size: 13px;" placeholder="Schema JSON...">${configJsonStr}</textarea>
-            <div style="text-align:right;">
-              <button class="button" id="studio-copy-json-btn" style="height:32px; padding:0 16px; font-size:12px;">Copy JSON Schema</button>
-            </div>
-          </div>
 
 
 
-          <div style="display: flex; gap: 12px;">
-            <button class="button" id="studio-back-to-1-btn">Back to Step 1</button>
-            <button class="button primary" id="studio-to-3-btn">
-              <span class="material-symbols-outlined" style="font-size:18px;">rule</span> Validate & Test Mapping Schema
-            </button>
-          </div>
-        </section>
-      `;
-    }
 
-    // Step 3: Validate, Test & Submit
-    if (s.step === 3) {
-      // Quality score details
-      const score = s.validation?.score || 100;
-      let scoreClass = 'matched';
-      let scoreLabel = 'Excellent';
-      if (score < 75) {
-        scoreClass = 'critical';
-        scoreLabel = 'Review Needed';
-      } else if (score < 90) {
-        scoreClass = 'warning';
-        scoreLabel = 'Good';
-      }
 
-      // Checklists
-      const errors = s.validation?.errors || [];
-      const warnings = s.validation?.warnings || [];
-      const passedChecks = [
-        errors.some(e => e.includes("required")) ? null : "Required fields are mapped for the canonical output.",
-        warnings.some(w => w.includes("multiple")) ? null : "Duplicate mapping check passed.",
-        warnings.some(w => w.includes("neither")) ? null : "Each field has either a source column or a constant."
-      ].filter(Boolean);
-
-      const renderValidationItems = (items, tone, icon) => items.length
-        ? items.map(item => `
-          <div class="validation-item ${tone}">
-            <span class="material-symbols-outlined">${icon}</span>
-            <span>${escapeHtml(item)}</span>
-          </div>
-        `).join("")
-        : `<div class="validation-empty ${tone}">None</div>`;
-
-      // Test output transformed JSON representation
-      let testOutputHtml = `<div class="empty-state" style="padding: 24px; text-align:center;">Click "Run Transformation Test" to verify output layout.</div>`;
-      if (s.testOutput) {
-        testOutputHtml = `
-          <textarea readonly style="width:100%; min-height: 180px; font-family: monospace; background: var(--bg-primary); border: 1px solid var(--border); padding: 12px; border-radius: 6px; color: #5bc0be; outline: none; line-height: 1.4; font-size: 13px;">${JSON.stringify(s.testOutput, null, 2)}</textarea>
-        `;
-      }
-
-      // Versions history listing
-      const versionRows = (s.versions || []).map(v => `
-        <tr style="border-top:1px solid var(--border);">
-          <td style="padding:10px 12px; font-weight:700;">${escapeHtml(v.configVersion || 'latest')}</td>
-          <td style="padding:10px 12px; color:var(--text-muted);">${escapeHtml(v.publishedAt ? formatDisplayDateTime(v.publishedAt) : 'N/A')}</td>
-          <td style="padding:10px 12px; text-align:right;">
-            <button class="button studio-restore-version-btn" data-id="${v._id}" style="height:26px; padding:0 10px; font-size:11px;">Restore</button>
-          </td>
-        </tr>
-      `).join("");
-      
-      const versionsTable = versionRows ? `
-        <table style="width:100%; border-collapse:collapse; text-align:left; font-size:12px;">
-          <thead>
-            <tr style="background:var(--bg-surface-hover);">
-              <th style="padding:10px 12px;">Version</th>
-              <th style="padding:10px 12px;">Published Date</th>
-              <th style="padding:10px 12px; text-align:right;">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${versionRows}
-          </tbody>
-        </table>
-      ` : `<div style="font-size:12px; color:var(--text-muted); padding:10px; text-align:center;">No previous versions.</div>`;
-
-      return `
-        <section class="panel" style="margin-bottom: 24px;">
-          <h2>Validate & Prepare Review Handoff</h2>
-          <p class="muted" style="margin-bottom: 20px;">Resolve blocking issues, inspect warnings, test the transformed output, and then hand the draft to Review Center.</p>
-          ${s.draftMappingId ? `
-            <div class="panel" style="margin-bottom: 20px; padding: 12px 16px; display: flex; align-items: center; gap: 16px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.18); border-radius: 6px; flex-wrap: wrap;">
-              <span class="material-symbols-outlined" style="color: var(--brand-accent-blue);">fact_check</span>
-              <div style="font-size: 13px; color: var(--text-primary); flex-grow: 1;">
-                This draft requires Review Center action before activation.
-              </div>
-              <div style="display: flex; gap: 8px; align-items: center; margin-left: auto;">
-                ${badge(s.configStatus || "PENDING_APPROVAL")}
-                <button class="button ${s.handoffConfirmed ? "secondary-action" : "primary"}" id="studio-confirm-handoff-btn" style="height: 32px; padding: 0 12px; font-size: 12px;">
-                  ${s.handoffConfirmed ? "Handoff Confirmed" : "Confirm Ready"}
-                </button>
-                <button class="button" id="studio-open-review-center-btn" style="height: 32px; padding: 0 12px; font-size: 12px;">
-                  Open Review Center
-                </button>
-              </div>
-            </div>
-          ` : ""}
-          
-          ${stepsHeader}
-
-          <div class="grid cols-3" style="gap: 20px; align-items: stretch; margin-bottom: 24px;">
-            <!-- Score & Validation Status -->
-            <div class="panel studio-validation-card">
-              <div>
-                <h3 style="margin: 0 0 16px 0; font-size:14px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted);">Mapping Quality Score</h3>
-                <div style="display:flex; align-items:baseline; gap:8px; margin-bottom:8px;">
-                  <strong style="font-size:36px; color:${score < 75 ? 'var(--status-unmatched)' : 'var(--brand-primary)'};">${score}</strong>
-                  <span style="font-size:14px; color:var(--text-muted);">/ 100</span>
-                </div>
-                <span class="badge ${scoreClass}" style="margin-bottom:16px;">${scoreLabel}</span>
-                <div class="validation-group">
-                  <div class="validation-group-title">Passed Checks</div>
-                  ${renderValidationItems(passedChecks, "matched", "check_circle")}
-                </div>
-              </div>
-            </div>
-
-            <div class="panel studio-validation-card">
-              <div>
-                <h3 style="margin:0 0 16px 0; font-size:14px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted);">Validation Results</h3>
-                <div class="validation-group">
-                  <div class="validation-group-title critical">Blocking Errors</div>
-                  ${renderValidationItems(errors, "critical", "cancel")}
-                </div>
-                <div class="validation-group">
-                  <div class="validation-group-title warning">Warnings</div>
-                  ${renderValidationItems(warnings, "warning", "warning")}
-                </div>
-              </div>
-            </div>
-
-            <!-- Version Management history (Step 9) -->
-            <div class="panel studio-validation-card studio-version-card">
-              <div>
-                <h3 style="margin:0 0 12px 0; font-size:14px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted);">Schema Versions</h3>
-                <div class="table-wrap" style="max-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:4px;">
-                  ${versionsTable}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Section 2: Test Mapping Output console -->
-          <div class="panel studio-output-panel">
-            <div class="studio-output-header">
-              <h3 style="margin:0; font-size:15px; font-weight:700;">Test Mapping Transformation Result</h3>
-              <button class="button primary studio-tab-button" id="studio-run-test-btn">Run Transformation Test</button>
-            </div>
-            ${testOutputHtml}
-          </div>
-
-          <div style="display: flex; gap: 12px;">
-            <button class="button" id="studio-back-to-2-btn">Back to Step 2</button>
-            ${!s.draftMappingId ? `
-              <button class="button primary" id="studio-confirm-handoff-btn">Mark Ready for Review</button>
-            ` : ""}
-          </div>
-        </section>
-      `;
-    }
-  }
-
-  function renderAiObservation(obs) {
-    const resolutionLabel = {
-      "llm": "Primary LLM",
-      "llm_fallback": "Fallback LLM",
-      "schema_fallback": "Schema Fallback",
-      "rule_based": "Rule-based",
-    }[obs.resolution] || obs.resolution;
-
-    const isLlm = obs.resolution === "llm";
-    const providerModel = (obs.provider || '-') + (obs.model ? ` / ${obs.model}` : '');
-    const gr = obs.guardrail_result;
-
-    // Build the visual blueprint checklist of guardrails
-    let guardrailChecklistHtml = '';
-    if (gr && gr.findings) {
-      // Map standard checks:
-      // Check 1: Record Count Integrity
-      const hasCountHallucination = gr.findings.some(f => f.field === 'affected_count');
-      const countCheck = {
-        title: "Record Count Verification",
-        status: hasCountHallucination ? "fail" : "pass",
-        desc: hasCountHallucination 
-          ? "Discrepancy detected: LLM affected counts deviate from actual database records."
-          : "Verified. LLM anomaly counts match underlying database metrics."
-      };
-
-      // Check 2: Severity Calibration
-      const hasSeverityMismatch = gr.findings.some(f => f.field === 'severity');
-      const severityCheck = {
-        title: "Severity Level Calibration",
-        status: hasSeverityMismatch ? "warn" : "pass",
-        desc: hasSeverityMismatch
-          ? "Deviation flagged: LLM severity level is slightly misaligned with threshold rules."
-          : "Verified. Anomaly severity corresponds correctly to operational rules."
-      };
-
-      // Check 3: Scope Alignment
-      const hasScopeMismatch = gr.findings.some(f => f.field === 'type');
-      const scopeCheck = {
-        title: "Analysis Scope Check",
-        status: hasScopeMismatch ? "warn" : "pass",
-        desc: hasScopeMismatch
-          ? "Scope alert: Insights contain findings outside of the requested category focus."
-          : "Verified. AI findings are 100% focused on the requested analysis dimension."
-      };
-
-      const checks = [countCheck, severityCheck, scopeCheck];
-      guardrailChecklistHtml = `
-        <div style="margin-top: 16px;">
-          <h4 style="font-size: 11px; font-weight: 800; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 12px;">AI Confidence & Integrity Guardrails</h4>
-          <div class="guardrail-integrity-grid">
-            ${checks.map(c => {
-              const icon = c.status === 'pass' ? 'check_circle' : c.status === 'fail' ? 'cancel' : 'warning';
-              return `
-                <div class="guardrail-check-card ${c.status}">
-                  <span class="material-symbols-outlined guardrail-check-icon ${c.status}">${icon}</span>
-                  <div class="guardrail-check-body">
-                    <span class="guardrail-check-title">${c.title}</span>
-                    <span class="guardrail-check-desc">${c.desc}</span>
-                  </div>
-                </div>
-              `;
-            }).join("")}
-          </div>
-        </div>
-      `;
-    }
-
-    const flowStatus = gr ? (gr.is_valid ? 'completed' : 'failed') : 'completed';
-    const flowIcon = gr ? (gr.is_valid ? 'verified_user' : 'report') : 'verified_user';
-
-    return `
-      <details class="ai-obs-accordion">
-        <summary class="ai-obs-summary">
-          <div class="ai-obs-summary-left">
-            <span class="material-symbols-outlined ai-obs-glow-icon">psychology</span>
-            <span class="ai-obs-summary-title">AI Blueprint & Audit telemetry</span>
-            <span class="ai-obs-summary-subtext">(${resolutionLabel} • ${providerModel} • Latency: ${obs.latency_ms ? obs.latency_ms.toFixed(0) + 'ms' : '-'})</span>
-          </div>
-          <div class="ai-obs-summary-right">
-            <span class="ai-badge ${isLlm ? 'ai-badge-llm' : 'ai-badge-fallback'}">${isLlm ? 'LLM' : 'FALLBACK'}</span>
-            ${obs.cache_hit ? '<span class="ai-badge ai-badge-hit">CACHED</span>' : ''}
-            ${gr ? `<span class="ai-badge ai-badge-${gr.risk_level}">${gr.is_valid ? 'VALIDATED' : 'WARNING'}</span>` : ''}
-            <span class="material-symbols-outlined accordion-arrow">expand_more</span>
-          </div>
-        </summary>
-        <div class="ai-obs-details-grid" style="padding-top: 20px;">
-          <div class="pipeline-flow" style="margin-bottom: 20px;">
-            <div class="flow-step completed">
-              <span class="material-symbols-outlined">database</span>
-              <span>Source Ledger Data</span>
-            </div>
-            <div class="flow-arrow">➔</div>
-            <div class="flow-step completed">
-              <span class="material-symbols-outlined">cognition</span>
-              <span>LLM Generator (${obs.model || 'rule-engine'})</span>
-            </div>
-            <div class="flow-arrow">➔</div>
-            <div class="flow-step ${flowStatus}">
-              <span class="material-symbols-outlined">${flowIcon}</span>
-              <span>Integrity Guardrails</span>
-            </div>
-          </div>
-
-          <div class="grid cols-3" style="gap: 12px; margin: 0;">
-            <div class="ai-group">
-              <div class="ai-group-title">PIPELINE METADATA</div>
-              <div class="ai-group-body">
-                <div class="ai-row">
-                  <span class="ai-label">Resolution</span>
-                  <span class="ai-value">${resolutionLabel}</span>
-                </div>
-                <div class="ai-row">
-                  <span class="ai-label">Provider</span>
-                  <span class="ai-value mono">${providerModel}</span>
-                </div>
-                <div class="ai-row">
-                  <span class="ai-label">Cache</span>
-                  <span class="ai-value">${obs.cache_hit ? 'Hit' : 'Miss'}</span>
-                </div>
-              </div>
-            </div>
-            <div class="ai-group">
-              <div class="ai-group-title">PERFORMANCE METRICS</div>
-              <div class="ai-group-body">
-                <div class="ai-row">
-                  <span class="ai-label">Latency</span>
-                  <span class="ai-value mono">${obs.latency_ms ? obs.latency_ms.toFixed(0) + 'ms' : '-'}</span>
-                </div>
-                <div class="ai-row">
-                  <span class="ai-label">Tokens</span>
-                  <span class="ai-value mono">${formatNumber(obs.total_tokens || 0)} <small style="color: var(--text-muted); font-weight: 400;">(p:${formatNumber(obs.prompt_tokens || 0)} / c:${formatNumber(obs.completion_tokens || 0)})</small></span>
-                </div>
-                <div class="ai-row">
-                  <span class="ai-label">Cost</span>
-                  <span class="ai-value mono">${obs.estimated_cost_usd ? '$' + obs.estimated_cost_usd.toFixed(6) : '-'}</span>
-                </div>
-              </div>
-            </div>
-            <div class="ai-group">
-              <div class="ai-group-title">QUALITY COMPLIANCE</div>
-              <div class="ai-group-body">
-                <div class="ai-row">
-                  <span class="ai-label">Schema Validation</span>
-                  <span class="ai-value">${obs.schema_valid ? 'PASSED' : 'FAILED'}</span>
-                </div>
-                <div class="ai-row">
-                  <span class="ai-label">Data Integrity</span>
-                  <span class="ai-value" style="color: ${gr && !gr.is_valid ? 'var(--status-failed)' : 'var(--status-matched)'};">${gr ? (gr.is_valid ? 'VERIFIED' : 'WARNING') : 'VERIFIED'}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          ${guardrailChecklistHtml}
-        </div>
-      </details>
-    `;
-  }
-
-  function renderError(err) {
-    return `
-      <section class="panel" style="border-color: var(--red); background: var(--red-bg); display: flex; align-items: center; gap: 12px;">
-        <span class="material-symbols-outlined" style="color: var(--red);">error</span>
-        <div>
-          <strong style="color: var(--red);">Service API error</strong>
-          <p class="muted" style="margin: 2px 0 0 0;">${escapeHtml(err.message || String(err))}</p>
-        </div>
-      </section>
-    `;
-  }
-
-  function boldNumbers(text) {
-    if (!text) return "";
-    return text.replace(/\b(\d+(?:\.\d+)?%|\b\d+(?:,\d{3})*(?:\.\d+)?(?:[MKmk])?\s*VND|\b\d+(?:,\d{3})*(?:\.\d+)?(?:[MKmk])?)\b/gi, "<strong>$1</strong>");
-  }
-
-  function insightCard(item) {
-    const sev = String(item.severity || "low").toLowerCase();
-    
-    // Select visual color and icon based on severity
-    let statusColor = "var(--text-muted)";
-    if (sev === "critical") {
-      statusColor = "var(--critical)";
-    } else if (sev === "high") {
-      statusColor = "var(--status-warning)";
-    } else if (sev === "medium") {
-      statusColor = "#fb923c";
-    } else if (sev === "low") {
-      statusColor = "var(--status-matched)";
-    }
-
-    const typeLabel = (item.type || state.focus).replace(/_/g, ' ');
-    const descriptionText = item.description || "";
-
-    return `
-      <div class="insight-card-flex" style="display: flex; gap: 16px; padding: 18px; border-radius: 14px; background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015)); border: 1px solid rgba(255,255,255,0.07); align-items: flex-start; box-shadow: var(--shadow);">
-        <div style="flex-shrink: 0; width: 68px; height: 68px; border-radius: 12px; background: ${sev === 'critical' ? 'rgba(235, 87, 87, 0.12)' : sev === 'high' ? 'rgba(240, 185, 11, 0.12)' : 'rgba(255,255,255,0.04)'}; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1.5px solid ${statusColor}; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.15);">
-          <span style="font-size: 26px; font-weight: 800; color: ${statusColor}; line-height: 1.1; font-family: monospace;">${formatNumber(item.affected_count || 0)}</span>
-          <span style="font-size: 9px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-top: 3px; letter-spacing: 0.05em;">Record</span>
-        </div>
-        <div style="flex-grow: 1; min-width: 0;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px;">
-            <span class="insight-type-badge" style="margin: 0; font-size: 10px; padding: 2px 8px; text-transform: uppercase; font-weight: 700; background: rgba(255,255,255,0.05); color: var(--text-muted); border-radius: 4px;">${typeLabel}</span>
-            ${severityBadge(sev)}
-          </div>
-          <h3 style="margin: 0 0 6px; font-size: 15px; font-weight: 700; color: #FFFFFF; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${boldNumbers(escapeHtml(item.title))}</h3>
-          <p style="margin: 0 0 10px; font-size: 13px; color: var(--text-muted); line-height: 1.45;">${boldNumbers(escapeHtml(descriptionText))}</p>
-          ${item.recommendation ? `
-            <div style="padding: 10px 12px; border-radius: 8px; background: rgba(0,0,0,0.2); border-left: 3px solid ${statusColor}; font-size: 12px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);">
-              <strong style="color: ${statusColor}; font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 3px; font-weight: 800;">Action</strong>
-              <span style="color: #E2E8F0; line-height: 1.4;">${boldNumbers(escapeHtml(item.recommendation))}</span>
-            </div>
-          ` : ""}
-        </div>
-      </div>
-    `;
-  }
 
   function bindViewActions() {
-    const reconStatus = document.getElementById("recon-status-filter");
-    if (reconStatus) {
-      reconStatus.addEventListener("change", () => {
-        state.reconStatus = reconStatus.value;
+    const auditEntityFilter = document.getElementById("audit-entity-filter");
+    if (auditEntityFilter) {
+      auditEntityFilter.addEventListener("change", () => {
+        state.audit.entityType = auditEntityFilter.value || "";
         render();
       });
     }
 
-    const scopeSelect = document.getElementById("scope-override-select");
-    if (scopeSelect) {
-      scopeSelect.addEventListener("change", () => {
-        const packetId = scopeSelect.dataset.packetId;
-        if (!state.overrideScopes) {
-          state.overrideScopes = {};
-        }
-        state.overrideScopes[packetId] = scopeSelect.value;
-        renderPreserveScroll();
-      });
-    }
-    
-    // Explorer apply filter
-    const explorerBtn = document.getElementById("explorer-apply-btn");
-    if (explorerBtn) {
-      explorerBtn.addEventListener("click", () => {
-        const dateFromRaw = document.getElementById("date-from")?.value || "";
-        const dateToRaw = document.getElementById("date-to")?.value || "";
-        const parsedDateFrom = dateFromRaw ? parseFlexibleDateInput(dateFromRaw, state.date) : "";
-        const parsedDateTo = dateToRaw ? parseFlexibleDateInput(dateToRaw, state.date) : "";
-
-        if (dateFromRaw && !parsedDateFrom) {
-          showToast("DATE FROM khong hop le. Dung dd/mm/yyyy hoac yyyy-mm-dd.");
-          return;
-        }
-        if (dateToRaw && !parsedDateTo) {
-          showToast("DATE TO khong hop le. Dung dd/mm/yyyy hoac yyyy-mm-dd.");
-          return;
-        }
-
-        state.explorerFilters = {
-          amountMin: document.getElementById("amount-min")?.value || "",
-          amountMax: document.getElementById("amount-max")?.value || "",
-          dateFrom: parsedDateFrom,
-          dateTo: parsedDateTo,
-        };
+    const auditActionFilter = document.getElementById("audit-action-filter");
+    if (auditActionFilter) {
+      auditActionFilter.addEventListener("change", () => {
+        state.audit.action = auditActionFilter.value || "";
         render();
       });
     }
+
+    bindReconciliationFilters({ state, render, localRender: rerenderReconciliationLocally, showToast });
 
     // Actions triggers
     document.querySelectorAll("[data-action]").forEach(el => {
       el.addEventListener("click", (e) => {
         const action = el.dataset.action;
+        const handled = handleReviewCenterAction({
+          action,
+          el,
+          state,
+          render,
+          renderPreserveScroll,
+          showToast,
+          getActorName,
+          withActorHeaders,
+          getReviewPacketById,
+          openPacketInStudio,
+          syncLocalReviewPacket,
+          upsertPostApprovalRun,
+          pollPostApprovalRun,
+          loadReviewHistoryData,
+          getReviewCenterPendingItems,
+          getSelectedReviewPacket,
+          getTrackedReviewPacket,
+          getRuntimeValidationState,
+          updateReviewPacketLocally,
+          loadGuidedReviewScopeLLM
+        });
+        if (handled) return;
+
+        const guidedHandled = handleGuidedReviewAction({
+          action,
+          el,
+          state,
+          render,
+          renderPreserveScroll,
+          showToast,
+          withActorHeaders,
+          getReviewPacketById,
+          syncLocalReviewPacket,
+          updateReviewPacketLocally,
+          getReviewCenterPendingItems,
+          getSelectedReviewPacket,
+          getTrackedReviewPacket,
+          getRuntimeValidationState,
+          pollPostApprovalRun,
+          loadGuidedReviewScopeLLM,
+          loadGuidedReviewAIMapping
+        });
+        if (guidedHandled) return;
+
+        const reconHandled = handleReconciliationAction({
+          action,
+          el,
+          state,
+          render,
+          localRender: rerenderReconciliationLocally,
+          renderPreserveScroll,
+          showToast,
+          withActorHeaders,
+          getActorName,
+          getActivePostApprovalRunForContext,
+          pollReconciliationRun,
+          resolveReviewRecord,
+          loadReconciliationReviewRecords,
+          refreshAuditLogIfVisible,
+          getActiveRenderToken: () => activeRenderToken
+        });
+        if (reconHandled) {
+          // Sync floating bar state in case of reconciliation actions
+          const bar = document.getElementById("bulk-action-bar");
+          if (bar) {
+            const selectedKeys = Object.entries(state.selectedReconRows || {})
+              .filter(([, selected]) => selected)
+              .map(([key]) => key);
+            if (selectedKeys.length > 0) {
+              bar.classList.add("visible");
+              const countEl = document.getElementById("bulk-selected-count");
+              if (countEl) countEl.textContent = selectedKeys.length;
+            } else {
+              bar.classList.remove("visible");
+            }
+          }
+          return;
+        }
+
         if (action === "run-job") {
           showToast(`Manual triggers active for partner: ${el.dataset.partner}`);
           return;
@@ -3344,7 +1481,7 @@
               const decisionActions = ["reject_proposal", "approve_activate_next_runtime", "approve_keep_current"];
               if (decisionActions.includes(actionKey)) {
                 state.briefOpen = false;
-                briefStep = 0;
+                state.briefStep = 0;
                 showToast(actionKey === "reject_proposal" ? "Proposal rejected." : "Proposal approved.");
               } else {
                 showToast(actionKey === "refresh_context" ? "Recommendation refreshed." : "Copilot action completed.");
@@ -3370,20 +1507,24 @@
           showToast(`Running automation job for ${partner}...`);
           fetch(`/api/v1/automation/jobs/${encodeURIComponent(partner)}/run`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withActorHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({}),
           })
             .then(r => r.json().then(body => ({ ok: r.ok, body })))
             .then(({ ok, body }) => {
-              el.disabled = false;
-              el.style.opacity = "";
-              el.style.cursor = "";
-              el.innerHTML = originalText;
               if (!ok) throw new Error(body.detail || "Run now failed");
-              showToast(`Automation job completed for ${partner}.`);
-              render();
+              state.automationRunningPartners = {
+                ...(state.automationRunningPartners || {}),
+                [partner]: true,
+              };
+              showToast(body.message || `Automation job queued for ${partner}.`);
+              pollAutomationOverview();
             })
             .catch(err => {
+              state.automationRunningPartners = {
+                ...(state.automationRunningPartners || {}),
+                [partner]: false,
+              };
               el.disabled = false;
               el.style.opacity = "";
               el.style.cursor = "";
@@ -3392,1022 +1533,40 @@
             });
           return;
         }
-        if (action === "select-partner") {
-          const partner = el.dataset.partner;
-          if (!partner) return;
-          state.partner = partner;
-          render();
-          return;
-        }
-        if (action === "select-review-packet") {
-          const packetId = el.dataset.packetId;
-          if (!packetId) return;
-          state.selectedReviewPacketId = packetId;
-          renderPreserveScroll();
-          return;
-        }
-        if (action === "go-approvals" || action === "go-review-queue" || action === "go-review-center") {
-          const partner = el.dataset.partner;
-          if (partner) state.partner = partner;
-          location.hash = "review-center";
-          return;
-        }
-        if (action === "go-review-packet") {
-          const packetId = el.dataset.packetId;
-          const partner = el.dataset.partner;
-          if (partner) state.partner = partner;
-          if (packetId) state.selectedReviewPacketId = packetId;
-          location.hash = "review-center";
-          return;
-        }
-        if (action === "open-review-upload") {
-          const uploadInput = el.parentElement?.querySelector(".review-upload-input")
-            || el.closest(".panel")?.querySelector(".review-upload-input")
-            || document.querySelector(".review-upload-input");
-          uploadInput?.click();
-          return;
-        }
-        if (action === "go-submit-sample" || action === "go-mapping-studio") {
-          const partner = el.dataset.partner;
-          if (partner) state.partner = partner;
-          // Fresh studio open — clear pre-loaded IDs
-          state.studio.handoffConfirmed = false;
-          state.studio.step = 1;
-          location.hash = "mapping-studio";
-          return;
-        }
-        if (action === "clear-filters") {
-          state.reconStatus = "";
-          state.explorerFilters = { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" };
-          render();
-          return;
-        }
-        if (action === "go-reconciliation") {
-          location.hash = "reconciliation";
-          return;
-        }
-        if (action === "go-data-intake") {
-          const partner = el.dataset.partner;
-          if (partner) state.partner = partner;
-          location.hash = "review-center";
-          return;
-        }
-        if (action === "set-recon-status") {
-          state.reconStatus = el.dataset.status || "";
-          render();
-          return;
-        }
-        if (action === "reset-recon-status") {
-          state.reconStatus = "";
-          render();
-          return;
-        }
-        if (action === "apply-recon-filters") {
-          const amountMin = document.getElementById("amount-min")?.value || "";
-          const amountMax = document.getElementById("amount-max")?.value || "";
-          const dateFromRaw = document.getElementById("date-from")?.value || "";
-          const dateToRaw = document.getElementById("date-to")?.value || "";
-          const parsedDateFrom = dateFromRaw ? parseFlexibleDateInput(dateFromRaw, state.date) : "";
-          const parsedDateTo = dateToRaw ? parseFlexibleDateInput(dateToRaw, state.date) : "";
 
-          if (dateFromRaw && !parsedDateFrom) {
-            showToast("DATE FROM khong hop le. Dung dd/mm/yyyy hoac yyyy-mm-dd.");
-            return;
-          }
-          if (dateToRaw && !parsedDateTo) {
-            showToast("DATE TO khong hop le. Dung dd/mm/yyyy hoac yyyy-mm-dd.");
-            return;
-          }
-
-          state.explorerFilters = {
-            amountMin,
-            amountMax,
-            dateFrom: parsedDateFrom,
-            dateTo: parsedDateTo
-          };
-          render();
-          return;
-        }
-        if (action === "clear-recon-filters") {
-          state.explorerFilters = { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" };
-          render();
-          return;
-        }
-        if (action === "set-insight-tab") {
-          const tabIndex = parseInt(el.dataset.tabIndex || "0", 10);
-          state.activeInsightTab = tabIndex;
-          render();
-          return;
-        }
-        if (action === "approve-config") {
-          const configId = el.dataset.configId;
-          if (!configId) return;
-          fetch(`/api/v1/mappings/${encodeURIComponent(configId)}/approve`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
-          })
-            .then(r => r.json().then(body => ({ ok: r.ok, body })))
-            .then(({ ok, body }) => {
-              if (!ok) throw new Error(body.detail || "Approve failed");
-              if (state.selectedReviewPacketId === configId) {
-                state.selectedReviewPacketId = null;
-              }
-              showToast("Mapping config approved.");
-              render();
-            })
-            .catch(err => showToast(err.message || "Approve failed"));
-          return;
-        }
-        if (action === "reject-config") {
-          const configId = el.dataset.configId;
-          if (!configId) return;
-          fetch(`/api/v1/mappings/${encodeURIComponent(configId)}/reject`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
-          })
-            .then(r => r.json().then(body => ({ ok: r.ok, body })))
-            .then(({ ok, body }) => {
-              if (!ok) throw new Error(body.detail || "Reject failed");
-              if (state.selectedReviewPacketId === configId) {
-                state.selectedReviewPacketId = null;
-              }
-              showToast("Draft mapping rejected.");
-              render();
-            })
-            .catch(err => showToast(err.message || "Reject failed"));
-          return;
-        }
-        if (action === "refresh-config") {
-          showToast("Re-run AI is triggered from the next fetch cycle.");
-          return;
-        }
-        if (action === "approve-packet-activate" || action === "approve-packet-keep-current" || action === "reject-packet" || action === "send-packet-to-studio") {
-          const packetId = el.dataset.packetId;
-          if (!packetId) return;
-
-          let actionLabel = "";
-          if (action === "approve-packet-activate") actionLabel = "approve and activate this configuration";
-          if (action === "approve-packet-keep-current") actionLabel = "approve this file but keep the current runtime configuration";
-          if (action === "reject-packet") actionLabel = "reject this proposed change";
-          if (action === "send-packet-to-studio") actionLabel = "send this item to Mapping Studio for adjustments";
-
-          const originalText = el.innerHTML;
-          el.disabled = true;
-          el.style.opacity = "0.6";
-          el.style.cursor = "not-allowed";
-          if (action === "approve-packet-activate") {
-            el.innerHTML = `<span class="spinner-mini" style="display:inline-block; width:12px; height:12px; border:2px solid #000; border-top:2px solid transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:6px; vertical-align:middle;"></span>Reconciling...`;
-          } else if (action === "approve-packet-keep-current") {
-            el.innerHTML = `Approving...`;
-          } else if (action === "reject-packet") {
-            el.innerHTML = `Rejecting...`;
-          } else {
-            el.innerHTML = `Processing...`;
-          }
-
-          const isVirtual = !state.reviewPackets.some(p => p._id === packetId);
-          if (isVirtual) {
-            if (action === "send-packet-to-studio") {
-              el.disabled = false;
-              el.style.opacity = "";
-              el.style.cursor = "";
-              el.innerHTML = originalText;
-              state.studio.reviewItemId = null;
-              state.studio.draftMappingId = packetId;
-              state.studio.step = 2;
-              location.hash = "mapping-studio";
-              return;
-            }
-            const endpoint = action === "reject-packet" ? "reject" : "approve";
-            fetch(`/api/v1/mappings/${encodeURIComponent(packetId)}/${endpoint}`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ reviewed_by: "Administrator" }),
-            })
-              .then(r => r.json().then(body => ({ ok: r.ok, body })))
-              .then(({ ok, body }) => {
-                el.disabled = false;
-                el.style.opacity = "";
-                el.style.cursor = "";
-                el.innerHTML = originalText;
-                if (!ok) throw new Error(body.detail || "Action failed");
-                if (state.selectedReviewPacketId === packetId) {
-                  state.selectedReviewPacketId = null;
-                }
-                showToast("Mapping config updated successfully.");
-                render();
-              })
-              .catch(err => {
-                el.disabled = false;
-                el.style.opacity = "";
-                el.style.cursor = "";
-                el.innerHTML = originalText;
-                showToast(err.message || "Action failed");
-              });
-            return;
-          }
-
-          const endpointMap = {
-            "approve-packet-activate": "approve-activate",
-            "approve-packet-keep-current": "approve-keep-current",
-            "reject-packet": "reject",
-            "send-packet-to-studio": "send-to-studio",
-          };
-          const payload = {};
-          if (action === "approve-packet-activate" || action === "approve-packet-keep-current") {
-            const scopeSelectEl = document.getElementById("scope-override-select");
-            if (scopeSelectEl) {
-              payload.scopeType = scopeSelectEl.value;
-            } else if (state.overrideScopes && state.overrideScopes[packetId]) {
-              payload.scopeType = state.overrideScopes[packetId];
-            }
-          }
-          fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/${endpointMap[action]}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          })
-            .then(r => r.json().then(body => ({ ok: r.ok, body })))
-            .then(async ({ ok, body }) => {
-              el.disabled = false;
-              el.style.opacity = "";
-              el.style.cursor = "";
-              el.innerHTML = originalText;
-              if (!ok) throw new Error(body.detail || "Review packet action failed");
-              if (action === "send-packet-to-studio") {
-                showToast("Opening Mapping Studio with this review item.");
-                await openPacketInStudio(packetId);
-                return;
-              }
-              if (state.selectedReviewPacketId === packetId) {
-                state.selectedReviewPacketId = null;
-              }
-              if (action === "approve-packet-activate") {
-                const runInfo = body.postApproveRun;
-                if (runInfo?.partner) state.partner = runInfo.partner;
-                if (runInfo?.date) state.date = runInfo.date;
-                if (runInfo?.ok) {
-                  showToast(`Approve xong va da chay doi soat ngay. ${runInfo.reconciliationCount || 0} ket qua duoc cap nhat.`);
-                } else if (body.warning) {
-                  showToast(body.warning);
-                } else {
-                  showToast("Review packet updated.");
-                }
-              } else {
-                showToast("Review packet updated.");
-              }
-              state.guidedReviewOpen = false;
-              render();
-            })
-            .catch(err => {
-              el.disabled = false;
-              el.style.opacity = "";
-              el.style.cursor = "";
-              el.innerHTML = originalText;
-              showToast(err.message || "Review packet action failed");
-            });
-        }
-
-        if (action === "validate-runtime-packet") {
-          const packetId = el.dataset.packetId;
-          if (!packetId) {
-            showToast("Missing review packet id for runtime validation.");
-            return;
-          }
-          const originalText = el.innerHTML;
-          el.disabled = true;
-          el.style.opacity = "0.65";
-          el.innerHTML = `<span class="spinner-mini" style="display:inline-block; width:12px; height:12px; border:2px solid #fff; border-top:2px solid transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:6px; vertical-align:middle;"></span>Validating...`;
-          fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/validate-runtime`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-          })
-            .then(r => r.json().then(body => ({ ok: r.ok, body })))
-            .then(({ ok, body }) => {
-              el.disabled = false;
-              el.style.opacity = "";
-              el.innerHTML = originalText;
-              if (!ok) throw new Error(body.detail || "Runtime validation failed");
-              updateReviewPacketLocally(packetId, packet => {
-                const gates = Array.isArray(packet.validationGates) ? packet.validationGates.filter(gate => gate.gateKey !== body.gate.gateKey) : [];
-                gates.push(body.gate);
-                packet.validationGates = gates;
-              });
-              state.reviewCenterCache = null;
-              showToast(body.gate?.reason || "Runtime validation completed.");
-              renderPreserveScroll();
-            })
-            .catch(err => {
-              el.disabled = false;
-              el.style.opacity = "";
-              el.innerHTML = originalText;
-              showToast(err.message || "Runtime validation failed");
-            });
-          return;
-        }
-        if (action === "set-review-tab") {
-          const tab = el.dataset.tab;
-          if (tab) {
-            state.reviewTab = tab;
-            render();
-          }
-          return;
-        }
-        if (action === "open-guided-review") {
-          state.guidedReviewOpen = true;
-          state.guidedReviewStep = 0;
-          state.inlineEditing = true;
-          state.guidedReviewAI = { loading: false, error: "", mapping: null, packetId: null };
-          render();
-          return;
-        }
-        if (action === "guided-next") {
-          if (typeof state.guidedReviewStep !== "number") {
-            state.guidedReviewStep = 0;
-          }
-          const nextStep = state.guidedReviewStep + 1;
-          state.guidedReviewStep = nextStep;
-          render();
-          if (nextStep === 1) {
-            const packets = [
-              ...(state.reviewPackets || []),
-              ...((state.reviewCenterCache && state.reviewCenterCache.data && state.reviewCenterCache.data.mappings) || [])
-                .filter(item => item && item.status === "PENDING_APPROVAL")
-                .map(item => ({
-                  _id: item._id,
-                  partner: item.partner,
-                  fileName: item.sheetName || "Manual Configuration",
-                  fileTypeDetected: item.fileType || "SETTLEMENT",
-                  draftMappingId: item._id,
-                  parseStrategy: { sheetName: item.sheetName, startRow: item.startRow, fieldMappingCount: (item.fieldMappings || []).length },
-                  structureSignature: item.structureSignature || null,
-                  validationGates: item.validationGates || [],
-                  riskSummary: { severity: "medium" },
-                  status: "PENDING",
-                  isVirtual: true
-                }))
-            ];
-            const packet = packets.find(item => String(item._id) === String(state.selectedReviewPacketId)) || packets[0] || null;
-            loadGuidedReviewAIMapping(packet);
-          }
-          return;
-        }
-        if (action === "close-guided-review") {
-          state.guidedReviewOpen = false;
-          state.guidedReviewAI = { loading: false, error: "", mapping: null, packetId: null };
-          render();
-          return;
-        }
-        if (action === "guided-prev") {
-          if (typeof state.guidedReviewStep !== "number") {
-            state.guidedReviewStep = 0;
-          }
-          if (state.guidedReviewStep > 0) {
-            state.guidedReviewStep--;
-          }
-          render();
-          return;
-        }
-        if (action === "toggle-inline-edit") {
-          state.inlineEditing = !state.inlineEditing;
-          if (state.inlineEditing) {
-            state.guidedReviewStep = 1;
-          }
-          render();
-          return;
-        }
-        if (action === "save-inline-mapping") {
-          const packetId = el.dataset.packetId;
-          if (!packetId) return;
-          if (state.guidedReviewAI.loading || state.guidedReviewAI.error) {
-            showToast("Wait for the AI mapping proposal to finish loading before saving.");
-            return;
-          }
-          const originalText = el.innerHTML;
-          const currentPacket = [
-            ...(state.reviewPackets || []),
-            ...((state.reviewCenterCache && state.reviewCenterCache.data && state.reviewCenterCache.data.packets) || [])
-          ].find(packet => String(packet._id) === String(packetId)) || null;
-          const rows = Array.from(document.querySelectorAll(".inline-field-select"));
-          const fieldMappings = rows.map((select, index) => {
-            const path = select.value;
-            if (!path) return null;
-            const sourceHeader = select.dataset.sourceHeader || `Column ${index + 1}`;
-            const rawSourceColumn = select.dataset.sourceColumn;
-            const sourceColumn = rawSourceColumn ? Number(rawSourceColumn) : null;
-            const originalPath = select.dataset.originalPath || "";
-            const originalType = select.dataset.originalType || "";
-            const originalRequired = select.dataset.originalRequired === "true";
-            const originalConstant = select.dataset.originalConstant || null;
-            let originalMapping = null;
-            if (select.dataset.originalMapping) {
-              try {
-                originalMapping = JSON.parse(select.dataset.originalMapping);
-              } catch (err) {
-                originalMapping = null;
-              }
-            }
-
-            if (path === originalPath) {
-              return {
-                path,
-                column: sourceColumn,
-                sourceField: sourceHeader,
-                type: originalType || INLINE_FIELD_TYPES[path] || "STRING",
-                required: originalRequired,
-                constant: originalConstant,
-                mapping: originalMapping
-              };
-            }
-
-            return {
-              path,
-              column: sourceColumn,
-              sourceField: sourceHeader,
-              type: INLINE_FIELD_TYPES[path] || "STRING",
-              required: ["id", "amount", "transDate"].includes(path)
-            };
-          }).filter(Boolean);
-
-          el.disabled = true;
-          el.style.opacity = "0.65";
-          el.innerHTML = `<span class="spinner-mini" style="display:inline-block; width:12px; height:12px; border:2px solid #fff; border-top:2px solid transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:6px; vertical-align:middle;"></span>Saving...`;
-          fetch(`/api/v1/review-packets/${encodeURIComponent(packetId)}/save-draft-mapping`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sheetName: currentPacket?.parseStrategy?.sheetName || "Sheet1",
-              startRow: currentPacket?.parseStrategy?.startRow || 2,
-              fieldMappings
-            }),
-          })
-            .then(r => r.json().then(body => ({ ok: r.ok, body })))
-            .then(({ ok, body }) => {
-              el.disabled = false;
-              el.style.opacity = "";
-              el.innerHTML = originalText;
-              if (!ok) {
-                const detail = body.detail;
-                if (detail && typeof detail === "object") {
-                  const msg = [detail.message, ...(detail.errors || []), ...(detail.warnings || [])]
-                    .filter(Boolean)
-                    .join(" ");
-                  throw new Error(msg || "Save mapping failed");
-                }
-                throw new Error(detail || "Save mapping failed");
-              }
-              if (!state.localDraftMappingIds) {
-                state.localDraftMappingIds = {};
-              }
-              state.localDraftMappingIds[packetId] = body.draftMappingId;
-              state.guidedReviewAI = {
-                loading: false,
-                error: "",
-                mapping: {
-                  ...(state.guidedReviewAI.mapping || {}),
-                  _id: body.draftMappingId,
-                  fieldMappings,
-                  sheetName: body.sheetName,
-                  startRow: body.startRow,
-                },
-                packetId
-              };
-              updateReviewPacketLocally(packetId, packet => {
-                packet.draftMappingId = body.draftMappingId;
-                packet.parseStrategy = {
-                  ...(packet.parseStrategy || {}),
-                  sheetName: body.sheetName,
-                  startRow: body.startRow,
-                  fieldMappingCount: body.fieldMappingCount
-                };
-                if (Array.isArray(body.validationGates)) {
-                  packet.validationGates = body.validationGates;
-                }
-              });
-              state.reviewCenterCache = null;
-              state.inlineEditing = false;
-              if (typeof state.guidedReviewStep === "number" && state.guidedReviewStep < 2) {
-                state.guidedReviewStep = 2;
-              }
-              showToast("Draft mapping saved. Run runtime validate before activation.");
-              render();
-            })
-            .catch(err => {
-              el.disabled = false;
-              el.style.opacity = "";
-              el.innerHTML = originalText;
-              showToast(err.message || "Save mapping failed");
-            });
-          return;
-        }
-        if (action === "refresh-recon") {
-          state.activeReconData = null;
-          render();
-          return;
-        }
-        if (action === "export-recon") {
-          showToast("Reconciliation report exported successfully.");
-          return;
-        }
-        if (action === "scroll-to-evidence") {
-          document.querySelector(".evidence-table-section")?.scrollIntoView({ behavior: "smooth" });
-          return;
-        }
-        if (action === "open-mapping-studio-context") {
-          state.studio.step = 1;
-          location.hash = "mapping-studio";
-          return;
-        }
-        if (action === "create-adjustment") {
-          const txnId = el.dataset.txnId || "";
-          const amount = el.dataset.amount || "";
-          state.adjustmentModalData = { txnId, amount };
-          render();
-          return;
-        }
-        if (action === "close-adjustment-modal") {
-          state.adjustmentModalData = null;
-          render();
-          return;
-        }
-        if (action === "submit-adjustment") {
-          showToast(`Adjustment of ${state.adjustmentModalData?.amount} VND for ${state.adjustmentModalData?.txnId} submitted successfully.`);
-          state.adjustmentModalData = null;
-          render();
-          return;
-        }
-        if (action === "open-evidence-detail") {
-          const rowId = el.dataset.rowId;
-          state.selectedEvidenceRowId = rowId;
-          render();
-          return;
-        }
-        if (action === "close-evidence-drawer") {
-          state.selectedEvidenceRowId = null;
-          render();
-          return;
-        }
-        if (action === "resolve-single-anomaly") {
-          const rowId = el.dataset.rowId;
-          resolveReviewRecord(rowId, "MATCHED")
-            .then(async () => {
-              if (state.activeReconData && state.activeReconData.results) {
-                const item = state.activeReconData.results.find(r => (r.partnerTxnId || r.internalTxnId || r.id) === rowId);
-                if (item) {
-                  item.reconciliationStatus = "MATCHED";
-                }
-              }
-              await loadReconciliationReviewRecords();
-              showToast(`Record ${rowId} marked as resolved.`);
-              state.selectedEvidenceRowId = null;
-              render();
-            })
-            .catch(() => {
-              showToast("Failed to persist resolved record.");
-            });
-          return;
-        }
-        if (action === "approve-all-recon") {
-          const results = (state.activeReconData && state.activeReconData.results) || [];
-          Promise.all(results.map(item => {
-            const key = item.partnerTxnId || item.internalTxnId || item.id;
-            item.reconciliationStatus = "MATCHED";
-            return resolveReviewRecord(key, "MATCHED");
-          }))
-            .then(async () => {
-              await loadReconciliationReviewRecords();
-              showToast("Reconciliation run approved. All anomalies marked as resolved.");
-              state.selectedEvidenceRowId = null;
-              render();
-            })
-            .catch(() => {
-              showToast("Failed to persist one or more resolved records.");
-            });
-          return;
-        }
-        if (action === "mark-exception") {
-          showToast("Record marked as exception.");
-          state.selectedEvidenceRowId = null;
-          render();
-          return;
-        }
-        if (action === "open-copilot-brief") {
-          state.briefOpen = true;
-          briefStep = 0;
-          render();
-          return;
-        }
-        if (action === "close-brief") {
-          if (e.target !== el) return;
-          state.briefOpen = false;
-          briefStep = 0;
-          render();
-          return;
-        }
-        if (action === "brief-next") {
-          if (briefStep < BRIEF_STEPS.length - 1) {
-            briefStep++;
-            render();
-          }
-          return;
-        }
-        if (action === "brief-prev") {
-          if (briefStep > 0) {
-            briefStep--;
-            render();
-          }
-          return;
-        }
       });
     });
 
-    document.querySelectorAll(".review-upload-input").forEach(input => {
-      input.addEventListener("change", (event) => {
-        const file = event.target.files && event.target.files[0];
-        if (!file) return;
-        showToast("Analyzing uploaded file and preparing a review item...");
-        const formData = new FormData();
-        formData.append("file", file);
-
-        fetch(`/api/v1/mapping/ai-generate?partner=${encodeURIComponent(state.partner)}`, {
-          method: "POST",
-          body: formData
-        })
-          .then(r => r.json().then(body => ({ ok: r.ok, body })))
-          .then(({ ok, body }) => {
-            if (!ok) throw new Error(body.detail || "Upload analysis failed");
-            state.studio.fileName = file.name;
-            state.studio.headers = body.headers || [];
-            state.studio.sampleRows = body.sample_rows || [];
-            state.studio.config = body.config;
-            state.studio.draftMappingId = body.draftMappingId || null;
-            state.studio.reviewItemId = body.reviewItemId || null;
-            state.studio.configStatus = body.configStatus || null;
-            state.studio.isRuntimeEligible = body.isRuntimeEligible || false;
-            state.studio.handoffConfirmed = false;
-            if (body.reviewItemId) {
-              state.selectedReviewPacketId = body.reviewItemId;
-            }
-            showToast("Review item created. Opening Review Center.");
-            location.hash = "review-center";
-            if (input) input.value = "";
-          })
-          .catch(err => {
-            showToast(err.message || "Upload analysis failed");
-            if (input) input.value = "";
-          });
-      });
+    bindMappingStudioViewActions({
+      state,
+      render,
+      showToast,
+      withActorHeaders,
+    });
+    bindReconciliationEnhancedUi({
+      state,
+      render,
+      localRender: rerenderReconciliationLocally,
     });
 
-    // Step 1: Upload Excel File for AI auto-generation
-    const studioExcelUpload = document.getElementById("studio-excel-upload");
-    if (studioExcelUpload) {
-      studioExcelUpload.addEventListener("change", (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const partner = document.getElementById("studio-partner-select")?.value || "VNPAY";
-        
-        showToast("Uploading sample and generating a draft mapping...");
-        state.studio.loading = true;
-        render();
-
-        const formData = new FormData();
-        formData.append("file", file);
-        
-        fetch(`/api/v1/mapping/ai-generate?partner=${encodeURIComponent(partner)}`, {
-          method: "POST",
-          body: formData
-        })
-          .then(r => r.json().then(body => ({ ok: r.ok, body })))
-          .then(({ ok, body }) => {
-            state.studio.loading = false;
-            if (!ok) throw new Error(body.detail || "AI gen failed");
-            
-            state.studio.fileName = file.name;
-            state.studio.headers = body.headers || [];
-            state.studio.sampleRows = body.sample_rows || [];
-            state.studio.config = body.config;
-            state.studio.draftMappingId = body.draftMappingId || null;
-            state.studio.reviewItemId = body.reviewItemId || null;
-            state.studio.configStatus = body.configStatus || null;
-            state.studio.isRuntimeEligible = body.isRuntimeEligible || false;
-            state.studio.handoffConfirmed = false;
-            state.studio.step = 2;
-            if (body.reviewItemId) {
-              state.selectedReviewPacketId = body.reviewItemId;
-              showToast("Draft created. Opening Review Center with the review drawer.");
-              location.hash = "review-center";
-              return;
-            }
-
-            showToast("Draft created. Review now continues in the Review Center.");
-            render();
-          })
-          .catch(err => {
-            state.studio.loading = false;
-            showToast("AI Gen failed: " + err.message);
-            render();
-          });
-      });
-    }
-
-    // Step 1: Upload Existing Mapping JSON
-    const studioJsonUpload = document.getElementById("studio-json-upload");
-    if (studioJsonUpload) {
-      studioJsonUpload.addEventListener("change", (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          try {
-            const json = JSON.parse(event.target.result);
-            state.studio.config = json;
-            state.studio.fileName = file.name;
-            state.studio.step = 2;
-            state.studio.handoffConfirmed = false;
-            state.studio.headers = (json.fieldMappings || []).map(fm => fm.path); // fallback headers
-            state.studio.sampleRows = [];
-            
-            showToast("Existing mapping JSON schema loaded.");
-            render();
-          } catch (err) {
-            showToast("Invalid JSON file schema structure.");
-          }
-        };
-        reader.readAsText(file);
-      });
-    }
-
-    // Step 1: Paste JSON Button click
-    const studioPasteBtn = document.getElementById("studio-paste-btn");
-    if (studioPasteBtn) {
-      studioPasteBtn.addEventListener("click", () => {
-        const template = {
-          "partner": "VNPAY",
-          "workflowType": "UPC",
-          "fileType": "SETTLEMENT",
-          "sheetName": "Sheet1",
-          "startRow": 2,
-          "configVersion": "v_manual",
-          "fieldMappings": [
-            { "path": "id", "column": 1, "type": "STRING", "required": true },
-            { "path": "amount", "column": 2, "type": "DECIMAL", "required": true },
-            { "path": "transDate", "column": 3, "type": "DATE", "required": true }
-          ]
-        };
-        state.studio.config = template;
-        state.studio.step = 2;
-        state.studio.handoffConfirmed = false;
-        state.studio.headers = ["id", "amount", "transDate"];
-        state.studio.sampleRows = [];
-        
-        showToast("Starting manual setup with default template.");
-        render();
-      });
-    }
-
-    // Tab Switches
-    const tabVisual = document.getElementById("studio-tab-visual");
-    const tabJson = document.getElementById("studio-tab-json");
-    if (tabVisual && tabJson) {
-      tabVisual.addEventListener("click", () => {
-        tabVisual.classList.add("active");
-        tabJson.classList.remove("active");
-        document.getElementById("studio-tab-visual-content").style.display = "block";
-        document.getElementById("studio-tab-json-content").style.display = "none";
-      });
-      tabJson.addEventListener("click", () => {
-        tabJson.classList.add("active");
-        tabVisual.classList.remove("active");
-        document.getElementById("studio-tab-json-content").style.display = "flex";
-        document.getElementById("studio-tab-visual-content").style.display = "none";
-      });
-    }
-
-    // Add field mapping row
-    const addFieldBtn = document.getElementById("studio-add-field-btn");
-    if (addFieldBtn) {
-      addFieldBtn.addEventListener("click", () => {
-        if (!state.studio.config) return;
-        state.studio.config.fieldMappings.push({
-          "path": "custom_field_" + (state.studio.config.fieldMappings.length + 1),
-          "column": null,
-          "type": "STRING",
-          "required": false
-        });
-        render();
-      });
-    }
-
-    // Listeners for dropdown/input mapping edits
-    document.querySelectorAll(".studio-mapping-col-select").forEach(el => {
-      el.addEventListener("change", () => {
-        const idx = parseInt(el.dataset.idx);
-        const val = el.value ? parseInt(el.value) : null;
-        if (state.studio.config && state.studio.config.fieldMappings[idx]) {
-          state.studio.config.fieldMappings[idx].column = val;
-          if (val !== null) delete state.studio.config.fieldMappings[idx].constant;
+    const bulkActionBar = document.getElementById("bulk-action-bar");
+    if (bulkActionBar) {
+      const syncBulkActionBar = () => {
+        const selectedCount = Object.values(state.selectedReconRows || {}).filter(Boolean).length;
+        bulkActionBar.classList.toggle("visible", selectedCount > 0);
+        bulkActionBar.dataset.selectedCount = String(selectedCount);
+        const countLabel = document.getElementById("bulk-action-count");
+        if (countLabel) {
+          countLabel.textContent = `${selectedCount.toLocaleString("en-US")} items selected`;
         }
-      });
-    });
+      };
 
-    document.querySelectorAll(".studio-mapping-const-input").forEach(el => {
-      el.addEventListener("change", () => {
-        const idx = parseInt(el.dataset.idx);
-        const val = el.value;
-        if (state.studio.config && state.studio.config.fieldMappings[idx]) {
-          state.studio.config.fieldMappings[idx].constant = val;
-          if (val !== "") delete state.studio.config.fieldMappings[idx].column;
-        }
+      document.querySelectorAll('[data-action="toggle-recon-row"], [data-action="toggle-recon-select-all"]').forEach(input => {
+        input.addEventListener("change", syncBulkActionBar);
       });
-    });
 
-    document.querySelectorAll(".studio-mapping-type-select").forEach(el => {
-      el.addEventListener("change", () => {
-        const idx = parseInt(el.dataset.idx);
-        const val = el.value;
-        if (state.studio.config && state.studio.config.fieldMappings[idx]) {
-          state.studio.config.fieldMappings[idx].type = val;
-        }
-      });
-    });
-
-    // Accept AI Suggestions (Step 8)
-    const acceptSuggestionBtn = document.getElementById("studio-accept-suggestion-btn");
-    if (acceptSuggestionBtn) {
-      acceptSuggestionBtn.addEventListener("click", () => {
-        if (!state.studio.config) return;
-        const hasCurrency = state.studio.config.fieldMappings.some(fm => fm.path === "currency");
-        if (!hasCurrency) {
-          state.studio.config.fieldMappings.push({
-            "path": "currency",
-            "constant": "VND",
-            "type": "CONSTANT"
-          });
-        }
-        showToast("AI Currency suggestion accepted.");
-        render();
-      });
+      syncBulkActionBar();
     }
-
-    // Back to Step 1
-    const backTo1Btn = document.getElementById("studio-back-to-1-btn");
-    if (backTo1Btn) {
-      backTo1Btn.addEventListener("click", () => {
-        state.studio.step = 1;
-        state.studio.handoffConfirmed = false;
-        render();
-      });
-    }
-
-    // Proceed to Step 3 (Validate & Test Mapping Schema)
-    const to3Btn = document.getElementById("studio-to-3-btn");
-    if (to3Btn) {
-      to3Btn.addEventListener("click", () => {
-        const jsonTextarea = document.getElementById("studio-json-textarea");
-        if (jsonTextarea && document.getElementById("studio-tab-json-content").style.display === "flex") {
-          try {
-            state.studio.config = JSON.parse(jsonTextarea.value);
-          } catch (err) {
-            showToast("Failed to parse schema JSON before proceeding.");
-            return;
-          }
-        }
-
-        if (!state.studio.config) return;
-
-        // Ensure currency defaults to VND in config payload sent to backend validator
-        const configCopy = JSON.parse(JSON.stringify(state.studio.config));
-        if (configCopy.fieldMappings && !configCopy.fieldMappings.some(fm => fm.path === "currency")) {
-          configCopy.fieldMappings.push({
-            path: "currency",
-            type: "CONSTANT",
-            constant: "VND",
-            required: true
-          });
-        }
-
-        showToast("Running validation rules engine...");
-        
-        fetch("/api/v1/mapping/validate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(configCopy)
-        })
-          .then(r => r.json())
-          .then(data => {
-            state.studio.validation = data;
-            state.studio.step = 3;
-            state.studio.handoffConfirmed = false;
-            
-            return fetch(`/api/v1/mapping/versions?partner=${encodeURIComponent(state.studio.config.partner)}`);
-          })
-          .then(r => r ? r.json() : null)
-          .then(vData => {
-            if (vData) state.studio.versions = vData.versions || [];
-            render();
-          })
-          .catch(err => showToast("Validation fetch error: " + err.message));
-      });
-    }
-
-    // Step 3 Back to Step 2
-    const backTo2Btn = document.getElementById("studio-back-to-2-btn");
-    if (backTo2Btn) {
-      backTo2Btn.addEventListener("click", () => {
-        state.studio.step = 2;
-        render();
-      });
-    }
-
-    // Step 3 Transformation test run
-    const runTestBtn = document.getElementById("studio-run-test-btn");
-    if (runTestBtn) {
-      runTestBtn.addEventListener("click", () => {
-        if (!state.studio.config) return;
-        const row = state.studio.sampleRows[0] || ["TXN001", "150000", "SUCCESS"];
-        
-        showToast("Testing layout transformation output...");
-        
-        fetch("/api/v1/mapping/test", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            "mapping": state.studio.config,
-            "sampleRow": row
-          })
-        })
-          .then(r => r.json())
-          .then(data => {
-            state.studio.testOutput = data.output;
-            showToast("Transformation test completed.");
-            render();
-          })
-          .catch(err => showToast("Transformation test failed: " + err.message));
-      });
-    }
-
-    const openReviewCenterBtn = document.getElementById("studio-open-review-center-btn");
-    if (openReviewCenterBtn) {
-      openReviewCenterBtn.addEventListener("click", () => {
-        if (state.studio.reviewItemId) {
-          state.selectedReviewPacketId = state.studio.reviewItemId;
-        }
-        location.hash = "review-center";
-      });
-    }
-
-    const confirmHandoffBtn = document.getElementById("studio-confirm-handoff-btn");
-    if (confirmHandoffBtn) {
-      confirmHandoffBtn.addEventListener("click", () => {
-        const draftId = state.studio.draftMappingId;
-        if (!draftId) {
-          showToast("No draft mapping to hand off. Save the draft mapping first.");
-          return;
-        }
-        confirmHandoffBtn.disabled = true;
-        confirmHandoffBtn.innerHTML = `<span class="spinner small"></span> Handing off...`;
-        fetch(`/api/v1/review-packets/from-mapping/${encodeURIComponent(draftId)}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        })
-          .then(r => r.json().then(body => ({ ok: r.ok, body })))
-          .then(({ ok, body }) => {
-            confirmHandoffBtn.disabled = false;
-            confirmHandoffBtn.innerHTML = "Confirm Ready";
-            if (!ok) throw new Error(body.detail || "Handoff failed");
-            showToast("Mapping submitted for review.");
-            state.studio.handoffConfirmed = false;
-            location.hash = "review-queue";
-          })
-          .catch(err => {
-            confirmHandoffBtn.disabled = false;
-            confirmHandoffBtn.innerHTML = "Confirm Ready";
-            showToast(err.message || "Handoff failed");
-          });
-      });
-    }
-
-    // Step 3 Restore Version
-    document.querySelectorAll(".studio-restore-version-btn").forEach(el => {
-      el.addEventListener("click", () => {
-        const vId = el.dataset.id;
-        showToast("Restoring schema version...");
-        
-        fetch(`/api/v1/mapping/version/${encodeURIComponent(vId)}`)
-          .then(r => r.json())
-          .then(data => {
-            state.studio.config = data;
-            state.studio.step = 2;
-            showToast(`Restored schema version: ${data.configVersion}`);
-            render();
-          })
-          .catch(err => showToast("Restore failed: " + err.message));
-      });
-    });
   }
 
   function handleConfigParse(json) {
@@ -4461,376 +1620,15 @@
     previewPanel.style.display = "block";
   }
 
-  function renderPageFilters(options = {}) {
-    const { showDate = true, showClear = true, showReconActions = false } = options;
-    return `
-      <div class="page-filters" style="align-items: center;">
-        <div class="filter-group">
-          <span class="filter-label">PARTNER</span>
-          <div class="filter-input-wrapper">
-            <span class="material-symbols-outlined input-icon">store</span>
-            <select id="partner-filter">
-              ${getPartnerOptions().map(partner => `<option value="${partner}" ${partner === state.partner ? "selected" : ""}>${partner}</option>`).join("")}
-            </select>
-          </div>
-        </div>
-        ${showDate ? `
-        <div class="filter-group">
-          <span class="filter-label">DATE</span>
-          <div class="date-inline-row">
-            <div class="filter-input-wrapper date-current-input">
-              <span class="material-symbols-outlined input-icon" style="color: #f8d76a;">edit_calendar</span>
-              <input id="date-filter" type="text" value="${formatDisplayDate(state.date)}" placeholder="dd/mm/yyyy">
-            </div>
-            <div class="date-picker-trigger" data-action="open-date-picker" aria-label="Open date picker" style="cursor: pointer;">
-              <span class="material-symbols-outlined">calendar_month</span>
-              <input id="date-picker" type="date" value="${state.date}">
-            </div>
-          </div>
-        </div>` : ""}
-        ${showClear ? `
-          <div class="filter-actions">
-            <button class="button tertiary-action" data-action="clear-filters">Clear Filters</button>
-          </div>
-        ` : ""}
-        ${showReconActions ? `
-          <div style="margin-left: auto; display: flex; align-items: center; gap: 12px; height: 44px; margin-top: auto;">
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <span class="badge matched" style="padding: 4px 8px; font-size: 11px; font-weight: 600; border-radius: 4px; border: none; background: rgba(16, 185, 129, 0.08); color: rgba(16, 185, 129, 0.8); text-transform: none; display: inline-flex; align-items: center; gap: 4px; height: 26px;">
-                <span style="display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: #10b981; opacity: 0.7;"></span>Completed
-              </span>
-              <span style="font-size: 11px; color: var(--text-muted);">Last run 10:42</span>
-            </div>
-            <button class="button primary compact" data-action="approve-all-recon" style="padding: 4px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; height: 32px; border-radius: 6px; background: var(--brand-primary); color: black; font-weight: 600; border: none; cursor: pointer; box-shadow: var(--shadow);">
-              <span class="material-symbols-outlined" style="font-size: 15px;">check_circle</span> Approve Run
-            </button>
-          </div>
-        ` : ""}
-      </div>
-    `;
-  }
 
-  function loadingPanel(message) {
-    return `
-      <section class="panel">
-        <div class="loading-row">
-          <div class="spinner"></div>
-          <div>
-            <h2 style="margin: 0;">Loading Workspace</h2>
-            <p class="muted" style="margin: 4px 0 0 0;">${message}</p>
-          </div>
-        </div>
-      </section>
-    `;
-  }
 
-  function fetchJson(path) {
-    return fetch(path, { headers: { Accept: "application/json" } }).then(r => {
-      if (!r.ok) return r.text().then(t => { throw new Error("HTTP " + r.status + ": " + t.slice(0, 180)); });
-      return r.json();
-    });
-  }
 
-  function executeCopilotAction(actionKey) {
-    return fetch(`/api/v1/copilot/actions/${encodeURIComponent(actionKey)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        partner: state.partner,
-        date: state.date,
-        reviewedBy: "Administrator",
-      }),
-    }).then(r => r.json().then(body => {
-      if (!r.ok) throw new Error(body.detail || "Copilot action failed");
-      return body;
-    }));
-  }
 
-  function metrics(items) {
-    return `<div class="grid cols-4">${items.map(([label, value, hint]) => `
-      <div class="metric compact">
-        <span>${label}</span>
-        <strong>${value}</strong>
-        <small>${hint}</small>
-      </div>
-    `).join("")}</div>`;
-  }
 
-  function table(headers, rows) {
-    return `
-      <div class="table-wrap">
-        <table>
-          <thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    `;
-  }
 
-  function badge(value) {
-    const text = statusLabel(value);
-    const cls = text.toLowerCase().replace(/_/g, "-");
-    const raw = String(value || "").toUpperCase();
-    const toneMap = {
-      "MATCHED": "matched",
-      "MATCHED_FAILED": "warning",
-      "MATCHED_REVERSED": "processing",
-      "AMOUNT_MISMATCH": "critical",
-      "STATUS_MISMATCH": "warning",
-      "MULTIPLE_MISMATCH": "critical",
-      "MISSING_INTERNAL": "warning",
-      "MISSING_PARTNER": "critical",
-      "UNMAPPED_SKIPPED": "neutral",
-      "APPROVED": "matched",
-      "PENDING_APPROVAL": "warning",
-      "REJECTED": "critical",
-      "SUPERSEDED": "processing",
-      "PROCESSING": "processing",
-      "COMPLETED": "matched",
-      "FAILED": "critical",
-      "ACTIVE": "matched",
-      "NEEDS_REVIEW": "warning",
-      "BLOCKED": "critical",
-      "NO_ACTIVITY": "neutral",
-      "STALE": "warning",
-      "ENABLED": "matched",
-      "DISABLED": "critical",
-      "PAUSED": "warning",
-      "PENDING": "warning",
-      "HEALTHY": "matched",
-      "MONITOR": "warning",
-      "LOW": "matched",
-      "MEDIUM": "warning",
-      "HIGH": "critical"
-    };
-    const tone = toneMap[raw] || "neutral";
-    return `<span class="badge ${tone}">${text}</span>`;
-  }
 
-  function statusLabel(value) {
-    const raw = String(value || "");
-    const labels = {
-      MATCHED: "Matched",
-      MATCHED_FAILED: "Matched with Failure",
-      MATCHED_REVERSED: "Matched and Reversed",
-      AMOUNT_MISMATCH: "Amount Mismatch",
-      STATUS_MISMATCH: "Status Mismatch",
-      MULTIPLE_MISMATCH: "Multiple Mismatch",
-      MISSING_INTERNAL: "Missing Internal",
-      MISSING_PARTNER: "Missing Partner",
-      UNMAPPED_SKIPPED: "Unmapped",
-      APPROVED: "Approved",
-      PENDING_APPROVAL: "Pending Review",
-      REJECTED: "Rejected",
-      SUPERSEDED: "Superseded",
-      PROCESSING: "Processing",
-      COMPLETED: "Completed",
-      FAILED: "Failed",
-      ACTIVE: "Active",
-      NEEDS_REVIEW: "Needs Review",
-      BLOCKED: "Blocked",
-      NO_ACTIVITY: "No Activity",
-      STALE: "Stale",
-      ENABLED: "Enabled",
-      DISABLED: "Disabled",
-      PAUSED: "Paused",
-      PENDING: "Pending",
-      HEALTHY: "Healthy",
-      MONITOR: "Monitor",
-      LOW: "Low",
-      MEDIUM: "Medium",
-      HIGH: "High"
-    };
-    return labels[raw] || raw.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-  }
 
-  function severityBadge(value) {
-    const level = String(value || "medium").toLowerCase();
-    const label = level.toUpperCase();
-    return `<span class="badge severity-${level}">${label}</span>`;
-  }
 
-  function reconciliationRowClass(status) {
-    const normalized = String(status || "").toUpperCase();
-    if (!normalized || normalized === "MATCHED") return "recon-row-neutral";
-    if (normalized.includes("MISSING")) return "recon-row-critical";
-    if (normalized.includes("AMOUNT") || normalized.includes("MULTIPLE")) return "recon-row-critical";
-    if (normalized.includes("STATUS") || normalized.includes("UNMAPPED")) return "recon-row-warning";
-    return "recon-row-warning";
-  }
-
-  function bars(items) {
-    return `<div class="bars">${items.map(([label, value, tone]) => `
-      <div class="bar-row">
-        <strong>${label}</strong>
-        <div class="bar-track"><div class="bar-fill ${tone || ""}" style="width:${Math.min(100, Number(value) || 0)}%"></div></div>
-        <span style="font-weight: 600; text-align: right; display: block;">${Math.round(Number(value) || 0)}%</span>
-      </div>
-    `).join("")}</div>`;
-  }
-
-  function donut(value, label) {
-    return `
-      <div class="donut" style="--value:${Math.round(value)}">
-        <div class="donut-inner">${Math.round(value)}%</div>
-      </div>
-      <p style="text-align:center; margin-top:14px; font-weight: 600; color: var(--green-primary); letter-spacing: 0.02em;">${label}</p>
-    `;
-  }
-
-  function percent(value, total) {
-    if (!total) return 0;
-    return Math.round((value / total) * 1000) / 10;
-  }
-
-  function formatNumber(value) {
-    return Number(value || 0).toLocaleString("en-US");
-  }
-
-  function formatAmount(value) {
-    if (value === null || value === undefined || value === "") return "-";
-    if (typeof value === "string" && Number.isNaN(Number(value))) return value;
-    return formatNumber(value) + " VND";
-  }
-
-  function escapeHtml(value) {
-    return String(value).replace(/[&<>"']/g, ch => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;"
-    }[ch]));
-  }
-
-  function highlightInsightText(text) {
-    if (!text) return "";
-    let html = escapeHtml(text);
-
-    // Color severity markers
-    html = html.replace(/\[CRITICAL\]/gi, '<span class="badge failed" style="padding: 2px 6px; font-size: 10px; font-weight: 700; margin-right: 4px; background-color: #ef4444; color: white; border-radius: 4px; border: none;">CRITICAL</span>');
-    html = html.replace(/\[HIGH\]/gi, '<span class="badge failed" style="padding: 2px 6px; font-size: 10px; font-weight: 700; margin-right: 4px; background-color: #f97316; color: white; border-radius: 4px; border: none;">HIGH</span>');
-    html = html.replace(/\[MEDIUM\]/gi, '<span class="badge warning" style="padding: 2px 6px; font-size: 10px; font-weight: 700; margin-right: 4px; background-color: #eab308; color: black; border-radius: 4px; border: none;">MEDIUM</span>');
-    html = html.replace(/\[LOW\]/gi, '<span class="badge neutral" style="padding: 2px 6px; font-size: 10px; font-weight: 700; margin-right: 4px; background-color: #6b7280; color: white; border-radius: 4px; border: none;">LOW</span>');
-
-    // Bold transaction IDs
-    html = html.replace(/(MOMO_TXN_\w+)/g, '<strong>$1</strong>');
-    
-    // Bold numbers with currency (VND, đ, USD)
-    html = html.replace(/(\b\d{1,3}(,\d{3})+(\.\d+)?\s*(VND|đ|USD)?\b)/gi, '<strong>$1</strong>');
-
-    const boldTerms = [
-      "matched", "mismatch", "amount discrepancy", "missing partner", "missing internal", "mismatches", 
-      "discrepancy", "anomaly", "anomalies", "recommendation", "wave", "wave1", "wave2", 
-      "difference", "delta", "unmatched", "single-source variance",
-      "msTotalAmount", "Mapping Studio", "SFTP delivery status", "float mapping", "recalibrate float mapping"
-    ];
-    
-    boldTerms.forEach(term => {
-      const regex = new RegExp(`\\b(${term.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')})\\b`, "gi");
-      html = html.replace(regex, "<strong>$1</strong>");
-    });
-
-    html = html.replace(/\b(MATCHED)\b/g, '<span class="badge matched" style="padding: 2px 6px; font-size: 10px; font-weight: 600; margin-left: 2px; border: none;">$1</span>');
-    html = html.replace(/\b(AMOUNT_MISMATCH|AMOUNT MISMATCH)\b/gi, '<span class="badge failed" style="padding: 2px 6px; font-size: 10px; font-weight: 600; margin-left: 2px; border: none;">$1</span>');
-    html = html.replace(/\b(STATUS_MISMATCH|STATUS MISMATCH)\b/gi, '<span class="badge failed" style="padding: 2px 6px; font-size: 10px; font-weight: 600; margin-left: 2px; border: none;">$1</span>');
-    html = html.replace(/\b(MISSING_INTERNAL|MISSING INTERNAL)\b/gi, '<span class="badge warning" style="padding: 2px 6px; font-size: 10px; font-weight: 600; margin-left: 2px; border: none;">$1</span>');
-    html = html.replace(/\b(MISSING_PARTNER|MISSING PARTNER)\b/gi, '<span class="badge warning" style="padding: 2px 6px; font-size: 10px; font-weight: 600; margin-left: 2px; border: none;">$1</span>');
-    
-    return html;
-  }
-
-  function showToast(message) {
-    toast.textContent = message;
-    toast.classList.add("show");
-    clearTimeout(showToast.timer);
-    showToast.timer = setTimeout(() => toast.classList.remove("show"), 2400);
-  }
-
-  function loadGuidedReviewAIMapping(packet) {
-    if (!packet || !packet.partner) {
-      state.guidedReviewAI = {
-        loading: false,
-        error: "No review item is available for AI mapping.",
-        mapping: null,
-        packetId: packet?._id || null
-      };
-      render();
-      return;
-    }
-    if (
-      state.guidedReviewAI &&
-      state.guidedReviewAI.packetId === packet._id &&
-      (state.guidedReviewAI.loading || state.guidedReviewAI.mapping || state.guidedReviewAI.error)
-    ) {
-      return;
-    }
-    state.guidedReviewAI = {
-      loading: true,
-      error: "",
-      mapping: null,
-      packetId: packet._id
-    };
-    render();
-    fetch(`/api/v1/review-packets/${encodeURIComponent(packet._id)}/generate-ai-mapping`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    })
-      .then(r => r.json().then(body => ({ ok: r.ok, body })))
-      .then(({ ok, body }) => {
-        if (!ok) {
-          throw new Error(body.detail || "Failed to generate AI mapping proposal.");
-        }
-        const mapping = body.mapping || null;
-        if (body.draftMappingId) {
-          if (!state.localDraftMappingIds) {
-            state.localDraftMappingIds = {};
-          }
-          state.localDraftMappingIds[packet._id] = body.draftMappingId;
-          updateReviewPacketLocally(packet._id, currentPacket => {
-            currentPacket.draftMappingId = body.draftMappingId;
-            currentPacket.parseStrategy = {
-              ...(currentPacket.parseStrategy || {}),
-              sheetName: mapping?.sheetName || currentPacket?.parseStrategy?.sheetName || "Sheet1",
-              startRow: mapping?.startRow || currentPacket?.parseStrategy?.startRow || 2,
-              fieldMappingCount: (mapping?.fieldMappings || []).length,
-            };
-            if (Array.isArray(body.validationGates)) {
-              currentPacket.validationGates = body.validationGates;
-            }
-          });
-        }
-        state.guidedReviewAI = {
-          loading: false,
-          error: mapping ? "" : "AI draft mapping was not found for this review item.",
-          mapping,
-          packetId: packet._id
-        };
-        render();
-      })
-      .catch(err => {
-        state.guidedReviewAI = {
-          loading: false,
-          error: err.message || "Failed to load AI mapping proposal.",
-          mapping: null,
-          packetId: packet._id
-        };
-        render();
-      });
-  }
-
-  function updateReviewPacketLocally(packetId, updater) {
-    state.reviewPackets = (state.reviewPackets || []).map(packet => {
-      if (String(packet._id) !== String(packetId)) return packet;
-      const nextPacket = { ...packet };
-      updater(nextPacket);
-      return nextPacket;
-    });
-    if (state.reviewCenterCache && state.reviewCenterCache.data && Array.isArray(state.reviewCenterCache.data.packets)) {
-      state.reviewCenterCache.data.packets = state.reviewCenterCache.data.packets.map(packet => {
-        if (String(packet._id) !== String(packetId)) return packet;
-        const nextPacket = { ...packet };
-        updater(nextPacket);
-        return nextPacket;
-      });
-    }
-  }
 
   function renderPreserveScroll() {
     const viewport = document.scrollingElement || document.documentElement;

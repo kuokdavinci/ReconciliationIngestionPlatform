@@ -833,7 +833,7 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
 
           {/* Trace Detail Modal Overlay */}
           {traceDetailSampleIndex !== null && localPacket.runtimeValidation?.traceSamples && (
-            <div className={styles.traceDetailOverlay} onClick={() => setTraceDetailSampleIndex(null)}>
+            <div className={styles.traceDetailOverlay}>
               <div className={styles.traceDetailPanel} onClick={e => e.stopPropagation()}>
                 {(() => {
                   const sample = localPacket.runtimeValidation!.traceSamples![traceDetailSampleIndex];

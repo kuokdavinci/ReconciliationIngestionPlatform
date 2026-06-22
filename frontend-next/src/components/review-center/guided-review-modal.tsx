@@ -333,6 +333,15 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
     );
   }, [fieldMappings]);
 
+  const constantFieldEntries = useMemo(() => {
+    return constantMappings.map(m => ({
+      canonicalField: m.path,
+      sourceColumn: m.constant ?? "-",
+      status: "OK" as const,
+      issue: null,
+    }));
+  }, [constantMappings]);
+
   const scopeConfidence = Math.round((scopeClassification?.probabilities?.[selectedScope] ?? 0) * 100);
   const scopeBorderColor = scopeConfidence >= 85 ? "#10b981" : scopeConfidence >= 60 ? "#f59e0b" : "#ef4444";
   const scopeBgColor = scopeConfidence >= 85 ? "rgba(16, 185, 129, 0.1)" : scopeConfidence >= 60 ? "rgba(245, 158, 11, 0.1)" : "rgba(239, 68, 68, 0.1)";
@@ -342,6 +351,17 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
   const previewRows = localPacket?.runtimeValidation?.previewRows ?? [];
   const fieldResults = localPacket?.runtimeValidation?.fieldResults ?? [];
   const topIssues = localPacket?.runtimeValidation?.topIssues ?? [];
+
+  const displayFieldResults = useMemo(() => {
+    const existingPaths = new Set(fieldResults.map(f => f.canonicalField));
+    const merged = [...fieldResults];
+    for (const ce of constantFieldEntries) {
+      if (!existingPaths.has(ce.canonicalField)) {
+        merged.push(ce);
+      }
+    }
+    return merged;
+  }, [fieldResults, constantFieldEntries]);
   const summary = localPacket?.runtimeValidation?.summary;
 
   const isApproved = localPacket ? String(localPacket.status).toUpperCase() === "APPROVED" : false;
@@ -696,18 +716,27 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {fieldResults.map((field) => (
-                  <tr key={field.canonicalField}>
-                    <td>{field.canonicalField}</td>
-                    <td>{field.sourceColumn ?? "-"}</td>
-                    <td>
-                      <Badge severity={field.status === "OK" ? "low" : field.status === "WARNING" ? "medium" : "critical"}>
-                        {field.status}
-                      </Badge>
-                    </td>
-                    <td>{field.issue ?? "-"}</td>
-                  </tr>
-                ))}
+                {displayFieldResults.map((field) => {
+                  const isConstant = constantMappings.some(m => m.path === field.canonicalField);
+                  const colIdx = Number(field.sourceColumn);
+                  const sourceLabel = isConstant
+                    ? `Constant: ${field.sourceColumn}`
+                    : (!isNaN(colIdx) && colIdx > 0 && sigHeaders[colIdx - 1])
+                      ? sigHeaders[colIdx - 1]
+                      : field.sourceColumn ?? "-";
+                  return (
+                    <tr key={field.canonicalField}>
+                      <td>{field.canonicalField}</td>
+                      <td>{sourceLabel}</td>
+                      <td>
+                        <Badge severity={field.status === "OK" ? "low" : field.status === "WARNING" ? "medium" : "critical"}>
+                          {field.status}
+                        </Badge>
+                      </td>
+                      <td>{field.issue ?? "-"}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </section>
@@ -775,35 +804,6 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
                     </div>
                   );
                 })}
-              </div>
-            </section>
-          )}
-
-          {previewRows.length > 0 && (
-            <section className={styles.sectionCard}>
-              <h5 className={styles.sectionCardTitle}>Preview after mapping</h5>
-              <div className={styles.previewGrid}>
-                {previewRows.slice(0, 3).map((row) => (
-                  <div key={row.id} className={styles.previewCard}>
-                    <div className={styles.previewHeader}>
-                      <strong>Sample row</strong>
-                      <span className={styles.previewId}>Row {row.id}</span>
-                    </div>
-                    <div className={styles.previewValues}>
-                      {Object.entries(row.values).slice(0, 5).map(([key, value]) => {
-                        const invalid = row.invalidFields?.includes(key);
-                        return (
-                          <div key={`${row.id}-${key}`}>
-                            <div className={styles.previewKey}>{key}</div>
-                            <div className={`${styles.previewValue} ${invalid ? styles.previewInvalid : ""}`}>
-                              {value == null || value === "" ? "-" : String(value)}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
               </div>
             </section>
           )}

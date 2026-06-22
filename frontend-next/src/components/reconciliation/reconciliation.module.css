@@ -352,6 +352,7 @@
   padding: 12px;
   font-family: var(--font-mono);
   font-size: 12px;
+  color: var(--text-primary);
 }
 
 .evidenceCompareHead {
@@ -368,6 +369,7 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   margin-bottom: 4px;
+  color: var(--text-primary);
 }
 
 .evidenceDelta {

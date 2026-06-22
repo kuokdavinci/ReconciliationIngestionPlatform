@@ -74,7 +74,7 @@ export function EvidenceTable({
             const id = row.partnerTxnId || row.internalTxnId || row.id;
             const isSelected = selectedRowId === id;
             const isChecked = Boolean(selectedRows[id]);
-            const sev = row.severity ?? (row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium");
+            const sev = (row.severity ?? (row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium")).toLowerCase();
             const delta = row.delta ?? Math.abs(Number(row.internalAmount ?? 0) - Number(row.partnerAmount ?? 0));
             const deltaDirection = Number((row.partnerAmount ?? 0) - (row.internalAmount ?? 0));
 

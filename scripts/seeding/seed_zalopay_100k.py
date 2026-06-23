@@ -73,17 +73,14 @@ def _write_partner_file(path: Path, day: datetime, count: int):
     worksheet.write(6, 39, "zpChecksum")
 
     row_idx = 7
+    # We will skip 6 indices from the main loop to simulate missing on partner side
+    skipped_indices = {1000, 20000, 40000, 60000, 80000, 90000}
+    
     for i in range(1, count + 1):
-        # MISSING_PARTNER case: omit this key entirely from partner file
-        if i in (1000, 50000, 90000):
+        if i in skipped_indices:
             continue
 
         txn_id = f"ZALO_TXN_80{i:06d}"
-        
-        # MISSING_INTERNAL case: change key suffix to denote missing internally
-        if i in (2000, 40000, 80000):
-            txn_id = f"ZALO_TXN_80{i:06d}_MISSING_INTERNAL"
-
         amount = Decimal(50000 + (i % 10) * 10000)
         
         # AMOUNT_MISMATCH case: mismatch on amount (e.g. 4 records)
@@ -102,6 +99,23 @@ def _write_partner_file(path: Path, day: datetime, count: int):
         if i % 5 == 0:
             worksheet.write(row_idx, 35, "PROMO_5K")
         worksheet.write(row_idx, 39, f"md5_hash_{i}")
+        row_idx += 1
+
+    # Add 3 extra records to Excel that do NOT exist in the 100k internal DB
+    # 100k - 6 (skipped) + 3 (extra) = 99,997 partner rows.
+    for extra_id in (1, 2, 3):
+        txn_id = f"ZALO_TXN_999{extra_id:03d}"
+        amount = Decimal("75000")
+        worksheet.write(row_idx, 0, str(count + extra_id))
+        worksheet.write(row_idx, 1, txn_id)
+        worksheet.write(row_idx, 4, str(amount))
+        worksheet.write(row_idx, 7, f"{date_str} 14:00:00")
+        worksheet.write(row_idx, 10, f"BILL_ZP_EXTRA_{extra_id}")
+        worksheet.write(row_idx, 17, "Thành công")
+        worksheet.write(row_idx, 20, "1100")
+        worksheet.write(row_idx, 25, "DOMESTIC_CARD")
+        worksheet.write(row_idx, 30, "APP_ZALO_PAY_1")
+        worksheet.write(row_idx, 39, f"md5_hash_extra_{extra_id}")
         row_idx += 1
 
     workbook.close()

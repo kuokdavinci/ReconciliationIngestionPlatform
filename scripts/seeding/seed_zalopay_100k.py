@@ -64,7 +64,7 @@ def _write_partner_file(path: Path, day: datetime, count: int):
         ws.append([])
 
     # 40 columns header
-    headers = [""] * TOTAL_COLUMNS
+    headers = [None] * TOTAL_COLUMNS
     headers[0] = "STT"
     headers[1] = "zpTransId"
     headers[4] = "zpTotalAmount"
@@ -96,7 +96,7 @@ def _write_partner_file(path: Path, day: datetime, count: int):
         if i in (500, 25000, 75000, 99999):
             amount += Decimal("5000") # Discrepancy
             
-        row = [""] * TOTAL_COLUMNS
+        row = [None] * TOTAL_COLUMNS
         row[0] = str(i)
         row[1] = txn_id
         row[4] = str(amount)

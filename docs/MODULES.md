@@ -150,19 +150,22 @@ Structured logging helpers.
 
 ## Frontend
 
-### `frontend/`
+### `frontend-next/`
 
 **Files:**
 
-| File | Purpose |
+| File/Directory | Purpose |
 |---|---|
-| `app.js` | Main SPA logic, route rendering, state handling, API calls (Command Center, Data Intake, Review Center, Reconciliation, Mapping Studio, Automation) |
-| `index.html` | Dashboard shell |
-| `styles.css` | Dashboard styling |
-| `vite.config.js` | Vite dev server config, `/api` proxy tới `http://localhost:8000`, build config |
-| `package.json` | npm scripts (`dev`, `build`, `preview`), dependency: `vite ^5.0.0` |
-| `server.py` | Optional Python static server |
+| `src/app/` | Next.js App Router pages (reconciliation, review-center, mapping-studio, schedules, audit-log) |
+| `src/components/` | React components organized by domain (ui/, layout/, reconciliation/, review-center/, mapping-studio/, schedules/, audit/) |
+| `src/lib/api/` | Typed HTTP client modules per domain (`client.ts`, `reconciliation.ts`, `review-center.ts`, `mapping-studio.ts`, `audit.ts`, `automation.ts`) |
+| `src/lib/state/` | Custom React hooks (useReconciliationStore) + mock data |
+| `src/types/` | TypeScript interfaces for all domain models |
+| `package.json` | npm scripts, dependencies (next@16, react@19, tailwindcss@4) |
+| `next.config.ts` | Next.js config with `/api/:path*` proxy to backend |
+| `postcss.config.mjs` | PostCSS + Tailwind CSS v4 |
+| `tsconfig.json` | TypeScript config with `@/*` path alias |
 
 ---
 
-*Module analysis: 2026-06-16*
+*Module analysis: 2026-06-23*

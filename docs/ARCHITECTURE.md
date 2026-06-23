@@ -1,6 +1,6 @@
 # Architecture
 
-**Cập nhật lần cuối:** 2026-06-16
+**Cập nhật lần cuối:** 2026-06-23
 
 ## Tổng quan
 
@@ -13,9 +13,9 @@ Nền tảng tiếp nhận file đối tác, chuẩn hóa thành các bản giao
 - `src.api:create_app`
   - FastAPI app factory với MongoDB lifespan management và router registration
 - `frontend-next/`
-  - Active Next.js + TypeScript dashboard that communicates with FastAPI through `/api`
-- `frontend/`
-  - Legacy Vite dashboard retained as reference only
+  - Next.js + TypeScript dashboard giao tiếp với FastAPI qua `/api`
+- `src/scheduler/scheduler.py:PartnerDataScheduler`
+  - APScheduler-based daemon cho partner fetch automation
 
 ## Backend Subsystems
 
@@ -136,8 +136,9 @@ API hiện đang đăng ký các router groups sau (xem `src/api/__init__.py`):
 | `operations` | `/api/v1/operations` | `operations_router` |
 | `review_packets` | `/api/v1/review-packets` | `review_packets_router` |
 | `automation` | `/api/v1/automation` | `automation_router` |
+| `audit` | `/api/v1/audit` | `audit_router` |
 
-**Tổng cộng 9 router groups** (insights/reports chung một router).
+**Tổng cộng 11 router groups** (insights/reports chung một router).
 
 ## Data Stores
 
@@ -164,14 +165,15 @@ Index definitions chi tiết xem tại `src/models/indexes.py`.
 
 ## Frontend Shape
 
-The active dashboard is `frontend-next/`.
+The dashboard is `frontend-next/`, a Next.js App Router application.
 
-Main active views:
+Main views:
 
-- Review Center
-- Reconciliation
-- Mapping Studio
-- Automation
+- Review Center — operator approval workflow (scope → mapping → validation → decision)
+- Reconciliation — results viewer with evidence + AI insights
+- Mapping Studio — draft mapping wizard
+- Schedules — partner fetch automation management
+- Audit Log — event history
 
 Review Center owns the operator approval workflow:
 
@@ -181,8 +183,6 @@ Review Center owns the operator approval workflow:
 4. Run runtime validation.
 5. Approve/reject.
 6. Track post-approval ingestion and reconciliation progress.
-
-The old `frontend/` directory is legacy/reference only.
 
 ## Operational Notes
 

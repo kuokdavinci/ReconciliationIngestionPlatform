@@ -225,8 +225,7 @@ make momo-e2e-run
 | Đường dẫn | Mô tả |
 |---|---|
 | `src/` | Backend Python code (FastAPI) |
-| `frontend-next/` | Dashboard chính (Next.js) |
-| `frontend/` | Dashboard cũ (legacy reference only) |
+| `frontend-next/` | Dashboard (Next.js) |
 | `tests/` | Automated tests (pytest) |
 | `docs/` | Project documentation |
 | `docker/` | Docker support files |

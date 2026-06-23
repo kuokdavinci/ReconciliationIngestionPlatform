@@ -217,7 +217,7 @@ export function GuidedReviewValidationStep({
                       {normalizedEntries.length > 0 ? normalizedEntries.map(([key, value]) => (
                         <div key={key} className={styles.traceRow}>
                           <span className={styles.traceRowKey}>{key}</span>
-                          <span className={styles.traceRowValue}>{value ?? "-"}</span>
+                          <span className={styles.traceRowValue}>{value != null ? String(value) : "-"}</span>
                         </div>
                       )) : <span className={styles.traceEmpty}>No normalized output</span>}
                     </div>
@@ -287,7 +287,7 @@ export function GuidedReviewValidationStep({
                       {normalizedEntries.length > 0 ? normalizedEntries.map(([key, value]) => (
                         <div key={key} className={styles.traceRow}>
                           <span className={styles.traceRowKey}>{key}</span>
-                          <span className={styles.traceRowValue}>{value ?? "-"}</span>
+                          <span className={styles.traceRowValue}>{value != null ? String(value) : "-"}</span>
                         </div>
                       )) : <span className={styles.traceEmpty}>No normalized output</span>}
                     </div>

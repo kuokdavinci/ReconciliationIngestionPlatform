@@ -63,7 +63,7 @@ momo-e2e-phase2-file:
 
 # ── ZALOPAY E2E shortcuts ─────────────────────────────────────────
 zalopay-e2e-reset:
-	PYTHONPATH=. python scripts/seeding/seed_zalopay_100k.py reset
+	PYTHONPATH=. uv run python scripts/seeding/seed_zalopay_100k.py reset
 
 momo-e2e-help:
 	@echo "MOMO E2E — start here (2 main commands):"

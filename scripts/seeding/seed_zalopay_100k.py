@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 import openpyxl
+import xlsxwriter
 from bson.decimal128 import Decimal128
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -52,33 +53,26 @@ def _partner_file_path_for_day(day: datetime) -> Path:
     return sftp_dir / f"zalopay_{date_compact}.xlsx"
 
 def _write_partner_file(path: Path, day: datetime, count: int):
-    logger.info(f"Generating Excel file with {count} records at {path}...")
+    logger.info(f"Generating Excel file with {count} records at {path} using xlsxwriter...")
     date_str = _date_str(day)
     
-    # Use write_only=True for extremely low memory footprint with 100k rows
-    wb = openpyxl.Workbook(write_only=True)
-    ws = wb.create_sheet()
+    workbook = xlsxwriter.Workbook(str(path), {'constant_memory': True})
+    worksheet = workbook.add_worksheet("Sheet1")
     
-    # 6 Blank rows for offset header matching ingestion configuration
-    for _ in range(6):
-        ws.append([])
+    # Write headers at row 6 (0-indexed, corresponding to row 7 in 1-indexed)
+    worksheet.write(6, 0, "STT")
+    worksheet.write(6, 1, "zpTransId")
+    worksheet.write(6, 4, "zpTotalAmount")
+    worksheet.write(6, 7, "zpNgayGd")
+    worksheet.write(6, 10, "zpMaHDon")
+    worksheet.write(6, 17, "zpTrangThai")
+    worksheet.write(6, 20, "zpFeeAmount")
+    worksheet.write(6, 25, "zpChannel")
+    worksheet.write(6, 30, "zpAppId")
+    worksheet.write(6, 35, "zpPromotionCode")
+    worksheet.write(6, 39, "zpChecksum")
 
-    # 40 columns header
-    headers = [None] * TOTAL_COLUMNS
-    headers[0] = "STT"
-    headers[1] = "zpTransId"
-    headers[4] = "zpTotalAmount"
-    headers[7] = "zpNgayGd"
-    headers[10] = "zpMaHDon"
-    headers[17] = "zpTrangThai"
-    # Extra columns for "more columns than usual"
-    headers[20] = "zpFeeAmount"
-    headers[25] = "zpChannel"
-    headers[30] = "zpAppId"
-    headers[35] = "zpPromotionCode"
-    headers[39] = "zpChecksum"
-    ws.append(headers)
-
+    row_idx = 7
     for i in range(1, count + 1):
         # MISSING_PARTNER case: omit this key entirely from partner file
         if i in (1000, 50000, 90000):
@@ -96,21 +90,21 @@ def _write_partner_file(path: Path, day: datetime, count: int):
         if i in (500, 25000, 75000, 99999):
             amount += Decimal("5000") # Discrepancy
             
-        row = [None] * TOTAL_COLUMNS
-        row[0] = str(i)
-        row[1] = txn_id
-        row[4] = str(amount)
-        row[7] = f"{date_str} 14:00:00"
-        row[10] = f"BILL_ZP_{i:06d}"
-        row[17] = "Thành công"
-        row[20] = "1100"  # Fee
-        row[25] = "DOMESTIC_CARD"
-        row[30] = "APP_ZALO_PAY_1"
-        row[35] = "PROMO_5K" if i % 5 == 0 else ""
-        row[39] = f"md5_hash_{i}"
-        ws.append(row)
+        worksheet.write(row_idx, 0, str(i))
+        worksheet.write(row_idx, 1, txn_id)
+        worksheet.write(row_idx, 4, str(amount))
+        worksheet.write(row_idx, 7, f"{date_str} 14:00:00")
+        worksheet.write(row_idx, 10, f"BILL_ZP_{i:06d}")
+        worksheet.write(row_idx, 17, "Thành công")
+        worksheet.write(row_idx, 20, "1100")
+        worksheet.write(row_idx, 25, "DOMESTIC_CARD")
+        worksheet.write(row_idx, 30, "APP_ZALO_PAY_1")
+        if i % 5 == 0:
+            worksheet.write(row_idx, 35, "PROMO_5K")
+        worksheet.write(row_idx, 39, f"md5_hash_{i}")
+        row_idx += 1
 
-    wb.save(path)
+    workbook.close()
     logger.info("Excel file generated successfully.")
 
 async def _ensure_mapping_config(db) -> None:

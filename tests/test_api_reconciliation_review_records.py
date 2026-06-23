@@ -52,6 +52,12 @@ class _Collection:
         ]
         return _AsyncCursor(docs)
 
+    async def insert_one(self, document):
+        self.docs.append(document)
+        class MockResult:
+            inserted_id = document.get("_id")
+        return MockResult()
+
     async def update_one(self, query, update, upsert=False):
         for doc in self.docs:
             if all(doc.get(key) == value for key, value in query.items()):
@@ -128,7 +134,7 @@ async def test_add_note_upserts_review_record():
 async def test_resolve_record_upserts_resolved_status():
     db = _DB()
     request = _make_request(db, actor="test_user")
-    payload = type("Payload", (), {"partner": "MOMO", "date": "2026-06-10", "resolved_status": "MATCHED", "actor": "test_user"})()
+    payload = type("Payload", (), {"partner": "MOMO", "date": "2026-06-10", "resolved_status": "MATCHED", "actor": "test_user", "note": None})()
     body = await resolve_review_record(request, "txn-1", payload)
     assert body["ok"] is True
     doc = db["reconciliation_review_record"].docs[0]

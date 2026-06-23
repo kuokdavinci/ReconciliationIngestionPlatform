@@ -141,12 +141,6 @@ export function GuidedReviewDecisionStep({
             </div>
           )}
 
-          {postApprovalRun?.reconciliationCount !== undefined && postApprovalRun?.reconciliationCount !== null && (
-            <div className={styles.footerNote} style={{ fontWeight: 600, textAlign: "center", color: "#fff" }}>
-              Reconciliation output: {postApprovalRun.reconciliationCount} results written.
-            </div>
-          )}
-
           <div className={styles.actionRow} style={{ justifyContent: "center", marginTop: 12 }}>
             {postApprovalRun?.status === "FAILED" ? (
               <Button variant="secondary" onClick={onBack}>Return to Step 3</Button>

@@ -80,7 +80,7 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
     if (localPacket && String(localPacket.status).toUpperCase() === "APPROVED") {
       void api.getPostApproveRun(localPacket._id).then(res => {
         if (res.run) setPostApprovalRun(res.run as any);
-      });
+      }).catch(() => {});
     }
   }, [localPacket]);
 
@@ -244,6 +244,7 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
         setPostApprovalRun(response.postApproveRun as any);
       }
       startPolling(localPacket._id);
+      onRefresh();
     } catch (err: any) {
       showToast(err.message || "Failed to approve review packet.", "error");
     } finally {
@@ -346,8 +347,8 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
       <div className={styles.stepRail}>
         {steps.map((label, index) => {
           const current = index + 1;
-          const isActive = current === step;
-          const isDone = current < step;
+          const isActive = current === step && !isApproved;
+          const isDone = current < step || (current === step && isApproved);
           return (
             <div key={label} className={styles.stepCell}>
               <div className={`${styles.stepDot} ${isDone ? styles.stepDone : ""} ${isActive ? styles.stepActive : ""}`}>

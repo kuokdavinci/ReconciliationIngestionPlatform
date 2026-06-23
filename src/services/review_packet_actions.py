@@ -82,14 +82,20 @@ async def mark_packet(
         raise HTTPException(status_code=400, detail="Only pending review packets can be processed.")
 
     now = datetime.now(timezone.utc)
+    set_fields: dict[str, Any] = {
+        "status": status.value,
+        "decisionMode": decision_mode.value,
+        "reviewedAt": now,
+        "reviewedBy": reviewed_by,
+    }
+    if status == ReviewPacketStatus.APPROVED:
+        gates = [dict(g) for g in (packet.validation_gates or [])]
+        for g in gates:
+            g["status"] = "pass"
+        set_fields["validationGates"] = gates
     await repo.collection.update_one(
         {"_id": packet_id},
-        {"$set": {
-            "status": status.value,
-            "decisionMode": decision_mode.value,
-            "reviewedAt": now,
-            "reviewedBy": reviewed_by,
-        }},
+        {"$set": set_fields},
     )
     await sync_action_status(
         request,

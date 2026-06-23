@@ -24,7 +24,7 @@ function ReviewCenterContent() {
   const refreshPackets = useCallback(async () => {
     try {
       const response = await api.listReviewPackets();
-      const nextPackets = [...(response.packets ?? [])].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      const nextPackets = [...(response.packets ?? [])].filter(p => String(p.status).toUpperCase() === "PENDING").sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
       setPackets(nextPackets);
       setSelectedId((current) => {
         const requestedPacket = searchParams.get("packet");
@@ -54,7 +54,7 @@ function ReviewCenterContent() {
       try {
         const response = await api.listReviewPackets();
         if (cancelled) return;
-        const nextPackets = [...(response.packets ?? [])].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        const nextPackets = [...(response.packets ?? [])].filter(p => String(p.status).toUpperCase() === "PENDING").sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
         setPackets(nextPackets);
         setSelectedId((current) => {
           const requestedPacket = searchParams.get("packet");

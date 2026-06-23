@@ -167,25 +167,21 @@ async def _seed_internal(db, day: datetime, count: int):
     # Clean previous ZALOPAY data
     await collection.delete_many({"partner": PARTNER})
     
-    # Insert in batches of 10k to prevent driver timeout / out of memory
-    batch_size = 10000
-    batch = []
+    # Generate all documents in memory first (extremely fast in Python)
+    docs = []
     now = datetime.now(timezone.utc)
     
     for i in range(1, count + 1):
-        # MISSING_INTERNAL case: omit this key entirely from internal database
         if i in (2000, 40000, 80000):
             continue
 
         txn_id = f"ZALO_TXN_80{i:06d}"
-        
-        # MISSING_PARTNER case: append suffix denoting missing on partner side
         if i in (1000, 50000, 90000):
             txn_id = f"ZALO_TXN_80{i:06d}_MISSING_PARTNER"
 
         amount = Decimal(50000 + (i % 10) * 10000)
         
-        doc = {
+        docs.append({
             "_id": f"INT_{PARTNER}_{txn_id}",
             "partner": PARTNER,
             "partnerTxnId": txn_id,
@@ -195,17 +191,11 @@ async def _seed_internal(db, day: datetime, count: int):
             "transactionTime": day,
             "createdAt": now,
             "updatedAt": now,
-        }
-        batch.append(doc)
+        })
         
-        if len(batch) >= batch_size:
-            await collection.insert_many(batch)
-            logger.info(f"Inserted batch: {i}/{count}")
-            batch = []
-            
-    if batch:
-        await collection.insert_many(batch)
-        logger.info(f"Inserted final batch: {count}/{count}")
+    # Insert everything in one single MongoDB call (Zero TCP roundtrip overhead)
+    await collection.insert_many(docs, ordered=False)
+    logger.info(f"Inserted all {len(docs)} internal transactions successfully.")
 
 async def main():
     parser = argparse.ArgumentParser(description="Seed ZALOPAY 100k data")

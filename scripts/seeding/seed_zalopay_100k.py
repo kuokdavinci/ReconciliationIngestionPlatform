@@ -129,10 +129,8 @@ async def _ensure_mapping_config(db) -> None:
             { "path": "extra.provider", "constant": "ZALOPAY", "type": "CONSTANT" }
         ],
         "configVersion": "v_template",
-        "status": MappingConfigStatus.APPROVED.value,
-        "createdAt": datetime.now(timezone.utc),
-        "approvedAt": datetime.now(timezone.utc),
-        "approvedBy": "admin"
+        "status": MappingConfigStatus.PENDING_APPROVAL.value,
+        "createdAt": datetime.now(timezone.utc)
     }
     await collection.insert_one(config_doc)
 

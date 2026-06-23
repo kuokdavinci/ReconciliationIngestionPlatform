@@ -1,6 +1,7 @@
 export interface AuditEvent {
   _id: string;
   entityType: string;
+  entityId?: string;
   action: string;
   actor: string;
   createdAt: string;

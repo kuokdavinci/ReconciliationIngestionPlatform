@@ -40,3 +40,19 @@ sftp_data/
 
 # Test artifacts
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node.js
+**/node_modules/
+**/.next/
+frontend-next/.next/
+frontend-next/out/
+
+# Downloads and temp files
+downloads/
+tmp_downloads/
+test_data/
+mock_data/
+reports/
+scratch/

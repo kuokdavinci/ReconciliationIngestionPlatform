@@ -36,7 +36,7 @@ export function BulkActionBar({ selectedCount, onApprove, onFlag, onClear }: Pro
         Apply Action
       </Button>
       <Button variant="tertiary" onClick={onFlag}>
-        Mark for Review
+        Mark Reviewed
       </Button>
       <Button variant="secondary" onClick={onClear}>
         Clear

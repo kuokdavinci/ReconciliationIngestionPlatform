@@ -60,6 +60,7 @@ export function EvidenceTable({
             </th>
             <th className={styles.ledgerHeadCell}>Severity</th>
             <th className={styles.ledgerHeadCell}>Status</th>
+            <th className={styles.ledgerHeadCell}>Review</th>
             <th className={styles.ledgerHeadCell}>Txn ID</th>
             <th className={styles.ledgerHeadCell}>Internal Status</th>
             <th className={styles.ledgerHeadCell}>Partner Status</th>
@@ -77,6 +78,9 @@ export function EvidenceTable({
             const delta = row.delta ?? Math.abs(Number(row.internalAmount ?? 0) - Number(row.partnerAmount ?? 0));
             const deltaDirection = Number((row.partnerAmount ?? 0) - (row.internalAmount ?? 0));
 
+            const isReviewed = row.reviewState?.reviewed ?? false;
+            const resolvedStatus = row.reviewState?.resolvedStatus;
+
             return (
               <tr
                 key={id}
@@ -93,6 +97,17 @@ export function EvidenceTable({
                 </td>
                 <td className={styles.ledgerCell}>
                   <Badge severity={row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium"}>{row.reconciliationStatus}</Badge>
+                </td>
+                <td className={styles.ledgerCell}>
+                  {row.reconciliationStatus === "MATCHED" ? (
+                    <Badge severity="neutral">Auto-matched</Badge>
+                  ) : resolvedStatus ? (
+                    <Badge severity="low">RESOLVED: {resolvedStatus}</Badge>
+                  ) : isReviewed ? (
+                    <Badge severity="medium">Reviewed (with feedback)</Badge>
+                  ) : (
+                    <Badge severity="high">PENDING REVIEW</Badge>
+                  )}
                 </td>
                 <td className={styles.ledgerCell}>
                   <code className={styles.ledgerCode}>{id}</code>
@@ -145,6 +160,10 @@ export function EvidenceTable({
           const isChecked = Boolean(selectedRows[id]);
           const delta = row.delta ?? Math.abs(Number(row.internalAmount ?? 0) - Number(row.partnerAmount ?? 0));
           const sev = row.severity ?? (row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium");
+          
+          const isReviewed = row.reviewState?.reviewed ?? false;
+          const resolvedStatus = row.reviewState?.resolvedStatus;
+
           return (
             <div
               key={`mobile-${id}`}
@@ -161,7 +180,18 @@ export function EvidenceTable({
                 </div>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                <Badge severity={row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium"}>{row.reconciliationStatus}</Badge>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <Badge severity={row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium"}>{row.reconciliationStatus}</Badge>
+                  {row.reconciliationStatus !== "MATCHED" && (
+                    resolvedStatus ? (
+                      <Badge severity="low">RESOLVED: {resolvedStatus}</Badge>
+                    ) : isReviewed ? (
+                      <Badge severity="medium">Reviewed (with feedback)</Badge>
+                    ) : (
+                      <Badge severity="high">Pending</Badge>
+                    )
+                  )}
+                </div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: delta > 0 ? "#ef4444" : "var(--text-muted)" }}>
                   {delta > 0 ? `Δ ${delta.toLocaleString()}` : "No Delta"}
                 </div>

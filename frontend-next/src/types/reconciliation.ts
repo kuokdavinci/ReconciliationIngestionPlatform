@@ -16,6 +16,8 @@ export interface ReconciliationStats {
   missingPartner: number;
   missingInternal: number;
   matchRate: number;
+  reviewedCount?: number;
+  totalReviewable?: number;
 }
 
 export interface ReviewNote {

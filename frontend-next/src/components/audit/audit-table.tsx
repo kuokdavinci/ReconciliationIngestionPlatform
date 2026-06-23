@@ -11,12 +11,15 @@ interface Props {
 
 const entityColors: Record<string, "low" | "medium" | "high" | "critical"> = {
   REVIEW_PACKET: "medium",
+  DISCREPANCY_REVIEW: "medium",
   MAPPING_CONFIG: "high",
   RECONCILIATION_RUN: "low",
 };
 
 const actionColors: Record<string, "low" | "medium" | "high" | "critical"> = {
   APPROVED: "low",
+  COMMENTED: "low",
+  RESOLVED: "low",
   APPROVE_ACTIVATE_NEXT_RUNTIME: "low",
   REJECTED: "high",
   REJECT: "high",
@@ -59,7 +62,7 @@ export function AuditTable({ events, onSelect }: Props) {
             </td>
             <td style={{ padding: "10px 12px" }}>
               <code style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-muted)" }}>
-                {String(event.metadata?.reference ?? "-")}
+                {String(event.metadata?.reference ?? event.metadata?.recordKey ?? event.entityId ?? "-")}
               </code>
             </td>
             <td style={{ padding: "10px 12px" }}>

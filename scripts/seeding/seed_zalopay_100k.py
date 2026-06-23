@@ -80,11 +80,20 @@ def _write_partner_file(path: Path, day: datetime, count: int):
     ws.append(headers)
 
     for i in range(1, count + 1):
+        # MISSING_PARTNER case: omit this key entirely from partner file
+        if i in (1000, 50000, 90000):
+            continue
+
         txn_id = f"ZALO_TXN_80{i:06d}"
+        
+        # MISSING_INTERNAL case: change key suffix to denote missing internally
+        if i in (2000, 40000, 80000):
+            txn_id = f"ZALO_TXN_80{i:06d}_MISSING_INTERNAL"
+
         amount = Decimal(50000 + (i % 10) * 10000)
         
-        # Introduce a few discrepancies (e.g. 2 records with mismatch amounts)
-        if i == 500 or i == 99999:
+        # AMOUNT_MISMATCH case: mismatch on amount (e.g. 4 records)
+        if i in (500, 25000, 75000, 99999):
             amount += Decimal("5000") # Discrepancy
             
         row = [""] * TOTAL_COLUMNS
@@ -164,7 +173,16 @@ async def _seed_internal(db, day: datetime, count: int):
     now = datetime.now(timezone.utc)
     
     for i in range(1, count + 1):
+        # MISSING_INTERNAL case: omit this key entirely from internal database
+        if i in (2000, 40000, 80000):
+            continue
+
         txn_id = f"ZALO_TXN_80{i:06d}"
+        
+        # MISSING_PARTNER case: append suffix denoting missing on partner side
+        if i in (1000, 50000, 90000):
+            txn_id = f"ZALO_TXN_80{i:06d}_MISSING_PARTNER"
+
         amount = Decimal(50000 + (i % 10) * 10000)
         
         doc = {

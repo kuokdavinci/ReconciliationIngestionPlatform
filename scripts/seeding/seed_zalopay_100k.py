@@ -166,9 +166,6 @@ async def _seed_internal(db, day: datetime, count: int):
     now = datetime.now(timezone.utc)
     
     for i in range(1, count + 1):
-        if i in (2000, 40000, 80000):
-            continue
-
         txn_id = f"ZALO_TXN_80{i:06d}"
         if i in (1000, 50000, 90000):
             txn_id = f"ZALO_TXN_80{i:06d}_MISSING_PARTNER"

@@ -405,13 +405,6 @@ class IngestionPipeline:
                     )
                     batch_buffer.append(data_container)
 
-                    # Emit ROW_SUCCESS event
-                    self._logger.emit_row_success(
-                        str(file_record.id),
-                        row_number,
-                        txn.trace or "",
-                    )
-
                     # 8i: Flush when batch reaches batch_size
                     if len(batch_buffer) >= self._batch_size:
                         inserted = await self._flush_batch(batch_buffer)

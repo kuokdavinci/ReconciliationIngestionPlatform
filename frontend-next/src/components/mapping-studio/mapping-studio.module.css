@@ -11,6 +11,10 @@
 .uploadGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .optionCard { border: 1px dashed var(--border); border-radius: 8px; padding: 24px; text-align: center; display: flex; flex-direction: column; justify-content: space-between; min-height: 200px; }
 .optionCardPrimary { background: rgba(240, 185, 11, 0.02); }
+.optionCardTitle { margin: 0 0 8px; color: #fff; }
+.optionCardDesc { font-size: 12px; color: var(--text-muted); margin-bottom: 24px; }
+.studioTitle { color: #fff; }
+.studioSubtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
 
 .filePreview { overflow-x: auto; max-height: 250px; background: rgba(0,0,0,0.15); border: 1px solid var(--border); border-radius: 6px; }
 

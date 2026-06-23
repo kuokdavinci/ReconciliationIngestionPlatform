@@ -1,251 +1,274 @@
 # Reconciliation Ingestion Platform
 
-Config-driven reconciliation platform for ingesting partner settlement files, normalizing them into a canonical model, reviewing mapping changes with human approval, and exposing operations/reconciliation workflows through FastAPI and a Next.js dashboard.
+Config-driven platform for ingesting partner settlement files, normalizing into canonical transactions, matching against internal records via deterministic reconciliation, and managing mapping changes through human-in-the-loop approval workflows.
 
-## What Is In This Repo
+---
 
-- Python backend under `src/` for ingestion, reconciliation, approvals, automation, and AI-assisted analysis
-- CLI entrypoint in `run.py` for ingestion, reconciliation, scheduler control, and API serving
-- Active Next.js dashboard in `frontend-next/`
-- Legacy Vite dashboard in `frontend/` kept only as reference
-- MongoDB-backed persistence for files, mappings, review packets, copilot actions, and reconciliation results
+## Stack
 
-## Current Architecture
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.11+ · FastAPI 0.115+ · Uvicorn |
+| Frontend | Next.js 16 · React 19 · TypeScript 5 · Tailwind CSS v4 |
+| Database | MongoDB 7.0 via Motor 3.x (async driver) |
+| AI/LLM | OpenAI-compatible API (direct HTTP, no LangChain) |
+| Scheduling | APScheduler 3.x with MongoDB job store |
+| File Parsing | openpyxl (Excel), csv, json — streaming readers |
+| Infrastructure | Docker · Docker Compose · SFTP (paramiko) |
 
-- `src/pipeline/`: file ingestion orchestration
-- `src/reconciliation/`: deterministic reconciliation engine
-- `src/api/`: FastAPI routers under `/api/v1/*`
-- `src/config/`: runtime settings, mapping validation/loading, config health
-- `src/models/`: MongoDB models, repositories, indexes
-- `src/scheduler/` and `src/fetchers/`: scheduled partner fetch and automation jobs
-- `src/analysis/`: AI-assisted insights layer
-- `src/services/copilot_context.py`: dashboard Copilot context assembly
+---
 
-More detail:
+## Architecture
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Configuration](docs/CONFIGURATION.md)
-- [Data Flow](docs/DATA_FLOW.md)
-- [Development](docs/DEVELOPMENT.md)
-- [Module Map](docs/MODULES.md)
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Frontend (Next.js)                     │
+│  review-center · reconciliation · mapping-studio          │
+│  schedules · audit-log                                    │
+│  ┌────────────────────────────────────────────────────┐   │
+│  │  lib/api/ · lib/state/ · components/ · types/       │   │
+│  └────────────────────────────────────────────────────┘   │
+└────────────────────────┬─────────────────────────────────┘
+                         │ REST API (fetch) + X-Actor header
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│                    FastAPI Backend                         │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐  │
+│  │ API      │ │ Services │ │ Pipeline │ │ Analysis    │  │
+│  │ Routers  │ │ (audit,  │ │ (read →  │ │ (LLM       │  │
+│  │ (11      │ │  review, │ │  normalize│ │  insights, │  │
+│  │  groups) │ │  runtime) │ │  → validate│ │  guardrails)│  │
+│  └──────────┘ └──────────┘ └──────────┘ └────────────┘  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐  │
+│  │ Models   │ │ Config   │ │ Readers  │ │ Scheduler  │  │
+│  │ (15+)    │ │ Loader   │ │ (CSV,    │ │ + Fetchers │  │
+│  │ + Repos  │ │ + Cache  │ │  Excel,  │ │ (SFTP,     │  │
+│  │          │ │ + Valid  │ │  JSON)   │ │  API, drop) │  │
+│  └──────────┘ └──────────┘ └──────────┘ └────────────┘  │
+└────────────────────────┬─────────────────────────────────┘
+                         │ Motor (AsyncIO)
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│                    MongoDB 7.0                             │
+│  reconciliation_file · data_container · internal_txn      │
+│  reconciliation_result · mapping_config · review_packet   │
+│  copilot_action · audit_event · post_approval_run · ...   │
+└──────────────────────────────────────────────────────────┘
+```
 
-## Prerequisites
+---
 
-- Python `3.11+` for local development via `uv`
-- `uv`
-- Docker and Docker Compose for MongoDB/SFTP and optional full local stack
-- Node.js for the dashboard
+## Repository Structure
+
+```
+src/                           # Python backend
+├── core/                      # Shared enums, types, constants
+├── config/                    # Settings, mapping config loader/cache/validator
+├── models/                    # Pydantic models + MongoDB repositories
+├── readers/                   # Streaming parsers (CSV, Excel, JSON)
+├── normalizer/                # Field mapping → canonical transaction
+├── validators/                # Business rule validation
+├── pipeline/                  # Ingestion pipeline orchestrator
+├── reconciliation/            # Transaction matching + scope classification
+├── fetchers/                  # Partner data retrieval (SFTP, API, filedrop)
+├── scheduler/                 # APScheduler job scheduling
+├── analysis/                  # AI insight layer (LLM, guardrails, caching)
+│   └── providers/             # LLM providers (OpenAI-compatible)
+├── api/                       # FastAPI routers (11 groups)
+├── services/                  # Cross-cutting helpers (audit, review, runtime)
+└── logging/                   # Structured JSON logger
+
+frontend-next/                 # Next.js dashboard
+└── src/
+    ├── app/                   # App Router pages
+    │   ├── reconciliation/    # Reconciliation results + insights
+    │   ├── review-center/     # Guided review + approval workflows
+    │   ├── mapping-studio/    # Draft mapping wizard
+    │   ├── schedules/         # Partner fetch schedule management
+    │   └── audit-log/         # Audit event history
+    ├── components/            # React components
+    │   ├── ui/                # Shared design system (Button, Badge, Panel, Dialog)
+    │   ├── layout/            # AppShell, Sidebar, Topbar
+    │   ├── reconciliation/    # EvidenceTable, InsightGrid, SummaryStrip
+    │   ├── review-center/     # GuidedReviewModal, step components
+    │   ├── mapping-studio/    # MappingStudioWizard, ConfigsTable
+    │   ├── schedules/         # ScheduleTable, RecentPacketsGrid
+    │   └── audit/             # AuditTable, AuditDetailDialog
+    ├── lib/                   # API client, state stores, normalizers
+    │   ├── api/               # Typed HTTP modules per domain
+    │   └── state/             # React hooks + mock data
+    └── types/                 # TypeScript interfaces
+
+tests/                         # pytest suite (48 test files)
+├── conftest.py                # Shared fixtures + MongoDB mock
+├── test_api_*.py              # API endpoint tests
+├── test_analysis_*.py         # Analysis/LLM tests
+├── test_reconciliation.py     # Engine tests
+├── test_ingestion_*.py        # Pipeline + integration tests
+└── test_*.py                  # Per-module unit tests
+```
+
+---
+
+## Key Data Flows
+
+### Ingestion (file → canonical transactions)
+```
+run.py → IngestionPipeline.process_file()
+  → dedup check (SHA256)
+  → ConfigLoader.load() (cache-first, TTL 300s)
+  → create_reader() → iter_rows()
+  → TransactionNormalizer.normalize() (field mappings → typed values)
+  → Validator.validate() (field presence, types, duplicates)
+  → DataContainerRepository.insert_many() (batch 100)
+  → StructuredLogger events throughout
+```
+
+### Reconciliation (canonical → matched results)
+```
+ReconciliationEngine.reconcile(partner, date)
+  → scope.classify_scope() (FULL_SNAPSHOT / INCREMENTAL_APPEND / REPLACEMENT)
+  → query partner data_container + internal_transaction
+  → _build_internal_index() (dedup by latest updated_at)
+  → _iter_partner_record_batches() (batch 5000)
+  → compare amount + status → ReconciliationStatus enum
+  → batch write results (batch 5000), clear prior run
+```
+
+### Review & Approval
+```
+Review Packet Created (by upload / scheduler / mapping change)
+  → Guided Review Modal (4 steps)
+    1. Scope classification (LLM) + confirm
+    2. Review draft mapping (AI-generated)
+    3. Runtime validation (reprocess samples)
+    4. Decision: Approve-Activate / Approve-Keep / Reject
+  → PostApprovalRun (background re-ingestion + re-reconciliation)
+```
+
+---
 
 ## Quick Start
 
-1. Install Python dependencies:
+### Prerequisites
+
+- Python 3.11+ with `uv`
+- Docker + Docker Compose
+- Node.js 20+
+
+### Setup
 
 ```bash
+# 1. Install backend dependencies
 uv sync --all-extras
-```
 
-2. Create environment file:
-
-```bash
+# 2. Configure environment
 cp .env.example .env
-```
 
-3. Start supporting services:
-
-```bash
+# 3. Start infrastructure
 docker compose up -d mongodb sftp mongo-express
-```
 
-`mongo-express` in `docker-compose.yml` is configured for local development convenience and currently runs with `ME_CONFIG_BASICAUTH: "false"`.
-Do not expose it beyond localhost or reuse that setting as a production default.
-
-4. Start the backend API:
-
-```bash
+# 4. Start API server
 uv run python run.py --serve --port 8000
-```
 
-5. Start the frontend:
-
-```bash
+# 5. Start frontend (separate terminal)
 npm --prefix frontend-next install
 npm --prefix frontend-next run dev
 ```
 
-6. Open:
+### Open
 
-- Dashboard: `http://localhost:3000`
-- API docs: `http://localhost:8000/docs`
-- OpenAPI JSON: `http://localhost:8000/openapi.json`
-- Mongo Express: `http://localhost:8081`
+| Service | URL |
+|---|---|
+| Dashboard | http://localhost:3000 |
+| API docs | http://localhost:8000/docs |
+| OpenAPI JSON | http://localhost:8000/openapi.json |
+| Mongo Express | http://localhost:8081 |
 
-## CLI Workflows
+---
 
-The executable surface is defined by `run.py`.
+## CLI Commands
 
-Serve the API:
+| Command | Description |
+|---|---|
+| `python run.py --serve` | Start API server |
+| `python run.py --reconcile YYYY-MM-DD --partner MOMO` | Run reconciliation |
+| `python run.py --reconcile YYYY-MM-DD --partner MOMO --seed-mock` | ...with mock internal data |
+| `python run.py --data ./file.xlsx --partner MOMO --date 2024-07-07` | Run ingestion |
+| `python run.py --config ./RequestTemplate.xlsx` | Upload mapping + SFTP fallback |
+| `python run.py --start-scheduler` | Start scheduler daemon |
+| `python run.py --run-job-now` | Trigger fetch job immediately |
+| `python run.py --list-jobs` | List scheduled jobs |
 
-```bash
-uv run python run.py --serve --port 8000
-```
-
-List scheduler jobs:
-
-```bash
-uv run python run.py --list-jobs
-```
-
-Start the scheduler daemon:
-
-```bash
-uv run python run.py --start-scheduler
-```
-
-Trigger the daily fetch job immediately:
-
-```bash
-uv run python run.py --run-job-now
-```
-
-Run ingestion against a local file:
-
-```bash
-uv run python run.py --data ./path/to/file.xlsx --partner MOMO --date 2024-07-07
-```
-
-Upload mapping config from an Excel template and ingest with SFTP/local fallback flow:
-
-```bash
-uv run python run.py --config ./path/to/RequestTemplate.xlsx
-```
-
-Run reconciliation:
-
-```bash
-uv run python run.py --reconcile 2024-07-07 --partner MOMO
-```
-
-Run reconciliation with seeded mock internal transactions:
-
-```bash
-uv run python run.py --reconcile 2024-07-07 --partner MOMO --seed-mock
-```
+---
 
 ## API Surface
 
-The FastAPI app is created by `src.api:create_app` and currently includes these router groups:
+The FastAPI app registers 11 router groups under `/api/v1/`:
 
-- `/api/v1/insights/*`
-- `/api/v1/reports/*`
-- `/api/v1/reconciliation/*`
-- `/api/v1/data/*`
-- `/api/v1/mappings/*`
-- `/api/v1/mapping/*`
-- `/api/v1/copilot/*`
-- `/api/v1/operations/*`
-- `/api/v1/review-packets/*`
-- `/api/v1/automation/*`
+| Router | Prefix | Key Endpoints |
+|---|---|---|
+| `insights` | `/api/v1` | `GET /insights/summary`, `/insights/discrepancies` |
+| `reports` | `/api/v1/reports` | `GET /reports/daily` |
+| `reconciliation` | `/api/v1/reconciliation` | `GET /results`, `/stats`, `/insights` |
+| `data_explorer` | `/api/v1/data` | `GET /transactions`, `/files`, `/stats` |
+| `mappings` | `/api/v1/mappings` | `GET /`, `POST /ai-generate` |
+| `mapping` (v2) | `/api/v1/mapping` | `POST /ai-generate`, version CRUD |
+| `copilot` | `/api/v1/copilot` | `GET /context`, `/actions` |
+| `operations` | `/api/v1/operations` | `GET /intake`, partner ops |
+| `review_packets` | `/api/v1/review-packets` | `GET /`, `POST /{id}/approve-activate` |
+| `automation` | `/api/v1/automation` | `GET /jobs`, `POST /jobs/{partner}/run` |
+| `audit` | `/api/v1/audit` | `GET /events` |
 
-Representative endpoints:
+See `src/api/__init__.py` for router registration. Interactive docs at `/docs`.
 
-- `GET /api/v1/insights/summary`
-- `GET /api/v1/insights/discrepancies`
-- `GET /api/v1/reports/daily`
-- `GET /api/v1/reconciliation/results`
-- `GET /api/v1/reconciliation/stats`
-- `GET /api/v1/reconciliation/insights`
-- `GET /api/v1/data/transactions`
-- `GET /api/v1/data/files`
-- `GET /api/v1/mappings`
-- `POST /api/v1/mapping/ai-generate`
-- `GET /api/v1/copilot/context`
-- `GET /api/v1/operations/intake`
-- `GET /api/v1/review-packets`
-- `POST /api/v1/review-packets/{packet_id}/approve-activate`
-- `POST /api/v1/review-packets/{packet_id}/approve-keep-current`
-- `POST /api/v1/review-packets/{packet_id}/reject`
-- `GET /api/v1/automation/jobs`
-- `POST /api/v1/automation/jobs/{partner}/run`
-
-Use `/docs` for the current request/response schema.
-
-## Dashboard
-
-`frontend-next/` is the active dashboard, built with Next.js and TypeScript.
-
-Main active UI paths:
-
-- `frontend-next/src/app/review-center/`
-- `frontend-next/src/components/review-center/`
-- `frontend-next/src/lib/api/review-center.ts`
-
-The old `frontend/` Vite dashboard is kept only as a legacy/reference implementation.
+---
 
 ## Configuration
 
-Application settings are loaded from:
+Application settings loaded from `.env` with two config classes:
 
-- `src/config/settings.py` with `APP_` prefix
-- `src/analysis/config.py` with `AI_` prefix
-- `.env`
+| Config | Prefix | Source |
+|---|---|---|
+| `Settings` | `APP_` | `src/config/settings.py` |
+| `AnalysisConfig` | `AI_` | `src/analysis/config.py` |
 
-Important variables:
+Key variables: `APP_MONGODB_URL`, `APP_DB_NAME`, `APP_LOG_LEVEL`, `AI_ENDPOINT`, `AI_MODEL`, `AI_API_KEY`.
 
-- `APP_MONGODB_URL`
-- `APP_DB_NAME`
-- `APP_LOG_LEVEL`
-- `APP_LOG_FORMAT`
-- `APP_APP_NAME`
-- `APP_STRICT_MAPPING_APPROVAL_ENABLED`
-- `AI_PROVIDER`
-- `AI_MODEL`
-- `AI_ENDPOINT`
-- `AI_API_KEY`
-- `AI_FALLBACK_PROVIDER`
-- `AI_FALLBACK_MODEL`
-- `AI_TIMEOUT`
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for full reference.
 
-See [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+---
 
 ## Testing
 
-Run the main suite:
-
 ```bash
+# Run full suite
 uv run python -m pytest -v
-```
 
-Run a focused module:
-
-```bash
+# Run specific module
 uv run python -m pytest tests/test_api_review_packets.py -v
-```
 
-Run with coverage:
-
-```bash
+# With coverage
 uv run python -m pytest --cov=src --cov-report=html
 ```
 
-The repo currently includes tests for:
+The test suite covers: ingestion pipeline, file readers, normalizer, validator, reconciliation engine, API routers, review packet flow, automation, analysis/insights, and end-to-end flows.
 
-- ingestion pipeline and readers
-- reconciliation
-- API routers
-- review packet flows
-- automation run-now flows
-- Copilot context
-- analysis/insights modules
+---
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Configuration](docs/CONFIGURATION.md)
+- [Data Flow](docs/DATA_FLOW.md)
+- [Development Guide](docs/DEVELOPMENT.md)
+- [Module Map](docs/MODULES.md)
+
+---
 
 ## Docker
 
-`docker-compose.yml` currently defines:
-
-- `mongodb`
-- `sftp`
-- `mongo-express`
-- `api`
-- `scheduler`
+`docker-compose.yml` defines: `mongodb`, `sftp`, `mongo-express`, `api`, `scheduler`.
 
 See [docker/README.md](docker/README.md).
 
@@ -254,8 +277,8 @@ See [docker/README.md](docker/README.md).
 This repo has historically drifted between docs and code. Treat code as source of truth:
 
 - CLI behavior must match `run.py`
-- env vars must match `src/config/settings.py`, `src/analysis/config.py`, and `.env.example`
-- API route docs must match `src/api/`
-- dashboard route descriptions must match `frontend-next/src/app/` and active Review Center components
+- Env vars must match `src/config/settings.py`, `src/analysis/config.py`, and `.env.example`
+- API routes must match `src/api/`
+- Frontend routes must match `frontend-next/src/app/`
 
 If docs and code disagree, update docs or fix code in the same change.

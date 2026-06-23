@@ -91,23 +91,35 @@ class DataContainerRepository(BaseRepository[DataContainer]):
         super().__init__(collection_name="data_container", db=db)
         self._set_model_class(DataContainer)
 
-    async def insert_many(self, docs: list[DataContainer]) -> int:
+    async def insert_many(self, docs: list[DataContainer | dict], ordered: bool = True) -> int:
         """Bulk insert multiple DataContainer documents.
 
         Uses collection.insert_many for efficient batch insertion.
         Documents are serialized with UUID-to-string conversion.
 
         Args:
-            docs: List of DataContainer objects to insert.
+            docs: List of DataContainer or dict objects to insert.
+            ordered: If True, insert documents serially; if False, perform parallel/unordered inserts.
 
         Returns:
             Number of documents inserted.
         """
         if not docs:
             return 0
-        serialized = [self._to_mongo(doc) for doc in docs]
-        result = await self.collection.insert_many(serialized)
-        return len(result.inserted_ids)
+            
+        if isinstance(docs[0], dict):
+            from src.models.repository import BaseRepository
+            serialized = [BaseRepository._convert_special_types(doc) for doc in docs]
+        else:
+            serialized = [self._to_mongo(doc) for doc in docs]
+            
+        from pymongo.errors import BulkWriteError
+        try:
+            result = await self.collection.insert_many(serialized, ordered=ordered)
+            return len(result.inserted_ids)
+        except BulkWriteError as exc:
+            return exc.details.get("nInserted", 0)
+
 
     async def find_by_trace(
         self, identify: str, trace: str

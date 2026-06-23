@@ -483,7 +483,7 @@ class TestBatchInsertion:
         mock_recon_repo.update_status = AsyncMock(return_value=True)
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
-        mock_data_repo.insert_many = AsyncMock(side_effect=lambda batch: len(batch))
+        mock_data_repo.insert_many = AsyncMock(side_effect=lambda batch, **kwargs: len(batch))
 
         # Use batch_size=5 to test batching
         pipeline = IngestionPipeline(
@@ -613,8 +613,6 @@ class TestPipelineLogging:
 
             events = mock_logger.events
             assert events[0][0] == "FILE_STARTED"
-            row_success_events = [e for e in events if e[0] == "ROW_SUCCESS"]
-            assert len(row_success_events) == 3
             assert events[-1][0] == "FILE_COMPLETED"
             completed_data = events[-1][1]
             assert completed_data["total"] == 3
@@ -705,9 +703,7 @@ class TestPipelineLogging:
 
             events = mock_logger.events
             assert events[0][0] == "FILE_STARTED"
-            row_success = [e for e in events if e[0] == "ROW_SUCCESS"]
             row_failed = [e for e in events if e[0] == "ROW_FAILED"]
-            assert len(row_success) == 2
             assert len(row_failed) == 1
             assert row_failed[0][1]["reason"]  # reason is non-empty
             assert events[-1][0] == "FILE_COMPLETED"

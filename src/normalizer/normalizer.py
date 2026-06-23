@@ -439,6 +439,93 @@ class TransactionNormalizer:
         return fm.constant, None
 
     @staticmethod
+    def _extract_extra(data: dict[str, Any]) -> dict[str, Any]:
+        """Extract extra fields from normalized data dict.
+
+        Keys not in the canonical schema are collected into the ``extra``
+        dict. Dot-separated paths like ``"extra.service"`` become
+        ``extra["service"]``.
+        """
+        canonical_keys = {"id", "trace", "amount", "currency", "status", "transDate"}
+        extra: dict[str, Any] = {}
+        for k, v in data.items():
+            if k in canonical_keys:
+                continue
+            if "." in k:
+                parts = k.split(".", 1)
+                if len(parts) == 2:
+                    outer, inner = parts
+                    if outer == "extra":
+                        extra[inner] = v
+                    else:
+                        if outer not in extra:
+                            extra[outer] = {}
+                        extra[outer][inner] = v
+            else:
+                extra[k] = v
+        return extra
+
+    @staticmethod
+    def build_fast_dict(
+        data: dict[str, Any],
+        errors: list[ValidationError],
+        row_number: Optional[int] = None,
+    ) -> tuple[dict[str, Any] | None, list[ValidationError]]:
+        """Build a lightweight dict from normalized data, skipping Pydantic.
+
+        Validates required fields are present.  Returns a plain dict with
+        keys ``id``, ``trace``, ``status``, ``amount``, ``currency``,
+        ``transDate``, and ``extra`` — suitable for direct use in the
+        fast-mode ingestion pipeline without Pydantic overhead.
+
+        Args:
+            data: Normalized canonical field values keyed by path.
+            errors: Existing error list (not cleared; new errors appended).
+            row_number: Optional row number for error context.
+
+        Returns:
+            Tuple of (dict or None, updated error list).
+        """
+        required_fields = ("id", "amount", "currency", "status")
+        new_errors: list[ValidationError] = []
+
+        for field_name in required_fields:
+            if field_name not in data:
+                new_errors.append(ValidationError(
+                    field=field_name,
+                    reason=f"required field '{field_name}' not found in normalized data",
+                    row=row_number,
+                ))
+
+        if new_errors:
+            return None, errors + new_errors
+
+        # Validate status string
+        try:
+            TransactionStatus(data["status"])
+        except (ValueError, TypeError):
+            new_errors.append(ValidationError(
+                field="status",
+                reason=f"invalid status value '{data['status']}' — must be one of SUCCESS, FAILED, PENDING, REVERSED",
+                row=row_number,
+            ))
+            return None, errors + new_errors
+
+        extra = TransactionNormalizer._extract_extra(data)
+
+        txn = {
+            "id": str(data["id"]),
+            "trace": str(data["trace"]) if "trace" in data else None,
+            "status": data["status"],
+            "amount": data["amount"],
+            "currency": str(data["currency"]),
+            "transDate": data.get("transDate"),
+            "extra": extra,
+        }
+
+        return txn, errors
+
+    @staticmethod
     def build_canonical(
         data: dict[str, Any],
         errors: list[ValidationError],
@@ -473,7 +560,6 @@ class TransactionNormalizer:
         if new_errors:
             return None, errors + new_errors
 
-        # Validate and convert status string to TransactionStatus enum
         try:
             status_enum = TransactionStatus(data["status"])
         except (ValueError, TypeError):
@@ -484,28 +570,7 @@ class TransactionNormalizer:
             ))
             return None, errors + new_errors
 
-        # Collect extra fields (keys not in CanonicalTransaction schema)
-        # Handle dot-separated paths like "extra.service" → extra["service"] = v
-        canonical_keys = {"id", "trace", "amount", "currency", "status", "transDate"}
-        extra: dict[str, Any] = {}
-        for k, v in data.items():
-            if k in canonical_keys:
-                continue
-            if "." in k:
-                # Nested path: "extra.service" → extra["service"] = v
-                parts = k.split(".", 1)
-                if len(parts) == 2:
-                    outer, inner = parts
-                    if outer == "extra":
-                        # "extra.service" → extra["service"]
-                        extra[inner] = v
-                    else:
-                        # Other nested paths
-                        if outer not in extra:
-                            extra[outer] = {}
-                        extra[outer][inner] = v
-            else:
-                extra[k] = v
+        extra = TransactionNormalizer._extract_extra(data)
 
         txn = CanonicalTransaction(
             id=str(data["id"]),

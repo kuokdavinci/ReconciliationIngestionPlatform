@@ -247,7 +247,7 @@ async def run_fetch_config_once(
                 message="Reconciling ingested partner rows against internal transactions.",
                 started_at=datetime.now(timezone.utc),
             )
-            recon_results = await ReconciliationEngine(db).reconcile(
+            recon_results = await ReconciliationEngine(db, fast_mode=True).reconcile(
                 partner,
                 reconciliation_date,
                 source_file_id=str(ingestion_result.file_record.id),
@@ -323,7 +323,7 @@ async def _run_ingestion(
     file_path: str,
     partner: str,
     reconciliation_date: datetime,
-    batch_size: int = 100,
+    batch_size: int | None = None,
     structured_logger: Optional[StructuredLogger] = None,
 ) -> Any:
     """Run the ingestion pipeline for a fetched file.
@@ -334,7 +334,7 @@ async def _run_ingestion(
         file_path: Path to the fetched file.
         partner: Partner identifier.
         reconciliation_date: Date of the reconciliation file.
-        batch_size: Batch size for ingestion pipeline.
+        batch_size: Batch size for ingestion pipeline (None = use settings default).
         structured_logger: Optional logger for structured events.
 
     Returns:
@@ -348,6 +348,7 @@ async def _run_ingestion(
             config_loader=config_loader,
             batch_size=batch_size,
             logger=structured_logger,
+            fast_mode=True,
         )
 
         result = await pipeline.process_file(

@@ -528,7 +528,7 @@ async def _run_reconciliation_in_background(
     )
     try:
         recon_date = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        results = await ReconciliationEngine(db).reconcile(
+        results = await ReconciliationEngine(db, fast_mode=True).reconcile(
             partner,
             recon_date,
             source_file_id=source_file_id,

@@ -375,8 +375,15 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         )
         return None
 
+    # Clean up both old partner data containers AND reconciliation results matching this file/partner before ingesting/re-reconciling
+    await db["data_container"].delete_many({"sourceFileId": source_file_id})
+    date_str = source_file.reconciliation_date.strftime("%Y-%m-%d")
+    await db["reconciliation_result"].delete_many({
+        "partner": config.partner,
+        "date": date_str
+    })
+    
     if source_file.processing_status != ProcessingStatus.COMPLETED:
-        await db["data_container"].delete_many({"sourceFileId": source_file_id})
         await file_repo.delete_one({"_id": source_file_id})
 
     await _update_post_approval_run(
@@ -395,11 +402,13 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         started_at=datetime.now(timezone.utc),
     )
 
+    from src.config.settings import settings
     pipeline = IngestionPipeline(
         db=db,
         config_loader=build_config_loader_from_db(db),
-        batch_size=100,
+        batch_size=settings.ingest_batch_size,
         logger=None,
+        fast_mode=True,
     )
     ingestion_result = await pipeline.process_file(
         file_path=source_file_path,
@@ -478,7 +487,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
     )
 
     recon_date = source_file.reconciliation_date
-    recon_results = await ReconciliationEngine(db).reconcile(
+    recon_results = await ReconciliationEngine(db, fast_mode=True).reconcile(
         config.partner,
         recon_date,
         source_file_id=str(ingestion_result.file_record.id),

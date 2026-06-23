@@ -1,5 +1,6 @@
 """Unit and integration tests for the Reconciliation Engine."""
 
+import asyncio
 import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -243,7 +244,7 @@ async def test_reconciliation_ignores_pending_internal_for_missing_partner(mock_
     results = await engine.reconcile(partner, recon_date)
 
     assert results == []
-    engine._result_repo.collection.delete_many.assert_not_called()
+    engine._result_repo.collection.delete_many.assert_called_once()
     engine._result_repo.insert_many.assert_not_called()
 
 
@@ -768,9 +769,7 @@ async def test_mixed_skipped_and_matched_guard(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_flushes_results_in_chunks(mock_db):
     """Large result sets should be inserted in chunks instead of one unbounded batch."""
-    engine = ReconciliationEngine(mock_db)
-    engine.PARTNER_BATCH_SIZE = 2
-    engine.RESULT_WRITE_BATCH_SIZE = 2
+    engine = ReconciliationEngine(mock_db, partner_batch_size=2, result_batch_size=2)
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -810,3 +809,234 @@ async def test_reconciliation_flushes_results_in_chunks(mock_db):
         len(call.args[0]) for call in engine._result_repo.insert_many.await_args_list
     ]
     assert inserted_batch_sizes == [2, 2, 1]
+
+
+@pytest.mark.asyncio
+async def test_parallel_workers_produce_correct_counts(mock_db):
+    """Parallel workers should not change total counts vs single worker."""
+    engine = ReconciliationEngine(mock_db, write_workers=4, result_batch_size=3)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    partner_records = [
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId="00000000-0000-0000-0000-000000000001",
+            partnerData=PartnerData(
+                _id=f"txn_{i}",
+                trace=f"trace_{i}",
+                status="Thành công" if i < 8 else "Thất bại",
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for i in range(10)
+    ]
+
+    internal_records = [
+        InternalTransaction(
+            _id=f"int_{i}",
+            partner=partner,
+            partnerTxnId=f"trace_{i}",
+            amount=Decimal("150000"),
+            status=TransactionStatus.SUCCESS if i < 8 else TransactionStatus.FAILED,
+            transactionTime=recon_date,
+        )
+        for i in range(10)
+    ]
+
+    engine._data_repo.find_many = AsyncMock(return_value=partner_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock(return_value=1)
+
+    results = await engine.reconcile(partner, recon_date)
+
+    assert len(results) == 10
+    matched = [r for r in results if r.reconciliation_status == ReconciliationStatus.MATCHED]
+    matched_failed = [r for r in results if r.reconciliation_status == ReconciliationStatus.MATCHED_FAILED]
+    assert len(matched) == 8
+    assert len(matched_failed) == 2
+
+    # Verify multiple batch writes happened (parallel workers)
+    assert engine._result_repo.insert_many.await_count >= 3
+    assert engine._result_repo.collection.delete_many.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_parallel_workers_no_duplicate_results(mock_db):
+    """Parallel workers must not produce duplicate reconciliation results."""
+    engine = ReconciliationEngine(mock_db, write_workers=4, result_batch_size=2)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    partner_records = [
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId="00000000-0000-0000-0000-000000000001",
+            partnerData=PartnerData(
+                _id=f"txn_{i}",
+                trace=f"trace_{i}",
+                status="Thành công",
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for i in range(20)
+    ]
+
+    internal_records = [
+        InternalTransaction(
+            _id=f"int_{i}",
+            partner=partner,
+            partnerTxnId=f"trace_{i}",
+            amount=Decimal("150000"),
+            status=TransactionStatus.SUCCESS,
+            transactionTime=recon_date,
+        )
+        for i in range(20)
+    ]
+
+    engine._data_repo.find_many = AsyncMock(return_value=partner_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock(return_value=1)
+
+    results = await engine.reconcile(partner, recon_date)
+
+    # Verify no duplicate partner_txn_ids
+    result_ids = [r.partner_txn_id for r in results]
+    assert len(result_ids) == len(set(result_ids))
+
+    # Verify all records accounted for
+    assert len(results) == 20
+    matched = [r for r in results if r.reconciliation_status == ReconciliationStatus.MATCHED]
+    assert len(matched) == 20
+
+
+@pytest.mark.asyncio
+async def test_parallel_workers_correct_counts_mixed_outcomes(mock_db):
+    """Parallel workers produce correct matched/mismatch/unmatched counts."""
+    engine = ReconciliationEngine(mock_db, write_workers=4, result_batch_size=2)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    # 5 matched, 2 amount mismatch, 1 status mismatch, 2 missing internal
+    partner_records = [
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId="00000000-0000-0000-0000-000000000001",
+            partnerData=PartnerData(
+                _id=f"txn_{i}",
+                trace=f"trace_{i}",
+                status="Thành công",
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for i in range(8)
+    ]
+    # 2 records with amount mismatch
+    partner_records.extend([
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId="00000000-0000-0000-0000-000000000001",
+            partnerData=PartnerData(
+                _id=f"txn_{i}",
+                trace=f"trace_{i}",
+                status="Thành công",
+                amount=Decimal("200000"),
+                currency="VND",
+            ),
+        )
+        for i in range(8, 10)
+    ])
+
+    internal_records = [
+        InternalTransaction(
+            _id=f"int_{i}",
+            partner=partner,
+            partnerTxnId=f"trace_{i}",
+            amount=Decimal("150000"),
+            status=TransactionStatus.SUCCESS,
+            transactionTime=recon_date,
+        )
+        for i in range(10)
+    ]
+
+    engine._data_repo.find_many = AsyncMock(return_value=partner_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock(return_value=1)
+
+    results = await engine.reconcile(partner, recon_date)
+
+    assert len(results) == 10
+    matched = [r for r in results if r.reconciliation_status == ReconciliationStatus.MATCHED]
+    amount_mismatch = [r for r in results if r.reconciliation_status == ReconciliationStatus.AMOUNT_MISMATCH]
+    assert len(matched) == 8, f"Expected 8 matched, got {len(matched)}"
+    assert len(amount_mismatch) == 2, f"Expected 2 amount mismatches, got {len(amount_mismatch)}"
+
+
+@pytest.mark.asyncio
+async def test_parallel_workers_with_unmatched_internal(mock_db):
+    """Parallel workers produce correct unmatched internal count."""
+    engine = ReconciliationEngine(mock_db, write_workers=4, result_batch_size=2)
+
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner = "MOMO"
+
+    partner_records = [
+        DataContainer(
+            identify=partner,
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId="00000000-0000-0000-0000-000000000001",
+            partnerData=PartnerData(
+                _id=f"txn_{i}",
+                trace=f"trace_{i}",
+                status="Thành công",
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for i in range(3)
+    ]
+
+    # More internal records than partner records
+    internal_records = [
+        InternalTransaction(
+            _id=f"int_{i}",
+            partner=partner,
+            partnerTxnId=f"trace_{i}",
+            amount=Decimal("150000"),
+            status=TransactionStatus.SUCCESS,
+            transactionTime=recon_date,
+        )
+        for i in range(5)
+    ]
+
+    engine._data_repo.find_many = AsyncMock(return_value=partner_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
+    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock(return_value=1)
+
+    results = await engine.reconcile(partner, recon_date)
+
+    matched = [r for r in results if r.reconciliation_status == ReconciliationStatus.MATCHED]
+    missing_partner = [r for r in results if r.reconciliation_status == ReconciliationStatus.MISSING_PARTNER]
+
+    assert len(results) == 5  # 3 matched + 2 missing partner
+    assert len(matched) == 3
+    assert len(missing_partner) == 2

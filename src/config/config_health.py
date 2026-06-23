@@ -293,18 +293,15 @@ async def _create_mapping_proposal(
             f"Configuration approval required for {partner}; no sample rows available"
         )
 
-    result, error = await generate_config_from_samples(
-        partner=partner,
-        headers=sig.headers,
-        sample_rows=sig.sample_rows,
-        known_constants={"provider": partner},
-        header_row_index=sig.header_row_index,
-        first_data_row_index=sig.first_data_row_index,
-    )
-    if error or result is None:
-        raise ConfigurationApprovalRequiredError(
-            f"Configuration approval required for {partner}; AI proposal generation failed"
-        )
+    # Optimization: Defer LLM generation to when operator clicks "Review" in front-end
+    result = {
+        "sheetName": "Sheet1",
+        "startRow": sig.first_data_row_index or 2,
+        "fieldMappings": [],
+        "confidence": 0.0,
+        "reasoning": "AI generation deferred until review modal is opened by user."
+    }
+    error = None
 
     proposal = MappingConfig(
         partner=partner,
@@ -326,7 +323,9 @@ async def _create_mapping_proposal(
         },
     )
 
-    validation_errors = ConfigValidator().validate(proposal)
+    validation_errors = []
+    if proposal.field_mappings:
+        validation_errors = ConfigValidator().validate(proposal)
     if validation_errors:
         raise ConfigurationApprovalRequiredError(
             f"Configuration approval required for {partner}; AI proposal failed validation"

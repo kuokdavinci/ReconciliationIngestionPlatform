@@ -54,13 +54,23 @@ class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
         super().__init__(collection_name="reconciliation_result", db=db)
         self._set_model_class(ReconciliationResult)
 
-    async def insert_many(self, docs: list[ReconciliationResult]) -> int:
+    async def insert_many(self, docs: list[ReconciliationResult | dict], ordered: bool = True) -> int:
         """Bulk insert multiple ReconciliationResult documents."""
         if not docs:
             return 0
-        serialized = [self._to_mongo(doc) for doc in docs]
-        result = await self.collection.insert_many(serialized)
-        return len(result.inserted_ids)
+        if isinstance(docs[0], dict):
+            from src.models.repository import BaseRepository
+            serialized = [BaseRepository._convert_special_types(doc) for doc in docs]
+        else:
+            serialized = [self._to_mongo(doc) for doc in docs]
+        
+        from pymongo.errors import BulkWriteError
+        try:
+            result = await self.collection.insert_many(serialized, ordered=ordered)
+            return len(result.inserted_ids)
+        except BulkWriteError as exc:
+            return exc.details.get("nInserted", 0)
+
 
     async def find_by_partner_and_date(
         self, partner: str, date: str

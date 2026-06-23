@@ -17,13 +17,13 @@ class Settings(BaseSettings):
     upload_tmp_dir: str = str(Path.cwd() / "scratch" / "temp_uploads")
 
     # Ingestion Performance Tuning Configurations
-    ingest_batch_size: int = 10000
+    ingest_batch_size: int = 20000
     ingest_write_workers: int = 2
     ingest_ordered_insert: bool = False
 
     # Reconciliation Performance Tuning Configurations
     recon_partner_batch_size: int = 10000
-    recon_result_batch_size: int = 10000
+    recon_result_batch_size: int = 20000
     recon_result_write_workers: int = 2
     recon_result_ordered_insert: bool = False
 

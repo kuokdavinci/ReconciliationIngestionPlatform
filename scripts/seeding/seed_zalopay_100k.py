@@ -136,7 +136,7 @@ async def _ensure_mapping_config(db) -> None:
         "startRow": 8,
         "fieldMappings": [
             { "path": "id", "column": 2, "type": "STRING", "required": True },
-            { "path": "trace", "column": 11, "type": "STRING" },
+            { "path": "extra.zpMaHDon", "column": 11, "type": "STRING" },
             { "path": "amount", "column": 5, "type": "DECIMAL" },
             { "path": "currency", "constant": "VND", "type": "CONSTANT" },
             { "path": "status", "column": 18, "type": "MAPPING", "mapping": { "Thành công": "SUCCESS", "others": "FAILED" } },
@@ -202,6 +202,21 @@ async def _seed_internal(db, day: datetime, count: int):
     await collection.insert_many(docs, ordered=False)
     logger.info(f"Inserted all {len(docs)} internal transactions successfully.")
 
+async def _cleanup_existing_run_data(db) -> None:
+    logger.info("Cleaning up existing ZALOPAY execution data...")
+    collections_to_clean = [
+        "review_packet",
+        "reconciliation_file",
+        "data_container",
+        "reconciliation_result",
+        "partner_runtime_run",
+        "post_approval_run"
+    ]
+    for coll_name in collections_to_clean:
+        query = {"identify": PARTNER} if coll_name == "data_container" else {"partner": PARTNER}
+        res = await db[coll_name].delete_many(query)
+        logger.info(f"Deleted {res.deleted_count} records from collection '{coll_name}'")
+
 async def main():
     parser = argparse.ArgumentParser(description="Seed ZALOPAY 100k data")
     parser.add_argument("mode", choices=["reset"], help="Seeding action (only reset supported)")
@@ -215,6 +230,9 @@ async def main():
         # Generate file
         path = _partner_file_path_for_day(day)
         _write_partner_file(path, day, NUM_RECORDS)
+        
+        # Cleanup old runs
+        await _cleanup_existing_run_data(db)
         
         # Seed configs
         await _ensure_mapping_config(db)

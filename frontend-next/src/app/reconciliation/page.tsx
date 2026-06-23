@@ -297,6 +297,47 @@ export default function ReconciliationPage() {
     void loadPage(partner, date);
   }, [date, loadPage, partner]);
 
+  // Polling for run status if processing
+  useEffect(() => {
+    if (!partner || !date || !store.runStatus) return;
+    const activeStatuses = ["PROCESSING", "INGESTING", "RECONCILING", "RUNNING", "QUEUED"];
+    if (!activeStatuses.includes(store.runStatus.status)) return;
+
+    let intervalId: NodeJS.Timeout | null = null;
+
+    const checkStatus = async () => {
+      try {
+        const runStatusRes = await api.getRunStatus(partner, date);
+        if (runStatusRes && runStatusRes.run) {
+          const currentStatus = runStatusRes.run.status;
+          
+          setRunStatus({
+            status: currentStatus,
+            startedAt: runStatusRes.run.startedAt as string ?? "",
+            completedAt: runStatusRes.run.completedAt as string,
+            totalRows: (runStatusRes.run.stats as Record<string, number>)?.["resultCount"] ?? 0,
+            matchedRows: 0,
+            unmatchedRows: 0,
+            missingPartnerRows: 0,
+            missingInternalRows: 0,
+          });
+
+          if (!activeStatuses.includes(currentStatus)) {
+            if (intervalId) clearInterval(intervalId);
+            void loadPage(partner, date);
+          }
+        }
+      } catch (err) {
+        console.error("Polling run status failed:", err);
+      }
+    };
+
+    intervalId = setInterval(checkStatus, 3000);
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [partner, date, store.runStatus?.status, setRunStatus, loadPage]);
+
   const filteredRows = useMemo(() => {
     let items = results;
     if (tableType === "matched") {

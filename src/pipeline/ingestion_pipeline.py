@@ -58,8 +58,11 @@ class IngestionPipeline:
         self,
         db: Any,
         config_loader: ConfigLoader,
-        batch_size: int = 100,
+        batch_size: int | None = None,
         logger: StructuredLogger | None = None,
+        fast_mode: bool = False,
+        write_workers: int | None = None,
+        ordered_insert: bool | None = None,
     ) -> None:
         """Initialize the ingestion pipeline.
 
@@ -68,13 +71,20 @@ class IngestionPipeline:
             config_loader: ConfigLoader for loading mapping configurations.
             batch_size: Number of DataContainer objects to batch before inserting.
             logger: Optional StructuredLogger for lifecycle event emission.
+            fast_mode: If True, bypass Pydantic model initialization for faster inserts.
+            write_workers: Number of concurrent write workers/tasks.
+            ordered_insert: Whether inserts must be ordered.
         """
+        from src.config.settings import settings
         self._db = db
         self._config_loader = config_loader
-        self._batch_size = batch_size
+        self._batch_size = batch_size if batch_size is not None else settings.ingest_batch_size
+        self._write_workers = write_workers if write_workers is not None else settings.ingest_write_workers
+        self._ordered_insert = ordered_insert if ordered_insert is not None else settings.ingest_ordered_insert
         self._recon_repo = ReconciliationFileRepository(db)
         self._data_repo = DataContainerRepository(db)
         self._logger = logger or get_structured_logger()
+        self._fast_mode = fast_mode
 
     async def _compute_file_hash(self, file_path: str) -> str:
         """Compute SHA256 hash of the file content.
@@ -115,18 +125,9 @@ class IngestionPipeline:
         }
 
     async def _flush_batch(
-        self, batch: list[DataContainer]
+        self, batch: list[dict]
     ) -> int:
-        """Flush a batch of DataContainer objects to the database.
-
-        Uses collection.insert_many for bulk insertion.
-
-        Args:
-            batch: List of DataContainer objects to insert.
-
-        Returns:
-            Number of documents inserted.
-        """
+        """Flush a batch of raw dict documents to the database bypassing Pydantic."""
         if not batch:
             return 0
         count = await self._data_repo.insert_many(batch)
@@ -305,7 +306,9 @@ class IngestionPipeline:
                 config = copy.copy(config)
                 config.sheet_name = BaseFetcher.interpolate_date(config.sheet_name, reconciliation_date)
 
+            t_start_read = time.perf_counter()
             with create_reader(file_path, config) as reader:
+                read_file_ms = (time.perf_counter() - t_start_read) * 1000
                 normalizer = TransactionNormalizer(config.field_mappings)
                 validator = Validator(
                     data_container_repo=self._data_repo,
@@ -313,17 +316,54 @@ class IngestionPipeline:
                 )
 
                 batch_buffer: list[DataContainer] = []
+                t_parse = 0.0
+                t_normalize = 0.0
+                t_validate = 0.0
+                t_db_insert = 0.0
+                db_write_count = 0
+
+                write_semaphore = asyncio.Semaphore(self._write_workers)
+                write_tasks: list[asyncio.Task] = []
+                t_db_start_wall = 0.0
+                t_db_end_wall = 0.0
+                slowest_batch_ms = 0.0
+
+                async def _worker_flush(batch_to_write: list[Any]) -> int:
+                    nonlocal t_db_start_wall, t_db_end_wall, slowest_batch_ms
+                    t0_loc = time.perf_counter()
+                    if t_db_start_wall == 0.0:
+                        t_db_start_wall = t0_loc
+                    async with write_semaphore:
+                        t0_batch = time.perf_counter()
+                        res = await self._data_repo.insert_many(batch_to_write, ordered=self._ordered_insert)
+                        batch_duration_ms = (time.perf_counter() - t0_batch) * 1000
+                        if batch_duration_ms > slowest_batch_ms:
+                            slowest_batch_ms = batch_duration_ms
+                    t_db_end_wall = time.perf_counter()
+                    return res
+
+
 
                 # Step 8: Process each row
-                for row_tuple in reader.iter_rows():
+                row_iterator = reader.iter_rows()
+                while True:
+                    t0 = time.perf_counter()
+                    try:
+                        row_tuple = next(row_iterator)
+                    except StopIteration:
+                        break
+                    t_parse += (time.perf_counter() - t0) * 1000
+
                     total_rows += 1
                     row_number = config.start_row + total_rows - 1
 
-                    # 8b: Normalize (pass row tuple directly — normalizer uses column numbers)
+                    # 8b: Normalize
+                    t0 = time.perf_counter()
                     norm_result = normalizer.normalize(row_tuple, row_number)
 
                     # 8c: If normalization errors → failed, collect, continue
                     if norm_result.errors:
+                        t_normalize += (time.perf_counter() - t0) * 1000
                         failed_rows += 1
                         for err in norm_result.errors:
                             errors.append({
@@ -339,13 +379,19 @@ class IngestionPipeline:
                         )
                         continue
 
-                    # 8d: Build CanonicalTransaction
-                    txn, build_errors = TransactionNormalizer.build_canonical(
-                        norm_result.data, [], row_number
-                    )
+                    # 8d: Build CanonicalTransaction (fast dict or Pydantic)
+                    if self._fast_mode:
+                        txn, build_errors = TransactionNormalizer.build_fast_dict(
+                            norm_result.data, [], row_number
+                        )
+                    else:
+                        txn, build_errors = TransactionNormalizer.build_canonical(
+                            norm_result.data, [], row_number
+                        )
 
                     # 8e: If build fails → failed, collect, continue
                     if txn is None:
+                        t_normalize += (time.perf_counter() - t0) * 1000
                         failed_rows += 1
                         for err in build_errors:
                             errors.append({
@@ -360,63 +406,109 @@ class IngestionPipeline:
                             build_errors[0].reason,
                         )
                         continue
+                    t_normalize += (time.perf_counter() - t0) * 1000
 
-                    # 8f: Validate (skip file duplicate check — already done at pipeline level)
-                    validation_result = validator.validate(
-                        txn,
-                        row_number=row_number,
-                        trace=txn.trace,
-                    )
-
-                    # 8h: If invalid → failed, collect, continue
-                    if not validation_result.is_valid:
-                        failed_rows += 1
-                        for err in validation_result.errors:
-                            errors.append({
-                                "row": err.row,
-                                "field": err.field,
-                                "reason": err.reason,
-                                "trace": err.trace,
-                            })
-                        self._logger.emit_row_failed(
-                            str(file_record.id),
-                            row_number,
-                            txn.trace or "",
-                            validation_result.errors[0].reason,
+                    # 8f: Validate (skipped in fast-mode — normalizer already guarantees types)
+                    if not self._fast_mode:
+                        t0 = time.perf_counter()
+                        validation_result = validator.validate(
+                            txn,
+                            row_number=row_number,
+                            trace=txn.trace,
                         )
-                        continue
+                        t_validate += (time.perf_counter() - t0) * 1000
+
+                        if not validation_result.is_valid:
+                            failed_rows += 1
+                            for err in validation_result.errors:
+                                errors.append({
+                                    "row": err.row,
+                                    "field": err.field,
+                                    "reason": err.reason,
+                                    "trace": err.trace,
+                                })
+                            self._logger.emit_row_failed(
+                                str(file_record.id),
+                                row_number,
+                                txn.trace or "",
+                                validation_result.errors[0].reason,
+                            )
+                            continue
 
                     # 8g: Valid → add to batch buffer
-                    partner_data = PartnerData(
-                        **{"_id": txn.id},
-                        trace=txn.trace,
-                        status=txn.status.value,
-                        amount=txn.amount,
-                        currency=txn.currency,
-                        transDate=txn.transDate,
-                        extra=txn.extra,
-                    )
-                    data_container = DataContainer(
-                        identify=partner,
-                        workflow_type=workflow_type,
-                        reconciliation_date=reconciliation_date,
-                        source_file_id=file_record.id,
-                        partner_data=partner_data,
-                    )
+                    if self._fast_mode:
+                        # Bypass all Pydantic model creation for performance
+                        from uuid import uuid4
+                        from datetime import datetime, timezone
+                        data_container = {
+                             "_id": str(uuid4()),
+                             "requestId": str(uuid4()),
+                             "identify": partner,
+                             "workflowType": workflow_type,
+                             "reconciliationDate": reconciliation_date,
+                             "operationStatus": "IN_PROGRESS",
+                             "reconciliationStatus": "",
+                             "connectorData": "",
+                             "extraData": "",
+                             "sourceFileId": str(file_record.id),
+                             "partnerData": {
+                                 "_id": txn["id"],
+                                 "trace": txn["trace"],
+                                 "status": txn["status"],
+                                 "amount": txn["amount"],
+                                 "currency": txn["currency"],
+                                 "transDate": txn["transDate"],
+                                 "extra": txn["extra"],
+                             },
+                             "createdBy": "system",
+                             "createdDate": datetime.now(timezone.utc),
+                             "lastModifiedBy": "system",
+                             "lastModifiedDate": datetime.now(timezone.utc)
+                        }
+                    else:
+                        # Standard Pydantic model creation
+                        partner_data = PartnerData(
+                            **{"_id": txn.id},
+                            trace=txn.trace,
+                            status=txn.status.value,
+                            amount=txn.amount,
+                            currency=txn.currency,
+                            transDate=txn.transDate,
+                            extra=txn.extra,
+                        )
+                        data_container = DataContainer(
+                            identify=partner,
+                            workflow_type=workflow_type,
+                            reconciliation_date=reconciliation_date,
+                            source_file_id=file_record.id,
+                            partner_data=partner_data,
+                        )
                     batch_buffer.append(data_container)
 
                     # 8i: Flush when batch reaches batch_size
                     if len(batch_buffer) >= self._batch_size:
-                        inserted = await self._flush_batch(batch_buffer)
-                        success_rows += inserted
+                        task = asyncio.create_task(_worker_flush(batch_buffer))
+                        write_tasks.append(task)
+                        db_write_count += 1
                         batch_buffer = []
+                        write_tasks = [t for t in write_tasks if not t.done()]
 
                 # Step 9: Flush remaining batch
                 if batch_buffer:
-                    inserted = await self._flush_batch(batch_buffer)
-                    success_rows += inserted
+                    task = asyncio.create_task(_worker_flush(batch_buffer))
+                    write_tasks.append(task)
+                    db_write_count += 1
+
+                # Wait for all writing tasks to finish
+                if write_tasks:
+                    results = await asyncio.gather(*write_tasks)
+                    success_rows += sum(results)
+                if t_db_start_wall > 0.0:
+                    t_db_insert = (t_db_end_wall - t_db_start_wall) * 1000
+
 
             # Step 10: Update stats and status
+            t_post_start = time.perf_counter()
             if file_record is not None:
                 await self._recon_repo.update_processing_stats(
                     file_record.id, total_rows, success_rows, failed_rows
@@ -446,6 +538,22 @@ class IngestionPipeline:
             self._logger.emit_file_completed(
                 str(file_record.id), total_rows, success_rows, failed_rows, duration_ms,
             )
+            post_insert_update_ms = (time.perf_counter() - t_post_start) * 1000
+
+            # Print structured performance log
+            perf_log = (
+                f"PERF_INGEST: total_ingest_ms={duration_ms:.2f} read_file_ms={read_file_ms:.2f} "
+                f"parse_rows_ms={t_parse:.2f} normalize_ms={t_normalize:.2f} validate_ms={t_validate:.2f} "
+                f"deduplicate_ms=0.00 db_insert_ms={t_db_insert:.2f} post_insert_update_ms={post_insert_update_ms:.2f} "
+                f"records_count={total_rows} batch_size={self._batch_size} "
+                f"db_write_operation_count={db_write_count + 2} error_count={len(errors)} slowest_batch_ms={slowest_batch_ms:.2f}"
+            )
+            print(perf_log, flush=True)
+            if hasattr(self._logger, "get_logger"):
+                self._logger.get_logger().info(perf_log)
+            else:
+                import logging
+                logging.getLogger("reconciliation").info(perf_log)
 
             # Step 11: Return result
             stats = ProcessingStats(

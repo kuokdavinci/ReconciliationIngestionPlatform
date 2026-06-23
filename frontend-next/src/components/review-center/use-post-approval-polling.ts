@@ -54,9 +54,19 @@ export function usePostApprovalPolling({
   useEffect(() => {
     if (!enabled || !packetId) return;
     void api.getPostApproveRun(packetId).then(res => {
-      if (res.run) setRun(res.run as unknown as PostApprovalRun);
+      if (res.run) {
+        const polledRun = res.run as unknown as PostApprovalRun;
+        setRun(polledRun);
+        if (
+          polledRun.status === "QUEUED" ||
+          polledRun.status === "INGESTING" ||
+          polledRun.status === "RECONCILING"
+        ) {
+          startPolling(packetId);
+        }
+      }
     }).catch(() => {});
-  }, [enabled, packetId]);
+  }, [enabled, packetId, startPolling]);
 
   useEffect(() => {
     return () => stopPolling();

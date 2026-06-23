@@ -176,7 +176,7 @@ async def validate_runtime_packet(request: Request, packet_id: str):
 
 
 @router.post("/{packet_id}/generate-ai-mapping")
-async def generate_ai_mapping_for_packet(request: Request, packet_id: str):
+async def generate_ai_mapping_for_packet(request: Request, packet_id: str, force: bool = False):
     repo = _repo(request)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
@@ -188,6 +188,15 @@ async def generate_ai_mapping_for_packet(request: Request, packet_id: str):
     existing = None
     if packet.draft_mapping_id:
         existing = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
+
+    # Optimization: If draft mapping already exists with mapping fields and force is False, return it directly
+    if existing is not None and getattr(existing, "field_mappings", None) and not force:
+        mapping_payload = _serialize_mapping(existing)
+        return {
+            "ok": True,
+            "mapping": mapping_payload,
+            "warnings": []
+        }
 
     context = await resolve_ai_generation_context(_get_db(request), packet, existing)
     headers = context["headers"]
@@ -600,7 +609,7 @@ async def create_review_packet_from_mapping(
 
 
 @router.post("/{packet_id}/classify-scope-llm")
-async def classify_scope_llm_for_packet(request: Request, packet_id: str):
+async def classify_scope_llm_for_packet(request: Request, packet_id: str, force: bool = False):
     import re
     import os
     import json
@@ -617,6 +626,62 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str):
     if packet is None:
         raise HTTPException(status_code=404, detail="Review packet not found.")
         
+    # Optimization: If scope is already classified and force is False, return it directly
+    if getattr(packet, "scope_type", None) and not force:
+        suggested = packet.scope_type
+        probs = {
+            "FULL_SNAPSHOT": 1.0 if suggested == "FULL_SNAPSHOT" else 0.0,
+            "INCREMENTAL_APPEND": 1.0 if suggested == "INCREMENTAL_APPEND" else 0.0,
+            "REPLACEMENT": 1.0 if suggested == "REPLACEMENT" else 0.0,
+        }
+        db = _get_db(request)
+        recon_date = getattr(packet, "reconciliation_date", None)
+        if not recon_date:
+            match = re.search(r'(\d{4})[-_]?(\d{2})[-_]?(\d{2})', packet.file_name)
+            if match:
+                try:
+                    recon_date = datetime.strptime(f"{match.group(1)}-{match.group(2)}-{match.group(3)}", "%Y-%m-%d")
+                except ValueError:
+                    recon_date = datetime.utcnow()
+            else:
+                recon_date = datetime.utcnow()
+                
+        start_of_day = datetime.combine(recon_date, datetime_time.min)
+        end_of_day = datetime.combine(recon_date, datetime_time.max)
+        
+        internal_count = await db["internal_transaction"].count_documents({
+            "partner": packet.partner,
+            "transactionTime": {
+                "$gte": start_of_day,
+                "$lte": end_of_day
+            }
+        })
+        
+        received_count = 0
+        source_file_path = getattr(packet, "source_file_path", None)
+        if source_file_path and os.path.exists(source_file_path):
+            try:
+                mapping_repo = MappingConfigRepository(db)
+                config = None
+                if packet.draft_mapping_id:
+                    config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
+                with create_reader(source_file_path, config) as reader:
+                    received_count = sum(1 for _ in reader.iter_rows())
+            except Exception as exc:
+                logger.error(f"Error counting rows in file: {exc}")
+                received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
+        else:
+            received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
+
+        return {
+            "ok": True,
+            "internalDbRecordCount": internal_count,
+            "receivedRecordCount": received_count,
+            "probabilities": probs,
+            "suggestedScope": suggested,
+            "reasoning": getattr(packet, "scope_reason", None) or "Reused previously computed scope from review packet."
+        }
+
     db = _get_db(request)
     
     # 1. Determine date

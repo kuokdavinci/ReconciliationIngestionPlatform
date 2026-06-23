@@ -4,7 +4,7 @@ import { useState, useCallback } from "react";
 import type { ReconciliationPageState, ReconciliationRow } from "@/types/reconciliation";
 
 const initialFilters = { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" };
-const initialPagination = { limit: 50, offset: 0 };
+const initialPagination = { limit: 25, offset: 0 };
 
 export function useReconciliationStore() {
   const [partner, setPartner] = useState("MOMO");

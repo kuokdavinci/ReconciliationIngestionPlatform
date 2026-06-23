@@ -12,8 +12,10 @@ Nền tảng tiếp nhận file đối tác, chuẩn hóa thành các bản giao
   - CLI entrypoint cho serving API, chạy ingestion, điều khiển scheduler, và chạy reconciliation
 - `src.api:create_app`
   - FastAPI app factory với MongoDB lifespan management và router registration
+- `frontend-next/`
+  - Active Next.js + TypeScript dashboard that communicates with FastAPI through `/api`
 - `frontend/`
-  - Vite-served Vanilla JS dashboard giao tiếp với backend qua `/api`
+  - Legacy Vite dashboard retained as reference only
 
 ## Backend Subsystems
 
@@ -162,17 +164,25 @@ Index definitions chi tiết xem tại `src/models/indexes.py`.
 
 ## Frontend Shape
 
-Dashboard là một SPA nhỏ trong `frontend/app.js` với các view chính:
+The active dashboard is `frontend-next/`.
 
-- **Command Center** — tổng quan và điều hướng
-- **Data Intake** — xem trạng thái file và ingestion
-- **Review Center** — review và approve mapping changes
-- **Reconciliation** — xem kết quả đối chiếu
-- **Mapping Studio** — chỉnh sửa mapping configs
-- **Automation** — quản lý scheduler và fetch configs
+Main active views:
 
-**Build tool:** Vite (xem `frontend/vite.config.js`, `frontend/package.json`).
-Vite dev server proxy `/api` tới `http://localhost:8000`.
+- Review Center
+- Reconciliation
+- Mapping Studio
+- Automation
+
+Review Center owns the operator approval workflow:
+
+1. Load pending review packets.
+2. Confirm file scope.
+3. Review or adjust draft mapping.
+4. Run runtime validation.
+5. Approve/reject.
+6. Track post-approval ingestion and reconciliation progress.
+
+The old `frontend/` directory is legacy/reference only.
 
 ## Operational Notes
 

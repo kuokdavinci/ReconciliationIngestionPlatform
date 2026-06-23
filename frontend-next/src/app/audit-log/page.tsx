@@ -10,9 +10,6 @@ import { useToast } from "@/components/ui/toast";
 import * as api from "@/lib/api/audit";
 import polish from "@/components/ui/dashboard-polish.module.css";
 
-const entityOptions = ["", "REVIEW_PACKET", "MAPPING_CONFIG", "RECONCILIATION_RUN"];
-const actionOptions = ["", "APPROVED", "REJECTED", "APPROVE_ACTIVATE_NEXT_RUNTIME", "COMPLETED", "FAILED"];
-
 export default function AuditLogPage() {
   const [events, setEvents] = useState<Record<string, unknown>[]>([]);
   const [entityFilter, setEntityFilter] = useState("");
@@ -20,6 +17,22 @@ export default function AuditLogPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
+
+  const entityOptions = useMemo(() => {
+    const types = new Set<string>();
+    events.forEach((e) => {
+      if (e.entityType) types.add(String(e.entityType));
+    });
+    return ["", ...Array.from(types).sort()];
+  }, [events]);
+
+  const actionOptions = useMemo(() => {
+    const acts = new Set<string>();
+    events.forEach((e) => {
+      if (e.action) acts.add(String(e.action));
+    });
+    return ["", ...Array.from(acts).sort()];
+  }, [events]);
 
   const loadEvents = useCallback(async () => {
     setLoading(true);

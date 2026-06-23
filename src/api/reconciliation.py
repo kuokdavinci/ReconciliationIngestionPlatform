@@ -42,6 +42,7 @@ class ResolveReviewPayload(BaseModel):
     partner: str
     date: str
     resolved_status: str = Field(alias="resolvedStatus")
+    note: Optional[str] = None
 
 
 class RunReconciliationPayload(BaseModel):
@@ -330,6 +331,21 @@ async def add_review_note(request: Request, record_key: str, payload: ReviewNote
         },
         upsert=True,
     )
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        await record_audit_event(
+            db,
+            entity_type="DISCREPANCY_REVIEW",
+            entity_id=record_key,
+            action="COMMENTED",
+            metadata={
+                "partner": partner,
+                "date": date,
+                "recordKey": record_key,
+                "note": note,
+                "actor": actor,
+            },
+        )
     record = await repo.find_one({"partner": partner, "date": date, "recordKey": record_key})
     return {"ok": True, "record": _serialize_review_record(record)}
 
@@ -339,28 +355,55 @@ async def resolve_review_record(request: Request, record_key: str, payload: Reso
     actor = require_actor(request, payload_field_name="actor")
     partner = _validate_partner(payload.partner)
     date = _validate_date(payload.date)
+    note = (payload.note or "").strip()
     now = datetime.now(timezone.utc)
     repo = _get_review_repo(request)
+
+    update_doc = {
+        "$setOnInsert": {
+            "_id": record_key,
+            "partner": partner,
+            "date": date,
+            "recordKey": record_key,
+            "createdAt": now,
+        },
+        "$set": {
+            "reviewed": True,
+            "reviewedBy": actor,
+            "resolvedBy": actor,
+            "resolvedStatus": payload.resolved_status,
+            "updatedAt": now,
+        },
+    }
+    if note:
+        update_doc["$push"] = {
+            "notes": {
+                "time": _review_note_timestamp(),
+                "event": f"{actor}: {note}",
+            }
+        }
+
     await repo.collection.update_one(
         {"partner": partner, "date": date, "recordKey": record_key},
-        {
-            "$setOnInsert": {
-                "_id": record_key,
+        update_doc,
+        upsert=True,
+    )
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        await record_audit_event(
+            db,
+            entity_type="DISCREPANCY_REVIEW",
+            entity_id=record_key,
+            action="RESOLVED",
+            metadata={
                 "partner": partner,
                 "date": date,
                 "recordKey": record_key,
-                "createdAt": now,
-            },
-            "$set": {
-                "reviewed": True,
-                "reviewedBy": actor,
-                "resolvedBy": actor,
                 "resolvedStatus": payload.resolved_status,
-                "updatedAt": now,
+                "actor": actor,
+                **({"note": note} if note else {}),
             },
-        },
-        upsert=True,
-    )
+        )
     record = await repo.find_one({"partner": partner, "date": date, "recordKey": record_key})
     return {"ok": True, "record": _serialize_review_record(record)}
 

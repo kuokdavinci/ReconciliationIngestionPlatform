@@ -17,6 +17,11 @@ export function SummaryStrip({ stats }: Props) {
     );
   }
 
+  const hasDiscrepancy = stats.unmatched + stats.missingPartner + stats.missingInternal > 0;
+  const reviewCount = stats.reviewedCount ?? 0;
+  const totalReview = stats.totalReviewable ?? (stats.unmatched + stats.missingPartner + stats.missingInternal);
+  const reviewRate = totalReview > 0 ? Math.round((reviewCount / totalReview) * 100) : 100;
+
   return (
     <div className={styles.summaryGrid}>
       <div className={styles.summaryCard}>
@@ -36,6 +41,18 @@ export function SummaryStrip({ stats }: Props) {
       <div className={`${styles.summaryCard} ${styles.summaryCardDanger}`}>
         <span className={styles.summaryLabel}>Missing</span>
         <strong className={styles.summaryValue} style={{ color: "#ef4444" }}>{(stats.missingPartner + stats.missingInternal).toLocaleString()}</strong>
+      </div>
+      <div className={`${styles.summaryCard} ${reviewRate === 100 ? styles.summaryCardSuccess : styles.summaryCardDanger}`} style={{
+        borderLeft: `3px solid ${reviewRate === 100 ? "#10b981" : "#ef4444"}`,
+      }}>
+        <span className={styles.summaryLabel}>Review Progress</span>
+        <strong className={styles.summaryValue} style={{ color: reviewRate === 100 ? "#10b981" : "#ef4444" }}>
+          {!hasDiscrepancy ? (
+            "No reviews needed"
+          ) : (
+            `${reviewCount}/${totalReview} (${reviewRate}%)`
+          )}
+        </strong>
       </div>
     </div>
   );

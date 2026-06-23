@@ -1,14 +1,6 @@
-const BASE_URL = "/api/v1";
+import { getCurrentActor } from "@/lib/actor";
 
-function getActor(): string {
-  if (typeof window === "undefined") return "Administrator";
-  try {
-    const stored = sessionStorage.getItem("actor");
-    return stored ? stored.trim() || "Administrator" : "Administrator";
-  } catch {
-    return "Administrator";
-  }
-}
+const BASE_URL = "/api/v1";
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -26,7 +18,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 function actorHeaders(): Record<string, string> {
-  return { "X-Actor": getActor() };
+  return { "X-Actor": getCurrentActor() };
 }
 
 export async function get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {

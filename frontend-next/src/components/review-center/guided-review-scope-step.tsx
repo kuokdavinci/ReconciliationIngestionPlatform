@@ -1,6 +1,5 @@
 "use client";
 
-import * as api from "@/lib/api/review-center";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ReviewPacket } from "@/types/review-center";

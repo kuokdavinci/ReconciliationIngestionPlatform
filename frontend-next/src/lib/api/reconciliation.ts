@@ -73,14 +73,49 @@ export async function getReviewRecords(partner: string, date: string) {
   return get<ReviewRecordsResponse>("/reconciliation/review-records", { partner, date });
 }
 
+export async function addReviewNote(
+  recordKey: string,
+  payload: { partner: string; date: string; note: string; actor?: string }
+) {
+  return post<{ ok: boolean; record: Record<string, unknown> }>(
+    `/reconciliation/review-records/${recordKey}/note`,
+    payload
+  );
+}
+
+export async function resolveReviewRecord(
+  recordKey: string,
+  payload: { partner: string; date: string; resolvedStatus: string; actor?: string; note?: string }
+) {
+  return post<{ ok: boolean; record: Record<string, unknown> }>(
+    `/reconciliation/review-records/${recordKey}/resolve`,
+    payload
+  );
+}
+
 function normalizeInsight(item: Record<string, unknown>): InsightItem {
-  const recommendation = (item.recommendation as Record<string, unknown>) || {};
+  const rawRec = item.recommendation;
+  let parsedRec: InsightItem["recommendation"] = undefined;
+
+  if (typeof rawRec === "string" && rawRec.trim()) {
+    parsedRec = { action: rawRec };
+  } else if (rawRec && typeof rawRec === "object") {
+    const recObj = rawRec as Record<string, unknown>;
+    parsedRec = {
+      action: String(recObj.action || "Review the affected evidence."),
+      why: recObj.why ? String(recObj.why) : undefined,
+      owner: recObj.owner ? String(recObj.owner) : undefined,
+      priority: recObj.priority ? String(recObj.priority) : undefined,
+      expectedOutcome: recObj.expectedOutcome ? String(recObj.expectedOutcome) : undefined,
+    };
+  }
+
   return {
     id: String(item.id || item._id || crypto.randomUUID()),
     category: String(item.category || "ANOMALY"),
     severity: String(item.severity || "MEDIUM").toUpperCase(),
     title: String(item.title || "Insight"),
-    shortSummary: String(item.shortSummary || item.summary || "Review the selected evidence for details."),
+    shortSummary: String(item.shortSummary || item.summary || item.description || "Review the selected evidence for details."),
     affectedCount: Number(item.affectedCount ?? item.affected_count ?? (item.evidence as Record<string, unknown>)?.["affectedRecords"] ?? 0),
     partner: item.partner ? String(item.partner) : undefined,
     confidence: item.confidence != null ? Number(item.confidence) : undefined,
@@ -96,16 +131,8 @@ function normalizeInsight(item: Record<string, unknown>): InsightItem {
           .filter((metric) => metric.value)
       : [],
     evidence: (item.evidence as Record<string, unknown>) || undefined,
-    likelyCause: item.likelyCause ? String(item.likelyCause) : undefined,
-    recommendation: Object.keys(recommendation).length > 0
-      ? {
-          action: String(recommendation.action || "Review the affected evidence."),
-          why: recommendation.why ? String(recommendation.why) : undefined,
-          owner: recommendation.owner ? String(recommendation.owner) : undefined,
-          priority: recommendation.priority ? String(recommendation.priority) : undefined,
-          expectedOutcome: recommendation.expectedOutcome ? String(recommendation.expectedOutcome) : undefined,
-        }
-      : undefined,
+    likelyCause: item.likelyCause ? String(item.likelyCause) : (item.likely_cause ? String(item.likely_cause) : undefined),
+    recommendation: parsedRec,
     impact: item.impact ? (item.impact as Record<string, unknown>) as InsightItem["impact"] : undefined,
     samples: Array.isArray(item.samples) ? item.samples.map((sample) => sample as Record<string, unknown>) : [],
   };

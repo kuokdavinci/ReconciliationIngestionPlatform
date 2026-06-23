@@ -1,4 +1,5 @@
 import { get, post } from "./client";
+import { getCurrentActor } from "@/lib/actor";
 
 export interface MappingsResponse {
   mappings: Record<string, unknown>[];
@@ -59,7 +60,7 @@ export async function handoffReview(draftId: string): Promise<HandoffResponse> {
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
-      "X-Actor": (() => { try { return sessionStorage.getItem("actor")?.trim() || "Administrator"; } catch { return "Administrator"; } })(),
+      "X-Actor": getCurrentActor(),
     },
   });
   if (!res.ok) {

@@ -32,6 +32,17 @@ export default function SchedulesPage() {
     }
   }, []);
 
+  const enabledJobs = jobs.filter((j) => j.enabled);
+  const pendingReview = jobs.reduce((sum, j) => sum + ((j.pendingReviewPackets as number) ?? 0), 0);
+  const partnersWaiting = jobs.filter((j) => j.hasPendingFile).length;
+  const activeRuns = jobs.filter((j) => j.status === "HEALTHY").length;
+
+  // Active status list that indicates a background process is running
+  const hasActiveJobRunning = useMemo(() => {
+    const activeStatuses = ["QUEUED", "FETCHING", "INGESTING", "RECONCILING", "RUNNING"];
+    return jobs.some((j) => activeStatuses.includes(j.status));
+  }, [jobs]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -52,15 +63,20 @@ export default function SchedulesPage() {
     }
 
     void bootstrapJobs();
+
+    // Set up polling if there's any active job running
+    let intervalId: NodeJS.Timeout | null = null;
+    if (hasActiveJobRunning) {
+      intervalId = setInterval(() => {
+        void loadJobs();
+      }, 3000);
+    }
+
     return () => {
       cancelled = true;
+      if (intervalId) clearInterval(intervalId);
     };
-  }, []);
-
-  const enabledJobs = jobs.filter((j) => j.enabled);
-  const pendingReview = jobs.reduce((sum, j) => sum + ((j.pendingReviewPackets as number) ?? 0), 0);
-  const partnersWaiting = jobs.filter((j) => j.hasPendingFile).length;
-  const activeRuns = jobs.filter((j) => j.status === "HEALTHY").length;
+  }, [hasActiveJobRunning, loadJobs]);
 
   const recentPackets = useMemo<RecentPacket[]>(() => {
     return jobs

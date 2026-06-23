@@ -73,6 +73,26 @@ export async function getReviewRecords(partner: string, date: string) {
   return get<ReviewRecordsResponse>("/reconciliation/review-records", { partner, date });
 }
 
+export async function addReviewNote(
+  recordKey: string,
+  payload: { partner: string; date: string; note: string; actor?: string }
+) {
+  return post<{ ok: boolean; record: Record<string, unknown> }>(
+    `/reconciliation/review-records/${recordKey}/note`,
+    payload
+  );
+}
+
+export async function resolveReviewRecord(
+  recordKey: string,
+  payload: { partner: string; date: string; resolvedStatus: string; actor?: string }
+) {
+  return post<{ ok: boolean; record: Record<string, unknown> }>(
+    `/reconciliation/review-records/${recordKey}/resolve`,
+    payload
+  );
+}
+
 function normalizeInsight(item: Record<string, unknown>): InsightItem {
   const recommendation = (item.recommendation as Record<string, unknown>) || {};
   return {

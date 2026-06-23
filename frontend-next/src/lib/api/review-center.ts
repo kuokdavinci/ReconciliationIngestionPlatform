@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { get, post } from "./client";
 import { normalizePacket } from "./review-center-normalizer";
 import type { ReviewPacket } from "@/types/review-center";

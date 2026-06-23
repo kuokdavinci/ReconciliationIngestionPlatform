@@ -60,9 +60,9 @@
   min-height: 220px;
   height: 100%;
   padding: 18px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(239, 68, 68, 0.2), rgba(239, 68, 68, 0.1));
-  border: 1px solid rgba(255, 180, 180, 0.72);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 12px 28px rgba(0, 0, 0, 0.22);
   display: flex;
   flex-direction: column;
@@ -70,7 +70,7 @@
 }
 
 .insightEmpty {
-  background: linear-gradient(180deg, rgba(239, 68, 68, 0.12), rgba(239, 68, 68, 0.06));
+  background: rgba(0, 0, 0, 0.15);
 }
 
 .insightCard {
@@ -79,7 +79,6 @@
 }
 
 .insightCard:hover {
-  border-color: rgba(255, 255, 255, 0.88);
   transform: translateY(-1px);
 }
 

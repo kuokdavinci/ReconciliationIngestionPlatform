@@ -11,6 +11,7 @@ import { MappingConfigsTable } from "@/components/mapping-studio/mapping-configs
 import { MappingStudioWizard } from "@/components/mapping-studio/mapping-studio-wizard";
 import { useToast } from "@/components/ui/toast";
 import * as api from "@/lib/api/mapping-studio";
+import { getCurrentActor } from "@/lib/actor";
 
 export default function MappingStudioPage() {
   const [configs, setConfigs] = useState<Record<string, unknown>[]>([]);
@@ -56,7 +57,7 @@ export default function MappingStudioPage() {
 
   const handleApprove = async (id: string) => {
     try {
-      await api.approveMapping(id, "Administrator");
+      await api.approveMapping(id, getCurrentActor());
       showToast(`Config ${id} approved!`, "success");
       setPendingActions((prev) => prev.filter((a) => a.draftMappingId !== id));
       await loadData();
@@ -67,7 +68,7 @@ export default function MappingStudioPage() {
 
   const handleReject = async (id: string) => {
     try {
-      await api.rejectMapping(id, "Administrator");
+      await api.rejectMapping(id, getCurrentActor());
       showToast(`Config ${id} rejected.`, "info");
       setPendingActions((prev) => prev.filter((a) => a.draftMappingId !== id));
       await loadData();

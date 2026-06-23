@@ -18,6 +18,23 @@ export interface ReconciliationStats {
   matchRate: number;
 }
 
+export interface ReviewNote {
+  time: string;
+  event: string;
+}
+
+export interface ReviewRecord {
+  _id: string;
+  partner: string;
+  date: string;
+  recordKey: string;
+  reviewed: boolean;
+  resolvedStatus?: string;
+  notes: ReviewNote[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ReconciliationRow {
   id: string;
   partnerTxnId?: string;
@@ -29,6 +46,7 @@ export interface ReconciliationRow {
   partnerAmount?: number;
   delta?: number;
   severity?: string;
+  reviewState?: ReviewRecord;
 }
 
 export interface InsightItem {

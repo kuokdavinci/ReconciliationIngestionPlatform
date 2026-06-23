@@ -69,7 +69,7 @@ uv run python run.py --serve --port 8000
 
 ```bash
 npm --prefix frontend-next install
-npm run dev
+npm --prefix frontend-next run dev
 ```
 
 6. Open:
@@ -171,16 +171,15 @@ Use `/docs` for the current request/response schema.
 
 ## Dashboard
 
-`frontend/` is a Vite-served Vanilla JS SPA that proxies `/api` to `http://localhost:8000`.
+`frontend-next/` is the active dashboard, built with Next.js and TypeScript.
 
-Current views reflected in `frontend/app.js`:
+Main active UI paths:
 
-- `#review-center`
-- `#reconciliation`
-- `#mapping-studio`
-- `#automation`
+- `frontend-next/src/app/review-center/`
+- `frontend-next/src/components/review-center/`
+- `frontend-next/src/lib/api/review-center.ts`
 
-See [frontend/README.md](frontend/README.md).
+The old `frontend/` Vite dashboard is kept only as a legacy/reference implementation.
 
 ## Configuration
 
@@ -257,6 +256,6 @@ This repo has historically drifted between docs and code. Treat code as source o
 - CLI behavior must match `run.py`
 - env vars must match `src/config/settings.py`, `src/analysis/config.py`, and `.env.example`
 - API route docs must match `src/api/`
-- dashboard route descriptions must match `frontend/app.js`
+- dashboard route descriptions must match `frontend-next/src/app/` and active Review Center components
 
 If docs and code disagree, update docs or fix code in the same change.

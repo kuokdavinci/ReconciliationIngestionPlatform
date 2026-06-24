@@ -1,4 +1,9 @@
-"""Alembic environment configuration with async SQLAlchemy support."""
+"""Alembic environment configuration with async SQLAlchemy support.
+
+Supports two modes:
+1. CLI/standalone: creates its own async engine via asyncio.run()
+2. Programmatic: uses a pre-existing connection from config.attributes['connection']
+"""
 import asyncio
 import sys
 from logging.config import fileConfig
@@ -17,6 +22,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+
+# Support pre-existing connection for programmatic use (e.g., FastAPI lifespan)
+target_connection = config.attributes.get('connection')
 
 
 def run_migrations_offline() -> None:
@@ -50,7 +58,12 @@ async def run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    asyncio.run(run_async_migrations())
+    if target_connection is not None:
+        # Programmatic call with a pre-existing connection (e.g., from FastAPI lifespan)
+        do_run_migrations(target_connection)
+    else:
+        # Standard standalone mode - create our own engine
+        asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():

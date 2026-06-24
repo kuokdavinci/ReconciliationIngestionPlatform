@@ -8,13 +8,10 @@ Optimized for RAM efficiency during Excel generation using openpyxl's write-only
 import argparse
 import asyncio
 import logging
-import sys
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
 
-import openpyxl
 import xlsxwriter
 from bson.decimal128 import Decimal128
 from motor.motor_asyncio import AsyncIOMotorClient

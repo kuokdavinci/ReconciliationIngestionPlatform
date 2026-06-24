@@ -1,10 +1,8 @@
 import pytest
 from decimal import Decimal
-from datetime import datetime, timezone
 from src.models.reconciliation_result import ReconciliationResult, ReconciliationResultRepository
 from src.core.enums import ReconciliationStatus
 from src.models.postgres import ReconciliationResultTable
-from src.config.settings import settings
 
 class SubscriptableDummy:
     def __getitem__(self, item):
@@ -18,7 +16,7 @@ async def test_postgres_repository_filters_dict_and_list(setup_postgres_test_db)
     assert repo.use_postgres is True
 
     # 1. Clean previous data
-    from sqlalchemy import delete, select, func
+    from sqlalchemy import delete
     async with repo.engine.begin() as conn:
         await conn.execute(delete(ReconciliationResultTable))
 

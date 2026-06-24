@@ -5,7 +5,6 @@ from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import (
     BaseModel,
     ConfigDict,

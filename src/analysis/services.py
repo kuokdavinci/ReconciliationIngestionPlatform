@@ -345,8 +345,7 @@ def extract_partner_anomalies(
     """
     anomalies = []
     mismatch_rate = summary_metrics.get("mismatch_rate", 0)
-    by_status = summary_metrics.get("by_status", {})
-
+    
     if mismatch_rate > 5.0:
         anomalies.append(
             TopAnomaly(

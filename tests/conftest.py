@@ -286,7 +286,7 @@ def setup_postgres_test_db():
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
     from src.config.settings import settings
-    from src.models.postgres import set_pg_engine, init_postgres_db
+    from src.models.postgres import init_postgres_db
     
     url = settings.postgres_url
     base_url = url.rsplit("/", 1)[0] + "/postgres"

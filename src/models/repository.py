@@ -57,7 +57,7 @@ class BaseRepository(Generic[T]):
     async def create(self, doc: T) -> T:
         """Insert a document into the collection and return it with _id populated."""
         data = self._to_mongo(doc)
-        result = await self.collection.insert_one(data)
+        await self.collection.insert_one(data)
         return doc
 
     async def find_one(self, query: dict) -> Optional[T]:

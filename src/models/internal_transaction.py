@@ -4,7 +4,6 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from src.core.enums import TransactionStatus
 from src.models.repository import BaseRepository
 

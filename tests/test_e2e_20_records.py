@@ -25,14 +25,11 @@ from src.config.settings import settings
 from src.config.cache import ConfigCache
 from src.config.loader import ConfigLoader
 from src.config.validator import ConfigValidator
-from src.core.enums import FileType, ReconciliationStatus
-from src.models.data_container import DataContainerRepository
-from src.models.internal_transaction import InternalTransactionRepository
-from src.models.mapping_config import MappingConfig, MappingConfigRepository
+from src.core.enums import FileType
+from src.models.mapping_config import MappingConfigRepository
 
 from src.pipeline.ingestion_pipeline import IngestionPipeline
 from src.reconciliation.engine import ReconciliationEngine
-from src.reconciliation.scope import classify_scope
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -49,7 +46,6 @@ def _today_utc() -> datetime:
 
 def _ensure_mapping_config(db, partner: str, config_id: str) -> None:
     """Ensure an APPROVED mapping config exists for the given partner."""
-    import asyncio
 
     async def _inner():
         collection = db["reconciliation_mapping_config"]
@@ -249,7 +245,7 @@ async def test_e2e_20_records_momo():
         assert summary["recon_total"] > 0, "Reconciliation should process records"
         assert summary["recon_matched"] > 0, "Expected at least some matched records"
 
-        print(f"\n  MOMO 20-records results:")
+        print("\n  MOMO 20-records results:")
         print(f"    Internal seeded: {summary['total_internal']}")
         print(f"    Ingested: {summary['ingestion_success']}/{summary['ingestion_total']}")
         print(f"    Reconciled: {summary['recon_total']} total, {summary['recon_matched']} matched")
@@ -291,7 +287,7 @@ async def test_e2e_20_records_zalopay():
         assert summary["recon_total"] > 0, "Reconciliation should process records"
         assert summary["recon_matched"] > 0, "Expected at least some matched records"
 
-        print(f"\n  ZALOPAY 20-records results:")
+        print("\n  ZALOPAY 20-records results:")
         print(f"    Internal seeded: {summary['total_internal']}")
         print(f"    Ingested: {summary['ingestion_success']}/{summary['ingestion_total']}")
         print(f"    Reconciled: {summary['recon_total']} total, {summary['recon_matched']} matched")
@@ -336,7 +332,7 @@ async def test_e2e_20_records_both_partners():
             f"{partner}: Expected {TEST_NUM_RECORDS} ingested, got {r['ingestion_success']}"
         assert r["recon_matched"] > 0, f"{partner}: Expected matches"
 
-    print(f"\n  Both partners 20-records comparison:")
+    print("\n  Both partners 20-records comparison:")
     for partner, r in results.items():
         print(f"    {partner}: ingest={r['ingestion_success']}, "
               f"recon={r['recon_total']} total, {r['recon_matched']} matched")

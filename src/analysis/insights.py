@@ -41,8 +41,16 @@ from src.analysis.services import (
     rule_based_pre_process,
 )
 from src.core.enums import ReconciliationStatus
+from src.models.reconciliation_result import ReconciliationResultRepository
 
 logger = logging.getLogger(__name__)
+
+_SEVERITY_RANK = {
+    "low": 0,
+    "medium": 1,
+    "high": 2,
+    "critical": 3,
+}
 
 
 def _normalize_extra_query_for_mongo(extra_query: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -120,12 +128,41 @@ def _docs_to_results(docs: list[dict[str, Any]], partner: str, date: str) -> lis
 
 
 async def _query_summary_metrics(
-    collection: AsyncIOMotorCollection,
+    collection: AsyncIOMotorCollection | ReconciliationResultRepository,
     partner: str,
     date: str,
     *,
     extra_query: Optional[dict[str, Any]] = None,
 ) -> SummaryResult:
+    if isinstance(collection, ReconciliationResultRepository):
+        data = await collection.get_summary_metrics(
+            partner,
+            date,
+            reconciliation_run_id=(extra_query or {}).get("reconciliation_run_id"),
+            source_file_id=(extra_query or {}).get("source_file_id"),
+        )
+        by_status = {str(k): int(v) for k, v in (data.get("by_status") or {}).items()}
+        total_transactions = sum(by_status.values())
+        matched = sum(
+            by_status.get(status, 0)
+            for status in (
+                ReconciliationStatus.MATCHED.value,
+                ReconciliationStatus.MATCHED_FAILED.value,
+                ReconciliationStatus.MATCHED_REVERSED.value,
+            )
+        )
+        mismatch_count = max(0, total_transactions - matched)
+        mismatch_rate = round((mismatch_count * 100 / total_transactions), 2) if total_transactions else 0.0
+        return SummaryResult(
+            partner=partner,
+            date=date,
+            total_transactions=total_transactions,
+            matched=matched,
+            mismatch_rate=mismatch_rate,
+            total_amount_mismatch=float(data.get("total_amount_mismatch") or 0.0),
+            by_status=by_status,
+        )
+
     match_query: dict[str, Any] = {"partner": partner, "date": date}
     match_query.update(_normalize_extra_query_for_mongo(extra_query))
     pipeline = [
@@ -214,13 +251,37 @@ def _compute_summary_hash(summary: SummaryResult) -> str:
 
 
 async def _query_selected_error_results(
-    collection: AsyncIOMotorCollection,
+    collection: AsyncIOMotorCollection | ReconciliationResultRepository,
     partner: str,
     date: str,
     *,
     extra_query: Optional[dict[str, Any]] = None,
     per_status_limit: int = 50,
 ) -> list[Any]:
+    if isinstance(collection, ReconciliationResultRepository):
+        selected_docs: list[dict[str, Any]] = []
+        repo_extra_query = extra_query or {}
+        status_order = [
+            ReconciliationStatus.MISSING_INTERNAL.value,
+            ReconciliationStatus.MISSING_PARTNER.value,
+            ReconciliationStatus.AMOUNT_MISMATCH.value,
+            ReconciliationStatus.MULTIPLE_MISMATCH.value,
+            ReconciliationStatus.STATUS_MISMATCH.value,
+            ReconciliationStatus.UNMAPPED_SKIPPED.value,
+        ]
+        for status in status_order:
+            records, _ = await collection.find_page_by_partner_and_date(
+                partner,
+                date,
+                status=ReconciliationStatus(status),
+                reconciliation_run_id=repo_extra_query.get("reconciliation_run_id"),
+                source_file_id=repo_extra_query.get("source_file_id"),
+                limit=per_status_limit,
+                offset=0,
+            )
+            selected_docs.extend([record.model_dump(by_alias=True) for record in records])
+        return _docs_to_results(selected_docs, partner, date)
+
     selected_docs: list[dict[str, Any]] = []
     mongo_extra_query = _normalize_extra_query_for_mongo(extra_query)
     status_order = [
@@ -414,7 +475,7 @@ def _compute_results_hash(results: list[Any]) -> str:
 async def get_summary(
     partner: str,
     date: str,
-    collection: AsyncIOMotorCollection,
+    collection: AsyncIOMotorCollection | ReconciliationResultRepository,
     llm_provider: LLMProvider,
     config: Optional[AnalysisConfig] = None,
     extra_query: Optional[dict[str, Any]] = None,
@@ -559,7 +620,7 @@ async def get_discrepancies(
     partner: str,
     date: str,
     focus: str,
-    collection: AsyncIOMotorCollection,
+    collection: AsyncIOMotorCollection | ReconciliationResultRepository,
     llm_provider: LLMProvider,
     config: Optional[AnalysisConfig] = None,
     extra_query: Optional[dict[str, Any]] = None,
@@ -689,7 +750,7 @@ async def get_discrepancies(
         },
     )
 
-    return insights
+    return _compress_insights_for_focus(analysis_input, insights, max_items=1)
 
 
 # ---------------------------------------------------------------------------
@@ -790,6 +851,79 @@ def _sanitize_mismatch_rate(
     return sanitized
 
 
+def _focus_affected_count(analysis_input: AnalysisInput, focus: str, fallback: int) -> int:
+    by_status = analysis_input.summary_metrics.get("by_status", {})
+    if focus == "operational":
+        return int(by_status.get("MISSING_INTERNAL", 0) + by_status.get("MISSING_PARTNER", 0)) or fallback
+    if focus == "inconsistency":
+        return int(
+            by_status.get("AMOUNT_MISMATCH", 0)
+            + by_status.get("STATUS_MISMATCH", 0)
+            + by_status.get("MULTIPLE_MISMATCH", 0)
+        ) or fallback
+    mismatch_total = int(analysis_input.summary_metrics.get("total_transactions", 0)) - int(
+        analysis_input.summary_metrics.get("matched", 0)
+    )
+    return mismatch_total or fallback
+
+
+def _compress_insights_for_focus(
+    analysis_input: AnalysisInput,
+    results: list[AnalysisResult],
+    *,
+    max_items: int = 1,
+) -> list[AnalysisResult]:
+    if not results:
+        return []
+
+    ordered = sorted(
+        results,
+        key=lambda item: (
+            _SEVERITY_RANK.get(item.severity.lower(), 0),
+            item.affected_count,
+            len(item.description or ""),
+        ),
+        reverse=True,
+    )
+    unique_results: list[AnalysisResult] = []
+    seen_signatures: set[tuple[str, str]] = set()
+    for item in ordered:
+        signature = (
+            (item.title or "").strip().lower(),
+            (item.recommendation or "").strip().lower(),
+        )
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        unique_results.append(item)
+
+    if len(unique_results) <= max_items:
+        return unique_results[:max_items]
+
+    primary = unique_results[0]
+    secondary = unique_results[1:]
+    secondary_titles = [item.title.strip() for item in secondary if item.title.strip()]
+    covered_suffix = ""
+    if secondary_titles:
+        covered_suffix = " Also covers: " + "; ".join(secondary_titles[:2]) + "."
+
+    merged_recommendation = primary.recommendation.strip()
+    if secondary and merged_recommendation:
+        merged_recommendation += " Then review the remaining related mismatch groups in the same pass."
+    elif secondary:
+        merged_recommendation = "Review the dominant mismatch driver first, then clear the remaining related discrepancy groups in one pass."
+
+    compressed = AnalysisResult(
+        type=f"{analysis_input.focus}_summary",
+        severity=primary.severity,
+        title=primary.title,
+        description=(primary.description.strip() + covered_suffix).strip(),
+        affected_count=_focus_affected_count(analysis_input, analysis_input.focus, primary.affected_count),
+        recommendation=merged_recommendation,
+    )
+    return [compressed][:max_items]
+
+
 async def _generate_insights_with_fallback(
     analysis_input: AnalysisInput,
     llm_provider: LLMProvider,
@@ -842,14 +976,22 @@ async def _generate_insights_with_fallback(
 
         if not llm_response:
             logger.warning("LLM returned no response, falling back to rule-based")
-            return _rule_based_fallback(analysis_input), False, None
+            return _compress_insights_for_focus(
+                analysis_input,
+                _rule_based_fallback(analysis_input),
+                max_items=1,
+            ), False, None
 
         # Parse with structured schema validation
         parsed_results, schema_valid = parse_structured_insight(llm_response)
 
         if not parsed_results:
             logger.warning("LLM returned no parseable findings, falling back to rule-based")
-            return _rule_based_fallback(analysis_input), False, None
+            return _compress_insights_for_focus(
+                analysis_input,
+                _rule_based_fallback(analysis_input),
+                max_items=1,
+            ), False, None
 
         # Run guardrail validation: cross-reference LLM claims against input data
         guardrail = validate_insights(analysis_input, parsed_results)
@@ -865,7 +1007,11 @@ async def _generate_insights_with_fallback(
                     "risk_level": guardrail.risk_level,
                 },
             )
-            return _rule_based_fallback(analysis_input), schema_valid, guardrail_dict
+            return _compress_insights_for_focus(
+                analysis_input,
+                _rule_based_fallback(analysis_input),
+                max_items=1,
+            ), schema_valid, guardrail_dict
 
         if guardrail.warnings:
             logger.info(
@@ -880,6 +1026,7 @@ async def _generate_insights_with_fallback(
         # Sanitize: ensure mismatch rate percentages match the computed value
         actual_rate = analysis_input.summary_metrics.get("mismatch_rate", 0)
         parsed_results = _sanitize_mismatch_rate(parsed_results, actual_rate)
+        parsed_results = _compress_insights_for_focus(analysis_input, parsed_results, max_items=1)
 
         return parsed_results, schema_valid, guardrail_dict
 
@@ -888,7 +1035,11 @@ async def _generate_insights_with_fallback(
             f"LLM call failed, falling back to rule-based: {exc}",
             extra={"event": "ai_insight_llm_error", "error": str(exc)},
         )
-        return _rule_based_fallback(analysis_input), False, None
+        return _compress_insights_for_focus(
+            analysis_input,
+            _rule_based_fallback(analysis_input),
+            max_items=1,
+        ), False, None
 
 
 # ---------------------------------------------------------------------------

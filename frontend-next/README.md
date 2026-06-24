@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Adapter Dashboard (Next.js)
 
-## Getting Started
+Active frontend for the Reconciliation Ingestion Platform — built with Next.js 16 App Router, React 19, TypeScript 5, and Tailwind CSS v4.
 
-First, run the development server:
+## Pages
+
+| Route | Description |
+|-------|-------------|
+| `/` | Overview / dashboard home |
+| `/reconciliation` | Reconciliation results, stats, and insights |
+| `/review-center` | Guided review + approval workflows for mapping changes |
+| `/mapping-studio` | Draft mapping configuration wizard |
+| `/schedules` | Partner fetch schedule management |
+| `/audit-log` | Audit event history |
+
+## Quick Start
 
 ```bash
+# Install dependencies
+npm install
+
+# Start dev server (proxies API to localhost:8000)
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+
+# Build for production
+npm run build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The dev server runs on `http://localhost:3000` and proxies `/api/*` requests to `http://localhost:8000` (configured in `next.config.ts`).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Tech Stack
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **Framework:** Next.js 16 (App Router)
+- **Language:** TypeScript 5
+- **Styling:** Tailwind CSS v4
+- **Linting:** ESLint 9 + Prettier 3
 
-## Learn More
+## Code Quality
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run lint        # ESLint
+npx tsc --noEmit    # Type check
+npx prettier --check src/  # Format check
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Project Structure
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+src/
+├── app/           # App Router pages (6 routes)
+├── components/    # React components (ui/, layout/, feature-specific/)
+├── lib/           # API client + state stores + helpers
+└── types/         # TypeScript interfaces
+```
 
-## Deploy on Vercel
+## Legacy
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The old `frontend/` (Vite + vanilla JS) dashboard in the repo root is kept as a legacy/reference implementation. All active development is in this directory.

@@ -1,5 +1,6 @@
 """Helpers for resolving actor identity on mutating endpoints."""
 
+import os
 from collections.abc import Mapping
 
 from fastapi import HTTPException, Request
@@ -20,10 +21,6 @@ def require_actor(
         actor = str(headers.get("x-actor", "") or headers.get("X-Actor", "")).strip()
         if actor:
             return actor
-
-    import os
-    if not os.getenv("PYTEST_CURRENT_TEST"):
-        return "admin"
 
     raise HTTPException(
         status_code=400,

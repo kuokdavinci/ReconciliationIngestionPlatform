@@ -391,15 +391,23 @@ async def _activate_sprint6_wave2(db, day: datetime) -> tuple[Path, Path, int]:
 
 
 async def main(mode: str) -> None:
+    import os
     client = AsyncIOMotorClient(settings.mongodb_url)
     db = client[settings.db_name]
-    day = _today_utc()
+    
+    day_str = os.getenv("SEED_DATE")
+    if day_str:
+        day = datetime.strptime(day_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    else:
+        day = _today_utc()
+        
     partner_file_path = _partner_file_path_for_day(day)
 
     try:
         if mode == "reset":
             await _full_wipe(db)
             inserted = await _reset_and_seed_phase1(db, partner_file_path)
+            await _ensure_mapping_config(db, status="APPROVED")
             await _ensure_fetch_config(db)
             print(f"Reset complete for {PARTNER} on {_date_str(day)}")
             print(f"Seeded Phase 1 internal rows: {inserted}")

@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 PARTNER = "ZALOPAY"
 NUM_RECORDS = 100000
 TOTAL_COLUMNS = 40  # More columns than MOMO's 30
+MISSING_PARTNER_INDICES = {20000, 40000, 60000}
+AMOUNT_MISMATCH_INDICES = {500, 25000, 75000, 99999}
 
 def _today_utc() -> datetime:
     return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -73,19 +75,23 @@ def _write_partner_file(path: Path, day: datetime, count: int):
     worksheet.write(6, 39, "zpChecksum")
 
     row_idx = 7
-    # We will skip 6 indices from the main loop to simulate missing on partner side
-    skipped_indices = {1000, 20000, 40000, 60000, 80000, 90000}
+    logger.info(
+        "ZALOPAY 100k fixture: internal=%s, partner_rows=%s, missing_partner=%s, amount_mismatch=%s",
+        count,
+        count - len(MISSING_PARTNER_INDICES),
+        len(MISSING_PARTNER_INDICES),
+        len(AMOUNT_MISMATCH_INDICES),
+    )
     
     for i in range(1, count + 1):
-        if i in skipped_indices:
+        if i in MISSING_PARTNER_INDICES:
             continue
 
         txn_id = f"ZALO_TXN_80{i:06d}"
         amount = Decimal(50000 + (i % 10) * 10000)
         
-        # AMOUNT_MISMATCH case: mismatch on amount (e.g. 4 records)
-        if i in (500, 25000, 75000, 99999):
-            amount += Decimal("5000") # Discrepancy
+        if i in AMOUNT_MISMATCH_INDICES:
+            amount += Decimal("5000")
             
         worksheet.write(row_idx, 0, str(i))
         worksheet.write(row_idx, 1, txn_id)
@@ -99,23 +105,6 @@ def _write_partner_file(path: Path, day: datetime, count: int):
         if i % 5 == 0:
             worksheet.write(row_idx, 35, "PROMO_5K")
         worksheet.write(row_idx, 39, f"md5_hash_{i}")
-        row_idx += 1
-
-    # Add 3 extra records to Excel that do NOT exist in the 100k internal DB
-    # 100k - 6 (skipped) + 3 (extra) = 99,997 partner rows.
-    for extra_id in (1, 2, 3):
-        txn_id = f"ZALO_TXN_999{extra_id:03d}"
-        amount = Decimal("75000")
-        worksheet.write(row_idx, 0, str(count + extra_id))
-        worksheet.write(row_idx, 1, txn_id)
-        worksheet.write(row_idx, 4, str(amount))
-        worksheet.write(row_idx, 7, f"{date_str} 14:00:00")
-        worksheet.write(row_idx, 10, f"BILL_ZP_EXTRA_{extra_id}")
-        worksheet.write(row_idx, 17, "Thành công")
-        worksheet.write(row_idx, 20, "1100")
-        worksheet.write(row_idx, 25, "DOMESTIC_CARD")
-        worksheet.write(row_idx, 30, "APP_ZALO_PAY_1")
-        worksheet.write(row_idx, 39, f"md5_hash_extra_{extra_id}")
         row_idx += 1
 
     workbook.close()
@@ -181,8 +170,6 @@ async def _seed_internal(db, day: datetime, count: int):
     
     for i in range(1, count + 1):
         txn_id = f"ZALO_TXN_80{i:06d}"
-        if i in (1000, 50000, 90000):
-            txn_id = f"ZALO_TXN_80{i:06d}_MISSING_PARTNER"
 
         amount = Decimal(50000 + (i % 10) * 10000)
         

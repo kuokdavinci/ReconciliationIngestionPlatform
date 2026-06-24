@@ -69,5 +69,13 @@ module = [
   "src.analysis.*",
   "src.reconciliation.engine",
   "src.models.postgres",
+  "src.pipeline.*",
+  "src.services.*",
+  "src.scheduler.*",
+  "src.config.*",
+  "src.normalizer.*",
+  "src.readers.*",
+  "src.models.reconciliation_result",
+  "src.models.data_container",
 ]
 ignore_errors = true

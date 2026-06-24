@@ -568,7 +568,6 @@ class ReconciliationEngine:
 
         # Upfront deletion of existing records
         await self._result_repo.collection.delete_many(delete_query)
-        cleared_existing = True
 
         # Parallel write worker setup
         write_semaphore = asyncio.Semaphore(self._write_workers)

@@ -4,7 +4,6 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional, Any
 from pydantic import BaseModel, ConfigDict, Field
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from src.core.enums import ReconciliationStatus
 from src.models.repository import BaseRepository
 
@@ -369,7 +368,6 @@ class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
             ]
             cursor = self.collection.aggregate(pipeline)
             async for doc in cursor:
-                from decimal import Decimal
                 from bson.decimal128 import Decimal128
                 tpa = doc.get("total_partner_amount")
                 tia = doc.get("total_internal_amount")

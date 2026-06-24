@@ -422,8 +422,6 @@ async def test_ai_response_follows_json_schema():
     summary.total_amount_mismatch = result["summary_metrics"]["total_amount_mismatch"]
     summary.by_status = result["summary_metrics"]["by_status"]
 
-    groups = GroupingEngine.group([])  # Would need real results for actual groups
-
     analysis_input = AnalysisInput(
         partner="MOMO",
         date="2024-07-09",

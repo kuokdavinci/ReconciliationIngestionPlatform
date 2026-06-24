@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from src.config.ai_generator import generate_config_from_samples
 from src.config.loader import ConfigLoader
 from src.config.settings import settings
 from src.config.signature import StructureSignature, compute_signature
@@ -301,8 +300,6 @@ async def _create_mapping_proposal(
         "confidence": 0.0,
         "reasoning": "AI generation deferred until review modal is opened by user."
     }
-    error = None
-
     proposal = MappingConfig(
         partner=partner,
         workflowType=workflow_type,

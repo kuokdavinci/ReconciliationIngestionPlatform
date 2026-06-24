@@ -1,11 +1,8 @@
 import asyncio
 from datetime import datetime, timezone
-import json
-from uuid import UUID
-from typing import Any, Optional
-from sqlalchemy import Column, String, Numeric, DateTime, JSON, Text
+from sqlalchemy import Column, String, Numeric, DateTime, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -122,15 +119,43 @@ async def init_postgres_db(postgres_url: str, use_unlogged: bool = False):
         postgres_url = postgres_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
     engine = create_async_engine(postgres_url, echo=False)
-    async with engine.begin() as conn:
-        # Apply pending Alembic migrations
-        await conn.run_sync(_run_alembic_upgrade)
 
-        if use_unlogged:
-            from sqlalchemy import text
-            await conn.execute(text("ALTER TABLE partner_transaction SET UNLOGGED;"))
-            await conn.execute(text("ALTER TABLE internal_transaction SET UNLOGGED;"))
+    # Check if partner_transaction table already exists (e.g., from old create_all).
+    # If it does, stamp Alembic head to avoid re-applying migrations on existing objects.
+    from sqlalchemy import text
+    async with engine.connect() as conn:
+        has_partner = await conn.execute(
+            text("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'partner_transaction')")
+        )
+        partner_exists = has_partner.scalar()
+
+    if partner_exists:
+        # Tables exist (from old create_all or previous run) — stamp head
+        # instead of running upgrade which would fail on existing indexes.
+        async with engine.begin() as conn:
+            await conn.run_sync(_stamp_head)
+            if use_unlogged:
+                await conn.execute(text("ALTER TABLE partner_transaction SET UNLOGGED;"))
+                await conn.execute(text("ALTER TABLE internal_transaction SET UNLOGGED;"))
+    else:
+        # Fresh database — run migrations from scratch
+        async with engine.begin() as conn:
+            await conn.run_sync(_run_alembic_upgrade)
+            if use_unlogged:
+                await conn.execute(text("ALTER TABLE partner_transaction SET UNLOGGED;"))
+                await conn.execute(text("ALTER TABLE internal_transaction SET UNLOGGED;"))
     await engine.dispose()
+
+
+def _stamp_head(connection):
+    """Stamp the database with the current Alembic head revision."""
+    from alembic.config import Config
+    from alembic import command
+
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", str(connection.engine.url))
+    cfg.attributes["connection"] = connection
+    command.stamp(cfg, "head")
 
 
 def _run_alembic_upgrade(connection):

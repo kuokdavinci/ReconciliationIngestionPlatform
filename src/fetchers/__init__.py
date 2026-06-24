@@ -8,7 +8,7 @@ Exports:
     create_fetcher: Factory function to create appropriate fetcher.
 """
 
-from src.fetchers.base import BaseFetcher, FetchResult
+from src.fetchers.base import BaseFetcher
 from src.fetchers.sftp_fetcher import SFTPFetcher
 from src.fetchers.api_fetcher import APIFetcher
 from src.fetchers.filedrop_fetcher import FileDropFetcher

@@ -1,6 +1,5 @@
 """Helpers for resolving actor identity on mutating endpoints."""
 
-import os
 from collections.abc import Mapping
 
 from fastapi import HTTPException, Request

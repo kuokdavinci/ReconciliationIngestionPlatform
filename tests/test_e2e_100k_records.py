@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-import openpyxl
 import xlsxwriter
 import pytest
 from bson.decimal128 import Decimal128
@@ -332,7 +331,7 @@ async def test_e2e_100k_momo():
         assert summary["records_per_sec_ingest"] > 1000, \
             f"Ingestion too slow: {summary['records_per_sec_ingest']} rec/s"
 
-        print(f"\n  MOMO 100k performance:")
+        print("\n  MOMO 100k performance:")
         print(f"    Seed: {summary['timing_seconds']['seed_seconds']}s")
         print(f"    Ingest: {summary['timing_seconds']['ingest_seconds']}s "
               f"({summary['records_per_sec_ingest']} rec/s)")
@@ -359,7 +358,6 @@ async def test_e2e_100k_zalopay():
     db = client[settings.db_name]
 
     expected_partner_rows = NUM_RECORDS - len(ZALO_MISSING_PARTNER_INDICES)
-    num_amount_mismatches = len(ZALO_AMOUNT_MISMATCH_INDICES)
 
     try:
         await _cleanup_partner_data(db, PARTNER_ZALOPAY)
@@ -385,7 +383,7 @@ async def test_e2e_100k_zalopay():
             f"Expected {len(ZALO_MISSING_PARTNER_INDICES)} missing partner, " \
             f"got {summary['recon_missing_partner']}"
 
-        print(f"\n  ZALOPAY 100k performance:")
+        print("\n  ZALOPAY 100k performance:")
         print(f"    Seed: {summary['timing_seconds']['seed_seconds']}s")
         print(f"    Ingest: {summary['timing_seconds']['ingest_seconds']}s "
               f"({summary['records_per_sec_ingest']} rec/s)")
@@ -460,7 +458,7 @@ async def test_e2e_100k_performance_comparison():
         assert s["records_per_sec_recon"] > 1000, \
             f"{partner}: reconciliation too slow ({s['records_per_sec_recon']} rec/s)"
 
-    print(f"\n  100k Performance Comparison:")
+    print("\n  100k Performance Comparison:")
     print(f"  {'Partner':<12} {'Ingest(s)':<12} {'Rec/s':<12} {'Recon(s)':<12} {'Rec/s':<12} {'Match':<10} {'Total(s)':<10}")
     print(f"  {'-'*68}")
     for partner, s in results.items():

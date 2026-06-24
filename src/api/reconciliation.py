@@ -701,7 +701,7 @@ async def reconciliation_insights(
         db = getattr(request.app.state, "db", None)
         if db is None:
             raise HTTPException(status_code=503, detail="Database connection not available.")
-        collection = db["reconciliation_result"]
+        repo = ReconciliationResultRepository(db)
 
         from src.analysis.config import AnalysisConfig
         from src.analysis.provider import create_provider
@@ -714,7 +714,7 @@ async def reconciliation_insights(
             result = await get_summary(
                 partner=partner,
                 date=date,
-                collection=collection,
+                collection=repo,
                 llm_provider=llm_provider,
                 extra_query=await _resolve_latest_run_filters(db, partner, date),
             )
@@ -733,7 +733,7 @@ async def reconciliation_insights(
                 partner=partner,
                 date=date,
                 focus=focus,
-                collection=collection,
+                collection=repo,
                 llm_provider=llm_provider,
                 extra_query=await _resolve_latest_run_filters(db, partner, date),
             )

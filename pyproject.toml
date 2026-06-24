@@ -23,6 +23,7 @@ dependencies = [
     "python-calamine>=0.7.0",
     "asyncpg>=0.31.0",
     "sqlalchemy>=2.0.51",
+    "alembic>=1.14.0",
     "greenlet>=3.5.2",
 ]
 
@@ -55,9 +56,17 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-ignore = ["E402", "E701", "F841", "F821", "F401"]
+ignore = ["E402", "E701", "F841", "F401"]
 
 [tool.mypy]
 ignore_missing_imports = true
 explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+  "src.api.*",
+  "src.analysis.*",
+  "src.reconciliation.engine",
+  "src.models.postgres",
+]
 ignore_errors = true

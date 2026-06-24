@@ -111,15 +111,13 @@ tests/                         # pytest suite (48 test files)
 
 ## Dashboard
 
-`frontend-next/` is the active dashboard, built with Next.js and TypeScript.
+`frontend-next/` is the dashboard, built with Next.js 16 and TypeScript 5.
 
-Main active UI paths:
+Main UI paths:
 
 - `frontend-next/src/app/review-center/`
 - `frontend-next/src/components/review-center/`
 - `frontend-next/src/lib/api/review-center.ts`
-
-The old `frontend/` Vite dashboard is kept only as a legacy/reference implementation.
 
 ---
 

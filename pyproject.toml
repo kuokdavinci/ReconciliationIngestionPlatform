@@ -23,6 +23,7 @@ dependencies = [
     "python-calamine>=0.7.0",
     "asyncpg>=0.31.0",
     "sqlalchemy>=2.0.51",
+    "alembic>=1.14.0",
     "greenlet>=3.5.2",
 ]
 
@@ -31,6 +32,7 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff>=0.6.9",
+    "mypy>=1.14.0",
 ]
 
 [tool.pytest.ini_options]
@@ -55,9 +57,25 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-ignore = ["E402", "E701", "F841", "F821", "F401"]
+ignore = ["E402", "E701", "F841", "F401"]
 
 [tool.mypy]
 ignore_missing_imports = true
 explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+  "src.api.*",
+  "src.analysis.*",
+  "src.reconciliation.engine",
+  "src.models.postgres",
+  "src.pipeline.*",
+  "src.services.*",
+  "src.scheduler.*",
+  "src.config.*",
+  "src.normalizer.*",
+  "src.readers.*",
+  "src.models.reconciliation_result",
+  "src.models.data_container",
+]
 ignore_errors = true

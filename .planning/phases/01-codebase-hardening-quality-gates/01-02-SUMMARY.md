@@ -85,5 +85,14 @@ None - no external service configuration required.
 
 ---
 
+## Self-Check: PASSED
+
+- [x] `src/api/actor.py` — exists, no `return "admin"`, no `PYTEST_CURRENT_TEST`, has `raise HTTPException`
+- [x] `frontend-next/README.md` — exists, no `create-next-app` scaffold, has `Adapter Dashboard` and `Legacy` section
+- [x] `docs/ARCHITECTURE.md` — exists, has `Active Next.js` and `Legacy Vite`
+- [x] Commit `237a538` — fix: remove require_actor silent admin fallback
+- [x] Commit `5645642` — docs: replace frontend-next README and verify docs consistency
+- [x] Commit `5645e29` — docs: complete plan 02 summary
+
 *Phase: 01-codebase-hardening-quality-gates*
 *Completed: 2026-06-24*

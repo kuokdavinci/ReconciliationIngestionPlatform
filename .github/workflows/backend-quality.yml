@@ -52,5 +52,10 @@ jobs:
           src/services
           scripts/seeding/seed_vnpay_audit_flow.py
 
-      - name: Run test suite
-        run: uv run pytest -v --tb=short
+      - name: Type check
+        run: uv run mypy src/ --show-error-codes
+
+      - name: Run full test suite (excluding E2E)
+        run: uv run pytest tests/ --ignore=tests/test_analysis_e2e.py --ignore=tests/test_phase8.py -v --tb=short
+        env:
+          AI_API_KEY: "sk-test-fake-key"

@@ -277,3 +277,67 @@ def large_excel_file() -> Generator[str, None, None]:
     yield temp_path
 
     Path(temp_path).unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_postgres_test_db():
+    """Create test database and tables for PostgreSQL testing, then configure the engine."""
+    import asyncio
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from src.config.settings import settings
+    from src.models.postgres import set_pg_engine, init_postgres_db
+    
+    url = settings.postgres_url
+    base_url = url.rsplit("/", 1)[0] + "/postgres"
+    if base_url.startswith("postgresql://"):
+        base_url = base_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        
+    engine = create_async_engine(base_url, isolation_level="AUTOCOMMIT")
+    
+    async def create_db():
+        async with engine.connect() as conn:
+            result = await conn.execute(text("SELECT 1 FROM pg_database WHERE datname='reconciliation_test'"))
+            if not result.scalar():
+                await conn.execute(text("CREATE DATABASE reconciliation_test"))
+        await engine.dispose()
+        
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+    if loop.is_running():
+        # In case we're inside a running loop, create task or use event loop
+        import nest_asyncio
+        nest_asyncio.apply()
+        
+    loop.run_until_complete(create_db())
+    
+    test_url = url.rsplit("/", 1)[0] + "/reconciliation_test"
+    if test_url.startswith("postgresql://"):
+        test_url = test_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        
+    loop.run_until_complete(init_postgres_db(test_url))
+    
+    settings.postgres_url = test_url
+    
+    yield
+    
+    async def clean_db():
+        from src.models.postgres import get_pg_engine
+        engine = get_pg_engine()
+        await engine.dispose()
+        
+    loop.run_until_complete(clean_db())
+
+
+@pytest.fixture(autouse=True)
+async def clean_postgres_tables():
+    """Wipe all PostgreSQL tables before each test to ensure test isolation."""
+    from src.models.postgres import get_pg_engine
+    from sqlalchemy import text
+    engine = get_pg_engine()
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE TABLE partner_transaction, internal_transaction, reconciliation_result CASCADE"))

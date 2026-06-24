@@ -1,0 +1,126 @@
+import asyncio
+from datetime import datetime, timezone
+import json
+from uuid import UUID
+from typing import Any, Optional
+from sqlalchemy import Column, String, Numeric, DateTime, JSON, Text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import declarative_base
+
+Base = declarative_base()
+
+class PartnerTransactionTable(Base):
+    __tablename__ = "partner_transaction"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True)
+    request_id = Column(PG_UUID(as_uuid=True), nullable=False)
+    identify = Column(String(255), nullable=False, index=True)
+    workflow_type = Column(String(255), nullable=False)
+    reconciliation_date = Column(DateTime, nullable=False, index=True)
+    operation_status = Column(String(50), default="IN_PROGRESS")
+    reconciliation_status = Column(String(50), default="")
+    connector_data = Column(Text, default="")
+    extra_data = Column(Text, default="")
+    source_file_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    
+    # Nested PartnerData fields flattened for queries/indices
+    partner_id = Column(String(255), nullable=False)
+    partner_trace = Column(String(255), nullable=True, index=True)
+    partner_status = Column(String(255), nullable=False)
+    partner_amount = Column(Numeric(20, 4), nullable=False)
+    partner_currency = Column(String(50), nullable=False)
+    partner_trans_date = Column(DateTime, nullable=True)
+    
+    # Extra dynamic columns
+    partner_metadata = Column(JSONB, default=dict)
+    
+    created_by = Column(String(255), default="system")
+    created_date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_modified_by = Column(String(255), default="system")
+    last_modified_date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class InternalTransactionTable(Base):
+    __tablename__ = "internal_transaction"
+
+    id = Column(String(255), primary_key=True)
+    partner = Column(String(255), nullable=False, index=True)
+    partner_txn_id = Column(String(255), nullable=False, index=True)
+    amount = Column(Numeric(20, 4), nullable=False)
+    currency = Column(String(50), default="VND")
+    status = Column(String(50), nullable=False)
+    transaction_time = Column(DateTime, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ReconciliationResultTable(Base):
+    __tablename__ = "reconciliation_result"
+
+    id = Column(String(255), primary_key=True)
+    partner = Column(String(255), nullable=False, index=True)
+    date = Column(String(10), nullable=False, index=True)
+    partner_txn_id = Column(String(255), nullable=False)
+    internal_txn_id = Column(String(255), nullable=True)
+    
+    partner_amount = Column(Numeric(20, 4), nullable=True)
+    internal_amount = Column(Numeric(20, 4), nullable=True)
+    
+    partner_status = Column(String(50), nullable=True)
+    internal_status = Column(String(50), nullable=True)
+    
+    reconciliation_status = Column(String(50), nullable=False, index=True)
+    reconciliation_run_id = Column(String(255), nullable=True, index=True)
+    source_file_id = Column(String(255), nullable=True, index=True)
+    scope_type = Column(String(50), nullable=True)
+    mapping_version = Column(String(50), nullable=True)
+    
+    partner_record_id = Column(String(255), nullable=True)
+    internal_record_id = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+_pg_engine = None
+_pg_engine_loop = None
+
+def get_pg_engine():
+    global _pg_engine, _pg_engine_loop
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+        
+    if _pg_engine is None or (current_loop is not None and _pg_engine_loop is not current_loop):
+        from src.config.settings import settings
+        postgres_url = settings.postgres_url
+        if postgres_url.startswith("postgresql://"):
+            postgres_url = postgres_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        _pg_engine = create_async_engine(postgres_url, echo=False)
+        _pg_engine_loop = current_loop
+    return _pg_engine
+
+def set_pg_engine(engine):
+    global _pg_engine, _pg_engine_loop
+    _pg_engine = engine
+    try:
+        _pg_engine_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _pg_engine_loop = None
+
+async def init_postgres_db(postgres_url: str):
+    """Create all tables in Postgres if they do not exist."""
+    # Ensure correct scheme for asyncpg
+    if postgres_url.startswith("postgresql://"):
+        postgres_url = postgres_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        
+    engine = create_async_engine(postgres_url, echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        from sqlalchemy import text
+        try:
+            await conn.execute(text("ALTER TABLE partner_transaction SET UNLOGGED;"))
+            await conn.execute(text("ALTER TABLE internal_transaction SET UNLOGGED;"))
+        except Exception:
+            pass
+    await engine.dispose()

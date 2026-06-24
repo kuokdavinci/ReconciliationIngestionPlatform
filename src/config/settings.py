@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     mongodb_url: str = "mongodb://localhost:27017"
     db_name: str = "reconciliation"
+    postgres_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/reconciliation"
     log_level: str = "INFO"
     log_format: str = "json"
     app_name: str = "reconciliation-ingestion"

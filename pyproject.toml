@@ -21,6 +21,9 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "xlsxwriter>=3.2.9",
     "python-calamine>=0.7.0",
+    "asyncpg>=0.31.0",
+    "sqlalchemy>=2.0.51",
+    "greenlet>=3.5.2",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +45,7 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "nest-asyncio>=1.6.0",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.6.9",
 ]

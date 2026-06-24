@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:16
+    container_name: reconciliation-postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: reconciliation
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   mongodb:
     image: mongo:7
     container_name: reconciliation-mongo
@@ -56,10 +74,13 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     env_file:
       - .env
     environment:
       - APP_MONGODB_URL=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
+      - APP_POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/reconciliation
     volumes:
       - ./downloads:/app/downloads
       - ./sftp_data:/app/sftp_data
@@ -74,10 +95,13 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     env_file:
       - .env
     environment:
       - APP_MONGODB_URL=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
+      - APP_POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/reconciliation
       - SFTP_HOST=sftp
     volumes:
       - ./downloads:/app/downloads
@@ -86,4 +110,6 @@ services:
 
 volumes:
   mongo_data:
+    driver: local
+  postgres_data:
     driver: local

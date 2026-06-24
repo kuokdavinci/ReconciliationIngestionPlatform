@@ -7,13 +7,14 @@ Config-driven platform for ingesting partner settlement files, normalizing into 
 ## Stack
 
 | Layer | Technology |
-|---|---|
+|---|---|---|
 | Backend | Python 3.11+ · FastAPI 0.115+ · Uvicorn |
 | Frontend | Next.js 16 · React 19 · TypeScript 5 · Tailwind CSS v4 |
-| Database | MongoDB 7.0 via Motor 3.x (async driver) |
+| Primary Database | MongoDB 7.0 via Motor 3.x (async driver) — configs, reviews, audit |
+| Transactional Database | PostgreSQL 16 via asyncpg + SQLAlchemy — bulk ingestion, reconciliation |
 | AI/LLM | OpenAI-compatible API (direct HTTP, no LangChain) |
 | Scheduling | APScheduler 3.x with MongoDB job store |
-| File Parsing | openpyxl (Excel), csv, json — streaming readers |
+| File Parsing | python-calamine (Excel), csv, json — streaming readers |
 | Infrastructure | Docker · Docker Compose · SFTP (paramiko) |
 
 ---
@@ -108,6 +109,18 @@ tests/                         # pytest suite (48 test files)
 └── test_*.py                  # Per-module unit tests
 ```
 
+## Dashboard
+
+`frontend-next/` is the active dashboard, built with Next.js and TypeScript.
+
+Main active UI paths:
+
+- `frontend-next/src/app/review-center/`
+- `frontend-next/src/components/review-center/`
+- `frontend-next/src/lib/api/review-center.ts`
+
+The old `frontend/` Vite dashboard is kept only as a legacy/reference implementation.
+
 ---
 
 ## Key Data Flows
@@ -120,8 +133,9 @@ run.py → IngestionPipeline.process_file()
   → create_reader() → iter_rows()
   → TransactionNormalizer.normalize() (field mappings → typed values)
   → Validator.validate() (field presence, types, duplicates)
-  → DataContainerRepository.insert_many() (batch 100)
+  → DataContainerRepository.insert_many() (configurable batch, default 20000)
   → StructuredLogger events throughout
+  → PostgreSQL COPY (when enabled) via asyncpg copy_records_to_table
 ```
 
 ### Reconciliation (canonical → matched results)
@@ -200,6 +214,48 @@ npm --prefix frontend-next run dev
 | `python run.py --run-job-now` | Trigger fetch job immediately |
 | `python run.py --list-jobs` | List scheduled jobs |
 
+## E2E Testing
+
+The project includes end-to-end test suites for two partner integrations:
+
+- **MOMO** — via `scripts/seeding/seed_momo_e2e.py` (wave-based phases, 20 records each)
+- **ZALOPAY** — via `scripts/seeding/seed_zalopay_100k.py` (100k records)
+
+### Seed Commands
+
+```bash
+# MOMO — Phase 1 (20 records)
+PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py reset
+
+# MOMO — Phase 2 (add 20 records with new file)
+PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py phase2
+
+# MOMO — Sprint 6 full setup
+PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py sprint6-setup
+
+# ZALOPAY — 100k records
+PYTHONPATH=. uv run python scripts/seeding/seed_zalopay_100k.py reset
+```
+
+### Pytest E2E Tests (require `--e2e` flag + running services)
+
+```bash
+# 20 records test (MOMO + ZALOPAY)
+uv run python -m pytest tests/test_e2e_20_records.py -v --e2e
+
+# 100k records test (MOMO + ZALOPAY)
+uv run python -m pytest tests/test_e2e_100k_records.py -v --e2e
+```
+
+### Makefile Shortcuts
+
+```bash
+make momo-e2e-reset         # Seed MOMO Phase 1
+make momo-e2e-phase2        # Add MOMO Phase 2
+make zalopay-e2e-reset      # Seed ZALOPAY 100k
+make momo-e2e-run           # Trigger MOMO automation job
+```
+
 ---
 
 ## API Surface
@@ -233,7 +289,9 @@ Application settings loaded from `.env` with two config classes:
 | `Settings` | `APP_` | `src/config/settings.py` |
 | `AnalysisConfig` | `AI_` | `src/analysis/config.py` |
 
-Key variables: `APP_MONGODB_URL`, `APP_DB_NAME`, `APP_LOG_LEVEL`, `AI_ENDPOINT`, `AI_MODEL`, `AI_API_KEY`.
+Key variables: `APP_MONGODB_URL`, `APP_POSTGRES_URL`, `APP_DB_NAME`, `APP_LOG_LEVEL`, `AI_ENDPOINT`, `AI_MODEL`, `AI_API_KEY`.
+
+Performance tuning variables: `APP_INGEST_BATCH_SIZE`, `APP_INGEST_WRITE_WORKERS`, `APP_RECON_PARTNER_BATCH_SIZE`, `APP_RECON_RESULT_BATCH_SIZE`, `APP_RECON_RESULT_WRITE_WORKERS`.
 
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for full reference.
 
@@ -268,7 +326,7 @@ The test suite covers: ingestion pipeline, file readers, normalizer, validator, 
 
 ## Docker
 
-`docker-compose.yml` defines: `mongodb`, `sftp`, `mongo-express`, `api`, `scheduler`.
+`docker-compose.yml` defines: `mongodb`, `postgres`, `sftp`, `mongo-express`, `api`, `scheduler`.
 
 See [docker/README.md](docker/README.md).
 
@@ -279,6 +337,6 @@ This repo has historically drifted between docs and code. Treat code as source o
 - CLI behavior must match `run.py`
 - Env vars must match `src/config/settings.py`, `src/analysis/config.py`, and `.env.example`
 - API routes must match `src/api/`
-- Frontend routes must match `frontend-next/src/app/`
+- dashboard route descriptions must match `frontend-next/src/app/` and active Review Center components
 
 If docs and code disagree, update docs or fix code in the same change.

@@ -56,6 +56,40 @@
   grid-auto-rows: 1fr;
 }
 
+.insightLoadingWrap {
+  display: grid;
+  gap: 14px;
+}
+
+.insightLoadingBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(240, 185, 11, 0.14);
+  background:
+    radial-gradient(circle at left, rgba(240, 185, 11, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12.5px;
+}
+
+.insightLoadingBanner strong {
+  color: #fff;
+  font-size: 12.5px;
+}
+
+.insightLoadingDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #f0b90b;
+  box-shadow: 0 0 0 rgba(240, 185, 11, 0.35);
+  animation: insightBeacon 1.4s ease-in-out infinite;
+}
+
 .insightCard,
 .insightEmpty {
   min-height: 220px;
@@ -79,8 +113,41 @@
   transition: var(--transition-smooth);
 }
 
+.insightCardEnter {
+  animation: insightCardEnter 320ms ease-out both;
+  animation-delay: var(--insight-enter-delay, 0ms);
+}
+
 .insightCard:hover {
   transform: translateY(-1px);
+}
+
+.insightSkeletonCard {
+  position: relative;
+  overflow: hidden;
+}
+
+.insightSkeletonCard::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.03) 35%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0.03) 65%,
+    transparent 100%
+  );
+  animation: insightShimmer 2.2s ease-in-out infinite;
+}
+
+.insightSkeletonMetrics {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
 }
 
 .insightColumnTitle {
@@ -557,6 +624,18 @@
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .insightCard,
+  .insightCardEnter,
+  .insightSkeletonCard::after,
+  .insightLoadingDot,
+  .skeletonPulse {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
 @media (max-width: 768px) {
   .desktopOnly {
     display: none;
@@ -585,6 +664,37 @@
   }
 }
 
+@keyframes insightShimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes insightCardEnter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes insightBeacon {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(240, 185, 11, 0.32);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 7px rgba(240, 185, 11, 0);
+    opacity: 1;
+  }
+}
+
 .skeletonPulse {
   animation: skeletonPulse 1.5s ease-in-out infinite;
 }
@@ -594,6 +704,12 @@
   background-color: rgba(255, 255, 255, 0.05);
   border-radius: 4px;
   margin-top: 4px;
+}
+
+.skeletonTitle {
+  height: 12px;
+  background-color: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
 }
 
 .commentTextarea {

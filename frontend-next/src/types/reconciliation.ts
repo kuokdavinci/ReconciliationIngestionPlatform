@@ -48,7 +48,8 @@ export interface ReconciliationRow {
   partnerAmount?: number;
   delta?: number;
   severity?: string;
-  reviewState?: ReviewRecord;
+  reviewState?: ReviewRecord | null;
+  [key: string]: any;
 }
 
 export interface InsightItem {

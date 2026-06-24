@@ -27,8 +27,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Apply indexes on startup
     from src.models.indexes import apply_indexes
-
     await apply_indexes(app.state.db)
+
+    # Initialize Postgres DB tables on startup
+    from src.models.postgres import init_postgres_db
+    await init_postgres_db(settings.postgres_url)
 
     yield
 

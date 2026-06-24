@@ -35,14 +35,20 @@ export function SummaryStripSkeleton() {
 
 export function InsightGridSkeleton() {
   return (
-    <div className={styles.insightColumns}>
-      {[1, 2, 3].map((col) => (
+    <div className={styles.insightLoadingWrap}>
+      <div className={styles.insightLoadingBanner}>
+        <span className={styles.insightLoadingDot}></span>
+        <strong>AI is synthesizing reconciliation signals</strong>
+        <span>Ranking the highest-impact operator cards for this batch.</span>
+      </div>
+      <div className={styles.insightColumns}>
+        {[1, 2, 3].map((col) => (
         <div key={col} className={styles.insightColumn}>
           <div className={styles.insightCards}>
-            {[1, 2].map((card) => (
+            {[1].map((card) => (
               <div
                 key={card}
-                className={`${styles.insightCard} ${styles.skeletonPulse}`}
+                className={`${styles.insightCard} ${styles.skeletonPulse} ${styles.insightSkeletonCard}`}
                 style={{ borderColor: "rgba(255, 255, 255, 0.05)", background: "rgba(0, 0, 0, 0.1)" }}
               >
                 <div className={styles.skeletonTitle} style={{ width: "40%" }}></div>
@@ -50,8 +56,14 @@ export function InsightGridSkeleton() {
                   <div className={styles.skeletonText} style={{ width: "100px", height: 18 }}></div>
                   <div className={styles.skeletonText} style={{ width: "60px" }}></div>
                 </div>
+                <div className={styles.insightSkeletonMetrics}>
+                  <div className={styles.skeletonText} style={{ width: "74px", height: 18 }}></div>
+                  <div className={styles.skeletonText} style={{ width: "92px", height: 18 }}></div>
+                  <div className={styles.skeletonText} style={{ width: "68px", height: 18 }}></div>
+                </div>
                 <div className={styles.skeletonText} style={{ width: "90%", height: 14, marginTop: 12 }}></div>
                 <div className={styles.skeletonText} style={{ width: "85%", height: 14 }}></div>
+                <div className={styles.skeletonText} style={{ width: "70%", height: 14 }}></div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: "auto" }}>
                   <div className={styles.skeletonText} style={{ width: "80px" }}></div>
                   <div className={styles.skeletonText} style={{ width: "50px", height: 16 }}></div>
@@ -60,7 +72,8 @@ export function InsightGridSkeleton() {
             ))}
           </div>
         </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }

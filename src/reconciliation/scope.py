@@ -51,6 +51,18 @@ async def classify_scope(
         )
     signals["sameDayFileCount"] = same_day_file_count
 
+    internal_db_record_count = 0
+    if reconciliation_date is not None:
+        start_of_day = reconciliation_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_day = reconciliation_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        internal_db_record_count = await db["internal_transaction"].count_documents(
+            {
+                "partner": partner,
+                "transactionTime": {"$gte": start_of_day, "$lte": end_of_day},
+            }
+        )
+    signals["internalDbRecordCount"] = internal_db_record_count
+
     if same_day_file_count > 0:
         reasons.append(
             f"{same_day_file_count} file(s) already exist for {partner} on this reconciliation date."
@@ -58,10 +70,24 @@ async def classify_scope(
         if hinted_scope == ReconciliationScopeType.REPLACEMENT:
             scope = ReconciliationScopeType.REPLACEMENT
             confidence = 0.9
-        else:
+        elif hinted_scope == ReconciliationScopeType.INCREMENTAL_APPEND:
             scope = ReconciliationScopeType.INCREMENTAL_APPEND
-            confidence = 0.8 if hinted_scope is None else 0.88
-            reasons.append("Multiple files on the same date are treated as additive until explicitly replaced.")
+            confidence = 0.88
+            reasons.append("Filename explicitly suggests a partial or additive batch.")
+        elif hinted_scope == ReconciliationScopeType.FULL_SNAPSHOT:
+            scope = ReconciliationScopeType.FULL_SNAPSHOT
+            confidence = 0.84
+            reasons.append("Filename still points to a daily snapshot, so multiple same-day files are treated as a replacement snapshot candidate.")
+        elif internal_db_record_count == 0:
+            scope = ReconciliationScopeType.FULL_SNAPSHOT
+            confidence = 0.82
+            reasons.append("No same-day internal rows exist yet, so the file is still more likely a full snapshot than an append batch.")
+        else:
+            scope = ReconciliationScopeType.UNCONFIRMED
+            confidence = 0.58
+            reasons.append(
+                "Another same-day file exists, but that alone is not enough to force append scope without filename or volume evidence."
+            )
     elif hinted_scope is not None:
         scope = hinted_scope
         confidence = 0.78

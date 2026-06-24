@@ -57,7 +57,7 @@ MongoDB-backed domain models, repositories, và index definitions.
 **Files:**
 
 | Model file | Collection | Purpose |
-|---|---|---|
+|---|---|---|---|
 | `reconciliation_file.py` | `reconciliation_file` | File metadata và processing status |
 | `data_container.py` | `data_container` | Partner canonical records |
 | `internal_transaction.py` | `internal_transaction` | Internal transaction records |
@@ -72,6 +72,7 @@ MongoDB-backed domain models, repositories, và index definitions.
 | `reconciliation_review_record.py` | `reconciliation_review_record` | Review notes và resolution state per record |
 | `repository.py` | — | Base repository class (`BaseRepository`) |
 | `indexes.py` | — | MongoDB index definitions và startup creation |
+| `postgres.py` | PostgreSQL tables | SQLAlchemy models: `PartnerTransactionTable`, `InternalTransactionTable`, `ReconciliationResultTable` |
 
 ### `src/pipeline`
 
@@ -168,4 +169,4 @@ Structured logging helpers.
 
 ---
 
-*Module analysis: 2026-06-23*
+*Module analysis: 2026-06-24*

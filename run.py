@@ -230,6 +230,12 @@ async def main():
     await apply_indexes(db)
     print("Indexes verified/applied successfully.")
 
+    # Initialize Postgres DB tables automatically on startup
+    from src.models.postgres import init_postgres_db
+    print("Initializing PostgreSQL database...")
+    await init_postgres_db(settings.postgres_url)
+    print("PostgreSQL database initialized successfully.")
+
     # Reconciliation mode
     is_reconcile = args.reconcile is not None
     if is_reconcile:

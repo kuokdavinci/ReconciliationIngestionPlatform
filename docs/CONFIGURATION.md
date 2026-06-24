@@ -17,12 +17,21 @@ Loaded by `src/config/settings.py`.
 |----------|---------|---------|
 | `APP_MONGODB_URL` | `mongodb://localhost:27017` | MongoDB connection string |
 | `APP_DB_NAME` | `reconciliation` | Database name |
+| `APP_POSTGRES_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5432/reconciliation` | PostgreSQL connection string (asyncpg) |
 | `APP_LOG_LEVEL` | `INFO` | Log level |
 | `APP_LOG_FORMAT` | `json` | Log output format |
 | `APP_APP_NAME` | `reconciliation-ingestion` | Service name |
 | `APP_STRICT_MAPPING_APPROVAL_ENABLED` | `true` | Controls strict mapping approval behavior in runtime settings |
+| `APP_UPLOAD_TMP_DIR` | `./scratch/temp_uploads` | Temporary upload directory |
+| `APP_INGEST_BATCH_SIZE` | `20000` | Ingestion MongoDB batch insert size |
+| `APP_INGEST_WRITE_WORKERS` | `2` | Parallel write workers for ingestion |
+| `APP_INGEST_ORDERED_INSERT` | `false` | Ordered vs unordered MongoDB inserts during ingestion |
+| `APP_RECON_PARTNER_BATCH_SIZE` | `10000` | Partner record batch size for reconciliation streaming |
+| `APP_RECON_RESULT_BATCH_SIZE` | `20000` | Result write batch size for reconciliation |
+| `APP_RECON_RESULT_WRITE_WORKERS` | `2` | Parallel write workers for reconciliation results |
+| `APP_RECON_RESULT_ORDERED_INSERT` | `false` | Ordered vs unordered MongoDB inserts for reconciliation results |
 
-No new env vars have been added. The `Settings` class in `src/config/settings.py` (24 lines) remains stable with only these 6 fields.
+The `Settings` class in `src/config/settings.py` (40 lines) has been extended with PostgreSQL URL and performance tuning configurations.
 
 ## AI Analysis Settings
 
@@ -75,6 +84,7 @@ These are not loaded by `BaseSettings` directly unless referenced by code or con
 `docker-compose.yml` overrides or wires:
 
 - `APP_MONGODB_URL` for `api` and `scheduler`
+- `APP_POSTGRES_URL` pointing to the `postgres` service for `api` and `scheduler`
 - `SFTP_HOST=sftp` for the scheduler container
 - MongoDB root credentials for the database and Mongo Express
 
@@ -177,8 +187,31 @@ MongoDB indexes are defined centrally in `src/models/indexes.py` and applied on 
 | `reconciliation_run` | `partner+date+createdAt` | Manual run tracking |
 | `reconciliation_review_record` | `partner+date+recordKey` (unique) | Review record lookup |
 
+## PostgreSQL Database
+
+The platform supports PostgreSQL for transactional data storage alongside MongoDB. The PostgreSQL instance is defined in `docker-compose.yml` and initialized via `src/models/postgres.py`.
+
+### Tables
+
+| Table | Purpose |
+|-------|---------|
+| `partner_transaction` | Partner canonical records from ingestion (UNLOGGED for performance) |
+| `internal_transaction` | Internal/backend transaction records (UNLOGGED for performance) |
+| `reconciliation_result` | Reconciliation match/mismatch results |
+
+### Performance Optimization
+
+PostgreSQL tables `partner_transaction` and `internal_transaction` are created as `UNLOGGED` tables to bypass WAL write-ahead logging, reducing disk I/O during bulk ingestion. This is safe because these tables are staging/transactional data that can be rebuilt from source files.
+
+In-database reconciliation uses SQL joins (`INSERT ... SELECT ... LEFT JOIN` with `CASE WHEN`) instead of Python in-memory matching, achieving ~3x speedup over the MongoDB path (see [INGEST_RECON_TRACE.md](INGEST_RECON_TRACE.md)).
+
+### PostgreSQL Env Vars
+
+- `APP_POSTGRES_URL` — Connection string (default: `postgresql+asyncpg://postgres:postgres@localhost:5432/reconciliation`)
+
 ## Notes on Drift
 
 - Keep docs synchronized with settings classes first, then with example env files.
 - `partner_runtime_run` and `post_approval_run` collections overlap in purpose — `partner_runtime_run` is the unified tracking model while `post_approval_run` is specific to the post-approval reprocess flow. Both should be kept consistent in status semantics.
 - `reconciliation_run` (`src/models/reconciliation_run.py`) is a lightweight run tracker distinct from `partner_runtime_run` — it only tracks manually triggered reconciliation runs without the fetch/ingest stages.
+- PostgreSQL is used for bulk transactional processing (ingestion + reconciliation); MongoDB remains the source of truth for mapping configs, review packets, fetch configs, and audit events.

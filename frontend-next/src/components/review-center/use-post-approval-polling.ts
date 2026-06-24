@@ -15,11 +15,17 @@ export function usePostApprovalPolling({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const inFlightRef = useRef(false);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   const stopPolling = useCallback(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
+    }
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
   }, []);
 
@@ -29,6 +35,8 @@ export function usePostApprovalPolling({
     setError(null);
 
     const tick = async () => {
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
       try {
         const response = await api.getPostApproveRun(id);
         if (response.run) {
@@ -44,12 +52,47 @@ export function usePostApprovalPolling({
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Polling failed");
+      } finally {
+        inFlightRef.current = false;
       }
     };
 
     void tick();
-    intervalRef.current = setInterval(() => { void tick(); }, 1500);
+    intervalRef.current = setInterval(() => { void tick(); }, 750);
   }, [stopPolling, onCompleted]);
+
+  const startEventStream = useCallback((id: string) => {
+    if (eventSourceRef.current) return;
+    try {
+      const source = api.openPostApproveRunStream(id);
+      eventSourceRef.current = source;
+      source.addEventListener("post_approval_run", (event) => {
+        const message = JSON.parse((event as MessageEvent).data || "{}");
+        const streamedRun = (message.run || null) as PostApprovalRun | null;
+        if (!streamedRun) return;
+        setRun(streamedRun);
+        setLoading(false);
+        setError(null);
+        if (streamedRun.status === "COMPLETED" || streamedRun.status === "FAILED") {
+          stopPolling();
+          if (streamedRun.status === "COMPLETED") onCompleted?.();
+        }
+      });
+      source.onerror = () => {
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+        if (!intervalRef.current) {
+          startPolling(id);
+        }
+      };
+    } catch {
+      if (!intervalRef.current) {
+        startPolling(id);
+      }
+    }
+  }, [onCompleted, startPolling, stopPolling]);
 
   useEffect(() => {
     if (!enabled || !packetId) return;
@@ -62,11 +105,11 @@ export function usePostApprovalPolling({
           polledRun.status === "INGESTING" ||
           polledRun.status === "RECONCILING"
         ) {
-          startPolling(packetId);
+          startEventStream(packetId);
         }
       }
     }).catch(() => {});
-  }, [enabled, packetId, startPolling]);
+  }, [enabled, packetId, startEventStream]);
 
   useEffect(() => {
     return () => stopPolling();

@@ -24,6 +24,8 @@ from src.config.cache import ConfigCache
 from src.config.validator import ConfigValidator
 from src.core.enums import FileType
 from scripts.seeding.seed_zalopay_100k import (
+    AMOUNT_MISMATCH_INDICES,
+    MISSING_PARTNER_INDICES,
     _partner_file_path_for_day,
     _write_partner_file,
     _seed_internal,
@@ -34,6 +36,8 @@ from scripts.seeding.seed_zalopay_100k import (
 
 PARTNER = "ZALOPAY"
 NUM_RECORDS = 100000
+EXPECTED_PARTNER_ROWS = NUM_RECORDS - len(MISSING_PARTNER_INDICES)
+EXPECTED_RECON_RESULTS = NUM_RECORDS
 
 BATCH_SIZES = [5000, 10000, 20000, 50000, 100000]
 WORKERS = [1, 2, 4]
@@ -95,6 +99,12 @@ async def benchmark_matrix():
     day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     print("=== SEEDING DATABASE FOR BENCHMARK ===")
+    print(
+        f"Scenario: internal={NUM_RECORDS}, partner_rows={EXPECTED_PARTNER_ROWS}, "
+        f"missing_partner={len(MISSING_PARTNER_INDICES)}, "
+        f"amount_mismatch={len(AMOUNT_MISMATCH_INDICES)}, "
+        f"expected_reconciliation_results={EXPECTED_RECON_RESULTS}"
+    )
     path = _partner_file_path_for_day(day)
     _write_partner_file(path, day, NUM_RECORDS)
     await _cleanup_existing_run_data(db)
@@ -155,7 +165,7 @@ async def benchmark_matrix():
 
                 perf = _parse_perf_log(buf.getvalue(), "PERF_INGEST")
                 rate = res.stats.total_rows / runtime if runtime > 0 else 0
-                correct = res.stats.total_rows == 99997
+                correct = res.stats.total_rows == EXPECTED_PARTNER_ROWS
                 errors = res.stats.failed_rows
 
                 results.append(
@@ -244,7 +254,7 @@ async def benchmark_matrix():
 
                 perf = _parse_perf_log(buf.getvalue(), "PERF_RECON")
                 rate = len(recon_results) / runtime if runtime > 0 else 0
-                correct = len(recon_results) == 100004
+                correct = len(recon_results) == EXPECTED_RECON_RESULTS
 
                 # Count duplicates in results
                 txn_ids = [r.partner_txn_id if hasattr(r, "partner_txn_id") else r.get("partnerTxnId") for r in recon_results]

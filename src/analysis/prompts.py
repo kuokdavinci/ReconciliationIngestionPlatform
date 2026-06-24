@@ -47,9 +47,11 @@ An insight is **poor** when it:
 3. Output MUST be valid JSON — no markdown, no prose outside JSON.
 4. Each insight must include: type, severity, title, description, affected_count, recommendation.
 5. Do NOT reference specific transaction IDs or individual amounts — only use ranges and totals.
-6. Generate 1-4 findings per analysis. Zero findings is acceptable when data is clean.
+6. Generate AT MOST 1 finding per analysis. Zero findings is acceptable when data is clean.
 7. If there are multiple findings, ORDER them by business impact (most critical first).
 8. **CRITICAL: Use the exact `mismatch_rate` value from Summary Metrics.** Do NOT recompute mismatch rate from the grouped stats or by_status counts. The `mismatch_rate` in Summary Metrics is the authoritative ground truth. If you need to reference mismatch rate in a finding, use that exact number.
+9. Treat each response as an operator card, not a raw anomaly list. Merge closely related signals into one synthesized finding when they point to the same operational action.
+10. Prefer breadth over fragmentation: one strong finding that covers the dominant pattern is better than several narrow findings.
 
 ## Severity Guidelines
 
@@ -94,6 +96,13 @@ Return a JSON object with a single key "findings" containing an array of insight
   ]
 }
 ```
+
+## Operator Card Rules
+1. Return no more than one finding for this request.
+2. That finding should summarize the highest-value operator takeaway for the requested focus.
+3. If several symptoms share the same next action, merge them into one finding instead of listing them separately.
+4. Use the description to mention supporting secondary signals briefly, rather than creating extra findings.
+5. Recommendations must be phrased as the next operational move, not as a generic investigation note.
 
 ## Title and Scanning Rules
 1. Make the `title` extremely concise, short (maximum 4-6 words), and scan-friendly.
@@ -330,6 +339,8 @@ def build_analysis_prompt(analysis_input: AnalysisInput) -> str:
         "Now analyze the data above and return your findings as a JSON object "
         'with a "findings" array. Follow the system prompt\'s quality rubric — '
         "quantify impact, identify patterns, and give specific recommendations. "
+        "Return at most one synthesized operator card for this focus. "
+        "If multiple symptoms point to the same action, merge them into that single finding and mention the supporting signals in the description. "
         "If the data is clean (no significant mismatches), return an empty findings array.",
     ]
 

@@ -502,7 +502,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         message="Invalidating insight cache after reconciliation.",
         output_file_id=str(ingestion_result.file_record.id),
         reconciliation_count=len(recon_results),
-        stats=result["stats"],
+        stats={**result["stats"], "resultCount": len(recon_results), "reconciliationCount": len(recon_results)},
     )
 
     invalidated = await invalidate_insight_cache(
@@ -525,7 +525,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         finished_at=datetime.now(timezone.utc),
         output_file_id=str(ingestion_result.file_record.id),
         reconciliation_count=len(recon_results),
-        stats=result["stats"],
+        stats={**result["stats"], "resultCount": len(recon_results), "reconciliationCount": len(recon_results)},
         errors=ingestion_result.errors,
     )
     await update_runtime_run(

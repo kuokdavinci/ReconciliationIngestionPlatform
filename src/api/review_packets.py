@@ -1,9 +1,12 @@
 """Approval desk review packet endpoints."""
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
@@ -38,6 +41,152 @@ from src.services.runtime_validation import (
 
 
 router = APIRouter(prefix="/api/v1/review-packets")
+
+
+def _normalized_filename_tokens(file_name: str) -> str:
+    return str(file_name or "").strip().lower()
+
+
+def _scope_probabilities(
+    *,
+    file_name: str,
+    internal_count: int,
+    received_count: int,
+) -> tuple[dict[str, float], str, str]:
+    lowered = _normalized_filename_tokens(file_name)
+    replacement_tokens = ("replace", "replacement", "rerun", "retry", "resend", "correct", "correction")
+    incremental_tokens = ("part", "batch", "delta", "append", "supplement", "wave")
+    snapshot_tokens = ("full", "final", "daily", "settlement")
+
+    if any(token in lowered for token in replacement_tokens):
+        return (
+            {"FULL_SNAPSHOT": 0.08, "INCREMENTAL_APPEND": 0.12, "REPLACEMENT": 0.8},
+            "REPLACEMENT",
+            "Filename contains replacement/correction hints, so this file is most likely intended to overwrite existing rows.",
+        )
+
+    if received_count <= 0:
+        return (
+            {"FULL_SNAPSHOT": 0.34, "INCREMENTAL_APPEND": 0.33, "REPLACEMENT": 0.33},
+            "FULL_SNAPSHOT",
+            "No reliable row-count signal was available, so the suggestion stays conservative.",
+        )
+
+    if internal_count <= 0:
+        return (
+            {"FULL_SNAPSHOT": 0.9, "INCREMENTAL_APPEND": 0.07, "REPLACEMENT": 0.03},
+            "FULL_SNAPSHOT",
+            "There are no same-day internal rows yet, so the incoming file is most likely the day snapshot.",
+        )
+
+    larger = max(internal_count, received_count)
+    diff = abs(internal_count - received_count)
+    diff_ratio = diff / larger if larger > 0 else 0.0
+
+    if any(token in lowered for token in snapshot_tokens) and diff_ratio <= 0.2:
+        return (
+            {"FULL_SNAPSHOT": 0.86, "INCREMENTAL_APPEND": 0.1, "REPLACEMENT": 0.04},
+            "FULL_SNAPSHOT",
+            "Filename hints at a day snapshot and the row counts are still in the same operating range, so full snapshot remains the best fit.",
+        )
+
+    # Allow small count gaps in large files without downgrading to append.
+    full_snapshot_tolerance = max(10, int(larger * 0.05))
+    if diff <= full_snapshot_tolerance or diff_ratio <= 0.05:
+        return (
+            {"FULL_SNAPSHOT": 0.82, "INCREMENTAL_APPEND": 0.14, "REPLACEMENT": 0.04},
+            "FULL_SNAPSHOT",
+            "Received and internal counts are close enough that a few missing or mismatched rows still fit a full snapshot scenario.",
+        )
+
+    if any(token in lowered for token in incremental_tokens):
+        return (
+            {"FULL_SNAPSHOT": 0.12, "INCREMENTAL_APPEND": 0.82, "REPLACEMENT": 0.06},
+            "INCREMENTAL_APPEND",
+            "Filename indicates a partial batch or delta feed, so append is the most likely scope.",
+        )
+
+    if received_count < internal_count * 0.8:
+        return (
+            {"FULL_SNAPSHOT": 0.18, "INCREMENTAL_APPEND": 0.72, "REPLACEMENT": 0.1},
+            "INCREMENTAL_APPEND",
+            "The incoming file is materially smaller than the same-day internal population, which is more consistent with a partial append batch.",
+        )
+
+    return (
+        {"FULL_SNAPSHOT": 0.62, "INCREMENTAL_APPEND": 0.28, "REPLACEMENT": 0.1},
+        "FULL_SNAPSHOT",
+        "The file does not show strong incremental or replacement signals, so the default recommendation leans toward a full-day snapshot.",
+    )
+
+
+def _normalize_scope_probabilities(raw: object) -> dict[str, float]:
+    default = {
+        "FULL_SNAPSHOT": 0.34,
+        "INCREMENTAL_APPEND": 0.33,
+        "REPLACEMENT": 0.33,
+    }
+    if not isinstance(raw, dict):
+        return default
+
+    normalized = {
+        "FULL_SNAPSHOT": float(raw.get("FULL_SNAPSHOT", 0.0) or 0.0),
+        "INCREMENTAL_APPEND": float(raw.get("INCREMENTAL_APPEND", 0.0) or 0.0),
+        "REPLACEMENT": float(raw.get("REPLACEMENT", 0.0) or 0.0),
+    }
+    total = sum(max(v, 0.0) for v in normalized.values())
+    if total <= 0:
+        return default
+    return {key: max(value, 0.0) / total for key, value in normalized.items()}
+
+
+def _apply_scope_guardrails(
+    *,
+    ai_scope: str,
+    ai_probabilities: dict[str, float],
+    ai_reasoning: str,
+    heuristic_scope: str,
+    heuristic_probabilities: dict[str, float],
+    heuristic_reasoning: str,
+    internal_count: int,
+    received_count: int,
+    file_name: str,
+) -> tuple[dict[str, float], str, str, str]:
+    lowered = _normalized_filename_tokens(file_name)
+    incremental_tokens = ("part", "batch", "delta", "append", "supplement", "wave")
+    larger = max(internal_count, received_count, 1)
+    diff = abs(internal_count - received_count)
+    diff_ratio = diff / larger
+
+    # Guardrail 1: large files with small gaps should not be forced into append.
+    if ai_scope == "INCREMENTAL_APPEND" and (
+        (larger >= 10_000 and diff_ratio <= 0.05)
+        or (larger >= 100_000 and diff <= max(10, int(larger * 0.01)))
+    ):
+        return (
+            heuristic_probabilities,
+            heuristic_scope,
+            (
+                f"{ai_reasoning} Guardrail override applied: count gap is too small relative to file size "
+                "to treat this as a confident append-only batch."
+            ).strip(),
+            "guardrail_override_small_gap",
+        )
+
+    # Guardrail 2: append should have an explicit signal when same-day counts are already close.
+    if ai_scope == "INCREMENTAL_APPEND" and diff_ratio <= 0.2 and not any(
+        token in lowered for token in incremental_tokens
+    ):
+        return (
+            heuristic_probabilities,
+            heuristic_scope,
+            (
+                f"{ai_reasoning} Guardrail override applied: append is not strongly supported by filename or volume delta."
+            ).strip(),
+            "guardrail_override_weak_append_signal",
+        )
+
+    return ai_probabilities, ai_scope, ai_reasoning, "llm"
 
 
 def _get_db(request: Request):
@@ -138,6 +287,43 @@ async def get_post_approve_run(request: Request, packet_id: str):
     if run is None:
         raise HTTPException(status_code=404, detail="Post-approval run not found.")
     return {"run": serialize_post_approval_run(run)}
+
+
+@router.get("/{packet_id}/post-approve-run/stream")
+async def stream_post_approve_run(request: Request, packet_id: str):
+    repo = PostApprovalRunRepository(_get_db(request))
+
+    async def event_stream():
+        last_signature: str | None = None
+        while True:
+            if await request.is_disconnected():
+                break
+
+            run = await repo.find_latest_by_packet_id(packet_id)
+            if run is not None:
+                payload = serialize_post_approval_run(run)
+                signature = json.dumps(payload, sort_keys=True, default=str)
+                if signature != last_signature:
+                    last_signature = signature
+                    yield f"event: post_approval_run\ndata: {json.dumps({'run': payload})}\n\n"
+                if payload.get("status") in {"COMPLETED", "FAILED"}:
+                    break
+            else:
+                if last_signature != "not_found":
+                    last_signature = "not_found"
+                    yield "event: heartbeat\ndata: {}\n\n"
+
+            await asyncio.sleep(0.4)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 async def _next_pending_version(request: Request, partner: str) -> str:
@@ -626,62 +812,6 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str, force:
     if packet is None:
         raise HTTPException(status_code=404, detail="Review packet not found.")
         
-    # Optimization: If scope is already classified and force is False, return it directly
-    if getattr(packet, "scope_type", None) and not force:
-        suggested = packet.scope_type
-        probs = {
-            "FULL_SNAPSHOT": 1.0 if suggested == "FULL_SNAPSHOT" else 0.0,
-            "INCREMENTAL_APPEND": 1.0 if suggested == "INCREMENTAL_APPEND" else 0.0,
-            "REPLACEMENT": 1.0 if suggested == "REPLACEMENT" else 0.0,
-        }
-        db = _get_db(request)
-        recon_date = getattr(packet, "reconciliation_date", None)
-        if not recon_date:
-            match = re.search(r'(\d{4})[-_]?(\d{2})[-_]?(\d{2})', packet.file_name)
-            if match:
-                try:
-                    recon_date = datetime.strptime(f"{match.group(1)}-{match.group(2)}-{match.group(3)}", "%Y-%m-%d")
-                except ValueError:
-                    recon_date = datetime.utcnow()
-            else:
-                recon_date = datetime.utcnow()
-                
-        start_of_day = datetime.combine(recon_date, datetime_time.min)
-        end_of_day = datetime.combine(recon_date, datetime_time.max)
-        
-        internal_count = await db["internal_transaction"].count_documents({
-            "partner": packet.partner,
-            "transactionTime": {
-                "$gte": start_of_day,
-                "$lte": end_of_day
-            }
-        })
-        
-        received_count = 0
-        source_file_path = getattr(packet, "source_file_path", None)
-        if source_file_path and os.path.exists(source_file_path):
-            try:
-                mapping_repo = MappingConfigRepository(db)
-                config = None
-                if packet.draft_mapping_id:
-                    config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
-                with create_reader(source_file_path, config) as reader:
-                    received_count = sum(1 for _ in reader.iter_rows())
-            except Exception as exc:
-                logger.error(f"Error counting rows in file: {exc}")
-                received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
-        else:
-            received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
-
-        return {
-            "ok": True,
-            "internalDbRecordCount": internal_count,
-            "receivedRecordCount": received_count,
-            "probabilities": probs,
-            "suggestedScope": suggested,
-            "reasoning": getattr(packet, "scope_reason", None) or "Reused previously computed scope from review packet."
-        }
-
     db = _get_db(request)
     
     # 1. Determine date
@@ -725,71 +855,101 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str, force:
     else:
         received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
         
-    # 4. Invoke LLM for classification probabilities
+    heuristic_probabilities, heuristic_scope, heuristic_reasoning = _scope_probabilities(
+        file_name=packet.file_name,
+        internal_count=internal_count,
+        received_count=received_count,
+    )
+
     llm_provider = create_provider(AnalysisConfig())
     system_prompt = (
-        "You are an expert reconciliation assistant. Your task is to analyze the file metadata and database status "
-        "and classify the reconciliation file scope. You must respond ONLY with a valid JSON object."
+        "You are an expert reconciliation analyst. "
+        "Classify file scope for review workflow. "
+        "You must return valid JSON only."
     )
-    
-    prompt = f"""Classify the reconciliation file's scope into one of these types:
-1. FULL_SNAPSHOT: The file contains the full set of transactions for the day, replacing the existing state. Usually if internal DB has 0 records, or matches the file count.
-2. INCREMENTAL_APPEND: The file contains a new batch/wave of transactions for the day, to be appended to existing ones. Usually if internal DB already has records and this file adds more.
-3. REPLACEMENT: The file contains corrections/retry records for transactions that already exist, which should overwrite them.
+    prompt = f"""Decide the most likely reconciliation file scope.
+
+Valid classes:
+- FULL_SNAPSHOT: the file likely represents the partner's full-day snapshot, even if a few rows are missing or mismatched.
+- INCREMENTAL_APPEND: the file is likely only a partial/additive batch.
+- REPLACEMENT: the file likely corrects or replaces previously seen rows.
+
+Important guidance:
+- For large files, a small row-count gap does NOT by itself disqualify FULL_SNAPSHOT.
+- Example: 100000 internal rows vs 99997 partner rows can still be FULL_SNAPSHOT when the missing rows are ordinary reconciliation discrepancies.
+- Do not over-weight same-day file count alone.
+- Use filename hints, relative volume difference, and operational plausibility together.
 
 Metadata:
 - Partner: {packet.partner}
 - File Name: {packet.file_name}
 - Received Record Count: {received_count}
 - Internal DB Record Count (same day): {internal_count}
+- Absolute Count Gap: {abs(internal_count - received_count)}
+- Relative Count Gap: {abs(internal_count - received_count) / max(internal_count, received_count, 1):.6f}
+- Heuristic Baseline Suggestion: {heuristic_scope}
+- Heuristic Baseline Reasoning: {heuristic_reasoning}
 
-Analyze the filename hints (e.g., words like 'append', 'snapshot', 'replace', 'delta', 'correction', 'retry') and compare Received Record Count vs Internal DB Record Count.
-Return a JSON object containing:
-- probabilities: a dictionary with keys "FULL_SNAPSHOT", "INCREMENTAL_APPEND", "REPLACEMENT" and float values (probabilities summing to 1.0 or 100%)
-- suggested_scope: one of the three category strings
-- reasoning: a brief explanation in English
-
-JSON format:
+Return JSON:
 {{
   "probabilities": {{
-    "FULL_SNAPSHOT": 0.8,
-    "INCREMENTAL_APPEND": 0.15,
-    "REPLACEMENT": 0.05
+    "FULL_SNAPSHOT": 0.0,
+    "INCREMENTAL_APPEND": 0.0,
+    "REPLACEMENT": 0.0
   }},
   "suggested_scope": "FULL_SNAPSHOT",
-  "reasoning": "<explanation>"
+  "reasoning": "short explanation"
 }}
 """
-    try:
-        response_text = await llm_provider.generate(prompt=prompt, system_prompt=system_prompt)
-        clean_text = response_text.strip()
-        if clean_text.startswith("```"):
-            parts = clean_text.split("```")
-            if len(parts) >= 3:
-                clean_text = parts[1]
-                if clean_text.startswith("json"):
-                    clean_text = clean_text[4:]
-        clean_text = clean_text.strip()
-        result = json.loads(clean_text)
-    except Exception as exc:
-        logger.error(f"LLM classification failed: {exc}")
-        result = {
-            "probabilities": {
-                "FULL_SNAPSHOT": 0.34,
-                "INCREMENTAL_APPEND": 0.33,
-                "REPLACEMENT": 0.33
-            },
-            "suggested_scope": "FULL_SNAPSHOT",
-            "reasoning": f"Fallback suggestion due to LLM error: {str(exc)}"
-        }
+
+    resolution = "rule_based"
+    probabilities = heuristic_probabilities
+    suggested_scope = heuristic_scope
+    reasoning = heuristic_reasoning
+    response_text = await llm_provider.generate(prompt=prompt, system_prompt=system_prompt)
+    if response_text:
+        try:
+            clean_text = response_text.strip()
+            if clean_text.startswith("```"):
+                parts = clean_text.split("```")
+                if len(parts) >= 3:
+                    clean_text = parts[1]
+                    if clean_text.startswith("json"):
+                        clean_text = clean_text[4:]
+            clean_text = clean_text.strip()
+            parsed = json.loads(clean_text)
+            ai_probabilities = _normalize_scope_probabilities(parsed.get("probabilities"))
+            ai_scope = str(parsed.get("suggested_scope") or heuristic_scope).strip().upper()
+            if ai_scope not in {"FULL_SNAPSHOT", "INCREMENTAL_APPEND", "REPLACEMENT"}:
+                ai_scope = heuristic_scope
+            ai_reasoning = str(parsed.get("reasoning") or heuristic_reasoning).strip()
+            probabilities, suggested_scope, reasoning, resolution = _apply_scope_guardrails(
+                ai_scope=ai_scope,
+                ai_probabilities=ai_probabilities,
+                ai_reasoning=ai_reasoning,
+                heuristic_scope=heuristic_scope,
+                heuristic_probabilities=heuristic_probabilities,
+                heuristic_reasoning=heuristic_reasoning,
+                internal_count=internal_count,
+                received_count=received_count,
+                file_name=packet.file_name,
+            )
+        except Exception as exc:
+            logger.warning(f"Scope classification JSON parse failed: {exc}")
         
     return {
         "ok": True,
         "internalDbRecordCount": internal_count,
         "receivedRecordCount": received_count,
-        "probabilities": result.get("probabilities", {}),
-        "suggestedScope": result.get("suggested_scope", "FULL_SNAPSHOT"),
-        "reasoning": result.get("reasoning", "")
+        "probabilities": probabilities,
+        "suggestedScope": suggested_scope,
+        "reasoning": reasoning,
+        "resolution": resolution,
+        "heuristicBaseline": {
+            "suggestedScope": heuristic_scope,
+            "probabilities": heuristic_probabilities,
+            "reasoning": heuristic_reasoning,
+        },
     }
 
 

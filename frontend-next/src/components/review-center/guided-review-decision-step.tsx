@@ -26,6 +26,31 @@ export function GuidedReviewDecisionStep({
   onBack,
   onClose,
 }: Props) {
+  const stageOrder = ["approval", "ingestion", "reconciliation", "cache_invalidation"] as const;
+  const currentStageIndex = postApprovalRun?.stage ? stageOrder.indexOf(postApprovalRun.stage) : -1;
+  const stageItems = [
+    {
+      key: "approval",
+      title: "Approve Mapping",
+      description: "Persisting the operator decision and scheduling background processing.",
+    },
+    {
+      key: "ingestion",
+      title: "Ingest Partner File",
+      description: "Importing partner transactions into database.",
+    },
+    {
+      key: "reconciliation",
+      title: "Run Reconciliation",
+      description: "Computing discrepancies and matching transactions.",
+    },
+    {
+      key: "cache_invalidation",
+      title: "Refresh Insight Cache",
+      description: "Publishing updated results and insight views.",
+    },
+  ] as const;
+
   return (
     <div className={styles.modalSection}>
       <h4 className={styles.modalTitle}>Decision</h4>
@@ -85,46 +110,36 @@ export function GuidedReviewDecisionStep({
             </div>
           </div>
 
-          <div className={styles.progressCard}>
-            <div className={styles.progressHeader}>
-              <div>
-                <h5 className={styles.progressTitle}>Ingest Partner File</h5>
-                <p className={styles.progressCopy}>Importing partner transactions into database.</p>
-              </div>
-              {postApprovalRun?.stage === "approval" ? (
-                <Badge severity="neutral">Queued</Badge>
-              ) : postApprovalRun?.stage === "ingestion" && postApprovalRun?.status !== "COMPLETED" && postApprovalRun?.status !== "FAILED" ? (
-                <div className={styles.spinner} />
-              ) : postApprovalRun?.status === "FAILED" && postApprovalRun?.stage === "ingestion" ? (
-                <Badge severity="critical">Failed</Badge>
-              ) : (
-                <Badge severity="low">Done</Badge>
-              )}
-            </div>
-          </div>
+          {stageItems.map((item, index) => {
+            const isCurrent = postApprovalRun?.stage === item.key && postApprovalRun?.status !== "COMPLETED" && postApprovalRun?.status !== "FAILED";
+            const isDone = postApprovalRun?.status === "COMPLETED" || (currentStageIndex >= 0 && index < currentStageIndex);
+            const isFailed = postApprovalRun?.status === "FAILED" && postApprovalRun?.stage === item.key;
 
-          <div className={styles.progressCard}>
-            <div className={styles.progressHeader}>
-              <div>
-                <h5 className={styles.progressTitle}>Run Reconciliation</h5>
-                <p className={styles.progressCopy}>Computing discrepancies and matching transactions.</p>
+            return (
+              <div key={item.key} className={styles.progressCard}>
+                <div className={styles.progressHeader}>
+                  <div>
+                    <h5 className={styles.progressTitle}>{item.title}</h5>
+                    <p className={styles.progressCopy}>{item.description}</p>
+                  </div>
+                  {isFailed ? (
+                    <Badge severity="critical">Failed</Badge>
+                  ) : isCurrent ? (
+                    <div className={styles.spinner} />
+                  ) : isDone ? (
+                    <Badge severity="low">Done</Badge>
+                  ) : (
+                    <Badge severity="neutral">Queued</Badge>
+                  )}
+                </div>
               </div>
-              {postApprovalRun?.status === "COMPLETED" ? (
-                <Badge severity="low">Done</Badge>
-              ) : postApprovalRun?.status === "FAILED" && postApprovalRun?.stage === "reconciliation" ? (
-                <Badge severity="critical">Failed</Badge>
-              ) : postApprovalRun?.stage === "reconciliation" ? (
-                <div className={styles.spinner} />
-              ) : (
-                <Badge severity="neutral">Queued</Badge>
-              )}
-            </div>
-          </div>
+            );
+          })}
 
           {postApprovalRun?.stats && Object.keys(postApprovalRun.stats).length > 0 && (
             <div className={styles.sectionCard}>
               <h5 className={styles.sectionCardTitle}>Processed Row Counts</h5>
-              <div className={styles.metricGrid} style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+              <div className={styles.metricGrid} style={{ gridTemplateColumns: "repeat(5, 1fr)" }}>
                 <div className={styles.metricCard}>
                   <div className={styles.metricLabel} style={{ fontSize: "10px" }}>Total Rows</div>
                   <div className={styles.metricValue} style={{ fontSize: "20px" }}>{postApprovalRun.stats.totalRows ?? 0}</div>
@@ -136,6 +151,14 @@ export function GuidedReviewDecisionStep({
                 <div className={styles.metricCard}>
                   <div className={styles.metricLabel} style={{ fontSize: "10px" }}>Failed Rows</div>
                   <div className={styles.metricValue} style={{ fontSize: "20px", color: "#ef4444" }}>{postApprovalRun.stats.failedRows ?? 0}</div>
+                </div>
+                <div className={styles.metricCard}>
+                  <div className={styles.metricLabel} style={{ fontSize: "10px" }}>Recon Results</div>
+                  <div className={styles.metricValue} style={{ fontSize: "20px" }}>{postApprovalRun.stats.resultCount ?? 0}</div>
+                </div>
+                <div className={styles.metricCard}>
+                  <div className={styles.metricLabel} style={{ fontSize: "10px" }}>Recon Count</div>
+                  <div className={styles.metricValue} style={{ fontSize: "20px" }}>{postApprovalRun.stats.reconciliationCount ?? postApprovalRun.reconciliationCount ?? 0}</div>
                 </div>
               </div>
             </div>

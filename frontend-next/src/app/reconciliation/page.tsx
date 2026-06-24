@@ -22,6 +22,7 @@ import { useReconciliationStore } from "@/lib/state/reconciliation-store";
 import { useToast } from "@/components/ui/toast";
 import * as api from "@/lib/api/reconciliation";
 import styles from "@/components/reconciliation/reconciliation.module.css";
+import { ReviewRecord, ReconciliationRow } from "@/types/reconciliation";
 
 const PARTNER = "MOMO";
 const DATE = new Date().toISOString().slice(0, 10);
@@ -62,6 +63,7 @@ export default function ReconciliationPage() {
   const [reviewFilter, setReviewFilter] = useState("all");
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchType, setBatchType] = useState<"APPROVE" | "FLAG">("APPROVE");
+  const [previewRows, setPreviewRows] = useState<ReconciliationRow[]>([]);
 
   const tableTypeOptions = [
     { value: "all", label: "All Records" },
@@ -91,16 +93,24 @@ export default function ReconciliationPage() {
 
   const handleSilentRefresh = useCallback(async () => {
     try {
-      const [statsRes, resultsRes, reviewRecordsRes] = await Promise.all([
+      const [statsRes, resultsRes, reviewRecordsRes, previewResponses] = await Promise.all([
         api.getStats(partner, date).catch(handle404OrThrow(null)),
         api.getResults(partner, date, { limit: 100 }).catch(handle404OrThrow({ results: [] })),
         api.getReviewRecords(partner, date).catch(handle404OrThrow({ records: [] })),
+        Promise.all([
+          api.getResults(partner, date, { status: "AMOUNT_MISMATCH", limit: 25 }).catch(handle404OrThrow({ results: [] })),
+          api.getResults(partner, date, { status: "STATUS_MISMATCH", limit: 25 }).catch(handle404OrThrow({ results: [] })),
+          api.getResults(partner, date, { status: "MULTIPLE_MISMATCH", limit: 25 }).catch(handle404OrThrow({ results: [] })),
+          api.getResults(partner, date, { status: "MISSING_PARTNER", limit: 25 }).catch(handle404OrThrow({ results: [] })),
+          api.getResults(partner, date, { status: "MISSING_INTERNAL", limit: 25 }).catch(handle404OrThrow({ results: [] })),
+        ]),
       ]);
 
       const rawResults = resultsRes.results ?? [];
-      const reviewMap = new Map((reviewRecordsRes.records ?? []).map((r: any) => [r.recordKey, r]));
+      const reviewRecords = (reviewRecordsRes.records ?? []) as ReviewRecord[];
+      const reviewMap = new Map(reviewRecords.map((r: ReviewRecord) => [r.recordKey, r]));
       
-      const mappedResults = rawResults.map((r: any) => {
+      const mappedResults = rawResults.map((r: ReconciliationRow) => {
         const id = r.partnerTxnId || r.internalTxnId || r.id;
         return {
           ...r,
@@ -109,10 +119,13 @@ export default function ReconciliationPage() {
       });
 
       if (statsRes) {
-        const totalReviewable = mappedResults.filter((r: any) => r.reconciliationStatus !== "MATCHED").length;
-        const reviewedCount = mappedResults.filter((r: any) => 
-          r.reconciliationStatus !== "MATCHED" && (r.reviewState?.reviewed || r.reviewState?.resolvedStatus)
-        ).length;
+        const totalReviewable =
+          (statsRes.byStatus["AMOUNT_MISMATCH"] ?? 0) +
+          (statsRes.byStatus["STATUS_MISMATCH"] ?? 0) +
+          (statsRes.byStatus["MULTIPLE_MISMATCH"] ?? 0) +
+          (statsRes.byStatus["MISSING_PARTNER"] ?? 0) +
+          (statsRes.byStatus["MISSING_INTERNAL"] ?? 0);
+        const reviewedCount = reviewRecords.filter((r: ReviewRecord) => r.reviewed || r.resolvedStatus).length;
 
         setStats({
           total: statsRes.total,
@@ -129,14 +142,25 @@ export default function ReconciliationPage() {
       }
 
       setResults(mappedResults);
+
+      const previewRaw = previewResponses.flatMap((res) => res.results ?? []);
+      const previewUnique = Array.from(
+        new Map(
+          previewRaw.map((r: any) => {
+            const id = r.partnerTxnId || r.internalTxnId || r.id;
+            return [id, { ...r, reviewState: reviewMap.get(id) || null }];
+          })
+        ).values()
+      ).slice(0, 25) as ReconciliationRow[];
+      setPreviewRows(previewUnique);
     } catch {
       showToast("Failed to refresh reconciliation data silently", "error");
     }
   }, [partner, date, setResults, setStats, showToast]);
 
-  const handleLocalRowUpdate = useCallback((recordKey: string, updatedRecord: any) => {
+  const handleLocalRowUpdate = useCallback((recordKey: string, updatedRecord: ReviewRecord) => {
     setResults((prevResults) => {
-      const nextResults = prevResults.map((row) => {
+      const nextResults = prevResults.map((row: ReconciliationRow) => {
         const id = row.partnerTxnId || row.internalTxnId || row.id;
         if (id === recordKey) {
           return {
@@ -150,8 +174,8 @@ export default function ReconciliationPage() {
       // Recalculate stats locally
       setStats((prevStats) => {
         if (!prevStats) return null;
-        const totalReviewable = nextResults.filter((r: any) => r.reconciliationStatus !== "MATCHED").length;
-        const reviewedCount = nextResults.filter((r: any) => 
+        const totalReviewable = nextResults.filter((r: ReconciliationRow) => r.reconciliationStatus !== "MATCHED").length;
+        const reviewedCount = nextResults.filter((r: ReconciliationRow) => 
           r.reconciliationStatus !== "MATCHED" && (r.reviewState?.reviewed || r.reviewState?.resolvedStatus)
         ).length;
         return {
@@ -165,9 +189,9 @@ export default function ReconciliationPage() {
     });
   }, [setResults, setStats]);
 
-  const handleLocalRowBatchUpdate = useCallback((recordKeys: string[], updatedRecords: Record<string, any>) => {
+  const handleLocalRowBatchUpdate = useCallback((recordKeys: string[], updatedRecords: Record<string, ReviewRecord>) => {
     setResults((prevResults) => {
-      const nextResults = prevResults.map((row) => {
+      const nextResults = prevResults.map((row: ReconciliationRow) => {
         const id = row.partnerTxnId || row.internalTxnId || row.id;
         if (recordKeys.includes(id) && updatedRecords[id]) {
           return {
@@ -181,8 +205,8 @@ export default function ReconciliationPage() {
       // Recalculate stats locally
       setStats((prevStats) => {
         if (!prevStats) return null;
-        const totalReviewable = nextResults.filter((r: any) => r.reconciliationStatus !== "MATCHED").length;
-        const reviewedCount = nextResults.filter((r: any) => 
+        const totalReviewable = nextResults.filter((r: ReconciliationRow) => r.reconciliationStatus !== "MATCHED").length;
+        const reviewedCount = nextResults.filter((r: ReconciliationRow) => 
           r.reconciliationStatus !== "MATCHED" && (r.reviewState?.reviewed || r.reviewState?.resolvedStatus)
         ).length;
         return {
@@ -196,34 +220,50 @@ export default function ReconciliationPage() {
     });
   }, [setResults, setStats]);
 
+  const loadInsights = useCallback(async (partner: string, date: string) => {
+    try {
+      const [anomalies, patterns, recommendations] = await Promise.all([
+        api.getInsights(partner, date, "anomalies").catch((err) => {
+          const errMsg = String(err.message || "").toLowerCase();
+          if (errMsg.includes("404") || errMsg.includes("not found")) return [];
+          throw err;
+        }),
+        api.getInsights(partner, date, "patterns").catch((err) => {
+          const errMsg = String(err.message || "").toLowerCase();
+          if (errMsg.includes("404") || errMsg.includes("not found")) return [];
+          throw err;
+        }),
+        api.getInsights(partner, date, "recommendations").catch((err) => {
+          const errMsg = String(err.message || "").toLowerCase();
+          if (errMsg.includes("404") || errMsg.includes("not found")) return [];
+          throw err;
+        }),
+      ]);
+      setInsights({ anomalies, patterns, recommendations });
+    } catch (err) {
+      console.error("Failed to load insights:", err);
+      setInsights({ anomalies: [], patterns: [], recommendations: [] });
+    }
+  }, [setInsights]);
+
   const loadPage = useCallback(async (partner: string, date: string) => {
     setLoading(true);
+    setInsights({ anomalies: null, patterns: null, recommendations: null });
+    void loadInsights(partner, date);
 
     try {
-      const [runStatusRes, statsRes, resultsRes, reviewRecordsRes] = await Promise.all([
+      const [runStatusRes, statsRes, resultsRes, reviewRecordsRes, previewResponses] = await Promise.all([
         api.getRunStatus(partner, date).catch(handle404OrThrow(null)),
         api.getStats(partner, date).catch(handle404OrThrow(null)),
         api.getResults(partner, date, { limit: 100 }).catch(handle404OrThrow({ results: [] })),
         api.getReviewRecords(partner, date).catch(handle404OrThrow({ records: [] })),
         Promise.all([
-          api.getInsights(partner, date, "anomalies").catch((err) => {
-            const errMsg = String(err.message || "").toLowerCase();
-            if (errMsg.includes("404") || errMsg.includes("not found")) return null;
-            throw err;
-          }),
-          api.getInsights(partner, date, "patterns").catch((err) => {
-            const errMsg = String(err.message || "").toLowerCase();
-            if (errMsg.includes("404") || errMsg.includes("not found")) return null;
-            throw err;
-          }),
-          api.getInsights(partner, date, "recommendations").catch((err) => {
-            const errMsg = String(err.message || "").toLowerCase();
-            if (errMsg.includes("404") || errMsg.includes("not found")) return null;
-            throw err;
-          }),
-        ]).then(([anomalies, patterns, recommendations]) => {
-          setInsights({ anomalies, patterns, recommendations });
-        }),
+          api.getResults(partner, date, { status: "AMOUNT_MISMATCH", limit: 25 }).catch(handle404OrThrow({ results: [] })),
+          api.getResults(partner, date, { status: "STATUS_MISMATCH", limit: 25 }).catch(handle404OrThrow({ results: [] })),
+          api.getResults(partner, date, { status: "MULTIPLE_MISMATCH", limit: 25 }).catch(handle404OrThrow({ results: [] })),
+          api.getResults(partner, date, { status: "MISSING_PARTNER", limit: 25 }).catch(handle404OrThrow({ results: [] })),
+          api.getResults(partner, date, { status: "MISSING_INTERNAL", limit: 25 }).catch(handle404OrThrow({ results: [] })),
+        ]),
       ]);
 
       if (runStatusRes && runStatusRes.run) {
@@ -242,9 +282,10 @@ export default function ReconciliationPage() {
       }
 
       const rawResults = resultsRes.results ?? [];
-      const reviewMap = new Map((reviewRecordsRes.records ?? []).map((r: any) => [r.recordKey, r]));
+      const reviewRecords = (reviewRecordsRes.records ?? []) as ReviewRecord[];
+      const reviewMap = new Map(reviewRecords.map((r: ReviewRecord) => [r.recordKey, r]));
       
-      const mappedResults = rawResults.map((r: any) => {
+      const mappedResults = rawResults.map((r: ReconciliationRow) => {
         const id = r.partnerTxnId || r.internalTxnId || r.id;
         return {
           ...r,
@@ -253,10 +294,13 @@ export default function ReconciliationPage() {
       });
 
       if (statsRes) {
-        const totalReviewable = mappedResults.filter((r: any) => r.reconciliationStatus !== "MATCHED").length;
-        const reviewedCount = mappedResults.filter((r: any) => 
-          r.reconciliationStatus !== "MATCHED" && (r.reviewState?.reviewed || r.reviewState?.resolvedStatus)
-        ).length;
+        const totalReviewable =
+          (statsRes.byStatus["AMOUNT_MISMATCH"] ?? 0) +
+          (statsRes.byStatus["STATUS_MISMATCH"] ?? 0) +
+          (statsRes.byStatus["MULTIPLE_MISMATCH"] ?? 0) +
+          (statsRes.byStatus["MISSING_PARTNER"] ?? 0) +
+          (statsRes.byStatus["MISSING_INTERNAL"] ?? 0);
+        const reviewedCount = reviewRecords.filter((r: ReviewRecord) => r.reviewed || r.resolvedStatus).length;
 
         setStats({
           total: statsRes.total,
@@ -273,17 +317,28 @@ export default function ReconciliationPage() {
       }
 
       setResults(mappedResults);
+      const previewRaw = previewResponses.flatMap((res) => res.results ?? []);
+      const previewUnique = Array.from(
+        new Map(
+          previewRaw.map((r: any) => {
+            const id = r.partnerTxnId || r.internalTxnId || r.id;
+            return [id, { ...r, reviewState: reviewMap.get(id) || null }];
+          })
+        ).values()
+      ).slice(0, 25) as ReconciliationRow[];
+      setPreviewRows(previewUnique);
       setPagination({ limit: 25, offset: 0 });
     } catch {
       showToast("Failed to load reconciliation data from backend", "error");
       setRunStatus(null);
       setStats(null);
       setResults([]);
+      setPreviewRows([]);
       setInsights({ anomalies: null, patterns: null, recommendations: null });
     } finally {
       setLoading(false);
     }
-  }, [setInsights, setLoading, setPagination, setResults, setRunStatus, setStats, showToast]);
+  }, [loadInsights, setInsights, setLoading, setPagination, setResults, setRunStatus, setStats, showToast]);
 
   useEffect(() => {
     setPartner(PARTNER);
@@ -296,6 +351,69 @@ export default function ReconciliationPage() {
     if (partner === PARTNER && date === DATE) return;
     void loadPage(partner, date);
   }, [date, loadPage, partner]);
+
+  // Load results dynamically when filters change
+  useEffect(() => {
+    if (!partner || !date) return;
+
+    const fetchResults = async () => {
+      try {
+        let statusesToFetch: string[] = [];
+        if (reconStatus) {
+          statusesToFetch = [reconStatus];
+        } else if (tableType === "matched") {
+          statusesToFetch = ["MATCHED", "MATCHED_FAILED", "MATCHED_REVERSED"];
+        } else if (tableType === "unmatched") {
+          statusesToFetch = ["AMOUNT_MISMATCH", "STATUS_MISMATCH", "MULTIPLE_MISMATCH"];
+        } else if (tableType === "missing") {
+          statusesToFetch = ["MISSING_PARTNER", "MISSING_INTERNAL"];
+        }
+
+        let rawResults: any[] = [];
+
+        if (statusesToFetch.length > 0) {
+          const fetchPromises = statusesToFetch.map(status => 
+            api.getResults(partner, date, { status, limit: 250 }).catch(() => ({ results: [] }))
+          );
+          const resultsResponses = await Promise.all(fetchPromises);
+          rawResults = resultsResponses.flatMap(res => res.results ?? []);
+        } else {
+          // Default / "All" tab: Load errors first, then matched records
+          const [amtMismatchRes, statusMismatchRes, missingPartnerRes, missingInternalRes, matchedRes] = await Promise.all([
+            api.getResults(partner, date, { status: "AMOUNT_MISMATCH", limit: 100 }).catch(() => ({ results: [] })),
+            api.getResults(partner, date, { status: "STATUS_MISMATCH", limit: 100 }).catch(() => ({ results: [] })),
+            api.getResults(partner, date, { status: "MISSING_PARTNER", limit: 100 }).catch(() => ({ results: [] })),
+            api.getResults(partner, date, { status: "MISSING_INTERNAL", limit: 100 }).catch(() => ({ results: [] })),
+            api.getResults(partner, date, { status: "MATCHED", limit: 250 }).catch(() => ({ results: [] })),
+          ]);
+          rawResults = [
+            ...(amtMismatchRes.results ?? []),
+            ...(statusMismatchRes.results ?? []),
+            ...(missingPartnerRes.results ?? []),
+            ...(missingInternalRes.results ?? []),
+            ...(matchedRes.results ?? [])
+          ];
+        }
+        
+        const reviewRecordsRes = await api.getReviewRecords(partner, date).catch(() => ({ records: [] }));
+        const reviewMap = new Map((reviewRecordsRes.records ?? []).map((r: any) => [r.recordKey, r as ReviewRecord]));
+        
+        const mappedResults = rawResults.map((r: any) => {
+          const id = r.partnerTxnId || r.internalTxnId || r.id;
+          return {
+            ...r,
+            reviewState: reviewMap.get(id) || null,
+          };
+        });
+        
+        setResults(mappedResults);
+      } catch (err) {
+        console.error("Failed to load results dynamically:", err);
+      }
+    };
+
+    void fetchResults();
+  }, [partner, date, reconStatus, tableType, setResults]);
 
   // Polling for run status if processing
   useEffect(() => {
@@ -477,6 +595,34 @@ export default function ReconciliationPage() {
           <>
             <RunStatusPanel runStatus={store.runStatus} onTriggerRun={handleTriggerReconciliation} />
             <SummaryStrip stats={store.stats} />
+            {previewRows.length > 0 && (
+              <Panel
+                header={
+                  <div style={{ width: "100%" }}>
+                    <strong className={styles.panelTitle} style={{ marginBottom: 4 }}>Discrepancy Preview</strong>
+                    <p className={styles.panelDescription}>
+                      First 25 mismatched or missing records, surfaced before the main ledger.
+                    </p>
+                  </div>
+                }
+              >
+                <EvidenceTable
+                  rows={previewRows}
+                  total={previewRows.length}
+                  limit={25}
+                  offset={0}
+                  hidePagination
+                  selectedRowId={selectedEvidenceRowId}
+                  selectedRows={selectedRows}
+                  onPageChange={() => {}}
+                  onLimitChange={() => {}}
+                  onSelectRow={setSelectedEvidenceRowId}
+                  onToggleCheck={toggleRow}
+                  onSetVisibleSelection={setRowsSelection}
+                  onSelectEvidence={setSelectedEvidenceRowId}
+                />
+              </Panel>
+            )}
             <Panel
               header={
                 <div style={{ width: "100%" }}>

@@ -136,6 +136,8 @@ export interface PostApprovalRun {
     totalRows?: number;
     successRows?: number;
     failedRows?: number;
+    resultCount?: number;
+    reconciliationCount?: number;
   };
   errors?: any[];
   startedAt?: string;

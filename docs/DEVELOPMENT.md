@@ -1,12 +1,12 @@
 # Development
 
-**Cập nhật:** 2026-06-16
+**Cập nhật:** 2026-06-24
 
 ## Prerequisites
 
 - Python `>=3.11` (xem `pyproject.toml`)
 - Node.js (không có engines ràng buộc trong `frontend-next/package.json`)
-- Docker và Docker Compose
+- Docker và Docker Compose (cần cho MongoDB, PostgreSQL, SFTP)
 - `uv` (recommended) hoặc `pip`
 
 ## Install
@@ -31,11 +31,19 @@ cp .env.example .env
 ## Start Supporting Services
 
 ```bash
-docker compose up -d mongodb sftp mongo-express
+docker compose up -d mongodb postgres sftp mongo-express
 ```
 
 `mongo-express` is a local/dev helper only.
 Current Compose config disables its basic auth layer with `ME_CONFIG_BASICAUTH: "false"`, so keep it on localhost and do not mirror that posture outside development.
+
+PostgreSQL (`postgres:16`) is used for bulk transactional processing (ingestion + reconciliation). Tables are auto-created on application startup via `src/models/postgres.py`.
+
+### PostgreSQL Connection
+
+Default connection: `postgresql+asyncpg://postgres:postgres@localhost:5432/reconciliation`
+
+Configure via `APP_POSTGRES_URL` in `.env`.
 
 ## Run Backend
 
@@ -114,6 +122,15 @@ Dự án có `Makefile` với nhiều target tiện ích:
 | `make momo-e2e-run` | Trigger MOMO automation job qua API |
 | `make momo-e2e-job` | Kiểm tra trạng thái MOMO job |
 | `make momo-e2e-rebuild` | Rebuild api + scheduler containers |
+| `make momo-e2e-missing-partner-demo` | Inject MISSING_PARTNER row để test engine |
+| `make momo-sprint6-setup` | Full cleanup + Sprint 6 dataset |
+| `make momo-sprint6-wave2` | Activate Sprint 6 Wave 2 file |
+
+**ZALOPAY E2E targets:**
+
+| Target | Mô tả |
+|---|---|
+| `make zalopay-e2e-reset` | Seed 100k ZALOPAY records (internal + partner file + configs) |
 
 ## Tests
 
@@ -163,11 +180,23 @@ Các test modules hiện tại:
 | `tests/test_api_mapping*.py` | – | Mapping API |
 | `tests/test_analysis_*.py` | – | Analysis modules (guardrails, scenarios, providers, etc.) |
 | `tests/test_analysis_e2e.py`, `tests/test_phase8.py` | – | LLM E2E tests (--ignore trong make test) |
-| `tests/test_seed_momo_e2e.py` | – | MOMO E2E seed helpers |
+| `tests/test_seed_momo_e2e.py` | – | MOMO E2E seed helpers regression tests |
+| `tests/test_e2e_20_records.py` | – | Full-stack E2E: 20 records MOMO + ZALOPAY (ingestion → reconciliation → verify) |
+| `tests/test_e2e_100k_records.py` | – | Large volume E2E: 100k records MOMO + ZALOPAY (ingestion → reconciliation → verify) |
 
 ## Benchmarks
 
-Script benchmark reconciliation với 1 triệu rows:
+### Grid Search: Batch Size & Parallel Execution
+
+Script `scripts/parallel_benchmark.py` thực hiện grid search trên ZALOPAY 100k records, test các tổ hợp batch size, worker count, và ordered/unordered inserts:
+
+```bash
+uv run python scripts/parallel_benchmark.py
+```
+
+Kết quả hiển thị matrix và đề xuất cấu hình tối ưu (xem [Benchmarks trong README](../README.md#performance-benchmarks)).
+
+### 1M-Row Reconciliation Benchmark
 
 ```bash
 uv run python scripts/benchmark_reconcile_million.py
@@ -183,14 +212,16 @@ uv run python scripts/benchmark_reconcile_million.py --skip-seed
 uv run python scripts/benchmark_reconcile_million.py --mongo-url "mongodb://admin:admin123@localhost:27017/reconciliation?authSource=admin"
 ```
 
-Script chạy thông qua Makefile:
+### Performance Trace (3 Configurations)
 
-```bash
-make test-eval        # Eval scenarios
-make eval-all         # Full eval suite
-```
+So sánh Baseline ↔ MongoDB Optimized ↔ Hybrid PostgreSQL:
 
-Kết quả benchmark được ghi tại `tasks/eval.md`.
+| Stage | Baseline | MongoDB Opt. | Hybrid PostgreSQL |
+|---|---|---|---|
+| Ingestion (100k) | 30.013s | 14.359s | **12.555s** |
+| Reconciliation (100k) | 20.720s | 13.436s | **4.577s** |
+
+Chi tiết: `docs/performance/INGEST_RECON_TRACE.md`
 
 ## E2E Testing với Seed Scripts
 
@@ -206,6 +237,9 @@ PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py phase2
 # Demo trường hợp missing partner
 PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py missing_partner_demo
 
+# ZALOPAY 100k records
+PYTHONPATH=. uv run python scripts/seeding/seed_zalopay_100k.py reset
+
 # Quick helpers trong scratch/
 uv run python scratch/seed_momo_green.py
 uv run python scratch/register_vnpay_job.py
@@ -218,6 +252,7 @@ Hoặc dùng Makefile shortcuts:
 make momo-e2e-reset
 make momo-e2e-phase2
 make momo-e2e-run
+make zalopay-e2e-reset
 ```
 
 ## Directory Guide

@@ -94,7 +94,7 @@ async def test_reconciliation_insights_discrepancies():
             partner="MOMO",
             date="2026-06-05",
             focus="inconsistency",
-            collection=db["reconciliation_result"],
+            collection=ANY,
             llm_provider=ANY,
             extra_query={}
         )

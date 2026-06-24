@@ -258,6 +258,40 @@ make momo-e2e-run           # Trigger MOMO automation job
 
 ---
 
+## Performance Benchmarks
+
+100k-record ZALOPAY benchmark comparing three pipeline configurations:
+
+| Configuration | Ingestion | Reconciliation | Ingestion (rec/s) | Reconciliation (rec/s) |
+|---|---|---|---|---|
+| **Baseline** (before optimizations) | 30.013s | 20.720s | 3,331 | 4,826 |
+| **MongoDB Optimized** (calamine, fast-mode, parallel writes) | 14.359s | 13.436s | 6,916 | 7,342 |
+| **Hybrid PostgreSQL** (UNLOGGED tables, SQL join reconciliation) | 12.555s | 4.577s | 7,964 | 22,160 |
+
+### What Changed
+
+| Optimization | Impact |
+|---|---|
+| Rust-backed `python-calamine` Excel parser (replaced openpyxl) | Excel load 15.5s → 1.07s (14.5x) |
+| MongoDB bulk-write bypass of Pydantic (fast-mode) | Write CPU time reduced ~50% |
+| PostgreSQL `UNLOGGED` tables for staging data | Ingestion DB write reduced 19% |
+| PostgreSQL SQL `LEFT JOIN` in-database reconciliation | Reconciliation 13.4s → 4.6s (3x faster) |
+
+Run benchmarks:
+
+```bash
+# MongoDB grid search (batch sizes, workers, ordered vs unordered)
+uv run python scripts/parallel_benchmark.py
+
+# 1M-row reconciliation benchmark
+uv run python scripts/benchmark_reconcile_million.py
+
+# Full trace report
+cat docs/performance/INGEST_RECON_TRACE.md
+```
+
+---
+
 ## API Surface
 
 The FastAPI app registers 11 router groups under `/api/v1/`:

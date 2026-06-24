@@ -13,7 +13,9 @@ Nền tảng tiếp nhận file đối tác, chuẩn hóa thành các bản giao
 - `src.api:create_app`
   - FastAPI app factory với MongoDB lifespan management và router registration
 - `frontend-next/`
-  - Next.js + TypeScript dashboard giao tiếp với FastAPI qua `/api`
+  - Active Next.js + TypeScript dashboard that communicates with FastAPI through `/api`
+- `frontend/`
+  - Legacy Vite dashboard retained as reference only
 - `src/scheduler/scheduler.py:PartnerDataScheduler`
   - APScheduler-based daemon cho partner fetch automation
 
@@ -142,7 +144,7 @@ API hiện đang đăng ký các router groups sau (xem `src/api/__init__.py`):
 
 ## Data Stores
 
-MongoDB là primary persistence store duy nhất. Indexes được apply tại startup bởi `src/models/indexes.py`.
+MongoDB and PostgreSQL are dual persistence stores. MongoDB handles configs, review packets, audit events, and flexible document storage. PostgreSQL (via `asyncpg` + SQLAlchemy) handles bulk transactional data — ingestion uses `COPY` for high-speed writes, and reconciliation uses SQL joins for in-database matching. Indexes được apply tại startup bởi `src/models/indexes.py` (MongoDB) và `src/models/postgres.py:init_postgres_db` (PostgreSQL).
 
 ### Collections
 
@@ -165,15 +167,14 @@ Index definitions chi tiết xem tại `src/models/indexes.py`.
 
 ## Frontend Shape
 
-The dashboard is `frontend-next/`, a Next.js App Router application.
+The active dashboard is `frontend-next/`.
 
-Main views:
+Main active views:
 
-- Review Center — operator approval workflow (scope → mapping → validation → decision)
-- Reconciliation — results viewer with evidence + AI insights
-- Mapping Studio — draft mapping wizard
-- Schedules — partner fetch automation management
-- Audit Log — event history
+- Review Center
+- Reconciliation
+- Mapping Studio
+- Automation
 
 Review Center owns the operator approval workflow:
 
@@ -183,6 +184,8 @@ Review Center owns the operator approval workflow:
 4. Run runtime validation.
 5. Approve/reject.
 6. Track post-approval ingestion and reconciliation progress.
+
+The old `frontend/` directory is legacy/reference only.
 
 ## Operational Notes
 

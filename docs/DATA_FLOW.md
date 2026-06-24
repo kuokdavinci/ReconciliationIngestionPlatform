@@ -27,7 +27,7 @@ Flow:
 5. Read rows through the configured reader (`src/readers/`).
 6. Normalize rows into canonical transactions (`src/normalizer/normalizer.py`).
 7. Validate canonical transactions (`src/validators/validator.py`).
-8. Persist valid rows into `data_container`.
+8. Persist valid rows into `data_container` (MongoDB) and/or `partner_transaction` via `asyncpg.copy_records_to_table` (PostgreSQL COPY, ~1s for 100k rows).
 9. Update file stats and final processing state.
 
 **Structure signature & config health check:**
@@ -54,7 +54,7 @@ Flow:
 3. Resolve scope via `ReconciliationScopeType` (`FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT`) stored on the `reconciliation_file`. Non-full scopes restrict partner and internal records to a specific `sourceFileId` and collect scoped partner keys.
 4. Pre-check each partner record (`_pre_check_record`) — records with missing amount/status are skipped with `UNMAPPED_SKIPPED` status.
 5. Match records using deterministic comparison (amount + status). Results are classified into: `MATCHED`, `MATCHED_FAILED`, `MATCHED_REVERSED`, `AMOUNT_MISMATCH`, `STATUS_MISMATCH`, `MULTIPLE_MISMATCH`, `MISSING_INTERNAL`, `MISSING_PARTNER`.
-6. Persist classified outcomes into `reconciliation_result` in **chunked writes** (batch size `RESULT_WRITE_BATCH_SIZE = 5000`). Existing results for the same partner/date are **deleted before insertion**.
+6. Persist classified outcomes into `reconciliation_result` (MongoDB) in **chunked writes** (batch size `RESULT_WRITE_BATCH_SIZE = 5000`). When PostgreSQL is enabled, reconciliation runs as a SQL `LEFT JOIN` (`INSERT ... SELECT ... LEFT JOIN` with `CASE WHEN`) instead of Python in-memory matching, achieving ~3x speedup (13.4s → 4.6s for 100k records).
 7. Expose results, stats, and analysis through the API.
 
 **Reconciliation Run Tracking:**

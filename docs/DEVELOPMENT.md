@@ -186,7 +186,17 @@ Các test modules hiện tại:
 
 ## Benchmarks
 
-Script benchmark reconciliation với 1 triệu rows:
+### Grid Search: Batch Size & Parallel Execution
+
+Script `scripts/parallel_benchmark.py` thực hiện grid search trên ZALOPAY 100k records, test các tổ hợp batch size, worker count, và ordered/unordered inserts:
+
+```bash
+uv run python scripts/parallel_benchmark.py
+```
+
+Kết quả hiển thị matrix và đề xuất cấu hình tối ưu (xem [Benchmarks trong README](../README.md#performance-benchmarks)).
+
+### 1M-Row Reconciliation Benchmark
 
 ```bash
 uv run python scripts/benchmark_reconcile_million.py
@@ -202,23 +212,16 @@ uv run python scripts/benchmark_reconcile_million.py --skip-seed
 uv run python scripts/benchmark_reconcile_million.py --mongo-url "mongodb://admin:admin123@localhost:27017/reconciliation?authSource=admin"
 ```
 
-Script chạy thông qua Makefile:
+### Performance Trace (3 Configurations)
 
-```bash
-make test-eval        # Eval scenarios
-make eval-all         # Full eval suite
-```
+So sánh Baseline ↔ MongoDB Optimized ↔ Hybrid PostgreSQL:
 
-Kết quả benchmark được ghi tại `tasks/eval.md`.
+| Stage | Baseline | MongoDB Opt. | Hybrid PostgreSQL |
+|---|---|---|---|
+| Ingestion (100k) | 30.013s | 14.359s | **12.555s** |
+| Reconciliation (100k) | 20.720s | 13.436s | **4.577s** |
 
-### PostgreSQL Benchmark Scripts
-
-```bash
-# Chạy parallel benchmark (MongoDB + PostgreSQL comparison)
-uv run python scripts/parallel_benchmark.py
-```
-
-Kết quả PostgreSQL benchmark được ghi tại `docs/INGEST_RECON_TRACE.md`.
+Chi tiết: `docs/performance/INGEST_RECON_TRACE.md`
 
 ## E2E Testing với Seed Scripts
 

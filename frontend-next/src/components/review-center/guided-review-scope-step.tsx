@@ -45,15 +45,15 @@ export function GuidedReviewScopeStep({
         <div className={styles.loadingBlock}>
           <div className={styles.loadingSpinner} />
           <div className={styles.loadingText}>
-            <h3>Running LLM Scope Analysis</h3>
-            <p className={styles.introText}>Analyzing file name hints, received record counts, and database status...</p>
+            <h3>Running Scope Analysis</h3>
+            <p className={styles.introText}>Analyzing file name hints, row-count gap, and same-day internal volume...</p>
           </div>
         </div>
       )}
 
       {scopeError && (
         <div className={styles.emptyBlock}>
-          <h3 style={{ color: "var(--status-failed)" }}>LLM Scope Analysis Failed</h3>
+          <h3 style={{ color: "var(--status-failed)" }}>Scope Analysis Failed</h3>
           <p className={styles.introText}>{scopeError}</p>
           <Button style={{ marginTop: 16 }} onClick={onRetry}>Retry</Button>
         </div>

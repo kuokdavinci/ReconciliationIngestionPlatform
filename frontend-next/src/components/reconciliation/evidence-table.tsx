@@ -10,6 +10,7 @@ interface Props {
   total: number;
   limit: number;
   offset: number;
+  hidePagination?: boolean;
   selectedRowId: string | null;
   selectedRows: Record<string, boolean>;
   onPageChange: (offset: number) => void;
@@ -25,6 +26,7 @@ export function EvidenceTable({
   total,
   limit,
   offset,
+  hidePagination = false,
   selectedRowId,
   selectedRows,
   onPageChange,
@@ -213,13 +215,15 @@ export function EvidenceTable({
         })}
       </div>
 
-      <PaginationBar
-        total={total}
-        limit={limit}
-        offset={offset}
-        onPageChange={onPageChange}
-        onLimitChange={onLimitChange}
-      />
+      {!hidePagination && (
+        <PaginationBar
+          total={total}
+          limit={limit}
+          offset={offset}
+          onPageChange={onPageChange}
+          onLimitChange={onLimitChange}
+        />
+      )}
     </div>
   );
 }

@@ -39,14 +39,20 @@ export function InsightGrid({ title, items, onExplain }: Props) {
   return (
     <div className={styles.insightColumn}>
       <div className={styles.insightCards}>
-        {items.slice(0, 2).map((item, index) => {
+        {items.slice(0, 1).map((item, index) => {
           const color = sevColor[item.severity] ?? sevColor.MEDIUM;
           return (
             <div
               key={item.id}
-              className={styles.insightCard}
+              className={`${styles.insightCard} ${styles.insightCardEnter}`}
               onClick={() => onExplain(item)}
-              style={{ borderColor: color.border, background: color.bg }}
+              style={
+                {
+                  borderColor: color.border,
+                  background: color.bg,
+                  ["--insight-enter-delay" as string]: `${index * 70}ms`,
+                } as React.CSSProperties
+              }
             >
               {index === 0 && (
                 <div className={styles.insightColumnTitle}>{title}</div>

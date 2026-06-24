@@ -7,6 +7,23 @@ import type { ReviewPacket } from "@/types/review-center";
 import styles from "./review-center.module.css";
 import { usePostApprovalPolling } from "./use-post-approval-polling";
 
+function isGenericColumnLabel(value: unknown) {
+  return /^column\s+\d+$/i.test(String(value || "").trim());
+}
+
+function resolveSourceFieldLabel(mapping: any, sigHeaders: string[], fallbackIndex?: number) {
+  const sourceColumn = Number(mapping?.column);
+  const headerLabel = sourceColumn > 0 ? String(sigHeaders[sourceColumn - 1] || "").trim() : "";
+  if (headerLabel) return headerLabel;
+
+  const sourceField = String(mapping?.sourceField || "").trim();
+  if (sourceField && !isGenericColumnLabel(sourceField)) return sourceField;
+
+  if (sourceColumn > 0) return `Column ${sourceColumn}`;
+  if (fallbackIndex != null) return `Column ${fallbackIndex + 1}`;
+  return "Column";
+}
+
 export function useGuidedReview({
   packet,
   open,
@@ -112,7 +129,10 @@ export function useGuidedReview({
             if (m.path !== "trace") return true;
             if (!idMapping) return true;
             return Number(m.column || 0) !== Number(idMapping.column || 0);
-          });
+          }).map((m: any, index: number) => ({
+            ...m,
+            sourceField: resolveSourceFieldLabel(m, localPacket?.structureSignature?.headers || [], index),
+          }));
           setFieldMappings(draftFieldMappings);
         } catch (err: any) {
           setAiMappingError(err.message || "Failed to load AI mapping proposal.");
@@ -122,7 +142,7 @@ export function useGuidedReview({
       };
       void loadMapping();
     }
-  }, [open, localPacket?._id, step, aiMapping, aiMappingLoading, fieldMappings.length]);
+  }, [open, localPacket?._id, localPacket?.structureSignature?.headers, step, aiMapping, aiMappingLoading, fieldMappings.length]);
 
   const handleContinueFromScope = useCallback(async () => {
     if (!localPacket) return;
@@ -175,7 +195,7 @@ export function useGuidedReview({
         type: m.type || "STRING",
         required: m.required ?? false,
         constant: m.constant || null,
-        sourceField: m.sourceField || `Column ${index + 1}`,
+        sourceField: resolveSourceFieldLabel(m, localPacket?.structureSignature?.headers || [], index),
         mapping: m.mapping || null,
       }));
 
@@ -215,6 +235,23 @@ export function useGuidedReview({
     if (!localPacket) return;
     setIsSubmitting(true);
     try {
+      const optimisticRun = {
+        id: `optimistic-${localPacket._id}`,
+        packetId: localPacket._id,
+        partner: localPacket.partner,
+        date: localPacket.reconciliationDate,
+        status: "QUEUED",
+        stage: "approval",
+        message: "Approval accepted. Preparing post-approval processing...",
+        sourceFileId: undefined,
+        outputFileId: undefined,
+        reconciliationCount: null,
+        stats: {},
+        errors: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setPostApprovalRun(optimisticRun as any);
       const response = (await api.approveActivate(localPacket._id, getCurrentActor(), selectedScope)) as any;
       if (response.postApproveRun) {
         setPostApprovalRun(response.postApproveRun as any);

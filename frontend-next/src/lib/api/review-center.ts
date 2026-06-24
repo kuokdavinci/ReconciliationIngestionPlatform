@@ -65,6 +65,10 @@ export async function getPostApproveRun(packetId: string) {
   return get<{ run: Record<string, unknown> | null }>(`/review-packets/${packetId}/post-approve-run`);
 }
 
+export function openPostApproveRunStream(packetId: string) {
+  return new EventSource(`/api/v1/review-packets/${packetId}/post-approve-run/stream`);
+}
+
 export async function saveDraftMapping(
   packetId: string,
   payload: {

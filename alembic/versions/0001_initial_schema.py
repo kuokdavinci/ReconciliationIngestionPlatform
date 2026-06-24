@@ -39,6 +39,7 @@ def upgrade() -> None:
         sa.Column('created_date', sa.DateTime(), server_default=sa.func.now()),
         sa.Column('last_modified_by', sa.String(255), server_default='system'),
         sa.Column('last_modified_date', sa.DateTime(), server_default=sa.func.now()),
+        if_not_exists=True,
     )
     op.create_table(
         'internal_transaction',
@@ -51,6 +52,7 @@ def upgrade() -> None:
         sa.Column('transaction_time', sa.DateTime(), nullable=False, index=True),
         sa.Column('created_at', sa.DateTime(), server_default=sa.func.now()),
         sa.Column('updated_at', sa.DateTime(), server_default=sa.func.now()),
+        if_not_exists=True,
     )
     op.create_table(
         'reconciliation_result',
@@ -71,6 +73,7 @@ def upgrade() -> None:
         sa.Column('partner_record_id', sa.String(255), nullable=True),
         sa.Column('internal_record_id', sa.String(255), nullable=True),
         sa.Column('created_at', sa.DateTime(), server_default=sa.func.now()),
+        if_not_exists=True,
     )
 
 

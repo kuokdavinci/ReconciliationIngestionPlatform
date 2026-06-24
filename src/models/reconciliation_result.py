@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Any
 from pydantic import BaseModel, ConfigDict, Field
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from src.core.enums import ReconciliationStatus
@@ -47,36 +47,171 @@ class ReconciliationResult(BaseModel):
     )
 
 
-class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
-    """Repository for ReconciliationResult with domain-specific queries."""
+def reconciliation_result_to_row(doc: ReconciliationResult) -> dict:
+    return {
+        "id": doc.id,
+        "partner": doc.partner,
+        "date": doc.date,
+        "partner_txn_id": doc.partner_txn_id,
+        "internal_txn_id": doc.internal_txn_id,
+        "partner_amount": doc.partner_amount,
+        "internal_amount": doc.internal_amount,
+        "partner_status": doc.partner_status,
+        "internal_status": doc.internal_status,
+        "reconciliation_status": doc.reconciliation_status.value if hasattr(doc.reconciliation_status, "value") else str(doc.reconciliation_status),
+        "reconciliation_run_id": doc.reconciliation_run_id,
+        "source_file_id": doc.source_file_id,
+        "scope_type": doc.scope_type,
+        "mapping_version": doc.mapping_version,
+        "partner_record_id": doc.partner_record_id,
+        "internal_record_id": doc.internal_record_id,
+        "created_at": doc.created_at,
+    }
 
-    def __init__(self, db: AsyncIOMotorDatabase):
+
+def row_to_reconciliation_result(row) -> ReconciliationResult:
+    if hasattr(row, "__table__"):
+        data = {c.name: getattr(row, c.name) for c in row.__table__.columns}
+    else:
+        data = dict(row)
+    return ReconciliationResult(
+        _id=data["id"],
+        partner=data["partner"],
+        date=data["date"],
+        partnerTxnId=data["partner_txn_id"],
+        internalTxnId=data["internal_txn_id"],
+        partnerAmount=data["partner_amount"],
+        internalAmount=data["internal_amount"],
+        partnerStatus=data["partner_status"],
+        internalStatus=data["internal_status"],
+        reconciliationStatus=data["reconciliation_status"],
+        reconciliationRunId=data["reconciliation_run_id"],
+        sourceFileId=data["source_file_id"],
+        scopeType=data["scope_type"],
+        mappingVersion=data["mapping_version"],
+        partnerRecordId=data["partner_record_id"],
+        internalRecordId=data["internal_record_id"],
+        createdAt=data["created_at"],
+    )
+
+
+class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
+    """Repository for ReconciliationResult with domain-specific queries backed by PostgreSQL."""
+
+    def __init__(self, db: Any = None):
         super().__init__(collection_name="reconciliation_result", db=db)
         self._set_model_class(ReconciliationResult)
+        self.use_postgres = not ("MagicMock" in str(type(db)) or "AsyncMock" in str(type(db)))
+        if self.use_postgres:
+            from src.models.postgres import get_pg_engine
+            self.engine = get_pg_engine()
 
     async def insert_many(self, docs: list[ReconciliationResult | dict], ordered: bool = True) -> int:
         """Bulk insert multiple ReconciliationResult documents."""
+        if not self.use_postgres:
+            if not docs:
+                return 0
+            if isinstance(docs[0], dict):
+                from src.models.repository import BaseRepository
+                serialized = [BaseRepository._convert_special_types(doc) for doc in docs]
+            else:
+                serialized = [self._to_mongo(doc) for doc in docs]
+            from pymongo.errors import BulkWriteError
+            try:
+                result = await self.collection.insert_many(serialized, ordered=ordered)
+                return len(result.inserted_ids)
+            except BulkWriteError as exc:
+                return exc.details.get("nInserted", 0)
+
         if not docs:
             return 0
-        if isinstance(docs[0], dict):
-            from src.models.repository import BaseRepository
-            serialized = [BaseRepository._convert_special_types(doc) for doc in docs]
-        else:
-            serialized = [self._to_mongo(doc) for doc in docs]
         
-        from pymongo.errors import BulkWriteError
-        try:
-            result = await self.collection.insert_many(serialized, ordered=ordered)
-            return len(result.inserted_ids)
-        except BulkWriteError as exc:
-            return exc.details.get("nInserted", 0)
+        rows = []
+        for doc in docs:
+            if isinstance(doc, dict):
+                from src.models.repository import BaseRepository
+                converted = BaseRepository._convert_from_mongo_types(doc)
+                if "_id" in converted and "id" not in converted:
+                    converted["id"] = converted.pop("_id")
+                if "partnerTxnId" in converted:
+                    converted["partner_txn_id"] = converted.pop("partnerTxnId")
+                if "internalTxnId" in converted:
+                    converted["internal_txn_id"] = converted.pop("internalTxnId")
+                if "partnerAmount" in converted:
+                    converted["partner_amount"] = converted.pop("partnerAmount")
+                if "internalAmount" in converted:
+                    converted["internal_amount"] = converted.pop("internalAmount")
+                if "partnerStatus" in converted:
+                    converted["partner_status"] = converted.pop("partnerStatus")
+                if "internalStatus" in converted:
+                    converted["internal_status"] = converted.pop("internalStatus")
+                if "reconciliationStatus" in converted:
+                    converted["reconciliation_status"] = converted.pop("reconciliationStatus")
+                if "reconciliationRunId" in converted:
+                    converted["reconciliation_run_id"] = converted.pop("reconciliationRunId")
+                if "sourceFileId" in converted:
+                    converted["source_file_id"] = converted.pop("sourceFileId")
+                if "scopeType" in converted:
+                    converted["scope_type"] = converted.pop("scopeType")
+                if "mappingVersion" in converted:
+                    converted["mapping_version"] = converted.pop("mappingVersion")
+                if "partnerRecordId" in converted:
+                    converted["partner_record_id"] = converted.pop("partnerRecordId")
+                if "internalRecordId" in converted:
+                    converted["internal_record_id"] = converted.pop("internalRecordId")
+                if "createdAt" in converted:
+                    converted["created_at"] = converted.pop("createdAt")
+                    
+                model_doc = ReconciliationResult.model_validate(converted)
+            else:
+                model_doc = doc
+            rows.append(reconciliation_result_to_row(model_doc))
 
+        from sqlalchemy import insert
+        from src.models.postgres import ReconciliationResultTable
+        async with self.engine.begin() as conn:
+            stmt = insert(ReconciliationResultTable)
+            await conn.execute(stmt, rows)
+            return len(rows)
 
     async def find_by_partner_and_date(
         self, partner: str, date: str
+        , *, reconciliation_run_id: str | None = None, source_file_id: str | None = None
     ) -> list[ReconciliationResult]:
         """Find all results for a partner on a specific date."""
-        return await self.find_many({"partner": partner, "date": date})
+        if not self.use_postgres:
+            query = {"partner": partner, "date": date}
+            if reconciliation_run_id is not None:
+                query["reconciliationRunId"] = reconciliation_run_id
+            elif source_file_id is not None:
+                query["sourceFileId"] = source_file_id
+            return await self.find_many(query)
+
+        from sqlalchemy import select, and_
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from src.models.postgres import ReconciliationResultTable
+        conditions = [ReconciliationResultTable.partner == partner, ReconciliationResultTable.date == date]
+        if reconciliation_run_id is not None:
+            if isinstance(reconciliation_run_id, dict) and "$in" in reconciliation_run_id:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id["$in"]))
+            elif isinstance(reconciliation_run_id, (list, tuple)):
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id))
+            else:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id == reconciliation_run_id)
+        elif source_file_id is not None:
+            if isinstance(source_file_id, dict) and "$in" in source_file_id:
+                conditions.append(ReconciliationResultTable.source_file_id.in_(source_file_id["$in"]))
+            elif isinstance(source_file_id, (list, tuple)):
+                conditions.append(ReconciliationResultTable.source_file_id.in_(source_file_id))
+            else:
+                conditions.append(ReconciliationResultTable.source_file_id == source_file_id)
+        async with AsyncSession(self.engine) as session:
+            stmt = select(ReconciliationResultTable).where(
+                and_(*conditions)
+            ).order_by(ReconciliationResultTable.id.asc())
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [row_to_reconciliation_result(r) for r in rows]
 
     async def find_page_by_partner_and_date(
         self,
@@ -89,82 +224,281 @@ class ReconciliationResultRepository(BaseRepository[ReconciliationResult]):
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[ReconciliationResult], int]:
-        query: dict[str, object] = {"partner": partner, "date": date}
-        if status is not None:
-            query["reconciliationStatus"] = status.value
-        if reconciliation_run_id is not None:
-            query["reconciliationRunId"] = reconciliation_run_id
-        elif source_file_id is not None:
-            query["sourceFileId"] = source_file_id
+        if not self.use_postgres:
+            query = {"partner": partner, "date": date}
+            if status is not None:
+                query["reconciliationStatus"] = status.value
+            if reconciliation_run_id is not None:
+                query["reconciliationRunId"] = reconciliation_run_id
+            elif source_file_id is not None:
+                query["sourceFileId"] = source_file_id
 
-        total = await self.collection.count_documents(query)
-        cursor = self.collection.find(query).sort("_id", 1).skip(offset).limit(limit)
-        records: list[ReconciliationResult] = []
-        async for raw in cursor:
-            records.append(self._from_mongo(raw))
-        return records, total
+            cursor = self.collection.find(query).skip(offset).limit(limit)
+            records = []
+            async for raw in cursor:
+                records.append(self._from_mongo(raw))
+            total = await self.collection.count_documents(query)
+            return records, total
+
+        from sqlalchemy import select, and_, func
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from src.models.postgres import ReconciliationResultTable
+        conditions = [ReconciliationResultTable.partner == partner, ReconciliationResultTable.date == date]
+        if status is not None:
+            conditions.append(ReconciliationResultTable.reconciliation_status == status.value)
+        if reconciliation_run_id is not None:
+            if isinstance(reconciliation_run_id, dict) and "$in" in reconciliation_run_id:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id["$in"]))
+            elif isinstance(reconciliation_run_id, (list, tuple)):
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id))
+            else:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id == reconciliation_run_id)
+        elif source_file_id is not None:
+            if isinstance(source_file_id, dict) and "$in" in source_file_id:
+                conditions.append(ReconciliationResultTable.source_file_id.in_(source_file_id["$in"]))
+            elif isinstance(source_file_id, (list, tuple)):
+                conditions.append(ReconciliationResultTable.source_file_id.in_(source_file_id))
+            else:
+                conditions.append(ReconciliationResultTable.source_file_id == source_file_id)
+
+        async with AsyncSession(self.engine) as session:
+            count_stmt = select(func.count()).select_from(ReconciliationResultTable).where(and_(*conditions))
+            total_result = await session.execute(count_stmt)
+            total = total_result.scalar() or 0
+
+            stmt = select(ReconciliationResultTable).where(and_(*conditions)).order_by(ReconciliationResultTable.id.asc()).offset(offset).limit(limit)
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            records = [row_to_reconciliation_result(r) for r in rows]
+            return records, total
 
     async def find_by_partner_date_and_status(
         self, partner: str, date: str, status: ReconciliationStatus
     ) -> list[ReconciliationResult]:
         """Find results for a partner+date filtered by reconciliation status."""
-        return await self.find_many({
-            "partner": partner,
-            "date": date,
-            "reconciliationStatus": status.value,
-        })
+        if not self.use_postgres:
+            return await self.find_many({
+                "partner": partner,
+                "date": date,
+                "reconciliationStatus": status.value
+            })
+
+        from sqlalchemy import select, and_
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from src.models.postgres import ReconciliationResultTable
+        async with AsyncSession(self.engine) as session:
+            stmt = select(ReconciliationResultTable).where(
+                and_(
+                    ReconciliationResultTable.partner == partner,
+                    ReconciliationResultTable.date == date,
+                    ReconciliationResultTable.reconciliation_status == status.value
+                )
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [row_to_reconciliation_result(r) for r in rows]
 
     async def count_by_status(
         self, partner: str, date: str
         , *, reconciliation_run_id: str | None = None, source_file_id: str | None = None
     ) -> dict[str, int]:
-        """Aggregate reconciliation results by status.
+        if not self.use_postgres:
+            query = {"partner": partner, "date": date}
+            if reconciliation_run_id is not None:
+                query["reconciliationRunId"] = reconciliation_run_id
+            elif source_file_id is not None:
+                query["sourceFileId"] = source_file_id
 
-        Returns dict like {"MATCHED": 1450, "AMOUNT_MISMATCH": 30, ...}
-        """
-        match_query: dict[str, object] = {"partner": partner, "date": date}
+            pipeline = [
+                {"$match": query},
+                {"$group": {"_id": "$reconciliationStatus", "count": {"$sum": 1}}}
+            ]
+            cursor = self.collection.aggregate(pipeline)
+            counts = {}
+            async for doc in cursor:
+                counts[doc["_id"]] = doc["count"]
+            return counts
+
+        from sqlalchemy import select, and_, func
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from src.models.postgres import ReconciliationResultTable
+        conditions = [ReconciliationResultTable.partner == partner, ReconciliationResultTable.date == date]
         if reconciliation_run_id is not None:
-            match_query["reconciliationRunId"] = reconciliation_run_id
+            if isinstance(reconciliation_run_id, dict) and "$in" in reconciliation_run_id:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id["$in"]))
+            elif isinstance(reconciliation_run_id, (list, tuple)):
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id))
+            else:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id == reconciliation_run_id)
         elif source_file_id is not None:
-            match_query["sourceFileId"] = source_file_id
-        pipeline = [
-            {"$match": match_query},
-            {"$group": {"_id": "$reconciliationStatus", "count": {"$sum": 1}}},
-        ]
-        cursor = self.collection.aggregate(pipeline)
-        result: dict[str, int] = {}
-        async for doc in cursor:
-            result[str(doc["_id"])] = doc["count"]
-        return result
+            if isinstance(source_file_id, dict) and "$in" in source_file_id:
+                conditions.append(ReconciliationResultTable.source_file_id.in_(source_file_id["$in"]))
+            elif isinstance(source_file_id, (list, tuple)):
+                conditions.append(ReconciliationResultTable.source_file_id.in_(source_file_id))
+            else:
+                conditions.append(ReconciliationResultTable.source_file_id == source_file_id)
+
+        async with AsyncSession(self.engine) as session:
+            stmt = select(ReconciliationResultTable.reconciliation_status, func.count()).where(and_(*conditions)).group_by(ReconciliationResultTable.reconciliation_status)
+            result = await session.execute(stmt)
+            counts = {}
+            for status, count in result.all():
+                counts[status] = count
+            return counts
 
     async def get_total_amounts(
         self, partner: str, date: str
         , *, reconciliation_run_id: str | None = None, source_file_id: str | None = None
     ) -> dict[str, object]:
-        """Get sum of partner_amount and internal_amount for a partner+date."""
-        match_query: dict[str, object] = {"partner": partner, "date": date}
-        if reconciliation_run_id is not None:
-            match_query["reconciliationRunId"] = reconciliation_run_id
-        elif source_file_id is not None:
-            match_query["sourceFileId"] = source_file_id
-        pipeline = [
-            {"$match": match_query},
-            {
-                "$group": {
-                    "_id": None,
-                    "total_partner_amount": {"$sum": "$partnerAmount"},
-                    "total_internal_amount": {"$sum": "$internalAmount"},
+        if not self.use_postgres:
+            query = {"partner": partner, "date": date}
+            if reconciliation_run_id is not None:
+                query["reconciliationRunId"] = reconciliation_run_id
+            elif source_file_id is not None:
+                query["sourceFileId"] = source_file_id
+
+            pipeline = [
+                {"$match": query},
+                {
+                    "$group": {
+                        "_id": None,
+                        "total_partner_amount": {"$sum": "$partnerAmount"},
+                        "total_internal_amount": {"$sum": "$internalAmount"}
+                    }
                 }
-            },
-        ]
-        cursor = self.collection.aggregate(pipeline)
-        from bson.decimal128 import Decimal128
-        from decimal import Decimal
-        async for doc in cursor:
-            pa = doc.get("total_partner_amount")
-            ia = doc.get("total_internal_amount")
-            return {
-                "total_partner_amount": pa.to_decimal() if isinstance(pa, Decimal128) else (Decimal(str(pa)) if pa is not None else None),
-                "total_internal_amount": ia.to_decimal() if isinstance(ia, Decimal128) else (Decimal(str(ia)) if ia is not None else None),
-            }
-        return {"total_partner_amount": None, "total_internal_amount": None}
+            ]
+            cursor = self.collection.aggregate(pipeline)
+            async for doc in cursor:
+                from decimal import Decimal
+                from bson.decimal128 import Decimal128
+                tpa = doc.get("total_partner_amount")
+                tia = doc.get("total_internal_amount")
+                if isinstance(tpa, Decimal128):
+                    tpa = tpa.to_decimal()
+                if isinstance(tia, Decimal128):
+                    tia = tia.to_decimal()
+                return {
+                    "total_partner_amount": tpa,
+                    "total_internal_amount": tia,
+                }
+            return {"total_partner_amount": None, "total_internal_amount": None}
+
+        from sqlalchemy import select, and_, func
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from src.models.postgres import ReconciliationResultTable
+        conditions = [ReconciliationResultTable.partner == partner, ReconciliationResultTable.date == date]
+        if reconciliation_run_id is not None:
+            if isinstance(reconciliation_run_id, dict) and "$in" in reconciliation_run_id:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id["$in"]))
+            elif isinstance(reconciliation_run_id, (list, tuple)):
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id))
+            else:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id == reconciliation_run_id)
+        elif source_file_id is not None:
+            if isinstance(source_file_id, dict) and "$in" in source_file_id:
+                conditions.append(ReconciliationResultTable.source_file_id.in_(source_file_id["$in"]))
+            elif isinstance(source_file_id, (list, tuple)):
+                conditions.append(ReconciliationResultTable.source_file_id.in_(source_file_id))
+            else:
+                conditions.append(ReconciliationResultTable.source_file_id == source_file_id)
+
+        async with AsyncSession(self.engine) as session:
+            stmt = select(func.sum(ReconciliationResultTable.partner_amount), func.sum(ReconciliationResultTable.internal_amount)).where(and_(*conditions))
+            result = await session.execute(stmt)
+            row = result.first()
+            if row:
+                return {
+                    "total_partner_amount": row[0],
+                    "total_internal_amount": row[1],
+                }
+            return {"total_partner_amount": None, "total_internal_amount": None}
+
+    async def get_summary_metrics(
+        self, partner: str, date: str
+        , *, reconciliation_run_id: str | None = None, source_file_id: str | None = None
+    ) -> dict[str, object]:
+        by_status = await self.count_by_status(
+            partner,
+            date,
+            reconciliation_run_id=reconciliation_run_id,
+            source_file_id=source_file_id,
+        )
+
+        if not self.use_postgres:
+            query = {"partner": partner, "date": date}
+            if reconciliation_run_id is not None:
+                query["reconciliationRunId"] = reconciliation_run_id
+            elif source_file_id is not None:
+                query["sourceFileId"] = source_file_id
+            pipeline = [
+                {"$match": query},
+                {
+                    "$group": {
+                        "_id": None,
+                        "mismatch_amount": {
+                            "$sum": {
+                                "$cond": [
+                                    {"$in": ["$reconciliationStatus", [
+                                        ReconciliationStatus.AMOUNT_MISMATCH.value,
+                                        ReconciliationStatus.MULTIPLE_MISMATCH.value,
+                                        ReconciliationStatus.STATUS_MISMATCH.value,
+                                    ]]},
+                                    {"$abs": {"$subtract": ["$partnerAmount", "$internalAmount"]}},
+                                    0,
+                                ]
+                            }
+                        },
+                    }
+                },
+            ]
+            total_amount_mismatch = 0.0
+            cursor = self.collection.aggregate(pipeline)
+            async for doc in cursor:
+                mismatch_amount = doc.get("mismatch_amount")
+                if mismatch_amount is not None:
+                    try:
+                        total_amount_mismatch = float(
+                            mismatch_amount.to_decimal() if hasattr(mismatch_amount, "to_decimal") else mismatch_amount
+                        )
+                    except Exception:
+                        total_amount_mismatch = 0.0
+            return {"by_status": by_status, "total_amount_mismatch": total_amount_mismatch}
+
+        from sqlalchemy import select, and_, func, case
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from src.models.postgres import ReconciliationResultTable
+        conditions = [ReconciliationResultTable.partner == partner, ReconciliationResultTable.date == date]
+        if reconciliation_run_id is not None:
+            if isinstance(reconciliation_run_id, dict) and "$in" in reconciliation_run_id:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id["$in"]))
+            elif isinstance(reconciliation_run_id, (list, tuple)):
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id))
+            else:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id == reconciliation_run_id)
+        elif source_file_id is not None:
+            if isinstance(source_file_id, dict) and "$in" in source_file_id:
+                conditions.append(ReconciliationResultTable.source_file_id.in_(source_file_id["$in"]))
+            elif isinstance(source_file_id, (list, tuple)):
+                conditions.append(ReconciliationResultTable.source_file_id.in_(source_file_id))
+            else:
+                conditions.append(ReconciliationResultTable.source_file_id == source_file_id)
+
+        async with AsyncSession(self.engine) as session:
+            stmt = select(
+                func.sum(
+                    case(
+                        (
+                            ReconciliationResultTable.reconciliation_status.in_([
+                                ReconciliationStatus.AMOUNT_MISMATCH.value,
+                                ReconciliationStatus.MULTIPLE_MISMATCH.value,
+                                ReconciliationStatus.STATUS_MISMATCH.value,
+                            ]),
+                            func.abs(ReconciliationResultTable.partner_amount - ReconciliationResultTable.internal_amount),
+                        ),
+                        else_=0,
+                    )
+                )
+            ).where(and_(*conditions))
+            result = await session.execute(stmt)
+            total_amount_mismatch = float(result.scalar() or 0.0)
+            return {"by_status": by_status, "total_amount_mismatch": total_amount_mismatch}

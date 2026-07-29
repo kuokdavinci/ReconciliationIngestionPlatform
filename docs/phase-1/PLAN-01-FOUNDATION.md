@@ -1,4 +1,4 @@
-# Phase 2: Next.js Foundation — PLAN.md
+# Phase 1: Foundation — PLAN 1
 
 ## Objective
 

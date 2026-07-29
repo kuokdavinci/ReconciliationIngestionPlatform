@@ -325,7 +325,7 @@ Key variables: `APP_MONGODB_URL`, `APP_POSTGRES_URL`, `APP_DB_NAME`, `APP_LOG_LE
 
 Performance tuning variables: `APP_INGEST_BATCH_SIZE`, `APP_INGEST_WRITE_WORKERS`, `APP_RECON_PARTNER_BATCH_SIZE`, `APP_RECON_RESULT_BATCH_SIZE`, `APP_RECON_RESULT_WRITE_WORKERS`.
 
-See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for full reference.
+See [docs/phase-1/CONFIGURATION.md](docs/phase-1/CONFIGURATION.md) for full reference.
 
 ---
 
@@ -348,11 +348,11 @@ The test suite covers: ingestion pipeline, file readers, normalizer, validator, 
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Configuration](docs/CONFIGURATION.md)
-- [Data Flow](docs/DATA_FLOW.md)
-- [Development Guide](docs/DEVELOPMENT.md)
-- [Module Map](docs/MODULES.md)
+- [Architecture](docs/phase-1/ARCHITECTURE.md)
+- [Configuration](docs/phase-1/CONFIGURATION.md)
+- [Data Flow](docs/phase-1/DATA_FLOW.md)
+- [Development Guide](docs/phase-1/DEVELOPMENT.md)
+- [Module Map](docs/phase-1/MODULES.md)
 
 ---
 

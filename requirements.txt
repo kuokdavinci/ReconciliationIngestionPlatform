@@ -16,4 +16,5 @@ python-calamine>=0.7.0
 asyncpg>=0.31.0
 sqlalchemy>=2.0.51
 greenlet>=3.5.2
+alembic>=1.13.0
 

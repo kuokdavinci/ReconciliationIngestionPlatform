@@ -19,6 +19,8 @@ RUN pip install --no-cache-dir "APScheduler>=3.10" "httpx>=0.27" "watchdog>=4.0"
 
 # Copy the rest of the application
 COPY src/ ./src
+COPY alembic/ ./alembic
+COPY alembic.ini ./
 COPY run.py ./
 
 # Create default directories

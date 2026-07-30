@@ -114,7 +114,7 @@ def set_pg_engine(engine):
         _pg_engine_loop = None
 
 async def init_postgres_db(postgres_url: str, use_unlogged: bool = False):
-    """Apply pending Alembic migrations.
+    """Apply pending Alembic migrations or create tables if fresh DB.
 
     Args:
         postgres_url: PostgreSQL connection URL.
@@ -128,8 +128,7 @@ async def init_postgres_db(postgres_url: str, use_unlogged: bool = False):
 
     engine = create_async_engine(postgres_url, echo=False)
 
-    # Check if partner_transaction table already exists (e.g., from old create_all).
-    # If it does, stamp Alembic head to avoid re-applying migrations on existing objects.
+    # Check if partner_transaction table already exists.
     from sqlalchemy import text
     async with engine.connect() as conn:
         has_partner = await conn.execute(
@@ -139,16 +138,22 @@ async def init_postgres_db(postgres_url: str, use_unlogged: bool = False):
 
     if partner_exists:
         # Tables exist (from old create_all or previous run) — stamp head
-        # instead of running upgrade which would fail on existing indexes.
         async with engine.begin() as conn:
-            await conn.run_sync(_stamp_head)
+            try:
+                await conn.run_sync(_stamp_head)
+            except Exception:
+                pass
             if use_unlogged:
                 await conn.execute(text("ALTER TABLE partner_transaction SET UNLOGGED;"))
                 await conn.execute(text("ALTER TABLE internal_transaction SET UNLOGGED;"))
     else:
-        # Fresh database — run migrations from scratch
+        # Fresh database — create tables via SQLAlchemy first, then stamp head
         async with engine.begin() as conn:
-            await conn.run_sync(_run_alembic_upgrade)
+            await conn.run_sync(Base.metadata.create_all)
+            try:
+                await conn.run_sync(_stamp_head)
+            except Exception:
+                pass
             if use_unlogged:
                 await conn.execute(text("ALTER TABLE partner_transaction SET UNLOGGED;"))
                 await conn.execute(text("ALTER TABLE internal_transaction SET UNLOGGED;"))

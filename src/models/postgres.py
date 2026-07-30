@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Numeric, DateTime, Text
+from sqlalchemy import Column, String, Numeric, DateTime, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import declarative_base
@@ -9,6 +9,13 @@ Base = declarative_base()
 
 class PartnerTransactionTable(Base):
     __tablename__ = "partner_transaction"
+    __table_args__ = (
+        UniqueConstraint(
+            "identify",
+            "ingestion_key",
+            name="uq_partner_transaction_identify_ingestion_key",
+        ),
+    )
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True)
     request_id = Column(PG_UUID(as_uuid=True), nullable=False)
@@ -20,6 +27,7 @@ class PartnerTransactionTable(Base):
     connector_data = Column(Text, default="")
     extra_data = Column(Text, default="")
     source_file_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    ingestion_key = Column(String(255), nullable=False, index=True)
     
     # Nested PartnerData fields flattened for queries/indices
     partner_id = Column(String(255), nullable=False)
@@ -149,11 +157,9 @@ async def init_postgres_db(postgres_url: str, use_unlogged: bool = False):
 
 def _stamp_head(connection):
     """Stamp the database with the current Alembic head revision."""
-    from alembic.config import Config
     from alembic import command
 
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", str(connection.engine.url))
+    cfg = _alembic_config(connection)
     cfg.attributes["connection"] = connection
     command.stamp(cfg, "head")
 
@@ -166,10 +172,19 @@ def _run_alembic_upgrade(connection):
     Alembic via config.attributes so env.py can use it directly
     without creating its own engine or calling asyncio.run().
     """
-    from alembic.config import Config
     from alembic import command
 
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", str(connection.engine.url))
+    cfg = _alembic_config(connection)
     cfg.attributes["connection"] = connection
     command.upgrade(cfg, "head")
+
+
+def _alembic_config(connection):
+    """Load Alembic config from the application root, independent of cwd."""
+    from pathlib import Path
+    from alembic.config import Config
+
+    config_path = Path(__file__).resolve().parents[2] / "alembic.ini"
+    cfg = Config(str(config_path))
+    cfg.set_main_option("sqlalchemy.url", str(connection.engine.url))
+    return cfg

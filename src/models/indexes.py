@@ -15,6 +15,12 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_file_hash_unique",
         ),
         IndexModel(
+            "fetchUnitKey",
+            unique=True,
+            sparse=True,
+            name="idx_fetch_unit_key_unique",
+        ),
+        IndexModel(
             [("partner", ASCENDING), ("reconciliationDate", ASCENDING)],
             name="idx_partner_date",
         ),
@@ -78,69 +84,6 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel(
             [("sourceFileId", ASCENDING), ("createdAt", ASCENDING)],
             name="idx_partner_runtime_run_source_file_created",
-        ),
-    ],
-    "data_container": [
-        IndexModel(
-            "partnerData.trace",
-            name="idx_trace",
-        ),
-        IndexModel(
-            [("identify", ASCENDING), ("reconciliationDate", ASCENDING)],
-            name="idx_identify_date",
-        ),
-        IndexModel(
-            "operationStatus",
-            name="idx_operation_status",
-        ),
-        IndexModel(
-            "partnerData.status",
-            name="idx_partner_status",
-        ),
-        IndexModel(
-            "sourceFileId",
-            name="idx_source_file",
-        ),
-    ],
-    "internal_transaction": [
-        IndexModel(
-            "partnerTxnId",
-            name="idx_internal_partner_txn_id",
-        ),
-        IndexModel(
-            [("partner", ASCENDING), ("transactionTime", ASCENDING)],
-            name="idx_internal_partner_txn_time",
-        ),
-    ],
-    "reconciliation_result": [
-        IndexModel(
-            [("partner", ASCENDING), ("date", ASCENDING), ("_id", ASCENDING)],
-            name="idx_recon_partner_date_id",
-        ),
-        IndexModel(
-            [
-                ("partner", ASCENDING),
-                ("date", ASCENDING),
-                ("reconciliationStatus", ASCENDING),
-                ("_id", ASCENDING),
-            ],
-            name="idx_recon_partner_date_status_id",
-        ),
-        IndexModel(
-            "partnerTxnId",
-            name="idx_recon_partner_txn_id",
-        ),
-        IndexModel(
-            "reconciliationStatus",
-            name="idx_recon_status",
-        ),
-        IndexModel(
-            [("reconciliationRunId", ASCENDING), ("_id", ASCENDING)],
-            name="idx_recon_run_id",
-        ),
-        IndexModel(
-            [("sourceFileId", ASCENDING), ("reconciliationStatus", ASCENDING)],
-            name="idx_recon_source_file_status",
         ),
     ],
     "reconciliation_run": [

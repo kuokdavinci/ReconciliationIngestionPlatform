@@ -9,6 +9,7 @@ from bson import Decimal128
 from src.api.response_utils import camelize
 from src.models.data_container import DataContainer, DataContainerRepository
 from src.models.reconciliation_file import ReconciliationFileRepository
+from src.models.reconciliation_result import ReconciliationResultRepository
 
 logger = logging.getLogger(__name__)
 
@@ -130,11 +131,10 @@ async def list_transactions(
 async def get_transaction(request: Request, transaction_id: str):
     try:
         db = _get_db(request)
-        raw = await db["data_container"].find_one({"_id": transaction_id})
-        if raw is None:
+        transaction = await DataContainerRepository(db).find_by_id(transaction_id)
+        if transaction is None:
             raise HTTPException(status_code=404, detail=f"Transaction '{transaction_id}' not found.")
-        obj = DataContainer.model_validate(raw)
-        return _serialize_dc(obj)
+        return _serialize_dc(transaction)
     except HTTPException:
         raise
     except Exception as exc:
@@ -175,6 +175,7 @@ async def list_files(
             query["processingStatus"] = status
 
         repo = ReconciliationFileRepository(db)
+        transaction_repo = DataContainerRepository(db)
         records = await repo.find_many(query)
 
         total = len(records)
@@ -184,13 +185,15 @@ async def list_files(
             d = r.model_dump(by_alias=True)
             if "_id" in d:
                 d["_id"] = str(d["_id"])
-            dc_count = await db["data_container"].count_documents({"sourceFileId": d["_id"]})
+            dc_count = await transaction_repo.count_by_source_file(d["_id"])
             file_partner = d.get("partner", "")
             file_date_raw = d.get("reconciliationDate")
             file_date_str = file_date_raw.strftime("%Y-%m-%d") if hasattr(file_date_raw, "strftime") else str(file_date_raw)[:10] if file_date_raw else None
             rr_count = 0
             if file_partner and file_date_str:
-                rr_count = await db["reconciliation_result"].count_documents({"partner": file_partner, "date": file_date_str})
+                rr_count = await ReconciliationResultRepository(
+                    db
+                ).count_by_partner_and_date(file_partner, file_date_str)
             record_count = max(dc_count, rr_count)
             d["recordsCount"] = record_count
             files.append(d)
@@ -215,7 +218,7 @@ async def get_file(request: Request, file_id: str):
         raw = await db["reconciliation_file"].find_one({"_id": file_id})
         if raw is None:
             raise HTTPException(status_code=404, detail=f"File '{file_id}' not found.")
-        transaction_count = await db["data_container"].count_documents({"sourceFileId": file_id})
+        transaction_count = await DataContainerRepository(db).count_by_source_file(file_id)
         raw["_id"] = str(raw["_id"])
         return camelize({
             "file": raw,
@@ -256,21 +259,15 @@ async def data_stats(
             dc_query["reconciliationDate"] = {"$gte": start, "$lte": end}
             rf_query["reconciliationDate"] = {"$gte": start, "$lte": end}
 
-        total_transactions = await db["data_container"].count_documents(dc_query)
+        transaction_repo = DataContainerRepository(db)
+        total_transactions = await transaction_repo.count(dc_query)
         total_files = await db["reconciliation_file"].count_documents(rf_query)
 
         by_partner: dict[str, int] = {}
         if partner:
             by_partner[partner] = total_transactions
         else:
-            match_stage = {"$match": dc_query} if dc_query else None
-            pipeline = [
-                *( [match_stage] if match_stage else [] ),
-                {"$group": {"_id": "$identify", "count": {"$sum": 1}}},
-            ]
-            cursor = db["data_container"].aggregate(pipeline)
-            async for doc in cursor:
-                by_partner[str(doc["_id"])] = doc["count"]
+            by_partner = await transaction_repo.count_by_partner(dc_query)
 
         return camelize({
             "partner": partner or "*",

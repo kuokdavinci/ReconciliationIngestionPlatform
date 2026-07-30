@@ -135,32 +135,33 @@ class ReconciliationEngine:
             "updatedAt": 1,
         }
         internal_by_key: dict[str, dict] = {}
-        cursor = self._internal_repo.collection.find(internal_query, projection=projection)
-        if self._is_async_iterable(cursor):
-            async for raw in cursor:
-                normalized = self._internal_repo._convert_from_mongo_types(raw)
-                partner_txn_id = str(normalized.get("partnerTxnId") or "").strip()
-                if not partner_txn_id:
-                    continue
-                if (
-                    scope_type != ReconciliationScopeType.FULL_SNAPSHOT
-                    and scoped_partner_keys
-                    and partner_txn_id not in scoped_partner_keys
-                ):
-                    continue
-                status = normalized.get("status")
-                if not self._is_finalized_internal_status(status):
-                    continue
-                candidate = {
-                    "id": str(normalized.get("_id")),
-                    "amount": normalized.get("amount"),
-                    "status": status,
-                    "updated_at": normalized.get("updatedAt"),
-                }
-                existing = internal_by_key.get(partner_txn_id)
-                if existing is None or candidate["updated_at"] > existing["updated_at"]:
-                    internal_by_key[partner_txn_id] = candidate
-            return internal_by_key
+        if hasattr(self._internal_repo, "collection"):
+            cursor = self._internal_repo.collection.find(internal_query, projection=projection)
+            if self._is_async_iterable(cursor):
+                async for raw in cursor:
+                    normalized = self._internal_repo._convert_from_mongo_types(raw)
+                    partner_txn_id = str(normalized.get("partnerTxnId") or "").strip()
+                    if not partner_txn_id:
+                        continue
+                    if (
+                        scope_type != ReconciliationScopeType.FULL_SNAPSHOT
+                        and scoped_partner_keys
+                        and partner_txn_id not in scoped_partner_keys
+                    ):
+                        continue
+                    status = normalized.get("status")
+                    if not self._is_finalized_internal_status(status):
+                        continue
+                    candidate = {
+                        "id": str(normalized.get("_id")),
+                        "amount": normalized.get("amount"),
+                        "status": status,
+                        "updated_at": normalized.get("updatedAt"),
+                    }
+                    existing = internal_by_key.get(partner_txn_id)
+                    if existing is None or candidate["updated_at"] > existing["updated_at"]:
+                        internal_by_key[partner_txn_id] = candidate
+                return internal_by_key
 
         internal_records = await self._internal_repo.find_many(internal_query)
         finalized_internal_records = [
@@ -186,17 +187,18 @@ class ReconciliationEngine:
         return internal_by_key
 
     async def _iter_partner_record_batches(self, partner_query: dict):
-        cursor = self._data_repo.collection.find(partner_query).batch_size(self._partner_batch_size)
-        if self._is_async_iterable(cursor):
-            batch: list[DataContainer] = []
-            async for raw in cursor:
-                batch.append(self._data_repo._from_mongo(raw))
-                if len(batch) >= self._partner_batch_size:
+        if hasattr(self._data_repo, "collection"):
+            cursor = self._data_repo.collection.find(partner_query).batch_size(self._partner_batch_size)
+            if self._is_async_iterable(cursor):
+                batch: list[DataContainer] = []
+                async for raw in cursor:
+                    batch.append(self._data_repo._from_mongo(raw))
+                    if len(batch) >= self._partner_batch_size:
+                        yield batch
+                        batch = []
+                if batch:
                     yield batch
-                    batch = []
-            if batch:
-                yield batch
-            return
+                return
 
         records = await self._data_repo.find_many(partner_query)
         for start in range(0, len(records), self._partner_batch_size):
@@ -221,15 +223,15 @@ class ReconciliationEngine:
         if not result_buffer:
             return cleared_existing
         if not cleared_existing:
-            await self._result_repo.collection.delete_many(delete_query)
+            partner_name = delete_query.get("partner", "")
+            date_str = delete_query.get("date", "")
+            if hasattr(self._result_repo, "delete_by_partner_and_date"):
+                await self._result_repo.delete_by_partner_and_date(partner_name, date_str)
+            elif hasattr(self._result_repo, "collection"):
+                await self._result_repo.collection.delete_many(delete_query)
             cleared_existing = True
         batch_to_insert = list(result_buffer)
-        if self.fast_mode:
-            from src.models.repository import BaseRepository
-            serialized = [BaseRepository._convert_special_types(doc) for doc in batch_to_insert]
-            await self._result_repo.collection.insert_many(serialized)
-        else:
-            await self._result_repo.insert_many(batch_to_insert)
+        await self._result_repo.insert_many(batch_to_insert)
         results.extend(batch_to_insert)
         result_buffer.clear()
         return cleared_existing
@@ -567,7 +569,10 @@ class ReconciliationEngine:
             delete_query = {"partner": partner, "date": date_str}
 
         # Upfront deletion of existing records
-        await self._result_repo.collection.delete_many(delete_query)
+        if hasattr(self._result_repo, "delete_by_partner_and_date"):
+            await self._result_repo.delete_by_partner_and_date(partner, date_str)
+        elif hasattr(self._result_repo, "collection"):
+            await self._result_repo.collection.delete_many(delete_query)
 
         # Parallel write worker setup
         write_semaphore = asyncio.Semaphore(self._write_workers)

@@ -18,6 +18,7 @@ from typing import Any, Optional
 from motor.motor_asyncio import AsyncIOMotorCollection
 
 from src.analysis.config import AnalysisConfig
+from src.models.reconciliation_result import ReconciliationResultRepository
 from src.analysis.provider import LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -178,5 +179,7 @@ class DailyReporter:
         Returns:
             List of unique partner identifiers.
         """
+        if isinstance(self.collection, ReconciliationResultRepository):
+            return await self.collection.distinct_partners_by_date(date)
         partners = await self.collection.distinct("partner", {"date": date})
         return partners if isinstance(partners, list) else []

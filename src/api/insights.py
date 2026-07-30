@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from motor.motor_asyncio import AsyncIOMotorCollection
+from src.models.reconciliation_result import ReconciliationResultRepository
 
 from src.api.response_utils import camelize
 from src.analysis.config import AnalysisConfig
@@ -75,14 +75,14 @@ def _validate_partner(partner: Optional[str]) -> str:
     return partner.strip()
 
 
-def _get_collection(request: Request) -> AsyncIOMotorCollection:
-    """Get the reconciliation_result collection from app state.
+def _get_collection(request: Request) -> ReconciliationResultRepository:
+    """Get the PostgreSQL reconciliation result repository.
 
     Args:
         request: FastAPI request object.
 
     Returns:
-        Motor collection for reconciliation_result.
+        PostgreSQL repository for reconciliation results.
 
     Raises:
         HTTPException: If database connection is not available.
@@ -93,7 +93,7 @@ def _get_collection(request: Request) -> AsyncIOMotorCollection:
             status_code=503,
             detail="Database connection not available.",
         )
-    return db["reconciliation_result"]
+    return ReconciliationResultRepository(db)
 
 
 def _get_llm_provider() -> object:

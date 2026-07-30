@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from src.core.enums import ReconciliationScopeType
+from src.models.internal_transaction import InternalTransactionRepository
 
 
 def _filename_hints(file_name: str) -> tuple[list[str], ReconciliationScopeType | None]:
@@ -46,20 +47,33 @@ async def classify_scope(
 
     same_day_file_count = 0
     if reconciliation_date is not None:
-        same_day_file_count = await db["reconciliation_file"].count_documents(
-            {"partner": partner, "reconciliationDate": reconciliation_date}
-        )
+        file_coll = db["reconciliation_file"] if hasattr(db, "__getitem__") else getattr(db, "reconciliation_file", None)
+        if file_coll is not None and hasattr(file_coll, "count_documents"):
+            cnt_res = file_coll.count_documents(
+                {"partner": partner, "reconciliationDate": reconciliation_date}
+            )
+            if hasattr(cnt_res, "__await__"):
+                same_day_file_count = await cnt_res
+            elif callable(cnt_res):
+                same_day_file_count = cnt_res()
+            else:
+                same_day_file_count = cnt_res
+            try:
+                same_day_file_count = int(same_day_file_count)
+            except (TypeError, ValueError):
+                same_day_file_count = 0
     signals["sameDayFileCount"] = same_day_file_count
 
     internal_db_record_count = 0
     if reconciliation_date is not None:
         start_of_day = reconciliation_date.replace(hour=0, minute=0, second=0, microsecond=0)
         end_of_day = reconciliation_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-        internal_db_record_count = await db["internal_transaction"].count_documents(
-            {
-                "partner": partner,
-                "transactionTime": {"$gte": start_of_day, "$lte": end_of_day},
-            }
+        internal_db_record_count = await InternalTransactionRepository(
+            db
+        ).count_by_partner_and_date_range(
+            partner,
+            start_of_day,
+            end_of_day,
         )
     signals["internalDbRecordCount"] = internal_db_record_count
 

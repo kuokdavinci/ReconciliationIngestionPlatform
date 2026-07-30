@@ -5,7 +5,6 @@ from decimal import Decimal
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from src.core.enums import TransactionStatus
-from src.models.repository import BaseRepository
 
 
 class InternalTransaction(BaseModel):
@@ -77,34 +76,19 @@ def row_to_internal_transaction(row) -> InternalTransaction:
     )
 
 
-class InternalTransactionRepository(BaseRepository[InternalTransaction]):
-    """Repository for InternalTransaction with domain-specific queries backed by PostgreSQL."""
+class InternalTransactionRepository:
+    """PostgreSQL repository for internal source-of-truth transactions."""
 
-    def __init__(self, db: Any = None):
-        super().__init__(collection_name="internal_transaction", db=db)
-        self._set_model_class(InternalTransaction)
-        self.use_postgres = not ("MagicMock" in str(type(db)) or "AsyncMock" in str(type(db)))
-        if self.use_postgres:
+    def __init__(self, db: Any = None, engine: Any = None):
+        del db
+        if engine is None:
             from src.models.postgres import get_pg_engine
-            self.engine = get_pg_engine()
+
+            engine = get_pg_engine()
+        self.engine = engine
 
     async def insert_many(self, docs: list[InternalTransaction]) -> int:
         """Bulk insert multiple InternalTransaction documents."""
-        if not self.use_postgres:
-            if not docs:
-                return 0
-            if isinstance(docs[0], dict):
-                from src.models.repository import BaseRepository
-                serialized = [BaseRepository._convert_special_types(doc) for doc in docs]
-            else:
-                serialized = [self._to_mongo(doc) for doc in docs]
-            from pymongo.errors import BulkWriteError
-            try:
-                result = await self.collection.insert_many(serialized)
-                return len(result.inserted_ids)
-            except BulkWriteError as exc:
-                return exc.details.get("nInserted", 0)
-
         if not docs:
             return 0
         rows = [internal_transaction_to_row(doc) for doc in docs]
@@ -119,15 +103,10 @@ class InternalTransactionRepository(BaseRepository[InternalTransaction]):
         self, partner: str, start: datetime, end: datetime
     ) -> list[InternalTransaction]:
         """Find internal transactions for a partner within a transaction time range."""
-        if not self.use_postgres:
-            return await self.find_many({
-                "partner": partner,
-                "transactionTime": {
-                    "$gte": start,
-                    "$lte": end
-                }
-            })
-
+        if start.tzinfo is not None:
+            start = start.replace(tzinfo=None)
+        if end.tzinfo is not None:
+            end = end.replace(tzinfo=None)
         from sqlalchemy import select, and_
         from sqlalchemy.ext.asyncio import AsyncSession
         from src.models.postgres import InternalTransactionTable
@@ -142,3 +121,31 @@ class InternalTransactionRepository(BaseRepository[InternalTransaction]):
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [row_to_internal_transaction(r) for r in rows]
+
+    async def count_by_partner_and_date_range(
+        self,
+        partner: str,
+        start: datetime,
+        end: datetime,
+    ) -> int:
+        from sqlalchemy import and_, func, select
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from src.models.postgres import InternalTransactionTable
+
+        if start.tzinfo is not None:
+            start = start.replace(tzinfo=None)
+        if end.tzinfo is not None:
+            end = end.replace(tzinfo=None)
+        async with AsyncSession(self.engine) as session:
+            result = await session.execute(
+                select(func.count())
+                .select_from(InternalTransactionTable)
+                .where(
+                    and_(
+                        InternalTransactionTable.partner == partner,
+                        InternalTransactionTable.transaction_time >= start,
+                        InternalTransactionTable.transaction_time <= end,
+                    )
+                )
+            )
+            return int(result.scalar() or 0)

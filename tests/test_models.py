@@ -269,9 +269,147 @@ class TestReconciliationFileRepository:
         from src.models.reconciliation_file import ReconciliationFileRepository
 
         assert hasattr(ReconciliationFileRepository, "find_by_file_hash")
+        assert hasattr(ReconciliationFileRepository, "create_or_get_by_file_hash")
         assert hasattr(ReconciliationFileRepository, "find_by_partner_and_date")
         assert hasattr(ReconciliationFileRepository, "update_processing_stats")
         assert hasattr(ReconciliationFileRepository, "update_status")
+
+    @pytest.mark.asyncio
+    async def test_create_or_get_by_file_hash_returns_existing_on_duplicate(self):
+        from pymongo.errors import DuplicateKeyError
+        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+
+        mock_db = MagicMock()
+        mock_collection = AsyncMock()
+        mock_collection.insert_one.side_effect = DuplicateKeyError("E11000 duplicate key error")
+
+        now = datetime.now(timezone.utc)
+        existing = ReconciliationFile(
+            partner="MOMO",
+            file_name="test.xlsx",
+            file_hash="same_hash",
+            file_type=FileType.SETTLEMENT,
+            reconciliation_date=now,
+        )
+        mock_collection.find_one.return_value = existing.model_dump(by_alias=True)
+        mock_db.__getitem__.return_value = mock_collection
+
+        repo = ReconciliationFileRepository(db=mock_db)
+        repo._set_model_class(ReconciliationFile)
+
+        created, is_created = await repo.create_or_get_by_file_hash(
+            ReconciliationFile(
+                partner="MOMO",
+                file_name="test.xlsx",
+                file_hash="same_hash",
+                file_type=FileType.SETTLEMENT,
+                reconciliation_date=now,
+            )
+        )
+
+        assert is_created is False
+        assert created.file_hash == "same_hash"
+        mock_collection.insert_one.assert_called_once()
+        mock_collection.find_one.assert_called_once_with({"fileHash": "same_hash"})
+
+    @pytest.mark.asyncio
+    async def test_create_or_get_by_file_hash_inserts_new_record(self):
+        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+
+        mock_db = MagicMock()
+        mock_collection = AsyncMock()
+        mock_collection.insert_one.return_value = MagicMock(inserted_id="new-id")
+        mock_db.__getitem__.return_value = mock_collection
+
+        repo = ReconciliationFileRepository(db=mock_db)
+        repo._set_model_class(ReconciliationFile)
+        now = datetime.now(timezone.utc)
+        doc = ReconciliationFile(
+            partner="MOMO",
+            file_name="test.xlsx",
+            file_hash="hash-new",
+            file_type=FileType.SETTLEMENT,
+            reconciliation_date=now,
+        )
+
+        created, is_created = await repo.create_or_get_by_file_hash(doc)
+
+        assert is_created is True
+        assert created.file_hash == "hash-new"
+        mock_collection.insert_one.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_or_get_resolves_fetch_unit_duplicate(self):
+        from pymongo.errors import DuplicateKeyError
+        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+
+        mock_db = MagicMock()
+        mock_collection = AsyncMock()
+        mock_collection.insert_one.side_effect = DuplicateKeyError("duplicate fetch unit")
+        now = datetime.now(timezone.utc)
+        existing = ReconciliationFile(
+            partner="MOMO",
+            file_name="page-1-old.xlsx",
+            file_hash="old-content",
+            file_type=FileType.SETTLEMENT,
+            reconciliation_date=now,
+            fetch_unit_key="fetch-key",
+        )
+        mock_collection.find_one.side_effect = [
+            None,
+            existing.model_dump(by_alias=True),
+        ]
+        mock_db.__getitem__.return_value = mock_collection
+        repo = ReconciliationFileRepository(db=mock_db)
+
+        canonical, created = await repo.create_or_get_by_file_hash(
+            ReconciliationFile(
+                partner="MOMO",
+                file_name="page-1-new.xlsx",
+                file_hash="new-content",
+                file_type=FileType.SETTLEMENT,
+                reconciliation_date=now,
+                fetch_unit_key="fetch-key",
+            )
+        )
+
+        assert created is False
+        assert canonical.file_hash == "old-content"
+        assert mock_collection.find_one.await_args_list[1].args[0] == {
+            "fetchUnitKey": "fetch-key"
+        }
+
+    @pytest.mark.asyncio
+    async def test_concurrent_file_claim_has_one_canonical_winner(self):
+        import asyncio
+        from pymongo.errors import DuplicateKeyError
+        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+
+        mock_db = MagicMock()
+        mock_collection = AsyncMock()
+        mock_collection.insert_one.side_effect = [
+            MagicMock(inserted_id="winner"),
+            DuplicateKeyError("duplicate file hash"),
+        ]
+        now = datetime.now(timezone.utc)
+        canonical = ReconciliationFile(
+            partner="MOMO",
+            file_name="same.xlsx",
+            file_hash="same-hash",
+            file_type=FileType.SETTLEMENT,
+            reconciliation_date=now,
+        )
+        mock_collection.find_one.return_value = canonical.model_dump(by_alias=True)
+        mock_db.__getitem__.return_value = mock_collection
+        repo = ReconciliationFileRepository(db=mock_db)
+
+        results = await asyncio.gather(
+            repo.create_or_get_by_file_hash(canonical.model_copy(deep=True)),
+            repo.create_or_get_by_file_hash(canonical.model_copy(deep=True)),
+        )
+
+        assert sorted(created for _, created in results) == [False, True]
+        assert {record.file_hash for record, _ in results} == {"same-hash"}
 
 
 class TestMappingConfigRepository:
@@ -286,141 +424,45 @@ class TestMappingConfigRepository:
 
 
 class TestDataContainerRepository:
-    """Tests for DataContainerRepository."""
-
     def test_has_specialized_methods(self):
-        """DataContainerRepository has domain-specific query methods."""
         from src.models.data_container import DataContainerRepository
 
         assert hasattr(DataContainerRepository, "find_by_trace")
+        assert hasattr(DataContainerRepository, "find_by_ingestion_key")
         assert hasattr(DataContainerRepository, "find_by_source_file")
         assert hasattr(DataContainerRepository, "find_by_date_range")
         assert hasattr(DataContainerRepository, "find_by_duplicate_key")
+        assert hasattr(DataContainerRepository, "delete_by_source_file")
 
-    @pytest.mark.asyncio
-    async def test_find_by_duplicate_key_returns_none_when_no_match(self):
-        """find_by_duplicate_key returns None when no matching transaction exists."""
-        from unittest.mock import AsyncMock, MagicMock
+    def test_repository_uses_explicit_postgres_engine(self):
         from src.models.data_container import DataContainerRepository
 
-        mock_db = MagicMock()
-        mock_collection = AsyncMock()
-        mock_collection.find_one.return_value = None
-        mock_db.__getitem__.return_value = mock_collection
+        engine = object()
+        repo = DataContainerRepository(db=MagicMock(), engine=engine)
 
-        repo = DataContainerRepository(db=mock_db)
-        repo._set_model_class(type("Dummy", (), {"model_validate": lambda self, d: d})())
-
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        result = await repo.find_by_duplicate_key("MOMO", rec_date, "TRACE001")
-
-        assert result is None
-        mock_collection.find_one.assert_called_once_with({
-            "identify": "MOMO",
-            "reconciliationDate": rec_date,
-            "partnerData.trace": "TRACE001",
-        })
-
-    @pytest.mark.asyncio
-    async def test_find_by_duplicate_key_returns_container_when_match(self):
-        """find_by_duplicate_key returns DataContainer when a match exists."""
-        from unittest.mock import AsyncMock, MagicMock
-        from src.models.data_container import DataContainer, DataContainerRepository, PartnerData
-
-        mock_db = MagicMock()
-        mock_collection = AsyncMock()
-
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        partner = PartnerData(
-            id="61838642196",
-            trace="TRACE001",
-            status="SUCCESS",
-            amount=Decimal("100000"),
-            currency="VND",
-        )
-        existing = DataContainer(
-            identify="MOMO",
-            workflow_type="UPC",
-            reconciliation_date=rec_date,
-            source_file_id=uuid.uuid4(),
-            partner_data=partner,
-        )
-        mock_collection.find_one.return_value = existing.model_dump(by_alias=True)
-
-        mock_db.__getitem__.return_value = mock_collection
-        repo = DataContainerRepository(db=mock_db)
-        repo._set_model_class(DataContainer)
-
-        result = await repo.find_by_duplicate_key("MOMO", rec_date, "TRACE001")
-
-        assert result is not None
-        assert isinstance(result, DataContainer)
-        assert result.identify == "MOMO"
-        assert result.partner_data.trace == "TRACE001"
-
-    def test_has_insert_many_method(self):
-        """DataContainerRepository has insert_many method for bulk inserts."""
-        from src.models.data_container import DataContainerRepository
-
-        assert hasattr(DataContainerRepository, "insert_many")
-
-    @pytest.mark.asyncio
-    async def test_insert_many_calls_collection_insert_many(self):
-        """insert_many uses collection.insert_many with serialized documents."""
-        from src.models.data_container import DataContainer, DataContainerRepository, PartnerData
-
-        mock_db = MagicMock()
-        mock_collection = AsyncMock()
-        mock_collection.insert_many.return_value = MagicMock(inserted_ids=[1, 2, 3])
-        mock_db.__getitem__.return_value = mock_collection
-
-        repo = DataContainerRepository(db=mock_db)
-        repo._set_model_class(DataContainer)
-
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        partner = PartnerData(
-            id="txn1",
-            status="SUCCESS",
-            amount=Decimal("100000"),
-            currency="VND",
-        )
-        docs = [
-            DataContainer(
-                identify="MOMO",
-                workflow_type="UPC",
-                reconciliation_date=rec_date,
-                source_file_id=uuid.uuid4(),
-                partner_data=partner,
-            )
-            for _ in range(3)
-        ]
-
-        count = await repo.insert_many(docs)
-
-        assert count == 3
-        mock_collection.insert_many.assert_called_once()
-        call_docs = mock_collection.insert_many.call_args[0][0]
-        assert len(call_docs) == 3
-        # Verify documents are serialized with by_alias
-        for doc in call_docs:
-            assert "partnerData" in doc
-            assert "workflowType" in doc
+        assert repo.engine is engine
+        assert not hasattr(repo, "collection")
 
     @pytest.mark.asyncio
     async def test_insert_many_returns_zero_for_empty_list(self):
-        """insert_many returns 0 when given an empty list."""
         from src.models.data_container import DataContainerRepository
 
-        mock_db = MagicMock()
-        mock_collection = AsyncMock()
-        mock_db.__getitem__.return_value = mock_collection
+        repo = DataContainerRepository(engine=object())
 
-        repo = DataContainerRepository(db=mock_db)
+        assert await repo.insert_many([]) == 0
 
-        count = await repo.insert_many([])
 
-        assert count == 0
-        mock_collection.insert_many.assert_not_called()
+class TestDataContainerIngestionKey:
+    def test_ingestion_key_roundtrip_via_row_helpers(self):
+        from src.models.data_container import (DataContainer, PartnerData, data_container_to_row, row_to_data_container)
+        now = datetime.now(timezone.utc)
+        partner = PartnerData(id="TXN001", trace="TRACE001", status="SUCCESS", amount=Decimal("100000"), currency="VND")
+        doc = DataContainer(identify="MOMO", workflow_type="UPC", reconciliation_date=now, source_file_id=uuid.uuid4(), partner_data=partner, ingestion_key="MOMO:TXN001")
+        row = data_container_to_row(doc)
+        assert row["ingestion_key"] == "MOMO:TXN001"
+        restored = row_to_data_container(row)
+        assert restored.ingestion_key == "MOMO:TXN001"
+        assert restored.partner_data.id == "TXN001"
 
 
 class TestModelImports:
@@ -444,3 +486,20 @@ class TestModelImports:
         assert isinstance(DataContainer, type)
         assert isinstance(PartnerData, type)
         assert isinstance(BaseRepository, type)
+
+
+class TestPostgresSchema:
+    def test_partner_transaction_has_unique_identity_constraint(self):
+        from sqlalchemy import UniqueConstraint
+        from src.models.postgres import PartnerTransactionTable
+
+        unique_constraints = [
+            constraint
+            for constraint in PartnerTransactionTable.__table__.constraints
+            if isinstance(constraint, UniqueConstraint)
+        ]
+
+        assert any(
+            tuple(constraint.columns.keys()) == ("identify", "ingestion_key")
+            for constraint in unique_constraints
+        )

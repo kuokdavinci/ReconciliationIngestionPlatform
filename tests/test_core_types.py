@@ -16,6 +16,7 @@ from src.core.types import (
     FieldMapping,
     CanonicalTransaction,
     PartnerData,
+    BatchInsertResult,
     ValidationError,
     ProcessingStats,
 )
@@ -294,3 +295,12 @@ class TestProcessingStats:
         assert stats.total_rows == 100
         assert stats.success_rows == 95
         assert stats.failed_rows == 5
+        assert stats.duplicate_rows == 0
+
+
+class TestBatchInsertResult:
+    """Test BatchInsertResult model."""
+
+    def test_attempted_property(self):
+        result = BatchInsertResult(inserted=3, duplicates=2, failed=1)
+        assert result.attempted == 6

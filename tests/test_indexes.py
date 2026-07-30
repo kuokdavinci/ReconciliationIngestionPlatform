@@ -14,7 +14,7 @@ class TestIndexesDefinition:
 
         assert "reconciliation_file" in INDEXES
         assert "reconciliation_mapping_config" in INDEXES
-        assert "data_container" in INDEXES
+        assert "data_container" not in INDEXES
 
     def test_indexes_are_lists_of_index_models(self):
         """Each collection's indexes is a list of IndexModel objects."""
@@ -96,75 +96,6 @@ class TestMappingConfigIndexes:
             idx for idx in indexes if len(idx.document["key"]) > 1
         ]
         assert len(compound_indexes) >= 1, "No compound index found"
-
-
-class TestDataContainerIndexes:
-    """Tests for data_container index definitions."""
-
-    def test_index_on_trace(self):
-        """data_container has index on partnerData.trace."""
-        from src.models.indexes import INDEXES
-
-        indexes = INDEXES["data_container"]
-        trace_indexes = [
-            idx
-            for idx in indexes
-            if "partner_data.trace" in idx.document["key"]
-            or "partnerData.trace" in idx.document["key"]
-        ]
-        assert len(trace_indexes) >= 1, "No index on partnerData.trace found"
-
-    def test_compound_index_on_identify_and_date(self):
-        """data_container has compound index on identify + reconciliation_date."""
-        from src.models.indexes import INDEXES
-
-        indexes = INDEXES["data_container"]
-        compound_indexes = [
-            idx for idx in indexes if len(idx.document["key"]) > 1
-        ]
-
-        identify_date_found = False
-        for idx in compound_indexes:
-            keys = list(idx.document["key"].keys())
-            if "identify" in keys and (
-                "reconciliation_date" in keys
-                or "reconciliationDate" in keys
-            ):
-                identify_date_found = True
-                break
-        assert identify_date_found, (
-            "No compound index on identify + reconciliation_date"
-        )
-
-    def test_index_on_operation_status(self):
-        """data_container has index on operation_status."""
-        from src.models.indexes import INDEXES
-
-        indexes = INDEXES["data_container"]
-        status_indexes = [
-            idx
-            for idx in indexes
-            if "operation_status" in idx.document["key"]
-            or "operationStatus" in idx.document["key"]
-        ]
-        assert len(status_indexes) >= 1, (
-            "No index on operation_status found"
-        )
-
-    def test_index_on_partner_status(self):
-        """data_container has index on partnerData.status."""
-        from src.models.indexes import INDEXES
-
-        indexes = INDEXES["data_container"]
-        partner_status_indexes = [
-            idx
-            for idx in indexes
-            if "partner_data.status" in idx.document["key"]
-            or "partnerData.status" in idx.document["key"]
-        ]
-        assert len(partner_status_indexes) >= 1, (
-            "No index on partnerData.status found"
-        )
 
 
 class TestApplyIndexes:

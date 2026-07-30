@@ -1,6 +1,6 @@
 """Tests for Data Explorer API endpoints."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -66,15 +66,17 @@ class TestListTransactions:
              "requestId": req_id},
         ]
 
-        mock_cursor = _AsyncCursor(fake_docs)
-        mock_db.__getitem__.return_value.find = MagicMock(return_value=mock_cursor)
-
-        client = TestClient(app)
-        response = client.get("/api/v1/data/transactions", params={"partner": "MOMO"})
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data["transactions"]) == 1
-        assert data["transactions"][0]["identify"] == "MOMO"
+        from src.models.data_container import DataContainer
+        dc = DataContainer.model_validate(fake_docs[0])
+        mock_find_many = AsyncMock(return_value=[dc])
+        
+        with patch("src.api.data_explorer.DataContainerRepository.find_many", mock_find_many):
+            client = TestClient(app)
+            response = client.get("/api/v1/data/transactions", params={"partner": "MOMO"})
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["transactions"]) == 1
+            assert data["transactions"][0]["identify"] == "MOMO"
 
     def test_invalid_date_returns_400(self):
         app, _, _ = _create_test_app()
@@ -103,16 +105,18 @@ class TestListTransactions:
             for i in range(5)
         ]
 
-        mock_cursor = _AsyncCursor(fake_docs)
-        mock_db.__getitem__.return_value.find = MagicMock(return_value=mock_cursor)
+        from src.models.data_container import DataContainer
+        dcs = [DataContainer.model_validate(doc) for doc in fake_docs]
+        mock_find_many = AsyncMock(return_value=dcs)
 
-        client = TestClient(app)
-        response = client.get(
-            "/api/v1/data/transactions",
-            params={"limit": 2, "offset": 2},
-        )
-        assert response.status_code == 200
-        assert len(response.json()["transactions"]) == 2
+        with patch("src.api.data_explorer.DataContainerRepository.find_many", mock_find_many):
+            client = TestClient(app)
+            response = client.get(
+                "/api/v1/data/transactions",
+                params={"limit": 2, "offset": 2},
+            )
+            assert response.status_code == 200
+            assert len(response.json()["transactions"]) == 2
 
 
 class TestGetTransaction:
@@ -121,7 +125,7 @@ class TestGetTransaction:
         _id = "550e8400-e29b-41d4-a716-446655440000"
         src_id = "550e8400-e29b-41d4-a716-446655440002"
         req_id = "550e8400-e29b-41d4-a716-446655440001"
-        mock_db.__getitem__.return_value.find_one = AsyncMock(return_value={
+        doc = {
             "_id": _id, "identify": "MOMO", "workflowType": "RECON",
             "reconciliationDate": "2024-07-07T00:00:00Z", "operationStatus": "DONE",
             "reconciliationStatus": "", "connectorData": "", "extraData": "",
@@ -130,55 +134,62 @@ class TestGetTransaction:
             "createdBy": "system", "createdDate": "2024-07-07T00:00:00Z",
             "lastModifiedBy": "system", "lastModifiedDate": "2024-07-07T00:00:00Z",
             "requestId": req_id,
-        })
+        }
+        from src.models.data_container import DataContainer
+        dc = DataContainer.model_validate(doc)
+        mock_find_by_id = AsyncMock(return_value=dc)
 
-        client = TestClient(app)
-        response = client.get("/api/v1/data/transactions/" + _id)
-        assert response.status_code == 200
-        assert response.json()["_id"] == _id
+        with patch("src.api.data_explorer.DataContainerRepository.find_by_id", mock_find_by_id):
+            client = TestClient(app)
+            response = client.get("/api/v1/data/transactions/" + _id)
+            assert response.status_code == 200
+            assert response.json()["_id"] == _id
 
     def test_non_existing_returns_404(self):
         app, mock_db, _ = _create_test_app()
-        mock_db.__getitem__.return_value.find_one = AsyncMock(return_value=None)
+        mock_find_by_id = AsyncMock(return_value=None)
 
-        client = TestClient(app)
-        response = client.get("/api/v1/data/transactions/nonexistent")
-        assert response.status_code == 404
-        assert "not found" in response.json()["detail"]
+        with patch("src.api.data_explorer.DataContainerRepository.find_by_id", mock_find_by_id):
+            client = TestClient(app)
+            response = client.get("/api/v1/data/transactions/nonexistent")
+            assert response.status_code == 404
+            assert "not found" in response.json()["detail"]
 
 
 class TestListFiles:
     def test_returns_file_list(self):
         app, mock_db, _ = _create_test_app()
-        mock_cursor = _AsyncCursor([])
-        mock_db.__getitem__.return_value.find = MagicMock(return_value=mock_cursor)
+        mock_find_many = AsyncMock(return_value=[])
 
-        client = TestClient(app)
-        response = client.get("/api/v1/data/files")
-        assert response.status_code == 200
-        assert "files" in response.json()
+        with patch("src.api.data_explorer.ReconciliationFileRepository.find_many", mock_find_many):
+            client = TestClient(app)
+            response = client.get("/api/v1/data/files")
+            assert response.status_code == 200
+            assert "files" in response.json()
 
 
 class TestGetFile:
     def test_returns_file_with_transaction_count(self):
         app, mock_db, _ = _create_test_app()
+        file_id = "550e8400-e29b-41d4-a716-446655440001"
         mock_db.__getitem__.return_value.find_one = AsyncMock(return_value={
-            "_id": "file-1", "partner": "MOMO", "fileName": "test.xlsx",
+            "_id": file_id, "partner": "MOMO", "fileName": "test.xlsx",
             "fileHash": "abc123", "fileType": "EXCEL",
             "reconciliationDate": "2024-07-07T00:00:00Z",
-            "processingStatus": "DONE", "totalRows": 100,
+            "processingStatus": "COMPLETED", "totalRows": 100,
             "successRows": 95, "failedRows": 5,
             "uploadedAt": "2024-07-07T00:00:00Z",
             "createdBy": "system", "createdAt": "2024-07-07T00:00:00Z",
         })
-        mock_db.__getitem__.return_value.count_documents = AsyncMock(return_value=50)
+        mock_count = AsyncMock(return_value=50)
 
-        client = TestClient(app)
-        response = client.get("/api/v1/data/files/file-1")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["file"]["_id"] == "file-1"
-        assert data["transactionCount"] == 50
+        with patch("src.api.data_explorer.DataContainerRepository.count_by_source_file", mock_count):
+            client = TestClient(app)
+            response = client.get("/api/v1/data/files/" + file_id)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["file"]["_id"] == file_id
+            assert data["transactionCount"] == 50
 
     def test_non_existing_returns_404(self):
         app, mock_db, _ = _create_test_app()

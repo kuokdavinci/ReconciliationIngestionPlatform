@@ -13,7 +13,7 @@ async def test_postgres_repository_filters_dict_and_list(setup_postgres_test_db)
     """Test that ReconciliationResultRepository properly parses dict with $in and list for PostgreSQL queries."""
     # Ensure postgres is enabled for testing
     repo = ReconciliationResultRepository(SubscriptableDummy())
-    assert repo.use_postgres is True
+    assert not hasattr(repo, "collection")
 
     # 1. Clean previous data
     from sqlalchemy import delete

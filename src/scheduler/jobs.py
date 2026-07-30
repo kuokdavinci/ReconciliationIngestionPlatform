@@ -14,7 +14,7 @@ from src.core.error_formatting import summarize_runtime_error
 from src.fetchers import create_fetcher
 from src.fetchers.base import BaseFetcher
 from src.logging import StructuredLogger
-from src.models.fetch_config import FetchConfig, FetchConfigRepository
+from src.models.fetch_config import FetchConfig, FetchConfigRepository, FetchMethod
 from src.reconciliation.engine import ReconciliationEngine
 from src.services.runtime_runs import create_runtime_run, update_runtime_run
 from src.models.partner_runtime_run import (
@@ -23,6 +23,33 @@ from src.models.partner_runtime_run import (
 )
 
 logger = logging.getLogger("reconciliation.jobs")
+
+
+def _fetch_source_endpoint(config: FetchConfig) -> str:
+    method_config = config.get_method_config()
+    if config.fetch_method == FetchMethod.API:
+        return method_config.base_url
+    if config.fetch_method == FetchMethod.SFTP:
+        return f"sftp://{method_config.host}:{method_config.port}{method_config.remote_path}"
+    if config.fetch_method == FetchMethod.FILEDROP:
+        return f"filedrop://{method_config.directory}/{method_config.pattern}"
+    raise ValueError(f"Unsupported fetch method: {config.fetch_method}")
+
+
+def _fetch_unit_metadata(
+    config: FetchConfig,
+    fetch_metadata: dict[str, Any],
+    reconciliation_date: datetime,
+) -> dict[str, Any]:
+    metadata = {
+        **fetch_metadata,
+        "sourceEndpoint": _fetch_source_endpoint(config),
+        "windowStart": reconciliation_date.isoformat(),
+        "windowEnd": reconciliation_date.isoformat(),
+    }
+    if config.fetch_method == FetchMethod.FILEDROP:
+        metadata["cursor"] = fetch_metadata.get("selected_file")
+    return metadata
 
 
 async def daily_partner_fetch_job(
@@ -187,6 +214,11 @@ async def run_fetch_config_once(
             reconciliation_date=reconciliation_date,
             batch_size=batch_size,
             structured_logger=structured_logger,
+            fetch_unit_metadata=_fetch_unit_metadata(
+                config,
+                fetch_result.metadata,
+                reconciliation_date,
+            ),
         )
         if not ingestion_result or not ingestion_result.file_record:
             await update_runtime_run(
@@ -325,6 +357,7 @@ async def _run_ingestion(
     reconciliation_date: datetime,
     batch_size: int | None = None,
     structured_logger: Optional[StructuredLogger] = None,
+    fetch_unit_metadata: Optional[dict[str, Any]] = None,
 ) -> Any:
     """Run the ingestion pipeline for a fetched file.
 
@@ -357,6 +390,7 @@ async def _run_ingestion(
             workflow_type="UPC",
             file_type=FileType.SETTLEMENT,
             reconciliation_date=reconciliation_date,
+            fetch_unit_metadata=fetch_unit_metadata,
             enable_config_health_check=True,
         )
 

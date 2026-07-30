@@ -8,6 +8,7 @@ Exports:
 import asyncio
 from dataclasses import dataclass, field
 import hashlib
+import json
 from pathlib import Path
 import string
 import time
@@ -20,7 +21,7 @@ from src.config.config_health import (
 )
 from src.config.loader import ConfigLoader
 from src.core.enums import ProcessingStatus
-from src.core.types import ProcessingStats
+from src.core.types import BatchInsertResult, ProcessingStats
 from src.logging import StructuredLogger, get_structured_logger
 from src.models.data_container import DataContainer, DataContainerRepository, PartnerData
 from src.models.mapping_config import MappingConfig, MappingConfigRepository
@@ -80,6 +81,8 @@ class IngestionPipeline:
         self._config_loader = config_loader
         self._batch_size = batch_size if batch_size is not None else settings.ingest_batch_size
         self._write_workers = write_workers if write_workers is not None else settings.ingest_write_workers
+        if self._write_workers < 1:
+            raise ValueError("write_workers must be at least 1")
         self._ordered_insert = ordered_insert if ordered_insert is not None else settings.ingest_ordered_insert
         self._recon_repo = ReconciliationFileRepository(db)
         self._data_repo = DataContainerRepository(db)
@@ -124,6 +127,64 @@ class IngestionPipeline:
             for i, value in enumerate(row_tuple)
         }
 
+    def _derive_ingestion_key(self, txn: Any) -> str:
+        """Derive a stable transaction key from normalized transaction data."""
+        if isinstance(txn, dict):
+            txn_id = txn.get("id")
+            trace = txn.get("trace")
+        else:
+            txn_id = getattr(txn, "id", None)
+            trace = getattr(txn, "trace", None)
+
+        if txn_id:
+            return str(txn_id)
+        if trace:
+            return str(trace)
+        raise ValueError("Unable to derive ingestion_key from transaction payload")
+
+    def _derive_fetch_unit_key(
+        self,
+        *,
+        partner: str,
+        workflow_type: str,
+        file_type: Any,
+        reconciliation_date: Any,
+        config_version: Optional[str],
+        metadata: Optional[dict[str, Any]],
+    ) -> Optional[str]:
+        if not metadata:
+            return None
+
+        identity = {
+            "partner": partner,
+            "workflowType": workflow_type,
+            "fileType": getattr(file_type, "value", file_type),
+            "reconciliationDate": reconciliation_date.isoformat(),
+            "configVersion": config_version,
+            "sourceEndpoint": metadata.get("sourceEndpoint"),
+            "page": metadata.get("page"),
+            "cursor": metadata.get("cursor"),
+            "windowStart": metadata.get("windowStart"),
+            "windowEnd": metadata.get("windowEnd"),
+        }
+        if not identity["sourceEndpoint"]:
+            raise ValueError("fetch_unit metadata requires sourceEndpoint")
+        if not any(
+            identity[field] is not None
+            for field in ("page", "cursor", "windowStart", "windowEnd")
+        ):
+            raise ValueError(
+                "fetch_unit metadata requires page, cursor, or a fetch window"
+            )
+
+        canonical = json.dumps(
+            identity,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     async def _flush_batch(
         self, batch: list[dict]
     ) -> int:
@@ -141,6 +202,7 @@ class IngestionPipeline:
         file_type: Any,  # FileType enum
         reconciliation_date: Any,  # datetime
         config_version: Optional[str] = None,
+        fetch_unit_metadata: Optional[dict[str, Any]] = None,
         enable_config_health_check: bool = False,
     ) -> IngestionResult:
         """Process an entire reconciliation file end-to-end.
@@ -178,6 +240,7 @@ class IngestionPipeline:
         total_rows = 0
         success_rows = 0
         failed_rows = 0
+        duplicate_rows = 0
         errors: list[dict] = []
         file_record: Optional[ReconciliationFile] = None
 
@@ -186,30 +249,16 @@ class IngestionPipeline:
 
             # Step 1: Compute file hash
             file_hash = await self._compute_file_hash(file_path)
+            fetch_unit_key = self._derive_fetch_unit_key(
+                partner=partner,
+                workflow_type=workflow_type,
+                file_type=file_type,
+                reconciliation_date=reconciliation_date,
+                config_version=config_version,
+                metadata=fetch_unit_metadata,
+            )
 
-            # Step 2: Check for duplicate
-            existing = await self._recon_repo.find_by_file_hash(file_hash)
-            if existing is not None:
-                # File already processed — emit FILE_FAILED and return early
-                self._logger.emit_file_failed(
-                    "duplicate",
-                    f"File already processed (hash: {file_hash[:16]}...)",
-                )
-                stats = ProcessingStats(
-                    total_rows=0, success_rows=0, failed_rows=0
-                )
-                return IngestionResult(
-                    file_record=existing,
-                    stats=stats,
-                    errors=[
-                        {
-                            "field": "file_duplicate",
-                            "reason": f"File already processed (hash: {file_hash[:16]}...)",
-                        }
-                    ],
-                )
-
-            # Step 3: Create ReconciliationFile with PROCESSING status
+            # Step 2: Create the canonical file record or resolve a duplicate race.
             file_name = Path(file_path).name
             scope_meta = await classify_scope(
                 self._db,
@@ -225,12 +274,62 @@ class IngestionPipeline:
                 reconciliation_date=reconciliation_date,
                 processing_status=ProcessingStatus.PROCESSING,
                 config_version=config_version,
+                fetch_unit_key=fetch_unit_key,
+                fetch_unit_metadata=fetch_unit_metadata or {},
                 scope_type=scope_meta["scopeType"],
                 scope_confidence=scope_meta["scopeConfidence"],
                 scope_reason=scope_meta["scopeReason"],
                 scope_signals=scope_meta["scopeSignals"],
             )
-            file_record = await self._recon_repo.create(file_record)
+            existing = await self._recon_repo.find_by_file_hash(file_hash)
+            if existing is not None and isinstance(existing, ReconciliationFile):
+                file_record = existing
+                created = False
+            elif hasattr(self._recon_repo, "create_or_get_by_file_hash"):
+                res = await self._recon_repo.create_or_get_by_file_hash(file_record)
+                if isinstance(res, tuple) and len(res) == 2 and isinstance(res[0], ReconciliationFile):
+                    file_record, created = res
+                elif isinstance(res, ReconciliationFile):
+                    file_record, created = res, True
+                else:
+                    file_record = await self._recon_repo.create(file_record)
+                    created = True
+            else:
+                file_record = await self._recon_repo.create(file_record)
+                created = True
+
+            if not created:
+                duplicate_code = (
+                    "fetch_unit_duplicate"
+                    if fetch_unit_key
+                    and file_record.fetch_unit_key == fetch_unit_key
+                    and file_record.file_hash != file_hash
+                    else "file_duplicate"
+                )
+                self._logger.emit_file_failed(
+                    "duplicate",
+                    f"Duplicate ingestion claim ({duplicate_code})",
+                )
+                stats = ProcessingStats(
+                    total_rows=0,
+                    success_rows=0,
+                    failed_rows=0,
+                    duplicate_rows=0,
+                )
+                return IngestionResult(
+                    file_record=file_record,
+                    stats=stats,
+                    errors=[
+                        {
+                            "field": duplicate_code,
+                            "reason": (
+                                "Fetch unit already processed"
+                                if duplicate_code == "fetch_unit_duplicate"
+                                else f"File already processed (hash: {file_hash[:16]}...)"
+                            ),
+                        }
+                    ],
+                )
 
             # Emit FILE_STARTED event
             self._logger.emit_file_started(str(file_record.id), file_name, partner)
@@ -321,7 +420,6 @@ class IngestionPipeline:
                 t_validate = 0.0
                 t_db_insert = 0.0
                 db_write_count = 0
-
                 write_semaphore = asyncio.Semaphore(self._write_workers)
                 write_tasks: list[asyncio.Task] = []
                 t_db_start_wall = 0.0
@@ -335,12 +433,53 @@ class IngestionPipeline:
                         t_db_start_wall = t0_loc
                     async with write_semaphore:
                         t0_batch = time.perf_counter()
-                        res = await self._data_repo.insert_many(batch_to_write, ordered=self._ordered_insert)
+                        res = await self._data_repo.insert_many(
+                            batch_to_write,
+                            ordered=self._ordered_insert,
+                            detailed=True,
+                        )
                         batch_duration_ms = (time.perf_counter() - t0_batch) * 1000
                         if batch_duration_ms > slowest_batch_ms:
                             slowest_batch_ms = batch_duration_ms
                     t_db_end_wall = time.perf_counter()
                     return res
+
+                def _record_batch_result(result: int | BatchInsertResult) -> None:
+                    nonlocal success_rows, duplicate_rows, failed_rows
+                    if isinstance(result, BatchInsertResult):
+                        success_rows += result.inserted
+                        duplicate_rows += result.duplicates
+                        failed_rows += result.failed
+                        if result.duplicates:
+                            errors.append({
+                                "field": "transaction_duplicate",
+                                "reason": (
+                                    f"{result.duplicates} transaction(s) skipped "
+                                    "because the ingestion key already exists"
+                                ),
+                            })
+                        if result.failed:
+                            errors.append({
+                                "field": "batch_conflict",
+                                "reason": (
+                                    f"{result.failed} transaction(s) failed "
+                                    "during batch persistence"
+                                ),
+                            })
+                    else:
+                        success_rows += int(result)
+
+                async def _schedule_flush(batch_to_write: list[Any]) -> None:
+                    nonlocal write_tasks
+                    if self._write_workers == 1:
+                        _record_batch_result(await _worker_flush(batch_to_write))
+                        return
+
+                    write_tasks.append(asyncio.create_task(_worker_flush(batch_to_write)))
+                    if len(write_tasks) >= self._write_workers:
+                        for result in await asyncio.gather(*write_tasks):
+                            _record_batch_result(result)
+                        write_tasks = []
 
 
 
@@ -436,6 +575,7 @@ class IngestionPipeline:
                             continue
 
                     # 8g: Valid → add to batch buffer
+                    ingestion_key = self._derive_ingestion_key(txn)
                     if self._fast_mode:
                         # Bypass all Pydantic model creation for performance
                         from uuid import uuid4
@@ -451,6 +591,7 @@ class IngestionPipeline:
                              "connectorData": "",
                              "extraData": "",
                              "sourceFileId": str(file_record.id),
+                             "ingestion_key": ingestion_key,
                              "partnerData": {
                                  "_id": txn["id"],
                                  "trace": txn["trace"],
@@ -481,28 +622,27 @@ class IngestionPipeline:
                             workflow_type=workflow_type,
                             reconciliation_date=reconciliation_date,
                             source_file_id=file_record.id,
+                            ingestion_key=ingestion_key,
                             partner_data=partner_data,
                         )
                     batch_buffer.append(data_container)
 
                     # 8i: Flush when batch reaches batch_size
                     if len(batch_buffer) >= self._batch_size:
-                        task = asyncio.create_task(_worker_flush(batch_buffer))
-                        write_tasks.append(task)
+                        await _schedule_flush(batch_buffer)
                         db_write_count += 1
                         batch_buffer = []
-                        write_tasks = [t for t in write_tasks if not t.done()]
 
                 # Step 9: Flush remaining batch
                 if batch_buffer:
-                    task = asyncio.create_task(_worker_flush(batch_buffer))
-                    write_tasks.append(task)
+                    await _schedule_flush(batch_buffer)
                     db_write_count += 1
 
                 # Wait for all writing tasks to finish
                 if write_tasks:
                     results = await asyncio.gather(*write_tasks)
-                    success_rows += sum(results)
+                    for result in results:
+                        _record_batch_result(result)
                 if t_db_start_wall > 0.0:
                     t_db_insert = (t_db_end_wall - t_db_start_wall) * 1000
 
@@ -560,6 +700,7 @@ class IngestionPipeline:
                 total_rows=total_rows,
                 success_rows=success_rows,
                 failed_rows=failed_rows,
+                duplicate_rows=duplicate_rows,
             )
             return IngestionResult(
                 file_record=file_record,
@@ -593,9 +734,10 @@ class IngestionPipeline:
                 total_rows=total_rows,
                 success_rows=success_rows,
                 failed_rows=failed_rows,
+                duplicate_rows=duplicate_rows,
             )
             errors.append({
-                "field": "pipeline",
+                "field": "persistence_error",
                 "reason": str(exc),
             })
             return IngestionResult(

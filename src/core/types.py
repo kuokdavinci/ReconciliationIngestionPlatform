@@ -102,3 +102,16 @@ class ProcessingStats(BaseModel):
     total_rows: int
     success_rows: int
     failed_rows: int
+    duplicate_rows: int = 0
+
+
+class BatchInsertResult(BaseModel):
+    """Detailed result for a batch persistence attempt."""
+
+    inserted: int
+    duplicates: int = 0
+    failed: int = 0
+
+    @property
+    def attempted(self) -> int:
+        return self.inserted + self.duplicates + self.failed

@@ -310,27 +310,29 @@ class TestSFTPFetcher:
         """Test successful SFTP fetch."""
         monkeypatch.setenv("SFTP_PASS", "secret")
 
-        config = SFTPConfig(
-            host="sftp.example.com",
-            username="user",
-            password="env:SFTP_PASS",
-            remote_path="/data/file_{date:%Y%m%d}.xlsx",
-        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = SFTPConfig(
+                host="sftp.example.com",
+                username="user",
+                password="env:SFTP_PASS",
+                remote_path="/data/file_{date:%Y%m%d}.xlsx",
+                download_dir=tmp_dir,
+            )
 
-        fetcher = SFTPFetcher()
+            fetcher = SFTPFetcher()
 
-        # Mock the _download_via_sftp method to create a file
-        def mock_download(host, port, user, pwd, remote, local, timeout):
-            Path(local).parent.mkdir(parents=True, exist_ok=True)
-            Path(local).write_text("mock content")
+            # Mock the _download_via_sftp method to create a file
+            def mock_download(host, port, user, pwd, remote, local, timeout):
+                Path(local).parent.mkdir(parents=True, exist_ok=True)
+                Path(local).write_text("mock content")
 
-        with patch.object(fetcher, "_download_via_sftp", side_effect=mock_download):
-            result = await fetcher.fetch(config, datetime(2024, 7, 7))
+            with patch.object(fetcher, "_download_via_sftp", side_effect=mock_download):
+                result = await fetcher.fetch(config, datetime(2024, 7, 7))
 
-        assert result.success is True
-        assert result.local_path is not None
-        assert result.file_size > 0
-        assert result.metadata["remote_path"] == "/data/file_20240707.xlsx"
+            assert result.success is True
+            assert result.local_path is not None
+            assert result.file_size > 0
+            assert result.metadata["remote_path"] == "/data/file_20240707.xlsx"
 
     @pytest.mark.asyncio
     async def test_fetch_credential_error(self):
@@ -382,27 +384,29 @@ class TestAPIFetcher:
         """Test successful API fetch."""
         monkeypatch.setenv("API_TOKEN", "secret_token")
 
-        config = APIConfig(
-            base_url="https://api.example.com/data",
-            headers={"Authorization": "env:API_TOKEN"},
-            query_params={"date": "{date:%Y-%m-%d}"},
-        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = APIConfig(
+                base_url="https://api.example.com/data",
+                headers={"Authorization": "env:API_TOKEN"},
+                query_params={"date": "{date:%Y-%m-%d}"},
+                download_dir=tmp_dir,
+            )
 
-        fetcher = APIFetcher()
+            fetcher = APIFetcher()
 
-        # Mock httpx response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.content = b"mock,data\n1,2"
-        mock_response.headers = {"content-type": "text/csv"}
+            # Mock httpx response
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.content = b"mock,data\n1,2"
+            mock_response.headers = {"content-type": "text/csv"}
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
-            result = await fetcher.fetch(config, datetime(2024, 7, 7))
+            with patch("httpx.AsyncClient") as mock_client:
+                mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
+                result = await fetcher.fetch(config, datetime(2024, 7, 7))
 
-        assert result.success is True
-        assert result.local_path is not None
-        assert result.file_size > 0
+            assert result.success is True
+            assert result.local_path is not None
+            assert result.file_size > 0
 
     @pytest.mark.asyncio
     async def test_fetch_api_error(self):
@@ -427,24 +431,26 @@ class TestAPIFetcher:
     @pytest.mark.asyncio
     async def test_fetch_retry_on_timeout(self):
         """Test API fetch retries on timeout."""
-        config = APIConfig(
-            base_url="https://api.example.com/data",
-        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = APIConfig(
+                base_url="https://api.example.com/data",
+                download_dir=tmp_dir,
+            )
 
-        fetcher = APIFetcher()
+            fetcher = APIFetcher()
 
-        import httpx
+            import httpx
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.get.side_effect = [
-                httpx.TimeoutException("Timeout 1"),
-                httpx.TimeoutException("Timeout 2"),
-                MagicMock(status_code=200, content=b"data", headers={}),
-            ]
-            result = await fetcher.fetch(config, datetime(2024, 7, 7))
+            with patch("httpx.AsyncClient") as mock_client:
+                mock_client.return_value.__aenter__.return_value.get.side_effect = [
+                    httpx.TimeoutException("Timeout 1"),
+                    httpx.TimeoutException("Timeout 2"),
+                    MagicMock(status_code=200, content=b"data", headers={}),
+                ]
+                result = await fetcher.fetch(config, datetime(2024, 7, 7))
 
-        # Should succeed after retries
-        assert result.success is True
+            # Should succeed after retries
+            assert result.success is True
 
 
 # ============================================================================

@@ -155,7 +155,7 @@ class Validator:
         if existing is not None:
             return ValidationError(
                 field="duplicate",
-                reason="transaction already exists in data_container",
+                reason="transaction already exists in partner_transaction",
                 row=row_number,
                 trace=trace,
             )

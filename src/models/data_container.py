@@ -12,7 +12,7 @@ from pydantic import (
     field_validator,
 )
 
-from src.models.repository import BaseRepository
+from src.core.types import BatchInsertResult
 
 
 class PartnerData(BaseModel):
@@ -71,6 +71,7 @@ class DataContainer(BaseModel):
     connector_data: str = Field(default="", alias="connectorData")
     extra_data: str = Field(default="", alias="extraData")
     source_file_id: UUID = Field(alias="sourceFileId")
+    ingestion_key: str = Field(default="", alias="ingestionKey")
     partner_data: PartnerData = Field(alias="partnerData")
     created_by: str = Field(default="system", alias="createdBy")
     created_date: datetime = Field(
@@ -85,28 +86,45 @@ class DataContainer(BaseModel):
 
 def data_container_to_row(doc: DataContainer) -> dict:
     pd = doc.partner_data
+    recon_date = doc.reconciliation_date
+    if recon_date and recon_date.tzinfo is not None:
+        recon_date = recon_date.replace(tzinfo=None)
+
+    trans_date = pd.trans_date
+    if trans_date and trans_date.tzinfo is not None:
+        trans_date = trans_date.replace(tzinfo=None)
+
+    created_date = doc.created_date
+    if created_date and created_date.tzinfo is not None:
+        created_date = created_date.replace(tzinfo=None)
+
+    last_modified_date = doc.last_modified_date
+    if last_modified_date and last_modified_date.tzinfo is not None:
+        last_modified_date = last_modified_date.replace(tzinfo=None)
+
     return {
         "id": doc.id,
         "request_id": doc.request_id,
         "identify": doc.identify,
         "workflow_type": doc.workflow_type,
-        "reconciliation_date": doc.reconciliation_date,
+        "reconciliation_date": recon_date,
         "operation_status": doc.operation_status,
         "reconciliation_status": doc.reconciliation_status,
         "connector_data": doc.connector_data,
         "extra_data": doc.extra_data,
         "source_file_id": doc.source_file_id,
+        "ingestion_key": doc.ingestion_key,
         "partner_id": pd.id,
         "partner_trace": pd.trace,
         "partner_status": pd.status,
         "partner_amount": pd.amount,
         "partner_currency": pd.currency,
-        "partner_trans_date": pd.trans_date,
+        "partner_trans_date": trans_date,
         "partner_metadata": pd.extra or {},
         "created_by": doc.created_by,
-        "created_date": doc.created_date,
+        "created_date": created_date,
         "last_modified_by": doc.last_modified_by,
-        "last_modified_date": doc.last_modified_date,
+        "last_modified_date": last_modified_date,
     }
 
 
@@ -127,6 +145,7 @@ def row_to_data_container(row) -> DataContainer:
         connectorData=data["connector_data"],
         extraData=data["extra_data"],
         sourceFileId=data["source_file_id"],
+        ingestionKey=data.get("ingestion_key", data.get("ingestionKey", "")),
         partnerData={
             "_id": data["partner_id"],
             "trace": data["partner_trace"],
@@ -143,16 +162,16 @@ def row_to_data_container(row) -> DataContainer:
     )
 
 
-class DataContainerRepository(BaseRepository[DataContainer]):
-    """Repository for DataContainer with domain-specific query methods backed by PostgreSQL/MongoDB hybrid."""
+class DataContainerRepository:
+    """PostgreSQL repository for canonical partner transactions."""
 
-    def __init__(self, db: Any = None):
-        super().__init__(collection_name="data_container", db=db)
-        self._set_model_class(DataContainer)
-        self.use_postgres = not ("MagicMock" in str(type(db)) or "AsyncMock" in str(type(db)))
-        if self.use_postgres:
+    def __init__(self, db: Any = None, engine: Any = None):
+        del db  # Retained in the signature for existing dependency wiring.
+        if engine is None:
             from src.models.postgres import get_pg_engine
-            self.engine = get_pg_engine()
+
+            engine = get_pg_engine()
+        self.engine = engine
 
     async def copy_records(self, docs: list[DataContainer]) -> int:
         if not docs:
@@ -162,7 +181,7 @@ class DataContainerRepository(BaseRepository[DataContainer]):
         columns = [
             "id", "request_id", "identify", "workflow_type", "reconciliation_date",
             "operation_status", "reconciliation_status", "connector_data", "extra_data",
-            "source_file_id", "partner_id", "partner_trace", "partner_status",
+            "source_file_id", "ingestion_key", "partner_id", "partner_trace", "partner_status",
             "partner_amount", "partner_currency", "partner_trans_date", "partner_metadata",
             "created_by", "created_date", "last_modified_by", "last_modified_date"
         ]
@@ -178,7 +197,7 @@ class DataContainerRepository(BaseRepository[DataContainer]):
             tuples.append((
                 r["id"], r["request_id"], r["identify"], r["workflow_type"], strip_tz(r["reconciliation_date"]),
                 r["operation_status"], r["reconciliation_status"], r["connector_data"], r["extra_data"],
-                r["source_file_id"], r["partner_id"], r["partner_trace"], r["partner_status"],
+                r["source_file_id"], r["ingestion_key"], r["partner_id"], r["partner_trace"], r["partner_status"],
                 r["partner_amount"], r["partner_currency"], strip_tz(r["partner_trans_date"]),
                 json.dumps(r["partner_metadata"]) if isinstance(r["partner_metadata"], (dict, list)) else r["partner_metadata"],
                 r["created_by"], strip_tz(r["created_date"]), r["last_modified_by"], strip_tz(r["last_modified_date"])
@@ -194,25 +213,15 @@ class DataContainerRepository(BaseRepository[DataContainer]):
             )
             return len(tuples)
 
-    async def insert_many(self, docs: list[DataContainer | dict], ordered: bool = True) -> int:
-        if not self.use_postgres:
-            if not docs:
-                return 0
-            if isinstance(docs[0], dict):
-                from src.models.repository import BaseRepository
-                serialized = [BaseRepository._convert_special_types(doc) for doc in docs]
-            else:
-                serialized = [self._to_mongo(doc) for doc in docs]
-            from pymongo.errors import BulkWriteError
-            try:
-                result = await self.collection.insert_many(serialized, ordered=ordered)
-                return len(result.inserted_ids)
-            except BulkWriteError as exc:
-                return exc.details.get("nInserted", 0)
-
+    async def insert_many(
+        self,
+        docs: list[DataContainer | dict],
+        ordered: bool = True,
+        detailed: bool = False,
+    ) -> int | BatchInsertResult:
         if not docs:
-            return 0
-        
+            return BatchInsertResult(inserted=0) if detailed else 0
+
         model_docs = []
         for doc in docs:
             if isinstance(doc, dict):
@@ -243,6 +252,8 @@ class DataContainerRepository(BaseRepository[DataContainer]):
                     converted["extra_data"] = converted.pop("extraData")
                 if "sourceFileId" in converted:
                     converted["source_file_id"] = converted.pop("sourceFileId")
+                if "ingestionKey" in converted:
+                    converted["ingestion_key"] = converted.pop("ingestionKey")
                 if "createdBy" in converted:
                     converted["created_by"] = converted.pop("createdBy")
                 if "createdDate" in converted:
@@ -251,17 +262,40 @@ class DataContainerRepository(BaseRepository[DataContainer]):
                     converted["last_modified_by"] = converted.pop("lastModifiedBy")
                 if "lastModifiedDate" in converted:
                     converted["last_modified_date"] = converted.pop("lastModifiedDate")
-                
+
                 model_docs.append(DataContainer.model_validate(converted))
             else:
                 model_docs.append(doc)
-                
-        return await self.copy_records(model_docs)
+
+        rows = [data_container_to_row(doc) for doc in model_docs]
+        for row in rows:
+            for column in (
+                "reconciliation_date",
+                "partner_trans_date",
+                "created_date",
+                "last_modified_date",
+            ):
+                value = row[column]
+                if value is not None and value.tzinfo is not None:
+                    row[column] = value.replace(tzinfo=None)
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from src.models.postgres import PartnerTransactionTable
+
+        stmt = pg_insert(PartnerTransactionTable).values(rows)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["identify", "ingestion_key"]
+        ).returning(PartnerTransactionTable.id)
+
+        async with self.engine.begin() as conn:
+            result = await conn.execute(stmt)
+            inserted = len(result.scalars().all())
+
+        duplicates = max(len(rows) - inserted, 0)
+        if detailed:
+            return BatchInsertResult(inserted=inserted, duplicates=duplicates)
+        return inserted
 
     async def find_by_trace(self, identify: str, trace: str) -> Optional[DataContainer]:
-        if not self.use_postgres:
-            return await self.find_one({"identify": identify, "partnerData.trace": trace})
-
         from sqlalchemy import select, and_
         from sqlalchemy.ext.asyncio import AsyncSession
         from src.models.postgres import PartnerTransactionTable
@@ -273,10 +307,27 @@ class DataContainerRepository(BaseRepository[DataContainer]):
             row = result.scalars().first()
             return row_to_data_container(row) if row else None
 
-    async def find_by_source_file(self, source_file_id: UUID) -> list[DataContainer]:
-        if not self.use_postgres:
-            return await self.find_many({"sourceFileId": str(source_file_id)})
+    async def find_by_ingestion_key(
+        self,
+        identify: str,
+        ingestion_key: str,
+    ) -> Optional[DataContainer]:
+        from sqlalchemy import and_, select
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from src.models.postgres import PartnerTransactionTable
 
+        async with AsyncSession(self.engine) as session:
+            stmt = select(PartnerTransactionTable).where(
+                and_(
+                    PartnerTransactionTable.identify == identify,
+                    PartnerTransactionTable.ingestion_key == ingestion_key,
+                )
+            )
+            result = await session.execute(stmt)
+            row = result.scalars().first()
+            return row_to_data_container(row) if row else None
+
+    async def find_by_source_file(self, source_file_id: UUID) -> list[DataContainer]:
         from sqlalchemy import select
         from sqlalchemy.ext.asyncio import AsyncSession
         from src.models.postgres import PartnerTransactionTable
@@ -289,12 +340,6 @@ class DataContainerRepository(BaseRepository[DataContainer]):
             return [row_to_data_container(r) for r in rows]
 
     async def find_by_date_range(self, identify: str, start: datetime, end: datetime) -> list[DataContainer]:
-        if not self.use_postgres:
-            return await self.find_many({
-                "identify": identify,
-                "reconciliationDate": {"$gte": start, "$lte": end}
-            })
-
         if start.tzinfo is not None:
             start = start.replace(tzinfo=None)
         if end.tzinfo is not None:
@@ -316,13 +361,6 @@ class DataContainerRepository(BaseRepository[DataContainer]):
             return [row_to_data_container(r) for r in rows]
 
     async def find_by_duplicate_key(self, identify: str, reconciliation_date: datetime, trace: str) -> Optional[DataContainer]:
-        if not self.use_postgres:
-            return await self.find_one({
-                "identify": identify,
-                "reconciliationDate": reconciliation_date,
-                "partnerData.trace": trace
-            })
-
         if reconciliation_date.tzinfo is not None:
             reconciliation_date = reconciliation_date.replace(tzinfo=None)
 
@@ -342,9 +380,6 @@ class DataContainerRepository(BaseRepository[DataContainer]):
             return row_to_data_container(row) if row else None
 
     async def find_many(self, query: dict) -> list[DataContainer]:
-        if not self.use_postgres:
-            return await super().find_many(query)
-
         from sqlalchemy import select, and_
         from sqlalchemy.ext.asyncio import AsyncSession
         from src.models.postgres import PartnerTransactionTable
@@ -404,3 +439,49 @@ class DataContainerRepository(BaseRepository[DataContainer]):
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [row_to_data_container(r) for r in rows]
+
+    async def find_by_id(self, transaction_id: UUID | str) -> Optional[DataContainer]:
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from src.models.postgres import PartnerTransactionTable
+
+        if isinstance(transaction_id, str):
+            try:
+                transaction_id = UUID(transaction_id)
+            except ValueError:
+                return None
+        async with AsyncSession(self.engine) as session:
+            result = await session.execute(
+                select(PartnerTransactionTable).where(
+                    PartnerTransactionTable.id == transaction_id
+                )
+            )
+            row = result.scalars().first()
+            return row_to_data_container(row) if row else None
+
+    async def count(self, query: Optional[dict] = None) -> int:
+        return len(await self.find_many(query or {}))
+
+    async def count_by_source_file(self, source_file_id: UUID | str) -> int:
+        return await self.count({"sourceFileId": source_file_id})
+
+    async def count_by_partner(self, query: Optional[dict] = None) -> dict[str, int]:
+        records = await self.find_many(query or {})
+        counts: dict[str, int] = {}
+        for record in records:
+            counts[record.identify] = counts.get(record.identify, 0) + 1
+        return counts
+
+    async def delete_by_source_file(self, source_file_id: UUID | str) -> int:
+        from sqlalchemy import delete
+        from src.models.postgres import PartnerTransactionTable
+
+        if isinstance(source_file_id, str):
+            source_file_id = UUID(source_file_id)
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                delete(PartnerTransactionTable).where(
+                    PartnerTransactionTable.source_file_id == source_file_id
+                )
+            )
+            return int(result.rowcount or 0)

@@ -1,5 +1,6 @@
 """Tests for Reconciliation API endpoints."""
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -123,91 +124,95 @@ class TestListResults:
 
     def test_limit_and_offset_work(self):
         app, mock_collection = _create_test_app()
-        fake_docs = [
-            {"_id": f"txn{i}", "partner": "MOMO", "date": "2024-07-07",
-             "partnerTxnId": f"txn{i}", "reconciliationStatus": "MATCHED",
-             "createdAt": "2024-07-07T00:00:00"}
-            for i in range(10)
+        from src.models.reconciliation_result import ReconciliationResult
+        from uuid import uuid4
+        fake_results = [
+            ReconciliationResult(
+                id=str(uuid4()),
+                partner="MOMO",
+                partner_txn_id=f"txn{i}",
+                reconciliation_status="MATCHED",
+                date="2024-07-07",
+                reconciliation_date=datetime(2024, 7, 7, tzinfo=timezone.utc),
+            )
+            for i in range(5)
         ]
+        mock_find_page = AsyncMock(return_value=(fake_results, 10))
 
-        mock_cursor = _AsyncCursor(fake_docs)
-        mock_collection.find = MagicMock(return_value=mock_cursor)
-        mock_collection.count_documents = AsyncMock(return_value=10)
-
-        client = TestClient(app)
-        response = client.get(
-            "/api/v1/reconciliation/results",
-            params={"partner": "MOMO", "date": "2024-07-07", "limit": 5, "offset": 5},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data["results"]) == 5
-        assert data["total"] == 10
-        assert data["limit"] == 5
-        assert data["offset"] == 5
+        with patch("src.api.reconciliation.ReconciliationResultRepository.find_page_by_partner_and_date", mock_find_page):
+            client = TestClient(app)
+            response = client.get(
+                "/api/v1/reconciliation/results",
+                params={"partner": "MOMO", "date": "2024-07-07", "limit": 5, "offset": 5},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["results"]) == 5
+            assert data["total"] == 10
+            assert data["limit"] == 5
+            assert data["offset"] == 5
 
     def test_returns_500_on_db_error(self):
         app, mock_collection = _create_test_app()
-        mock_collection.find = MagicMock(side_effect=RuntimeError("DB connection lost"))
+        mock_find_page = AsyncMock(side_effect=RuntimeError("DB connection lost"))
 
-        client = TestClient(app)
-        response = client.get(
-            "/api/v1/reconciliation/results",
-            params={"partner": "MOMO", "date": "2024-07-07"},
-        )
-        assert response.status_code == 500
-        assert "Failed to list results" in response.json()["detail"]
+        with patch("src.api.reconciliation.ReconciliationResultRepository.find_page_by_partner_and_date", mock_find_page):
+            client = TestClient(app)
+            response = client.get(
+                "/api/v1/reconciliation/results",
+                params={"partner": "MOMO", "date": "2024-07-07"},
+            )
+            assert response.status_code == 500
+            assert "Failed to list results" in response.json()["detail"]
 
 
 class TestGetResult:
     def test_existing_id_returns_record(self):
         app, mock_collection = _create_test_app()
-        mock_collection.find_one = AsyncMock(return_value={
-            "_id": "txn123", "partner": "MOMO", "date": "2024-07-07",
-            "partnerTxnId": "txn123", "reconciliationStatus": "MATCHED",
-            "createdAt": "2024-07-07T00:00:00",
-        })
+        from src.models.reconciliation_result import ReconciliationResult
+        res_obj = ReconciliationResult(
+            id="txn123", partner="MOMO", date="2024-07-07",
+            partner_txn_id="txn123", reconciliation_status="MATCHED",
+            reconciliation_date=datetime(2024, 7, 7, tzinfo=timezone.utc),
+        )
+        mock_find_by_id = AsyncMock(return_value=res_obj)
 
-        client = TestClient(app)
-        response = client.get("/api/v1/reconciliation/results/txn123")
-        assert response.status_code == 200
-        assert response.json()["_id"] == "txn123"
+        with patch("src.api.reconciliation.ReconciliationResultRepository.find_by_id", mock_find_by_id):
+            client = TestClient(app)
+            response = client.get("/api/v1/reconciliation/results/txn123")
+            assert response.status_code == 200
+            assert response.json()["_id"] == "txn123"
 
     def test_non_existing_id_returns_404(self):
         app, mock_collection = _create_test_app()
-        mock_collection.find_one = AsyncMock(return_value=None)
+        mock_find_by_id = AsyncMock(return_value=None)
 
-        client = TestClient(app)
-        response = client.get("/api/v1/reconciliation/results/nonexistent")
-        assert response.status_code == 404
-        assert "not found" in response.json()["detail"]
+        with patch("src.api.reconciliation.ReconciliationResultRepository.find_by_id", mock_find_by_id):
+            client = TestClient(app)
+            response = client.get("/api/v1/reconciliation/results/nonexistent")
+            assert response.status_code == 404
+            assert "not found" in response.json()["detail"]
 
 
 class TestStats:
     def test_valid_request_returns_stats(self):
         app, mock_collection = _create_test_app()
+        mock_count = AsyncMock(return_value={"MATCHED": 80, "AMOUNT_MISMATCH": 20})
+        mock_totals = AsyncMock(return_value={"total_partner_amount": 1000000, "total_internal_amount": 950000})
 
-        mock_collection.aggregate = MagicMock(side_effect=[
-            _AsyncCursor([
-                {"_id": "MATCHED", "count": 80},
-                {"_id": "AMOUNT_MISMATCH", "count": 20},
-            ]),
-            _AsyncCursor([
-                {"_id": None, "total_partner_amount": 1000000, "total_internal_amount": 950000},
-            ]),
-        ])
-
-        client = TestClient(app)
-        response = client.get(
-            "/api/v1/reconciliation/stats",
-            params={"partner": "MOMO", "date": "2024-07-07"},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["partner"] == "MOMO"
-        assert data["total"] == 100
-        assert data["byStatus"]["MATCHED"] == 80
-        assert data["byStatus"]["AMOUNT_MISMATCH"] == 20
+        with patch("src.api.reconciliation.ReconciliationResultRepository.count_by_status", mock_count), \
+             patch("src.api.reconciliation.ReconciliationResultRepository.get_total_amounts", mock_totals):
+            client = TestClient(app)
+            response = client.get(
+                "/api/v1/reconciliation/stats",
+                params={"partner": "MOMO", "date": "2024-07-07"},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["partner"] == "MOMO"
+            assert data["total"] == 100
+            assert data["byStatus"]["MATCHED"] == 80
+            assert data["byStatus"]["AMOUNT_MISMATCH"] == 20
 
     def test_missing_partner_returns_400(self):
         app, _ = _create_test_app()

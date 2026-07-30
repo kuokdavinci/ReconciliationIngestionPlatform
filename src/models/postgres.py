@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Numeric, DateTime, Text
+from sqlalchemy import Column, String, Numeric, DateTime, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import declarative_base
@@ -9,6 +9,13 @@ Base = declarative_base()
 
 class PartnerTransactionTable(Base):
     __tablename__ = "partner_transaction"
+    __table_args__ = (
+        UniqueConstraint(
+            "identify",
+            "ingestion_key",
+            name="uq_partner_transaction_identify_ingestion_key",
+        ),
+    )
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True)
     request_id = Column(PG_UUID(as_uuid=True), nullable=False)
@@ -20,6 +27,7 @@ class PartnerTransactionTable(Base):
     connector_data = Column(Text, default="")
     extra_data = Column(Text, default="")
     source_file_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    ingestion_key = Column(String(255), nullable=False, index=True)
     
     # Nested PartnerData fields flattened for queries/indices
     partner_id = Column(String(255), nullable=False)
@@ -80,33 +88,41 @@ class ReconciliationResultTable(Base):
 
 _pg_engine = None
 _pg_engine_loop = None
+_pg_engine_url = None
 
 def get_pg_engine():
-    global _pg_engine, _pg_engine_loop
+    global _pg_engine, _pg_engine_loop, _pg_engine_url
     try:
         current_loop = asyncio.get_running_loop()
     except RuntimeError:
         current_loop = None
-        
-    if _pg_engine is None or (current_loop is not None and _pg_engine_loop is not current_loop):
-        from src.config.settings import settings
-        postgres_url = settings.postgres_url
-        if postgres_url.startswith("postgresql://"):
-            postgres_url = postgres_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    from src.config.settings import settings
+    postgres_url = settings.postgres_url
+    if postgres_url.startswith("postgresql://"):
+        postgres_url = postgres_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    if (
+        _pg_engine is None
+        or (current_loop is not None and _pg_engine_loop is not current_loop)
+        or _pg_engine_url != postgres_url
+    ):
         _pg_engine = create_async_engine(postgres_url, echo=False)
         _pg_engine_loop = current_loop
+        _pg_engine_url = postgres_url
     return _pg_engine
 
 def set_pg_engine(engine):
-    global _pg_engine, _pg_engine_loop
+    global _pg_engine, _pg_engine_loop, _pg_engine_url
     _pg_engine = engine
     try:
         _pg_engine_loop = asyncio.get_running_loop()
     except RuntimeError:
         _pg_engine_loop = None
+    _pg_engine_url = str(engine.url) if engine is not None else None
 
 async def init_postgres_db(postgres_url: str, use_unlogged: bool = False):
-    """Apply pending Alembic migrations.
+    """Apply pending Alembic migrations or create tables if fresh DB.
 
     Args:
         postgres_url: PostgreSQL connection URL.
@@ -120,8 +136,7 @@ async def init_postgres_db(postgres_url: str, use_unlogged: bool = False):
 
     engine = create_async_engine(postgres_url, echo=False)
 
-    # Check if partner_transaction table already exists (e.g., from old create_all).
-    # If it does, stamp Alembic head to avoid re-applying migrations on existing objects.
+    # Check if partner_transaction table already exists.
     from sqlalchemy import text
     async with engine.connect() as conn:
         has_partner = await conn.execute(
@@ -131,16 +146,22 @@ async def init_postgres_db(postgres_url: str, use_unlogged: bool = False):
 
     if partner_exists:
         # Tables exist (from old create_all or previous run) — stamp head
-        # instead of running upgrade which would fail on existing indexes.
         async with engine.begin() as conn:
-            await conn.run_sync(_stamp_head)
+            try:
+                await conn.run_sync(_stamp_head)
+            except Exception:
+                pass
             if use_unlogged:
                 await conn.execute(text("ALTER TABLE partner_transaction SET UNLOGGED;"))
                 await conn.execute(text("ALTER TABLE internal_transaction SET UNLOGGED;"))
     else:
-        # Fresh database — run migrations from scratch
+        # Fresh database — create tables via SQLAlchemy first, then stamp head
         async with engine.begin() as conn:
-            await conn.run_sync(_run_alembic_upgrade)
+            await conn.run_sync(Base.metadata.create_all)
+            try:
+                await conn.run_sync(_stamp_head)
+            except Exception:
+                pass
             if use_unlogged:
                 await conn.execute(text("ALTER TABLE partner_transaction SET UNLOGGED;"))
                 await conn.execute(text("ALTER TABLE internal_transaction SET UNLOGGED;"))
@@ -149,11 +170,9 @@ async def init_postgres_db(postgres_url: str, use_unlogged: bool = False):
 
 def _stamp_head(connection):
     """Stamp the database with the current Alembic head revision."""
-    from alembic.config import Config
     from alembic import command
 
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", str(connection.engine.url))
+    cfg = _alembic_config(connection)
     cfg.attributes["connection"] = connection
     command.stamp(cfg, "head")
 
@@ -166,10 +185,19 @@ def _run_alembic_upgrade(connection):
     Alembic via config.attributes so env.py can use it directly
     without creating its own engine or calling asyncio.run().
     """
-    from alembic.config import Config
     from alembic import command
 
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", str(connection.engine.url))
+    cfg = _alembic_config(connection)
     cfg.attributes["connection"] = connection
     command.upgrade(cfg, "head")
+
+
+def _alembic_config(connection):
+    """Load Alembic config from the application root, independent of cwd."""
+    from pathlib import Path
+    from alembic.config import Config
+
+    config_path = Path(__file__).resolve().parents[2] / "alembic.ini"
+    cfg = Config(str(config_path))
+    cfg.set_main_option("sqlalchemy.url", str(connection.engine.url))
+    return cfg

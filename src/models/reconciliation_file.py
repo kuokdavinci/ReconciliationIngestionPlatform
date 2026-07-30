@@ -5,6 +5,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.core.enums import FileType, ProcessingStatus, ReconciliationScopeType
@@ -36,6 +37,8 @@ class ReconciliationFile(BaseModel):
     success_rows: int = Field(default=0, alias="successRows")
     failed_rows: int = Field(default=0, alias="failedRows")
     config_version: Optional[str] = Field(default=None, alias="configVersion")
+    fetch_unit_key: Optional[str] = Field(default=None, alias="fetchUnitKey")
+    fetch_unit_metadata: dict = Field(default_factory=dict, alias="fetchUnitMetadata")
     scope_type: ReconciliationScopeType = Field(
         default=ReconciliationScopeType.UNCONFIRMED,
         alias="scopeType",
@@ -62,6 +65,32 @@ class ReconciliationFileRepository(BaseRepository[ReconciliationFile]):
     async def find_by_file_hash(self, file_hash: str) -> Optional[ReconciliationFile]:
         """Find a file by its SHA256 hash — used for duplicate detection."""
         return await self.find_one({"fileHash": file_hash})
+
+    async def find_by_fetch_unit_key(
+        self,
+        fetch_unit_key: str,
+    ) -> Optional[ReconciliationFile]:
+        return await self.find_one({"fetchUnitKey": fetch_unit_key})
+
+    async def create_or_get_by_file_hash(
+        self, doc: ReconciliationFile
+    ) -> tuple[ReconciliationFile, bool]:
+        """Create a file record or return the existing canonical record.
+
+        The unique file-hash index is the concurrency boundary. If two workers
+        race on the same file, one insert wins and the loser resolves the
+        duplicate by re-reading the canonical record.
+        """
+        try:
+            created = await self.create(doc)
+            return created, True
+        except DuplicateKeyError:
+            existing = await self.find_by_file_hash(doc.file_hash)
+            if existing is None and doc.fetch_unit_key:
+                existing = await self.find_by_fetch_unit_key(doc.fetch_unit_key)
+            if existing is None:
+                raise
+            return existing, False
 
     async def find_by_partner_and_date(
         self, partner: str, reconciliation_date: datetime

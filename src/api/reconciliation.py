@@ -18,6 +18,7 @@ from src.models.reconciliation_result import (
     ReconciliationResultRepository,
 )
 from src.models.reconciliation_review_record import ReconciliationReviewRecordRepository
+from src.models.data_container import DataContainerRepository
 from src.core.enums import ReconciliationStatus
 from src.reconciliation.engine import ReconciliationEngine
 from src.services.audit import record_audit_event
@@ -237,7 +238,7 @@ async def _resolve_latest_run_context(db, partner: str, date: str) -> dict[str, 
 
 
 async def _count_partner_rows_for_source_file(db, source_file_id: str) -> int:
-    return await db["data_container"].count_documents({"sourceFileId": source_file_id})
+    return await DataContainerRepository(db).count_by_source_file(source_file_id)
 
 
 async def _resolve_display_run(db, partner: str, date: str):
@@ -456,7 +457,7 @@ async def list_results(
 async def get_result(request: Request, result_id: str):
     try:
         repo = _get_repo(request)
-        obj = await repo.find_one({"_id": result_id})
+        obj = await repo.find_by_id(result_id)
         if obj is None:
             raise HTTPException(status_code=404, detail=f"Result '{result_id}' not found.")
         return _serialize(obj)

@@ -297,11 +297,16 @@ def setup_postgres_test_db():
     
     async def create_db():
         async with engine.connect() as conn:
-            result = await conn.execute(text("SELECT 1 FROM pg_database WHERE datname='reconciliation_test'"))
+            result = await conn.execute(text("SELECT 1 FROM pg_database WHERE datname=:name"), {"name": "reconciliation_test"})
             if not result.scalar():
-                await conn.execute(text("CREATE DATABASE reconciliation_test"))
+                try:
+                    await conn.execute(text("CREATE DATABASE reconciliation_test"))
+                except Exception as exc:
+                    # Another test process may have created it after the existence check.
+                    # Treat that as success so session-scoped setup stays idempotent.
+                    if "already exists" not in str(exc):
+                        raise
         await engine.dispose()
-        
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

@@ -830,13 +830,15 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str, force:
     start_of_day = datetime.combine(recon_date, datetime_time.min)
     end_of_day = datetime.combine(recon_date, datetime_time.max)
     
-    internal_count = await db["internal_transaction"].count_documents({
-        "partner": packet.partner,
-        "transactionTime": {
-            "$gte": start_of_day,
-            "$lte": end_of_day
-        }
-    })
+    from src.models.internal_transaction import InternalTransactionRepository
+
+    internal_count = await InternalTransactionRepository(
+        db
+    ).count_by_partner_and_date_range(
+        packet.partner,
+        start_of_day,
+        end_of_day,
+    )
     
     # 3. Count received records
     received_count = 0

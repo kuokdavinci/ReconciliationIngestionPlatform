@@ -56,7 +56,7 @@ async def test_reconciliation_matched(mock_db):
     # Mock repositories
     engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
     engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock(return_value=1)
 
     # 2. Run reconciliation
@@ -106,7 +106,7 @@ async def test_reconciliation_amount_mismatch(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
     engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
@@ -148,7 +148,7 @@ async def test_reconciliation_status_mismatch(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
     engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
@@ -181,7 +181,7 @@ async def test_reconciliation_missing_internal(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
     engine._internal_repo.find_many = AsyncMock(return_value=[])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
@@ -209,7 +209,7 @@ async def test_reconciliation_missing_partner(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=[])
     engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
@@ -237,13 +237,13 @@ async def test_reconciliation_ignores_pending_internal_for_missing_partner(mock_
 
     engine._data_repo.find_many = AsyncMock(return_value=[])
     engine._internal_repo.find_many = AsyncMock(return_value=[pending_internal_record])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
 
     assert results == []
-    engine._result_repo.collection.delete_many.assert_called_once()
+    engine._result_repo.delete_by_partner_and_date.assert_called_once()
     engine._result_repo.insert_many.assert_not_called()
 
 
@@ -290,7 +290,7 @@ async def test_reconciliation_incremental_scope_ignores_unrelated_internal_rows(
 
     engine._data_repo.find_many = AsyncMock(return_value=partner_records)
     engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date, source_file_id=source_file_id)
@@ -298,10 +298,7 @@ async def test_reconciliation_incremental_scope_ignores_unrelated_internal_rows(
     assert len(results) == 20
     assert {result.partner_txn_id for result in results} == {f"trace_{index:02d}" for index in range(20)}
     assert all(result.reconciliation_status == ReconciliationStatus.MATCHED for result in results)
-    engine._result_repo.collection.delete_many.assert_called_once_with({
-        "partner": partner,
-        "date": "2024-07-07",
-    })
+    engine._result_repo.delete_by_partner_and_date.assert_called_once_with(partner, "2024-07-07")
     assert results[0].source_file_id == source_file_id
     assert results[0].scope_type == "INCREMENTAL_APPEND"
 
@@ -350,7 +347,7 @@ async def test_reconciliation_incremental_append_uses_cumulative_partner_scope(m
 
     engine._data_repo.find_many = AsyncMock(return_value=partner_records)
     engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date, source_file_id=wave2_source_file_id)
@@ -358,10 +355,7 @@ async def test_reconciliation_incremental_append_uses_cumulative_partner_scope(m
     assert len(results) == 40
     assert {result.partner_txn_id for result in results} == {f"trace_{index:02d}" for index in range(40)}
     assert all(result.reconciliation_status == ReconciliationStatus.MATCHED for result in results)
-    engine._result_repo.collection.delete_many.assert_called_once_with({
-        "partner": partner,
-        "date": "2024-07-07",
-    })
+    engine._result_repo.delete_by_partner_and_date.assert_called_once_with(partner, "2024-07-07")
 
 
 @pytest.mark.asyncio
@@ -396,16 +390,13 @@ async def test_reconciliation_full_snapshot_replaces_entire_day_slice(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
     engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
 
     assert len(results) == 1
-    engine._result_repo.collection.delete_many.assert_called_once_with({
-        "partner": partner,
-        "date": "2024-07-07",
-    })
+    engine._result_repo.delete_by_partner_and_date.assert_called_once_with(partner, "2024-07-07")
 
 
 @pytest.mark.asyncio
@@ -445,20 +436,13 @@ async def test_reconciliation_replacement_scope_replaces_prior_keys(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
     engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date, source_file_id=source_file_id)
 
     assert len(results) == 1
-    engine._result_repo.collection.delete_many.assert_called_once_with({
-        "partner": partner,
-        "date": "2024-07-07",
-        "$or": [
-            {"sourceFileId": source_file_id},
-            {"partnerTxnId": {"$in": ["trace_01"]}},
-        ],
-    })
+    engine._result_repo.delete_by_partner_and_date.assert_called_once_with(partner, "2024-07-07", source_file_id=source_file_id, partner_txn_ids=["trace_01"])
     assert results[0].scope_type == "REPLACEMENT"
 
 
@@ -511,7 +495,7 @@ async def test_reconciliation_duplicate_internal_handling(mock_db):
     engine._internal_repo.find_many = AsyncMock(
         return_value=[old_internal_record, new_internal_record]
     )
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
@@ -546,7 +530,7 @@ async def test_reconciliation_skipped_empty_status(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
     engine._internal_repo.find_many = AsyncMock(return_value=[])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
@@ -584,7 +568,7 @@ async def test_reconciliation_all_records_skipped(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=partner_records)
     engine._internal_repo.find_many = AsyncMock(return_value=[])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
@@ -647,7 +631,7 @@ async def test_reconciliation_mixed_valid_and_skipped(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=[valid_record] + invalid_records)
     engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
@@ -684,7 +668,7 @@ async def test_skipped_record_creates_unmapped_skipped(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
     engine._internal_repo.find_many = AsyncMock(return_value=[])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
@@ -746,7 +730,7 @@ async def test_mixed_skipped_and_matched_guard(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=[valid_record] + skipped_records)
     engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
@@ -792,17 +776,14 @@ async def test_reconciliation_flushes_results_in_chunks(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=partner_records)
     engine._internal_repo.find_many = AsyncMock(return_value=[])
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date)
 
     assert len(results) == 5
     assert all(r.reconciliation_status == ReconciliationStatus.MISSING_INTERNAL for r in results)
-    engine._result_repo.collection.delete_many.assert_called_once_with({
-        "partner": partner,
-        "date": "2024-07-07",
-    })
+    engine._result_repo.delete_by_partner_and_date.assert_called_once_with(partner, "2024-07-07")
     assert engine._result_repo.insert_many.await_count == 3
     inserted_batch_sizes = [
         len(call.args[0]) for call in engine._result_repo.insert_many.await_args_list
@@ -849,7 +830,7 @@ async def test_parallel_workers_produce_correct_counts(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=partner_records)
     engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock(return_value=1)
 
     results = await engine.reconcile(partner, recon_date)
@@ -862,7 +843,7 @@ async def test_parallel_workers_produce_correct_counts(mock_db):
 
     # Verify multiple batch writes happened (parallel workers)
     assert engine._result_repo.insert_many.await_count >= 3
-    assert engine._result_repo.collection.delete_many.await_count == 1
+    assert engine._result_repo.delete_by_partner_and_date.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -904,7 +885,7 @@ async def test_parallel_workers_no_duplicate_results(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=partner_records)
     engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock(return_value=1)
 
     results = await engine.reconcile(partner, recon_date)
@@ -976,7 +957,7 @@ async def test_parallel_workers_correct_counts_mixed_outcomes(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=partner_records)
     engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock(return_value=1)
 
     results = await engine.reconcile(partner, recon_date)
@@ -1028,7 +1009,7 @@ async def test_parallel_workers_with_unmatched_internal(mock_db):
 
     engine._data_repo.find_many = AsyncMock(return_value=partner_records)
     engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
-    engine._result_repo.collection.delete_many = AsyncMock()
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock(return_value=1)
 
     results = await engine.reconcile(partner, recon_date)

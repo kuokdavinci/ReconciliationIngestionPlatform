@@ -20,6 +20,7 @@ import pytest
 
 from src.core.enums import FileType, ProcessingStatus
 from src.core.types import (
+    BatchInsertResult,
     FieldMapping,
     FieldMappingType,
     ProcessingStats,
@@ -159,6 +160,353 @@ class TestComputeFileHash:
         result = await pipeline._compute_file_hash(str(file_path))
         assert len(result) == 64
         assert all(c in "0123456789abcdef" for c in result)
+
+
+class TestFetchUnitKey:
+    def test_key_is_stable_for_equivalent_metadata(self):
+        from src.pipeline import IngestionPipeline
+
+        pipeline = object.__new__(IngestionPipeline)
+        kwargs = {
+            "partner": "MOMO",
+            "workflow_type": "UPC",
+            "file_type": FileType.SETTLEMENT,
+            "reconciliation_date": datetime(2024, 1, 15, tzinfo=timezone.utc),
+            "config_version": "v2",
+        }
+
+        first = pipeline._derive_fetch_unit_key(
+            **kwargs,
+            metadata={"sourceEndpoint": "/transactions", "page": 1},
+        )
+        second = pipeline._derive_fetch_unit_key(
+            **kwargs,
+            metadata={"page": 1, "sourceEndpoint": "/transactions"},
+        )
+
+        assert first == second
+
+    def test_key_changes_for_a_different_page(self):
+        from src.pipeline import IngestionPipeline
+
+        pipeline = object.__new__(IngestionPipeline)
+        common = {
+            "partner": "MOMO",
+            "workflow_type": "UPC",
+            "file_type": FileType.SETTLEMENT,
+            "reconciliation_date": datetime(2024, 1, 15, tzinfo=timezone.utc),
+            "config_version": "v2",
+        }
+
+        page_one = pipeline._derive_fetch_unit_key(
+            **common,
+            metadata={"sourceEndpoint": "/transactions", "page": 1},
+        )
+        page_two = pipeline._derive_fetch_unit_key(
+            **common,
+            metadata={"sourceEndpoint": "/transactions", "page": 2},
+        )
+
+        assert page_one != page_two
+
+    def test_missing_fetch_position_is_rejected(self):
+        from src.pipeline import IngestionPipeline
+
+        pipeline = object.__new__(IngestionPipeline)
+        with pytest.raises(ValueError, match="page, cursor, or a fetch window"):
+            pipeline._derive_fetch_unit_key(
+                partner="MOMO",
+                workflow_type="UPC",
+                file_type=FileType.SETTLEMENT,
+                reconciliation_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
+                config_version=None,
+                metadata={"sourceEndpoint": "/transactions"},
+            )
+
+
+class TestIngestionKey:
+    def test_missing_identity_fields_are_rejected(self):
+        from src.pipeline import IngestionPipeline
+
+        pipeline = object.__new__(IngestionPipeline)
+        with pytest.raises(ValueError, match="Unable to derive ingestion_key"):
+            pipeline._derive_ingestion_key({"amount": 100})
+
+    def test_different_keys_are_not_collapsed_by_derivation(self):
+        from src.pipeline import IngestionPipeline
+
+        pipeline = object.__new__(IngestionPipeline)
+
+        assert pipeline._derive_ingestion_key({"id": "TXN-1", "amount": 100}) != pipeline._derive_ingestion_key(
+            {"id": "TXN-2", "amount": 100}
+        )
+
+
+class TestIngestionKeyPropagation:
+    @pytest.mark.asyncio
+    async def test_process_file_populates_ingestion_key_from_transaction_id(self):
+        import tempfile
+        import openpyxl
+        from src.config.loader import ConfigLoader
+        from src.models.mapping_config import MappingConfig
+        from src.models.reconciliation_file import ReconciliationFileRepository
+        from src.models.data_container import DataContainerRepository
+        from src.pipeline import IngestionPipeline
+        field_mappings = [FieldMapping(path="id", column="A", type=FieldMappingType.STRING, required=True), FieldMapping(path="trace", column="B", type=FieldMappingType.STRING), FieldMapping(path="amount", column="C", type=FieldMappingType.DECIMAL, required=True), FieldMapping(path="currency", constant="VND", type=FieldMappingType.CONSTANT), FieldMapping(path="status", column="D", type=FieldMappingType.MAPPING, mapping={"Thành công": "SUCCESS"})]
+        mock_config = MappingConfig(partner="MOMO", workflow_type="UPC", file_type=FileType.SETTLEMENT, sheet_name="Sheet1", start_row=2, field_mappings=field_mappings)
+        mock_config_loader = MagicMock(spec=ConfigLoader)
+        mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
+        mock_db = _make_mock_db()
+        mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
+        mock_recon_repo.create_or_get_by_file_hash = AsyncMock(
+            side_effect=lambda doc: (doc, True)
+        )
+        mock_recon_repo.update_processing_stats = AsyncMock(return_value=True)
+        mock_recon_repo.update_status = AsyncMock(return_value=True)
+        mock_data_repo = MagicMock(spec=DataContainerRepository)
+        mock_data_repo.insert_many = AsyncMock(return_value=1)
+        pipeline = IngestionPipeline(
+            db=mock_db,
+            config_loader=mock_config_loader,
+            batch_size=10,
+            write_workers=1,
+            logger=MockStructuredLogger(),
+        )
+        pipeline._recon_repo = mock_recon_repo
+        pipeline._data_repo = mock_data_repo
+        pipeline._compute_file_hash = AsyncMock(return_value="content-hash")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Sheet1"
+            ws.append(["TransactionID", "Trace", "Amount", "Status"])
+            ws.append(["TXN001", "TRACE001", 100000, "Thành công"])
+            wb.save(f.name)
+            temp_path = f.name
+        try:
+            result = await pipeline.process_file(
+                file_path=temp_path,
+                partner="MOMO",
+                workflow_type="UPC",
+                file_type=FileType.SETTLEMENT,
+                reconciliation_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
+            )
+            assert result.stats.success_rows == 1
+            batch = mock_data_repo.insert_many.call_args[0][0]
+            assert len(batch) == 1
+            assert batch[0].ingestion_key == "TXN001"
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+
+
+class TestFileClaimAtomic:
+    @pytest.mark.asyncio
+    async def test_process_file_duplicate_uses_create_or_get(self, tmp_path):
+        from src.config.loader import ConfigLoader
+        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+        from src.pipeline import IngestionPipeline
+
+        mock_db = _make_mock_db()
+        mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
+        existing_file = ReconciliationFile(
+            partner="MOMO",
+            file_name="duplicate.xlsx",
+            file_hash="same_hash",
+            file_type=FileType.SETTLEMENT,
+            reconciliation_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
+        )
+        mock_recon_repo.create_or_get_by_file_hash = AsyncMock(
+            return_value=(existing_file, False)
+        )
+        mock_recon_repo.create = AsyncMock()
+        mock_recon_repo.update_processing_stats = AsyncMock(return_value=True)
+        mock_recon_repo.update_status = AsyncMock(return_value=True)
+
+        mock_config_loader = MagicMock(spec=ConfigLoader)
+        mock_config_loader.load_by_partner_type = AsyncMock()
+
+        pipeline = IngestionPipeline(
+            db=mock_db,
+            config_loader=mock_config_loader,
+            batch_size=100,
+            write_workers=1,
+            logger=MockStructuredLogger(),
+        )
+        pipeline._recon_repo = mock_recon_repo
+        pipeline._compute_file_hash = AsyncMock(return_value="same_hash")
+
+        file_path = tmp_path / "duplicate.xlsx"
+        file_path.write_bytes(b"duplicate")
+
+        result = await pipeline.process_file(
+            file_path=str(file_path),
+            partner="MOMO",
+            workflow_type="UPC",
+            file_type=FileType.SETTLEMENT,
+            reconciliation_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
+        )
+
+        assert result.file_record.file_hash == "same_hash"
+        assert result.stats.total_rows == 0
+        assert result.errors[0]["field"] == "file_duplicate"
+        mock_recon_repo.create.assert_not_called()
+
+
+class TestBatchInsertAccounting:
+    @pytest.mark.asyncio
+    async def test_process_file_tracks_duplicate_rows_from_batch_result(self, tmp_path):
+        from src.config.loader import ConfigLoader
+        from src.models.mapping_config import MappingConfig
+        from src.models.reconciliation_file import ReconciliationFileRepository
+        from src.models.data_container import DataContainerRepository
+        from src.pipeline import IngestionPipeline
+
+        field_mappings = [
+            FieldMapping(path="id", column="A", type=FieldMappingType.STRING, required=True),
+            FieldMapping(path="amount", column="B", type=FieldMappingType.DECIMAL, required=True),
+            FieldMapping(path="currency", constant="VND", type=FieldMappingType.CONSTANT),
+            FieldMapping(
+                path="status",
+                column="C",
+                type=FieldMappingType.MAPPING,
+                mapping={"Success": "SUCCESS"},
+            ),
+        ]
+        mock_config = MappingConfig(
+            partner="MOMO",
+            workflow_type="UPC",
+            file_type=FileType.SETTLEMENT,
+            sheet_name="Sheet1",
+            start_row=2,
+            field_mappings=field_mappings,
+        )
+        mock_config_loader = MagicMock(spec=ConfigLoader)
+        mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
+
+        mock_db = _make_mock_db()
+        mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
+        mock_recon_repo.create_or_get_by_file_hash = AsyncMock(
+            side_effect=lambda doc: (doc, True)
+        )
+        mock_recon_repo.update_processing_stats = AsyncMock(return_value=True)
+        mock_recon_repo.update_status = AsyncMock(return_value=True)
+
+        mock_data_repo = MagicMock(spec=DataContainerRepository)
+        mock_data_repo.insert_many = AsyncMock(
+            return_value=BatchInsertResult(inserted=1, duplicates=1, failed=0)
+        )
+
+        pipeline = IngestionPipeline(
+            db=mock_db,
+            config_loader=mock_config_loader,
+            batch_size=10,
+            write_workers=1,
+            logger=MockStructuredLogger(),
+        )
+        pipeline._recon_repo = mock_recon_repo
+        pipeline._data_repo = mock_data_repo
+        pipeline._compute_file_hash = AsyncMock(return_value="batch-hash")
+
+        excel_file = tmp_path / "batch.xlsx"
+        import openpyxl
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        ws.append(["ID", "Amount", "Status"])
+        ws.append(["TXN001", 100, "Success"])
+        ws.append(["TXN002", 200, "Success"])
+        wb.save(excel_file)
+
+        result = await pipeline.process_file(
+            file_path=str(excel_file),
+            partner="MOMO",
+            workflow_type="UPC",
+            file_type=FileType.SETTLEMENT,
+            reconciliation_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
+        )
+
+        assert result.stats.success_rows == 1
+        assert result.stats.duplicate_rows == 1
+        assert result.stats.failed_rows == 0
+        assert result.errors[0]["field"] == "transaction_duplicate"
+
+    @pytest.mark.asyncio
+    async def test_process_file_tracks_non_duplicate_batch_failures(self, tmp_path):
+        from src.config.loader import ConfigLoader
+        from src.models.mapping_config import MappingConfig
+        from src.models.reconciliation_file import ReconciliationFileRepository
+        from src.models.data_container import DataContainerRepository
+        from src.pipeline import IngestionPipeline
+
+        field_mappings = [
+            FieldMapping(path="id", column="A", type=FieldMappingType.STRING, required=True),
+            FieldMapping(path="amount", column="B", type=FieldMappingType.DECIMAL, required=True),
+            FieldMapping(path="currency", constant="VND", type=FieldMappingType.CONSTANT),
+            FieldMapping(
+                path="status",
+                column="C",
+                type=FieldMappingType.MAPPING,
+                mapping={"Success": "SUCCESS"},
+            ),
+        ]
+        config = MappingConfig(
+            partner="MOMO",
+            workflow_type="UPC",
+            file_type=FileType.SETTLEMENT,
+            sheet_name="Sheet1",
+            start_row=2,
+            field_mappings=field_mappings,
+        )
+        config_loader = MagicMock(spec=ConfigLoader)
+        config_loader.load_by_partner_type = AsyncMock(return_value=config)
+
+        recon_repo = MagicMock(spec=ReconciliationFileRepository)
+        recon_repo.create_or_get_by_file_hash = AsyncMock(
+            side_effect=lambda doc: (doc, True)
+        )
+        recon_repo.update_processing_stats = AsyncMock(return_value=True)
+        recon_repo.update_status = AsyncMock(return_value=True)
+
+        data_repo = MagicMock(spec=DataContainerRepository)
+        data_repo.insert_many = AsyncMock(
+            return_value=BatchInsertResult(inserted=1, duplicates=0, failed=1)
+        )
+
+        pipeline = IngestionPipeline(
+            db=_make_mock_db(),
+            config_loader=config_loader,
+            batch_size=10,
+            write_workers=1,
+            logger=MockStructuredLogger(),
+        )
+        pipeline._recon_repo = recon_repo
+        pipeline._data_repo = data_repo
+        pipeline._compute_file_hash = AsyncMock(return_value="partial-batch-hash")
+
+        excel_file = tmp_path / "partial-batch.xlsx"
+        import openpyxl
+
+        workbook = openpyxl.Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Sheet1"
+        worksheet.append(["ID", "Amount", "Status"])
+        worksheet.append(["TXN001", 100, "Success"])
+        worksheet.append(["TXN002", 200, "Success"])
+        workbook.save(excel_file)
+
+        result = await pipeline.process_file(
+            file_path=str(excel_file),
+            partner="MOMO",
+            workflow_type="UPC",
+            file_type=FileType.SETTLEMENT,
+            reconciliation_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
+        )
+
+        assert result.stats.success_rows == 1
+        assert result.stats.failed_rows == 1
+        assert result.stats.duplicate_rows == 0
+        assert result.errors[0]["field"] == "batch_conflict"
 
 
 class TestProcessFileHappyPath:
@@ -759,7 +1107,7 @@ class TestPipelineLogging:
         events = mock_logger.events
         assert len(events) == 1
         assert events[0][0] == "FILE_FAILED"
-        assert "already processed" in events[0][1]["error"].lower()
+        assert "already processed" in events[0][1]["error"].lower() or "duplicate" in events[0][1]["error"].lower()
         assert events[0][1]["file_id"] == "duplicate"
 
     @pytest.mark.asyncio

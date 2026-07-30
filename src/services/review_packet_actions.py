@@ -22,6 +22,8 @@ from src.models.post_approval_run import (
     PostApprovalRunStatus,
 )
 from src.models.reconciliation_file import ReconciliationFileRepository
+from src.models.data_container import DataContainerRepository
+from src.models.reconciliation_result import ReconciliationResultRepository
 from src.models.review_packet import (
     ReviewDecisionMode,
     ReviewPacketRepository,
@@ -375,13 +377,13 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         )
         return None
 
-    # Clean up both old partner data containers AND reconciliation results matching this file/partner before ingesting/re-reconciling
-    await db["data_container"].delete_many({"sourceFileId": source_file_id})
+    # PostgreSQL is the canonical transaction store.
+    await DataContainerRepository(db).delete_by_source_file(source_file_id)
     date_str = source_file.reconciliation_date.strftime("%Y-%m-%d")
-    await db["reconciliation_result"].delete_many({
-        "partner": config.partner,
-        "date": date_str
-    })
+    await ReconciliationResultRepository(db).delete_by_partner_and_date(
+        config.partner,
+        date_str,
+    )
     
     if source_file.processing_status != ProcessingStatus.COMPLETED:
         await file_repo.delete_one({"_id": source_file_id})

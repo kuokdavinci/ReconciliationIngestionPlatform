@@ -218,13 +218,12 @@ async def _seed_internal_zalopay(db, count: int) -> int:
 async def _cleanup_partner_data(db, partner: str) -> None:
     """Clean up all data for a partner."""
     for coll_name in [
-        "reconciliation_result", "reconciliation_file", "data_container",
+        "reconciliation_result", "reconciliation_file",
         "review_packet", "reconciliation_mapping_config", "internal_transaction",
         "partner_runtime_run", "post_approval_run", "reconciliation_review_record",
     ]:
-        query = {"identify": partner} if coll_name == "data_container" else {"partner": partner}
         try:
-            await db[coll_name].delete_many(query)
+            await db[coll_name].delete_many({"partner": partner})
         except Exception:
             pass
 

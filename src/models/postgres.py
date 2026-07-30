@@ -88,30 +88,38 @@ class ReconciliationResultTable(Base):
 
 _pg_engine = None
 _pg_engine_loop = None
+_pg_engine_url = None
 
 def get_pg_engine():
-    global _pg_engine, _pg_engine_loop
+    global _pg_engine, _pg_engine_loop, _pg_engine_url
     try:
         current_loop = asyncio.get_running_loop()
     except RuntimeError:
         current_loop = None
-        
-    if _pg_engine is None or (current_loop is not None and _pg_engine_loop is not current_loop):
-        from src.config.settings import settings
-        postgres_url = settings.postgres_url
-        if postgres_url.startswith("postgresql://"):
-            postgres_url = postgres_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    from src.config.settings import settings
+    postgres_url = settings.postgres_url
+    if postgres_url.startswith("postgresql://"):
+        postgres_url = postgres_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    if (
+        _pg_engine is None
+        or (current_loop is not None and _pg_engine_loop is not current_loop)
+        or _pg_engine_url != postgres_url
+    ):
         _pg_engine = create_async_engine(postgres_url, echo=False)
         _pg_engine_loop = current_loop
+        _pg_engine_url = postgres_url
     return _pg_engine
 
 def set_pg_engine(engine):
-    global _pg_engine, _pg_engine_loop
+    global _pg_engine, _pg_engine_loop, _pg_engine_url
     _pg_engine = engine
     try:
         _pg_engine_loop = asyncio.get_running_loop()
     except RuntimeError:
         _pg_engine_loop = None
+    _pg_engine_url = str(engine.url) if engine is not None else None
 
 async def init_postgres_db(postgres_url: str, use_unlogged: bool = False):
     """Apply pending Alembic migrations or create tables if fresh DB.

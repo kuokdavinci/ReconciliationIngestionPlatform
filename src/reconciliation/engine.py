@@ -226,7 +226,24 @@ class ReconciliationEngine:
             partner_name = delete_query.get("partner", "")
             date_str = delete_query.get("date", "")
             if hasattr(self._result_repo, "delete_by_partner_and_date"):
-                await self._result_repo.delete_by_partner_and_date(partner_name, date_str)
+                source_file_id = delete_query.get("sourceFileId")
+                partner_txn_ids = delete_query.get("partnerTxnId", {}).get("$in") if isinstance(delete_query.get("partnerTxnId"), dict) else None
+                
+                # If query contains $or clause (e.g. REPLACEMENT scope), extract source_file_id and partner_txn_ids from $or items
+                if "$or" in delete_query and isinstance(delete_query["$or"], list):
+                    for item in delete_query["$or"]:
+                        if isinstance(item, dict):
+                            if "sourceFileId" in item:
+                                source_file_id = item["sourceFileId"]
+                            if "partnerTxnId" in item and isinstance(item["partnerTxnId"], dict):
+                                partner_txn_ids = item["partnerTxnId"].get("$in")
+
+                kwargs = {}
+                if source_file_id:
+                    kwargs["source_file_id"] = source_file_id
+                if partner_txn_ids:
+                    kwargs["partner_txn_ids"] = partner_txn_ids
+                await self._result_repo.delete_by_partner_and_date(partner_name, date_str, **kwargs)
             elif hasattr(self._result_repo, "collection"):
                 await self._result_repo.collection.delete_many(delete_query)
             cleared_existing = True
@@ -570,7 +587,23 @@ class ReconciliationEngine:
 
         # Upfront deletion of existing records
         if hasattr(self._result_repo, "delete_by_partner_and_date"):
-            await self._result_repo.delete_by_partner_and_date(partner, date_str)
+            source_file_id_param = delete_query.get("sourceFileId")
+            partner_txn_ids_param = delete_query.get("partnerTxnId", {}).get("$in") if isinstance(delete_query.get("partnerTxnId"), dict) else None
+            
+            if "$or" in delete_query and isinstance(delete_query["$or"], list):
+                for item in delete_query["$or"]:
+                    if isinstance(item, dict):
+                        if "sourceFileId" in item:
+                            source_file_id_param = item["sourceFileId"]
+                        if "partnerTxnId" in item and isinstance(item["partnerTxnId"], dict):
+                            partner_txn_ids_param = item["partnerTxnId"].get("$in")
+
+            kwargs = {}
+            if source_file_id_param:
+                kwargs["source_file_id"] = source_file_id_param
+            if partner_txn_ids_param:
+                kwargs["partner_txn_ids"] = partner_txn_ids_param
+            await self._result_repo.delete_by_partner_and_date(partner, date_str, **kwargs)
         elif hasattr(self._result_repo, "collection"):
             await self._result_repo.collection.delete_many(delete_query)
 

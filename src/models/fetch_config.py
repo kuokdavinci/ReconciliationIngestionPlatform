@@ -31,6 +31,7 @@ class SFTPConfig(BaseModel):
     password: str  # Can be plain text, env:VAR, or encrypted:VALUE
     remote_path: str = Field(alias="remotePath")
     timeout: int = 30
+    download_dir: Optional[str] = Field(default="./downloads", alias="downloadDir")
 
 
 class APIConfig(BaseModel):
@@ -45,6 +46,7 @@ class APIConfig(BaseModel):
         default=None, alias="queryParams"
     )
     timeout: int = 30
+    download_dir: Optional[str] = Field(default="./downloads", alias="downloadDir")
 
 
 class FileDropConfig(BaseModel):

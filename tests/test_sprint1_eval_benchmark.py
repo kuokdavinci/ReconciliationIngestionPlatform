@@ -158,7 +158,11 @@ async def test_run_sprint1_eval_and_generate_report():
 
     engine = get_pg_engine()
     
-    # Ensure tables exist and clear only this benchmark's partner rows.
+    # Ensure tables and migrations exist before running integration tests
+    from src.models.postgres import init_postgres_db
+    await init_postgres_db(settings.postgres_url)
+
+    # Clear only this benchmark's partner rows.
     async with engine.begin() as conn:
         await conn.execute(text("DELETE FROM partner_transaction WHERE identify = 'MOMO_EVAL'"))
         

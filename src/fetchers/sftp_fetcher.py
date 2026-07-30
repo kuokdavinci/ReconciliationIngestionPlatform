@@ -44,7 +44,8 @@ class SFTPFetcher(BaseFetcher):
             )
 
             # Create local download directory
-            local_dir = Path("./downloads")
+            download_dir = config.download_dir or "./downloads"
+            local_dir = Path(download_dir)
             local_dir.mkdir(parents=True, exist_ok=True)
             local_filename = Path(remote_path).name
             local_path = local_dir / local_filename

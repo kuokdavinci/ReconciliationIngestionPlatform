@@ -158,12 +158,10 @@ async def test_run_sprint1_eval_and_generate_report():
 
     engine = get_pg_engine()
     
-    # Ensure tables and migrations exist before running integration tests
-    from src.models.postgres import init_postgres_db
-    await init_postgres_db(settings.postgres_url)
-
-    # Clear only this benchmark's partner rows.
+    # Ensure tables exist directly via SQLAlchemy Base metadata
+    from src.models.postgres import Base
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("DELETE FROM partner_transaction WHERE identify = 'MOMO_EVAL'"))
         
     eval_results = []

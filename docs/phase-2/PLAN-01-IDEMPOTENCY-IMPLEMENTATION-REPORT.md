@@ -1,7 +1,4 @@
 # Detailed Implementation Report — Plan 1: Idempotency & Duplicate Prevention
-
-> **Đơn vị thực thi**: Antigravity AI & Pair Programmer  
-> **Dự án**: Reconciliation & Ingestion Platform  
 > **Kế hoạch**: Plan 1 (`PLAN-01-IDEMPOTENCY`)  
 > **Ngày hoàn thành**: 30-07-2026  
 > **Vị trí tài liệu**: `docs/phase-2/PLAN-01-IDEMPOTENCY-IMPLEMENTATION-REPORT.md`

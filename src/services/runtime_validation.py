@@ -134,6 +134,26 @@ async def run_runtime_validation(db, packet, config) -> dict:
     failed_rows = 0
     failed_examples: list[dict] = []
     trace_samples: list[dict] = []
+    if not config.field_mappings:
+        return {
+            "gateKey": "runtime_validation",
+            "status": "fail",
+            "message": "Draft mapping configuration has no field mappings defined.",
+            "details": {
+                "validatedAt": validated_at.isoformat(),
+                "validatedMappingVersion": validated_mapping_version,
+                "currentMappingVersion": current_mapping_version,
+                "sampledRows": 0,
+                "successRows": 0,
+                "failedRows": 0,
+                "successRate": 0.0,
+                "failedExamples": [{"error": "Empty field mappings"}],
+                "topIssues": [{"code": "EMPTY_MAPPINGS", "count": 1, "message": "Draft mapping configuration has no field mappings defined."}],
+                "fieldResults": [],
+                "traceSamples": [],
+            },
+        }
+
     normalizer = TransactionNormalizer(config.field_mappings)
 
     def _consume_row(row: list, row_number: int) -> None:

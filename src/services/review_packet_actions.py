@@ -419,6 +419,15 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         file_type=config.file_type,
         reconciliation_date=source_file.reconciliation_date,
         config_version=config.config_version,
+        # Guided Review reprocessing is a new delivery attempt, but it does
+        # not come through the fetcher. Supply a deterministic fetch-unit
+        # identity so the unique Mongo index never receives null.
+        fetch_unit_metadata={
+            "sourceEndpoint": f"review://{source_file_id}",
+            "cursor": f"post-approval:{run_id}",
+            "windowStart": source_file.reconciliation_date.isoformat(),
+            "windowEnd": source_file.reconciliation_date.isoformat(),
+        },
         enable_config_health_check=False,
     )
     processing_status = getattr(
@@ -436,6 +445,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         "stats": {
             "totalRows": ingestion_result.stats.total_rows,
             "successRows": ingestion_result.stats.success_rows,
+            "duplicateRows": ingestion_result.stats.duplicate_rows,
             "failedRows": ingestion_result.stats.failed_rows,
         },
         "errors": ingestion_result.errors,

@@ -163,6 +163,26 @@ async def run_fetch_config_once(
         fetch_result = await fetcher.fetch(config.get_method_config(), reconciliation_date)
 
         if not fetch_result.success:
+            no_new_file = (
+                fetch_result.metadata.get("scanned_files") == 0
+                and "No files matching" in (fetch_result.error or "")
+            )
+            if no_new_file:
+                await update_runtime_run(
+                    db,
+                    str(run.id),
+                    status=PartnerRuntimeRunStatus.COMPLETED,
+                    message="No new file found in the Filedrop directory. Nothing was ingested.",
+                    stats={"outcome": "NO_NEW_FILE", "reconciliationSkipped": True},
+                    finished_at=datetime.now(timezone.utc),
+                )
+                return {
+                    "success": True,
+                    "stage": "fetch",
+                    "outcome": "NO_NEW_FILE",
+                    "partner": partner,
+                    "reconciliationSkipped": True,
+                }
             await update_runtime_run(
                 db,
                 str(run.id),
@@ -247,8 +267,53 @@ async def run_fetch_config_once(
         stats = {
             "totalRows": ingestion_result.stats.total_rows,
             "successRows": ingestion_result.stats.success_rows,
+            "duplicateRows": ingestion_result.stats.duplicate_rows,
             "failedRows": ingestion_result.stats.failed_rows,
         }
+        ingestion_outcome = getattr(ingestion_result, "outcome", "INGESTED")
+        is_duplicate = ingestion_outcome in {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY"}
+        if is_duplicate:
+            duplicate_outcome = ingestion_outcome
+            duplicate_code = getattr(ingestion_result, "duplicate_code", None) or "duplicate"
+            stats.update(
+                {
+                    "outcome": duplicate_outcome,
+                    "duplicateCode": duplicate_code,
+                    "canonicalFileId": str(ingestion_result.file_record.id),
+                    "reconciliationSkipped": True,
+                }
+            )
+            await update_runtime_run(
+                db,
+                str(run.id),
+                status=PartnerRuntimeRunStatus.COMPLETED,
+                message=(
+                    "File already processed. Ingestion and reconciliation skipped."
+                    if duplicate_outcome == "FILE_DUPLICATE"
+                    else "Fetch unit already processed. Ingestion and reconciliation skipped."
+                ),
+                source_file_id=str(ingestion_result.file_record.id),
+                stats=stats,
+                finished_at=datetime.now(timezone.utc),
+            )
+            return {
+                "success": True,
+                "stage": "ingestion",
+                "outcome": duplicate_outcome,
+                "duplicateCode": duplicate_code,
+                "partner": partner,
+                "filePath": fetch_result.local_path,
+                "fileSize": fetch_result.file_size,
+                "processingStatus": processing_status,
+                "reconciliationSkipped": True,
+                "runtimeRun": {
+                    "id": str(run.id),
+                    "status": PartnerRuntimeRunStatus.COMPLETED.value,
+                    "outcome": duplicate_outcome,
+                    "canonicalFileId": str(ingestion_result.file_record.id),
+                    "reconciliationSkipped": True,
+                },
+            }
         await update_runtime_run(
             db,
             str(run.id),

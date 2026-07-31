@@ -485,3 +485,25 @@ class DataContainerRepository:
                 )
             )
             return int(result.rowcount or 0)
+
+    async def rebind_source_file_by_ingestion_keys(
+        self, identify: str, ingestion_keys: list[str], source_file_id: UUID | str
+    ) -> int:
+        """Rebind existing canonical rows to the current logical file claim."""
+        if not ingestion_keys:
+            return 0
+        from sqlalchemy import update
+        from src.models.postgres import PartnerTransactionTable
+
+        if isinstance(source_file_id, str):
+            source_file_id = UUID(source_file_id)
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(PartnerTransactionTable)
+                .where(
+                    PartnerTransactionTable.identify == identify,
+                    PartnerTransactionTable.ingestion_key.in_(ingestion_keys),
+                )
+                .values(source_file_id=source_file_id)
+            )
+            return int(result.rowcount or 0)

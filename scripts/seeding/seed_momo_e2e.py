@@ -31,7 +31,7 @@ from bson.decimal128 import Decimal128
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import settings
-from src.core.enums import TransactionStatus
+from src.core.enums import FileType, TransactionStatus
 from src.models.fetch_config import (
     FetchConfig,
     FetchConfigRepository,
@@ -83,18 +83,18 @@ def _amount_for_key(txn_id: str) -> Decimal:
     raise ValueError(f"Unsupported txn id: {txn_id}")
 
 
-def _partner_file_path_for_day(day: datetime) -> Path:
-    """Default production partner file path: ./sftp_data/settlement_MOMO_YYYYMMDD.xlsx.
+def _partner_file_path_for_day(day: datetime, file_dir: str = "mock_data") -> Path:
+    """Default production partner file path: ./{file_dir}/settlement_MOMO_YYYYMMDD.xlsx.
 
-    Also cleans up any stale settlement_MOMO_*.xlsx files in ./sftp_data so a
+    Also cleans up any stale settlement_MOMO_*.xlsx files in target directory so a
     second run on the same day does not leave debris.
     """
-    sftp_dir = Path("./sftp_data")
-    sftp_dir.mkdir(exist_ok=True)
-    for old_file in sftp_dir.glob("settlement_MOMO_*.xlsx"):
+    target_dir = Path(file_dir)
+    target_dir.mkdir(exist_ok=True)
+    for old_file in target_dir.glob("settlement_MOMO_*.xlsx"):
         old_file.unlink()
     date_compact = _date_str(day).replace("-", "")
-    return sftp_dir / f"settlement_MOMO_{date_compact}.xlsx"
+    return target_dir / f"settlement_MOMO_{date_compact}.xlsx"
 
 
 # ── Partner file writer ──────────────────────────────────────────────────────
@@ -183,15 +183,14 @@ async def _seed_internal(
     *,
     day: Optional[datetime] = None,
 ) -> int:
-    """Insert internal rows for the given keys (skips ones already present).
-
-    Uses `db["internal_transaction"]` directly so the helper is testable with
-    a mock db (see `tests/test_seed_momo_e2e.py`).
-    """
+    """Insert internal rows into BOTH PostgreSQL and MongoDB for the given keys."""
     if day is None:
         day = _today_utc()
+    
+    # 1. Seed MongoDB internal_transaction
     collection = db["internal_transaction"]
     inserted = 0
+    docs_to_insert = []
     for txn_id in keys:
         existing = await collection.find_one(
             {"partner": PARTNER, "partnerTxnId": txn_id}
@@ -200,7 +199,35 @@ async def _seed_internal(
             continue
         doc = _build_internal_doc(txn_id, day)
         await collection.insert_one(doc)
+        docs_to_insert.append(doc)
         inserted += 1
+
+    # 2. Seed PostgreSQL internal_transaction table
+    try:
+        from src.models.postgres import get_pg_engine, InternalTransactionTable
+        from sqlalchemy import insert
+        from uuid import uuid4
+        engine = get_pg_engine()
+        pg_rows = []
+        for txn_id in keys:
+            amount_val = Decimal(_amount_for_key(txn_id))
+            pg_rows.append({
+                "id": str(uuid4()),
+                "partner": PARTNER,
+                "partner_txn_id": txn_id,
+                "amount": amount_val,
+                "currency": "VND",
+                "status": "SUCCESS",
+                "transaction_time": day.replace(tzinfo=None) if day.tzinfo else day,
+                "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+                "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
+            })
+        async with engine.begin() as conn:
+            await conn.execute(insert(InternalTransactionTable), pg_rows)
+        await engine.dispose()
+    except Exception as exc:
+        print(f"Warning seeding Postgres internal_transaction: {exc}")
+
     return inserted
 
 
@@ -208,17 +235,23 @@ async def _seed_internal(
 
 
 async def _reset_and_seed_phase1(db, partner_file_path: str | Path) -> int:
-    """Wipe MOMO internal rows, seed 20 wave1 rows, write wave1 partner xlsx.
-
-    Returns the number of inserted internal rows (20 in the clean case).
-    Does NOT touch the other MOMO collections (reconciliation_result, fetch_config,
-    etc.) — the CLI `main()` does that full reset, but the helper itself stays
-    narrowly focused on internal_transaction + the partner file so tests can
-    mock just one collection.
-    """
+    """Wipe MOMO internal & partner rows in both Mongo and Postgres, seed 20 wave1 rows."""
     day = _today_utc()
     collection = db["internal_transaction"]
     await collection.delete_many({"partner": PARTNER})
+    
+    # Wipe Postgres internal_transaction & partner_transaction for MOMO
+    try:
+        from src.models.postgres import get_pg_engine, InternalTransactionTable, PartnerTransactionTable
+        from sqlalchemy import delete
+        engine = get_pg_engine()
+        async with engine.begin() as conn:
+            await conn.execute(delete(InternalTransactionTable).where(InternalTransactionTable.partner == PARTNER))
+            await conn.execute(delete(PartnerTransactionTable).where(PartnerTransactionTable.identify == PARTNER))
+        await engine.dispose()
+    except Exception as exc:
+        print(f"Warning wiping Postgres tables: {exc}")
+
     inserted = await _seed_internal(db, _wave1_keys(), day=day)
     _write_partner_file(partner_file_path, _wave1_keys(), day=day)
     return inserted
@@ -235,6 +268,14 @@ async def _add_phase2(db, partner_file_path: str | Path) -> int:
     day = _today_utc()
     inserted = await _seed_internal(db, _wave2_keys(), day=day)
     _write_partner_file(partner_file_path, _wave2_keys(), day=day)
+    return inserted
+
+
+async def _add_phase2_duplicate(db, partner_file_path: str | Path) -> int:
+    """Prepare Sprint 1 partial-duplicate demo: 20 old + 10 new keys."""
+    day = _today_utc()
+    inserted = await _seed_internal(db, WAVE2_KEYS[:10], day=day)
+    _write_partner_file(partner_file_path, WAVE1_KEYS + WAVE2_KEYS[:10], day=day)
     return inserted
 
 
@@ -261,7 +302,7 @@ async def _add_missing_partner_demo(db, partner_file_path: str | Path) -> int:
 
 
 async def _full_wipe(db) -> None:
-    """Wipe all MOMO-related collections (production reset).
+    """Wipe all MOMO-related collections and PostgreSQL tables (production reset).
 
     `data_container` uses field name `identify`; the rest use `partner`.
     """
@@ -278,6 +319,19 @@ async def _full_wipe(db) -> None:
     await db["reconciliation_review_record"].delete_many({"partner": PARTNER})
     await db["copilot_action"].delete_many({"partner": PARTNER})
     await db["audit_event"].delete_many({"metadata.partner": PARTNER})
+
+    # Wipe PostgreSQL tables for MOMO
+    try:
+        from src.models.postgres import get_pg_engine, InternalTransactionTable, PartnerTransactionTable, ReconciliationResultTable
+        from sqlalchemy import delete
+        engine = get_pg_engine()
+        async with engine.begin() as conn:
+            await conn.execute(delete(ReconciliationResultTable).where(ReconciliationResultTable.partner == PARTNER))
+            await conn.execute(delete(PartnerTransactionTable).where(PartnerTransactionTable.identify == PARTNER))
+            await conn.execute(delete(InternalTransactionTable).where(InternalTransactionTable.partner == PARTNER))
+        await engine.dispose()
+    except Exception as exc:
+        print(f"Warning wiping Postgres tables in _full_wipe: {exc}")
 
 
 async def _ensure_mapping_config(db, status: str = "APPROVED") -> None:
@@ -327,11 +381,25 @@ async def _ensure_fetch_config(db) -> None:
         fetchMethod=FetchMethod.FILEDROP,
         enabled=True,
         schedule="0 0 * * *",
-        localDownloadDir="./downloads",
+        localDownloadDir="./mock_data",
         cleanupAfterIngest=False,
-        filedrop=FileDropConfig(directory="./sftp_data", pattern="settlement_MOMO_*.xlsx"),
+        filedrop=FileDropConfig(directory="./mock_data", pattern="settlement_MOMO_*.xlsx"),
     )
     await repo.create(fetch_config)
+
+
+async def _remove_runtime_mapping_for_review(db) -> int:
+    """Force phase 2 to create a brand-new AI mapping proposal."""
+    result = await db["reconciliation_mapping_config"].delete_many(
+        {"partner": PARTNER, "workflowType": "UPC", "fileType": FileType.SETTLEMENT.value}
+    )
+    await db["copilot_action"].delete_many(
+        {"partner": PARTNER, "type": "MAPPING_PROPOSAL"}
+    )
+    await db["review_packet"].delete_many(
+        {"partner": PARTNER, "status": "PENDING"}
+    )
+    return result.deleted_count
 
 
 async def _setup_sprint6(db, day: datetime) -> int:
@@ -390,7 +458,7 @@ async def _activate_sprint6_wave2(db, day: datetime) -> tuple[Path, Path, int]:
 # ── CLI entry point ──────────────────────────────────────────────────────────
 
 
-async def main(mode: str) -> None:
+async def main(mode: str, file_dir: str = "mock_data") -> None:
     import os
     client = AsyncIOMotorClient(settings.mongodb_url)
     db = client[settings.db_name]
@@ -401,13 +469,20 @@ async def main(mode: str) -> None:
     else:
         day = _today_utc()
         
-    partner_file_path = _partner_file_path_for_day(day)
+    partner_file_path = _partner_file_path_for_day(day, file_dir=file_dir)
+    if mode == "phase2_duplicate":
+        # FileDrop fetch-unit identity includes selected_file. Publish phase 2
+        # as a new delivery unit; overwriting the baseline path is correctly
+        # classified as FETCH_UNIT_REPLAY.
+        partner_file_path = partner_file_path.with_name(
+            f"settlement_MOMO_{_date_str(day).replace('-', '')}_phase2.xlsx"
+        )
 
     try:
         if mode == "reset":
             await _full_wipe(db)
             inserted = await _reset_and_seed_phase1(db, partner_file_path)
-            await _ensure_mapping_config(db, status="APPROVED")
+            await _ensure_mapping_config(db, status="PENDING_APPROVAL")
             await _ensure_fetch_config(db)
             print(f"Reset complete for {PARTNER} on {_date_str(day)}")
             print(f"Seeded Phase 1 internal rows: {inserted}")
@@ -417,6 +492,15 @@ async def main(mode: str) -> None:
             await _ensure_fetch_config(db)
             print(f"Phase 2 data prepared for {PARTNER} on {_date_str(day)}")
             print(f"Added Phase 2 internal rows: {inserted}")
+            print(f"Overwrote partner file: {partner_file_path}")
+        elif mode == "phase2_duplicate":
+            inserted = await _add_phase2_duplicate(db, partner_file_path)
+            removed = await _remove_runtime_mapping_for_review(db)
+            await _ensure_fetch_config(db)
+            print(f"Phase 2 duplicate demo prepared for {PARTNER} on {_date_str(day)}")
+            print(f"Added new Phase 2 internal rows: {inserted}")
+            print("Partner file now contains 20 existing wave1 rows + 10 new wave2 rows")
+            print(f"Removed approved runtime mapping(s): {removed}; next Run Now will create a new AI Guided Review proposal")
             print(f"Overwrote partner file: {partner_file_path}")
         elif mode == "missing_partner_demo":
             inserted = await _add_missing_partner_demo(db, partner_file_path)
@@ -438,7 +522,7 @@ async def main(mode: str) -> None:
         else:
             raise ValueError(
                 f"Unsupported mode: {mode!r}. "
-                f"Expected one of: reset, phase2, missing_partner_demo, sprint6-setup, sprint6-wave2"
+                f"Expected one of: reset, phase2, phase2_duplicate, missing_partner_demo, sprint6-setup, sprint6-wave2"
             )
     finally:
         client.close()
@@ -450,8 +534,13 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "mode",
-        choices=["reset", "phase2", "missing_partner_demo", "sprint6-setup", "sprint6-wave2"],
+        choices=["reset", "phase2", "phase2_duplicate", "missing_partner_demo", "sprint6-setup", "sprint6-wave2"],
         help="reset=clean Phase 1; phase2=add Wave 2; missing_partner_demo=inject MISSING_PARTNER row; sprint6-setup=Sprint 6 setup; sprint6-wave2=Sprint 6 wave 2 activation",
     )
+    parser.add_argument(
+        "--file-dir",
+        default="mock_data",
+        help="Directory to write partner excel files (default: mock_data)",
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.mode))
+    asyncio.run(main(args.mode, file_dir=args.file_dir))

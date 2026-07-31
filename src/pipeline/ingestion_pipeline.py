@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import string
 import time
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from src.config.config_health import (
     ConfigurationApprovalRequiredError,
@@ -45,6 +45,9 @@ class IngestionResult:
     file_record: ReconciliationFile
     stats: ProcessingStats
     errors: list[dict] = field(default_factory=list)
+    outcome: Literal["INGESTED", "FILE_DUPLICATE", "FETCH_UNIT_REPLAY", "WAITING_REVIEW", "FAILED"] = "INGESTED"
+    duplicate_code: str | None = None
+    ingestion_keys: list[str] = field(default_factory=list)
 
 
 class IngestionPipeline:
@@ -242,6 +245,7 @@ class IngestionPipeline:
         failed_rows = 0
         duplicate_rows = 0
         errors: list[dict] = []
+        ingestion_keys: list[str] = []
         file_record: Optional[ReconciliationFile] = None
 
         try:
@@ -329,6 +333,8 @@ class IngestionPipeline:
                             ),
                         }
                     ],
+                    outcome=("FETCH_UNIT_REPLAY" if duplicate_code == "fetch_unit_duplicate" else "FILE_DUPLICATE"),
+                    duplicate_code=duplicate_code,
                 )
 
             # Emit FILE_STARTED event
@@ -576,6 +582,7 @@ class IngestionPipeline:
 
                     # 8g: Valid → add to batch buffer
                     ingestion_key = self._derive_ingestion_key(txn)
+                    ingestion_keys.append(ingestion_key)
                     if self._fast_mode:
                         # Bypass all Pydantic model creation for performance
                         from uuid import uuid4
@@ -650,6 +657,12 @@ class IngestionPipeline:
             # Step 10: Update stats and status
             t_post_start = time.perf_counter()
             if file_record is not None:
+                if duplicate_rows and ingestion_keys and hasattr(self._data_repo, "rebind_source_file_by_ingestion_keys"):
+                    await self._data_repo.rebind_source_file_by_ingestion_keys(
+                        partner,
+                        ingestion_keys,
+                        file_record.id,
+                    )
                 await self._recon_repo.update_processing_stats(
                     file_record.id, total_rows, success_rows, failed_rows
                 )
@@ -706,6 +719,7 @@ class IngestionPipeline:
                 file_record=file_record,
                 stats=stats,
                 errors=errors,
+                ingestion_keys=ingestion_keys,
             )
 
         except Exception as exc:

@@ -4,12 +4,10 @@ import { useEffect, useMemo, useCallback, useState } from "react";
 import { Topbar } from "@/components/layout/topbar";
 import { PageSection } from "@/components/ui/page-section";
 import { Panel } from "@/components/ui/panel";
-import { RunStatusPanel } from "@/components/reconciliation/run-status-panel";
 import { SummaryStrip } from "@/components/reconciliation/summary-strip";
 import { InsightGrid } from "@/components/reconciliation/insight-grid";
 import { EvidenceTable } from "@/components/reconciliation/evidence-table";
 import {
-  RunStatusPanelSkeleton,
   SummaryStripSkeleton,
   InsightGridSkeleton,
   EvidenceTableSkeleton,
@@ -267,15 +265,16 @@ export default function ReconciliationPage() {
       ]);
 
       if (runStatusRes && runStatusRes.run) {
+        const statsObj = statsRes?.byStatus || {};
         setRunStatus({
           status: runStatusRes.run.status,
           startedAt: runStatusRes.run.startedAt as string ?? "",
           completedAt: runStatusRes.run.completedAt as string,
-          totalRows: (runStatusRes.run.stats as Record<string, number>)?.["resultCount"] ?? 0,
-          matchedRows: 0,
-          unmatchedRows: 0,
-          missingPartnerRows: 0,
-          missingInternalRows: 0,
+          totalRows: statsRes?.total ?? (runStatusRes.run.stats as Record<string, number>)?.["resultCount"] ?? 0,
+          matchedRows: (statsObj["MATCHED"] ?? 0) + (statsObj["MATCHED_FAILED"] ?? 0) + (statsObj["MATCHED_REVERSED"] ?? 0),
+          unmatchedRows: (statsObj["AMOUNT_MISMATCH"] ?? 0) + (statsObj["STATUS_MISMATCH"] ?? 0) + (statsObj["MULTIPLE_MISMATCH"] ?? 0),
+          missingPartnerRows: statsObj["MISSING_PARTNER"] ?? 0,
+          missingInternalRows: statsObj["MISSING_INTERNAL"] ?? 0,
         });
       } else {
         setRunStatus(null);
@@ -513,19 +512,6 @@ export default function ReconciliationPage() {
     return results.find((r) => (r.partnerTxnId || r.internalTxnId || r.id) === selectedEvidenceRowId) ?? null;
   }, [selectedEvidenceRowId, results]);
 
-  const handleTriggerReconciliation = useCallback(async () => {
-    try {
-      await api.runReconciliation({ partner, date });
-      showToast("Reconciliation run triggered successfully.", "success");
-      // Short timeout to let ingestion register on backend before reload
-      setTimeout(() => {
-        void loadPage(partner, date);
-      }, 1000);
-    } catch {
-      showToast("Failed to trigger reconciliation run.", "error");
-    }
-  }, [partner, date, loadPage, showToast]);
-
   const selectedCount = Object.keys(selectedRows).length;
 
 
@@ -564,7 +550,6 @@ export default function ReconciliationPage() {
       <PageSection>
         {store.loading ? (
           <>
-            <RunStatusPanelSkeleton />
             <SummaryStripSkeleton />
             <Panel
               header={
@@ -593,7 +578,6 @@ export default function ReconciliationPage() {
           </>
         ) : (
           <>
-            <RunStatusPanel runStatus={store.runStatus} onTriggerRun={handleTriggerReconciliation} />
             <SummaryStrip stats={store.stats} />
             {previewRows.length > 0 && (
               <Panel

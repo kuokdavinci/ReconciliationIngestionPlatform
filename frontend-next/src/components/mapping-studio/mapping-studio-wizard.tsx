@@ -9,6 +9,7 @@ import styles from "./mapping-studio.module.css";
 import { MappingStudioUploadStep } from "./mapping-studio-upload-step";
 import { MappingStudioFieldMappingStep } from "./mapping-studio-field-mapping-step";
 import { MappingStudioValidateStep } from "./mapping-studio-validate-step";
+import { MappingStudioExecuteStep } from "./mapping-studio-execute-step";
 
 interface Props {
   initialPartner?: string;
@@ -58,9 +59,10 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
 
   const renderStepRail = () => {
     const steps = [
-      { num: 1 as const, label: "Select Sample" },
-      { num: 2 as const, label: "Review Draft" },
-      { num: 3 as const, label: "Validate Output" },
+      { num: 1 as const, label: "1. Evaluate File" },
+      { num: 2 as const, label: "2. Mapping Config" },
+      { num: 3 as const, label: "3. Validate" },
+      { num: 4 as const, label: "4. Approve & Run" },
     ];
     return (
       <div className={styles.studioSteps}>
@@ -265,14 +267,14 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
 
   const handleHandoff = async () => {
     if (!wizard.draftMappingId) {
-      showToast("No draft mapping to hand off. Save the draft mapping first.", "error");
+      showToast("Moving to Step 4: Approve & Run...", "info");
+      setWizard(prev => ({ ...prev, step: 4 }));
       return;
     }
     try {
       await api.handoffReview(wizard.draftMappingId);
-      showToast("Mapping submitted for review.", "success");
-      setWizard(prev => ({ ...prev, handoffConfirmed: false }));
-      onNavigateReview?.(wizard.draftMappingId!);
+      showToast("Mapping submitted for review. Moving to Step 4...", "success");
+      setWizard(prev => ({ ...prev, step: 4, handoffConfirmed: true }));
     } catch (err: any) {
       showToast(err.message || "Handoff failed", "error");
     }
@@ -321,6 +323,16 @@ export function MappingStudioWizard({ initialPartner = "MOMO", onNavigateReview 
           onHandoff={handleHandoff}
           onOpenReviewCenter={openReviewCenter}
           onBack={() => setWizard(prev => ({ ...prev, step: 2 }))}
+        />
+      )}
+
+      {wizard.step === 4 && (
+        <MappingStudioExecuteStep
+          wizard={wizard}
+          onBack={() => setWizard(prev => ({ ...prev, step: 3 }))}
+          onOpenReconciliation={() => {
+            window.location.href = "/reconciliation";
+          }}
         />
       )}
     </section>

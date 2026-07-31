@@ -34,10 +34,10 @@ export function GuidedReviewDecisionStep({
       title: "Approve Mapping",
       description: "Persisting the operator decision and scheduling background processing.",
     },
-    {
-      key: "ingestion",
-      title: "Ingest Partner File",
-      description: "Importing partner transactions into database.",
+      {
+        key: "ingestion",
+        title: "Ingest Partner File",
+        description: "Reading, normalizing, validating, and persisting partner transactions safely.",
     },
     {
       key: "reconciliation",
@@ -82,6 +82,56 @@ export function GuidedReviewDecisionStep({
 
       {(postApprovalRun || isApproved) && (
         <div className={styles.approveProgress}>
+          {postApprovalRun?.stats && Object.keys(postApprovalRun.stats).length > 0 && (
+            <div className={`${styles.sectionCard} ${styles.pipelineMetricsHero}`}>
+              <div className={styles.sectionCardHeading}>
+                <div>
+                  <span className={styles.metricEyebrow}>Pipeline proof</span>
+                  <h5 className={styles.sectionCardTitle}>Ingestion performance</h5>
+                  <p className={styles.sectionCardCopy}>
+                    A compact view of what the pipeline read, persisted, skipped, and sent to reconciliation.
+                  </p>
+                </div>
+                <Badge severity="neutral">CONFLICT-SAFE</Badge>
+              </div>
+              <div className={`${styles.metricGrid} ${styles.ingestionMetricsGrid}`}>
+                <div className={styles.metricCard}>
+                  <div className={styles.metricLabel}>Input</div>
+                  <div className={styles.metricValue}>{postApprovalRun.stats.totalRows ?? 0}</div>
+                  <div className={styles.metricHint}>rows read</div>
+                </div>
+                <div className={`${styles.metricCard} ${styles.metricCardSuccess}`}>
+                  <div className={styles.metricLabel}>Inserted</div>
+                  <div className={styles.metricValue}>{postApprovalRun.stats.successRows ?? 0}</div>
+                  <div className={styles.metricHint}>new rows persisted</div>
+                </div>
+                <div className={`${styles.metricCard} ${styles.metricCardWarning}`}>
+                  <div className={styles.metricLabel}>Duplicates</div>
+                  <div className={styles.metricValue}>{postApprovalRun.stats.duplicateRows ?? 0}</div>
+                  <div className={styles.metricHint}>safely skipped</div>
+                </div>
+                <div className={`${styles.metricCard} ${styles.metricCardDanger}`}>
+                  <div className={styles.metricLabel}>Failed</div>
+                  <div className={styles.metricValue}>{postApprovalRun.stats.failedRows ?? 0}</div>
+                  <div className={styles.metricHint}>validation failures</div>
+                </div>
+                <div className={styles.metricCard}>
+                  <div className={styles.metricLabel}>Recon output</div>
+                  <div className={styles.metricValue}>{postApprovalRun.stats.reconciliationCount ?? postApprovalRun.reconciliationCount ?? 0}</div>
+                  <div className={styles.metricHint}>results produced</div>
+                </div>
+              </div>
+              <div className={styles.evidenceRow}>
+                <span>Idempotency</span>
+                <strong>
+                  {(postApprovalRun.stats.duplicateRows ?? 0) > 0
+                    ? `${postApprovalRun.stats.duplicateRows} duplicate row(s) skipped without failing the batch.`
+                    : "No duplicate rows detected in this run."}
+                </strong>
+              </div>
+            </div>
+          )}
+
           <div className={styles.recommendPanel} style={{ background: "rgba(255, 255, 255, 0.02)", borderColor: "rgba(255, 255, 255, 0.08)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
               <div>
@@ -135,34 +185,6 @@ export function GuidedReviewDecisionStep({
               </div>
             );
           })}
-
-          {postApprovalRun?.stats && Object.keys(postApprovalRun.stats).length > 0 && (
-            <div className={styles.sectionCard}>
-              <h5 className={styles.sectionCardTitle}>Processed Row Counts</h5>
-              <div className={styles.metricGrid} style={{ gridTemplateColumns: "repeat(5, 1fr)" }}>
-                <div className={styles.metricCard}>
-                  <div className={styles.metricLabel} style={{ fontSize: "10px" }}>Total Rows</div>
-                  <div className={styles.metricValue} style={{ fontSize: "20px" }}>{postApprovalRun.stats.totalRows ?? 0}</div>
-                </div>
-                <div className={styles.metricCard}>
-                  <div className={styles.metricLabel} style={{ fontSize: "10px" }}>Success Rows</div>
-                  <div className={styles.metricValue} style={{ fontSize: "20px", color: "#10b981" }}>{postApprovalRun.stats.successRows ?? 0}</div>
-                </div>
-                <div className={styles.metricCard}>
-                  <div className={styles.metricLabel} style={{ fontSize: "10px" }}>Failed Rows</div>
-                  <div className={styles.metricValue} style={{ fontSize: "20px", color: "#ef4444" }}>{postApprovalRun.stats.failedRows ?? 0}</div>
-                </div>
-                <div className={styles.metricCard}>
-                  <div className={styles.metricLabel} style={{ fontSize: "10px" }}>Recon Results</div>
-                  <div className={styles.metricValue} style={{ fontSize: "20px" }}>{postApprovalRun.stats.resultCount ?? 0}</div>
-                </div>
-                <div className={styles.metricCard}>
-                  <div className={styles.metricLabel} style={{ fontSize: "10px" }}>Recon Count</div>
-                  <div className={styles.metricValue} style={{ fontSize: "20px" }}>{postApprovalRun.stats.reconciliationCount ?? postApprovalRun.reconciliationCount ?? 0}</div>
-                </div>
-              </div>
-            </div>
-          )}
 
           <div className={styles.actionRow} style={{ justifyContent: "center", marginTop: 12 }}>
             {postApprovalRun?.status === "FAILED" ? (

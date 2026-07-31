@@ -43,6 +43,7 @@ python_functions = ["test_*"]
 asyncio_mode = "auto"
 markers = [
     "e2e: mark test as end-to-end (requires real services)",
+    "integration: mark tests requiring a real database or service",
 ]
 
 [dependency-groups]

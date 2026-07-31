@@ -1,9 +1,9 @@
-# Sprint 1 Master Evaluation & Benchmark Specification (Plan 1: Idempotency & Duplicate Prevention)
+# Sprint 1 Master Evaluation & Benchmark Specification (Idempotency & Duplicate Prevention)
 
 > **Trạng thái**: Tài liệu Mẫu Chuẩn (Master Specification)  
-> **Kế hoạch (Plan)**: `PLAN-01-IDEMPOTENCY`  
+> **Kế hoạch (Sprint)**: `sprint-1-idempotency`  
 > **Lệnh sinh báo cáo thực thi**: `./.venv/bin/pytest tests/test_sprint1_eval_benchmark.py -v`  
-> **File xuất kết quả runtime**: [SPRINT-01-EVAL-BENCHMARK-RUN.md](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/docs/phase-2/SPRINT-01-EVAL-BENCHMARK-RUN.md)
+> **File xuất kết quả runtime**: [sprint-1-eval-benchmark-run.md](sprint-1-eval-benchmark-run.md)
 
 ---
 
@@ -43,7 +43,7 @@ Ma trận dưới đây định nghĩa toàn bộ 13 Scenarios bắt buộc ph�
 
 ## 📊 3. Bảng Kết Quả Benchmark & Thực Thi (Benchmark Execution Matrix)
 
-*(Phần này được cập nhật động trong file `SPRINT-01-EVAL-BENCHMARK-RUN.md` sau mỗi lần chạy bộ test benchmark).*
+*(Phần này được cập nhật động trong file `sprint-1-eval-benchmark-run.md` sau mỗi lần chạy bộ test benchmark).*
 
 Ví dụ cấu trúc bảng kết quả đo đạc:
 

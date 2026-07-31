@@ -17,10 +17,14 @@ Tài liệu dự án được chia theo milestone/phase. Numbering của plan b�
 
 Milestone mới: hoàn thiện độ tin cậy của fetch/ingestion pipeline. Phase này không bao gồm reconciliation logic, frontend hoặc AI.
 
-- [Plan 1 — Idempotency](phase-2/PLAN-01-IDEMPOTENCY.md)
-- [Plan 2 — Incremental Processing & Recovery](phase-2/PLAN-02-INCREMENTAL-RECOVERY.md)
-- [Plan 3 — Data Quality & Quarantine](phase-2/PLAN-03-DATA-QUALITY.md)
-- [Plan 4 — Observability](phase-2/PLAN-04-OBSERVABILITY.md)
+- [Sprint 1 Summary](phase-2/sprint-1-summary.md)
+- [Sprint 1 — Idempotency](phase-2/sprint-1-idempotency.md)
+- [Sprint 1 — Implementation Report](phase-2/sprint-1-idempotency-report.md)
+- [Sprint 1 — Eval & Benchmark Suite](phase-2/sprint-1-eval-benchmark.md)
+- [Sprint 1 — Benchmark Execution Run](phase-2/sprint-1-eval-benchmark-run.md)
+- [Sprint 2 — Incremental Processing & Recovery](phase-2/sprint-2-incremental-recovery.md)
+- [Sprint 3 — Data Quality & Quarantine](phase-2/sprint-3-data-quality.md)
+- [Sprint 4 — Observability](phase-2/sprint-4-observability.md)
 - [Known Issues](KNOWN_ISSUES.md)
 
 ## Scope boundary

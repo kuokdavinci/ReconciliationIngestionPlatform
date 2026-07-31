@@ -18,6 +18,7 @@ from scripts.seeding.seed_momo_e2e import (
     WAVE2_KEYS,
     _add_missing_partner_demo,
     _add_phase2,
+    _add_phase2_duplicate,
     _reset_and_seed_phase1,
     _wave1_keys,
     _wave2_keys,
@@ -130,6 +131,23 @@ async def test_phase2_adds_wave2_only(mock_db: MagicMock, tmp_path: Path):
     assert sorted(file_keys) == sorted(WAVE2_KEYS)
     # Sanity: file has exactly 20 keys (not 40)
     assert len(file_keys) == 20
+
+
+async def test_phase2_duplicate_keeps_all_existing_rows(mock_db: MagicMock, tmp_path: Path):
+    """Partial duplicate fixture must not introduce missing-partner rows."""
+    collection = _setup_internal_collection(mock_db)
+    partner_file = tmp_path / "settlement_MOMO_20260605.xlsx"
+
+    assert await _reset_and_seed_phase1(mock_db, str(partner_file)) == 20
+    collection.insert_one.reset_mock()
+
+    inserted = await _add_phase2_duplicate(mock_db, str(partner_file))
+
+    assert inserted == 10
+    assert set(_inserted_partner_txn_ids(collection)) == set(WAVE2_KEYS[:10])
+    file_keys = _read_partner_txn_ids(partner_file)
+    assert len(file_keys) == 30
+    assert file_keys == WAVE1_KEYS + WAVE2_KEYS[:10]
 
 
 # ── Test 3: missing_partner_demo ────────────────────────────────────────────

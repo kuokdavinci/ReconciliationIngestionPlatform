@@ -135,6 +135,7 @@ export interface PostApprovalRun {
   stats: {
     totalRows?: number;
     successRows?: number;
+    duplicateRows?: number;
     failedRows?: number;
     resultCount?: number;
     reconciliationCount?: number;

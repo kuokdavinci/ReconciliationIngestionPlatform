@@ -118,7 +118,8 @@ Dự án có `Makefile` với nhiều target tiện ích:
 | Target | Mô tả |
 |---|---|
 | `make momo-e2e-reset` | Reset seed data Phase 1 (20 rows) |
-| `make momo-e2e-phase2` | Thêm seed data Phase 2 (20 rows + partner file) |
+| `make momo-e2e-phase2` | Chuẩn bị partial-duplicate demo Phase 2 (20 rows cũ + 10 rows mới) |
+| `make momo-e2e-phase2-full` | Legacy Phase 2: ghi file Wave 2 gồm 20 rows mới |
 | `make momo-e2e-run` | Trigger MOMO automation job qua API |
 | `make momo-e2e-job` | Kiểm tra trạng thái MOMO job |
 | `make momo-e2e-rebuild` | Rebuild api + scheduler containers |

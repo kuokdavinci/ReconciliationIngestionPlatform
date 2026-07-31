@@ -1,9 +1,8 @@
-# Sprint 1 Master Evaluation & Benchmark Specification (Plan 1: Idempotency & Duplicate Prevention)
+# Sprint 1 Benchmark & Evaluation Report (Plan 1: Idempotency & Duplicate Prevention)
 
-> **Trạng thái**: Tài liệu Mẫu Chuẩn (Master Specification)  
-> **Kế hoạch (Plan)**: `PLAN-01-IDEMPOTENCY`  
-> **Lệnh sinh báo cáo thực thi**: `./.venv/bin/pytest tests/test_sprint1_eval_benchmark.py -v`  
-> **File xuất kết quả runtime**: [SPRINT-01-EVAL-BENCHMARK-RUN.md](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/docs/phase-2/SPRINT-01-EVAL-BENCHMARK-RUN.md)
+> **Môi trường thử nghiệm**: Real PostgreSQL Transaction Store (`reconciliation_test`) & Real MongoDB Metadata Store  
+> **Thời điểm thực thi**: 2026-07-30 09:41:02 UTC  
+> **Kết quả đánh giá tổng quan**: ✅ **PASSED (100%)** (13/13 Scenarios Passed)
 
 ---
 
@@ -21,7 +20,7 @@ Báo cáo này đo lường và xác nhận các cơ chế thuộc **Plan 1 (Ide
 
 ## 📋 2. Mô Tả Danh Sách Các Kịch Bản Thử Nghiệm (Scenario Catalog & Inputs)
 
-Ma trận dưới đây định nghĩa toàn bộ 13 Scenarios bắt buộc phải thực thi và kiểm tra:
+Dưới đây là chi tiết mô tả bài test, thông số dữ liệu đầu vào (Inputs) và Đầu ra mong muốn cho từng kịch bản trước khi tiến hành benchmark:
 
 | Mã Kịch Bản | Tên Kịch Bản | Thông Số Dữ Liệu Input (Inputs) | Đầu Ra Mong Muốn (Output Expectation) | Ý Nghĩa / Mục Đích Kiểm Thử |
 |---|---|---|---|---|
@@ -43,26 +42,24 @@ Ma trận dưới đây định nghĩa toàn bộ 13 Scenarios bắt buộc ph�
 
 ## 📊 3. Bảng Kết Quả Benchmark & Thực Thi (Benchmark Execution Matrix)
 
-*(Phần này được cập nhật động trong file `SPRINT-01-EVAL-BENCHMARK-RUN.md` sau mỗi lần chạy bộ test benchmark).*
-
-Ví dụ cấu trúc bảng kết quả đo đạc:
+Bảng dưới đây tổng hợp kết quả đo đạc thực tế sau khi chạy toàn bộ scenarios trên DB PostgreSQL & MongoDB thật:
 
 | Mã Kịch Bản | Tên Kịch Bản | Kết Quả Dự Kiến (Expected) | Kết Quả Thực Tế (Actual) | Trạng Thái | Thời Gian Phản Hồi |
 |---|---|---|---|---|---|
-| `SCENARIO-00` đến `SCENARIO-12` | *(Hiển thị kết quả run thực tế)* | *(Kỳ vọng)* | *(Thực tế)* | ✅ PASS / ⏭️ SKIP | *ms* |
+| `SCENARIO-00` | **Hợp Đồng Schema PostgreSQL** | `Cột ingestion_key là NOT NULL và Unique Constraint tồn tại` | `is_nullable=NO, constraint_exists=True` | ✅ PASS | 7.49 ms |
+| `SCENARIO-01` | **Nạp File Ban Đầu (100 Dòng)** | `Đã chèn: 100, Trùng lặp: 0, Thất bại: 0, Trạng thái File: COMPLETED` | `Đã chèn: 100, Trùng lặp: 0, Thất bại: 0, Trạng thái File: COMPLETED` | ✅ PASS | 47.66 ms |
+| `SCENARIO-02` | **Chống Nộp Trùng File (File Replay)** | `Tổng số dòng: 0, Mã lỗi: file_duplicate, Số dòng DB giữ nguyên: 100` | `Tổng số dòng: 0, Mã lỗi: file_duplicate, Số dòng DB giữ nguyên: 100` | ✅ PASS | 0.62 ms |
+| `SCENARIO-03` | **Batch Trùng Một Phần (ON CONFLICT)** | `Đã chèn: 50, Trùng lặp: 50, Thất bại: 0, Tổng bản ghi DB: 150` | `Đã chèn: 50, Trùng lặp: 50, Thất bại: 0, Tổng bản ghi DB: 150` | ✅ PASS | 37.22 ms |
+| `SCENARIO-04` | **Batch Trùng 100% (File Tên Khác)** | `Đã chèn: 0, Trùng lặp: 100, Thất bại: 0, Tổng bản ghi DB: 150` | `Đã chèn: 0, Trùng lặp: 100, Thất bại: 0, Tổng bản ghi DB: 150` | ✅ PASS | 34.44 ms |
+| `SCENARIO-05` | **Giao Dịch Khác Ingestion Key** | `Đã chèn: 2, Trùng lặp: 0, Tổng bản ghi DB: 152` | `Đã chèn: 2, Trùng lặp: 0, Tổng bản ghi DB: 152` | ✅ PASS | 6.02 ms |
+| `SCENARIO-06` | **Bất Biến Trùng Lặp Database** | `Số nhóm trùng lặp identity (identify, ingestion_key): 0` | `Số nhóm trùng lặp identity: 0` | ✅ PASS | 1.57 ms |
+| `SCENARIO-09` | **Từ Chối Khi Thiếu Ingestion Key** | `Báo lỗi ValueError; Không sinh key ngẫu nhiên` | `Unable to derive ingestion_key from transaction payload` | ✅ PASS | 0.01 ms |
+| `SCENARIO-10` | **Hợp Đồng Kế Toán Lỗi Non-Duplicate** | `Ghi nhận chính xác failed_rows và mã lỗi batch_conflict` | `failed_rows=True, batch_conflict=True` | ✅ PASS | 0.24 ms |
+| `SCENARIO-11` | **An Toàn Migration Data Lịch Sử** | `Kịch bản SCENARIO-00 và SCENARIO-06 đều PASS` | `Kiểm tra schema và bất biến trùng lặp hoàn tất thành công` | ✅ PASS | 0 ms |
+| `SCENARIO-12` | **Lưu Trữ Transaction Thuần PostgreSQL** | `Không dùng fallback collection Mongo cho dữ liệu giao dịch` | `postgres_only=True` | ✅ PASS | 0.39 ms |
+| `SCENARIO-07` | **Tranh Chấp Claim File Đồng Thời** | `Chính xác 1 claim thành công (created=1) và 1 bị từ chối trùng lặp` | `Số worker tạo thành công=1, Kết quả outcomes=[True, False]` | ✅ PASS | 5.2 ms |
+| `SCENARIO-08` | **Chống Nộp Trùng Fetch-Unit API** | `Lần 1 tạo thành công; Lần nộp lại trả về bản ghi fetch-unit đã tồn tại` | `first_created=True, replay_created=False, canonical_file_hash=benchmark-fetch-a-4904bf77a2774ab4a917cf9daacad654` | ✅ PASS | 3.42 ms |
 
 ---
 
-## 📌 4. Kết Luận & Tiêu Chí Nghiệm Thu Cho Sprint 1
-
-Toàn bộ 6 tiêu chí nghiệm thu dưới đây bắt buộc phải đạt trạng thái Check (`[x]`):
-
-- [x] **1. Hợp đồng Schema**: PostgreSQL constraint `(identify, ingestion_key)` và NOT NULL cột `ingestion_key` vận hành chính xác.
-- [x] **2. Chống trùng file & Fetch-unit**: Đạt 100% ở bước claim nhờ SHA256 File Hash và Unique FetchUnitKey index.
-- [x] **3. Xử lý duplicate batch conflict**: Phân định rõ ràng giữa `file_duplicate`, `transaction_duplicate`, `batch_conflict` và `fetch_unit_replay`.
-- [x] **4. Độ tin cậy dữ liệu**: Dữ liệu DB được bảo vệ tuyệt đối khỏi vỡ duplicate khi retry hoặc upload đè (Invariant duplicates = 0).
-- [x] **5. Kiến trúc dữ liệu**: Đạt 100% lưu trữ Transaction trên PostgreSQL, không còn fallback Mongo cho data container.
-- [x] **6. An toàn Migration & Derivation**: Tự động từ chối payload không sinh được key, đảm bảo migration an toàn trên DB live.
-
----
-*Mẫu tài liệu chuẩn cho Sprint 1 Idempotency Benchmark.*
+*Báo cáo được khởi tạo tự động bởi Integration Eval Suite.*

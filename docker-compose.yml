@@ -30,7 +30,7 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
       MONGO_INITDB_DATABASE: reconciliation
     healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      test: ["CMD-SHELL", "mongosh -u $MONGO_INITDB_ROOT_USERNAME -p $MONGO_INITDB_ROOT_PASSWORD --eval 'db.runCommand(\"ping\").ok' --quiet"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -79,11 +79,12 @@ services:
     env_file:
       - .env
     environment:
-      - APP_MONGODB_URL=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
+      - APP_MONGODB_URL=mongodb://admin:123456@mongodb:27017/reconciliation?authSource=admin
       - APP_POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/reconciliation
     volumes:
       - ./downloads:/app/downloads
       - ./sftp_data:/app/sftp_data
+      - ./mock_data:/app/mock_data
 
   scheduler:
     build:
@@ -100,12 +101,13 @@ services:
     env_file:
       - .env
     environment:
-      - APP_MONGODB_URL=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
+      - APP_MONGODB_URL=mongodb://admin:123456@mongodb:27017/reconciliation?authSource=admin
       - APP_POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/reconciliation
       - SFTP_HOST=sftp
     volumes:
       - ./downloads:/app/downloads
       - ./sftp_data:/app/sftp_data
+      - ./mock_data:/app/mock_data
 
 
 volumes:

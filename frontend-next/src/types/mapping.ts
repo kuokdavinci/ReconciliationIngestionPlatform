@@ -80,7 +80,7 @@ export interface HandoffResponse {
 
 // Full wizard state (used internally by the wizard component)
 export interface StudioWizardState {
-  step: 1 | 2 | 3;
+  step: 1 | 2 | 3 | 4;
   loading: boolean;
   partner: string;
   fileName?: string;

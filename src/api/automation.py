@@ -108,6 +108,8 @@ async def list_automation_jobs(request: Request):
             }
 
         latest_run_data = serialize_partner_runtime_run(latest_run) if latest_run else None
+        latest_run_stats = (latest_run_data or {}).get("stats") or {}
+        duplicate_outcome = latest_run_stats.get("outcome")
         active_statuses = {
             PartnerRuntimeRunStatus.QUEUED.value,
             PartnerRuntimeRunStatus.FETCHING.value,
@@ -137,6 +139,8 @@ async def list_automation_jobs(request: Request):
         elif has_pending_file:
             status = "PENDING"
             status_message = "A partner file is available and waiting for reconciliation."
+        elif duplicate_outcome in {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY", "NO_NEW_FILE"}:
+            status_message = latest_run_data.get("message") or "No new file was processed."
         jobs.append({
             "partner": config.partner,
             "fetchMethod": config.fetch_method.value,
@@ -149,6 +153,12 @@ async def list_automation_jobs(request: Request):
             "recentPackets": recent_packet_docs.get(config.partner, [])[:3],
             "status": status,
             "statusMessage": status_message,
+            "duplicateOutcome": duplicate_outcome,
+            "duplicateMessage": (
+                latest_run_data.get("message")
+                if duplicate_outcome in {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY", "NO_NEW_FILE"}
+                else None
+            ),
             "hasPendingFile": has_pending_file,
             "latestRuntimeRun": latest_run_data,
             "activeRuntimeRun": active_run,

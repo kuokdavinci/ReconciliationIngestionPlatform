@@ -4,11 +4,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from motor.motor_asyncio import AsyncIOMotorClient
+from sqlalchemy import delete
 
 from src.config.settings import settings
 from src.core.enums import TransactionStatus
+from src.core.enums import FileType
+from src.core.types import FieldMapping, FieldMappingType
 from src.models.internal_transaction import InternalTransaction, InternalTransactionRepository
 from src.models.fetch_config import FetchConfig, FetchMethod, FileDropConfig, FetchConfigRepository
+from src.models.mapping_config import MappingConfig, MappingConfigRepository, MappingConfigStatus
 
 async def seed_acmepay_case():
     print("Connecting to MongoDB...")
@@ -16,11 +20,14 @@ async def seed_acmepay_case():
     db = client[settings.db_name]
 
     # Repositories
-    internal_repo = InternalTransactionRepository(db)
     fetch_repo = FetchConfigRepository(db)
+    mapping_repo = MappingConfigRepository(db)
 
     print("Cleaning up old ACMEPAY data...")
-    await internal_repo.collection.delete_many({"partner": "ACMEPAY"})
+    internal_repo = InternalTransactionRepository()
+    from src.models.postgres import InternalTransactionTable
+    async with internal_repo.engine.begin() as conn:
+        await conn.execute(delete(InternalTransactionTable).where(InternalTransactionTable.partner == "ACMEPAY"))
     await db["reconciliation_file"].delete_many({"partner": "ACMEPAY"})
     await db["data_container"].delete_many({"identify": "ACMEPAY"})
     await db["reconciliation_result"].delete_many({"partner": "ACMEPAY"})
@@ -30,7 +37,8 @@ async def seed_acmepay_case():
 
     # --- Seed 20 Internal Transactions ---
     print("Seeding 20 internal transactions for ACMEPAY...")
-    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    recon_date = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    postgres_recon_date = recon_date.replace(tzinfo=None)
     
     internal_data = [
         ("INT_ACMEPAY_001", "ACMEPAY_TXN_001", "50000", TransactionStatus.SUCCESS),
@@ -53,16 +61,19 @@ async def seed_acmepay_case():
         ("INT_ACMEPAY_018", "ACMEPAY_TXN_018", "135000", TransactionStatus.SUCCESS),
     ]
 
-    for tx_id, p_txn_id, amount, status in internal_data:
-        await internal_repo.create(InternalTransaction(
+    internal_docs = [
+        InternalTransaction(
             id=tx_id,
             partner="ACMEPAY",
             partnerTxnId=p_txn_id,
             amount=Decimal(amount),
             status=status,
-            transactionTime=recon_date,
-        ))
-    print(f"Successfully seeded {len(internal_data)} internal records.")
+            transactionTime=postgres_recon_date,
+        )
+        for tx_id, p_txn_id, amount, status in internal_data
+    ]
+    await internal_repo.insert_many(internal_docs)
+    print(f"Successfully seeded {len(internal_docs)} internal records.")
 
     # --- Seed Fetch Config (FileDrop) ---
     print("Seeding Fetch Config for ACMEPAY...")
@@ -82,6 +93,30 @@ async def seed_acmepay_case():
     doc["_id"] = str(doc["_id"])
     await fetch_repo._collection.insert_one(doc)
     print("Fetch Config saved.")
+
+    print("Seeding approved ACMEPAY mapping config...")
+    await mapping_repo.create(MappingConfig(
+        partner="ACMEPAY",
+        workflowType="UPC",
+        fileType=FileType.SETTLEMENT,
+        sheetName="Sheet1",
+        startRow=2,
+        configVersion="ACMEPAY_v01",
+        status=MappingConfigStatus.APPROVED,
+        approvedAt=datetime.now(timezone.utc),
+        approvedBy="demo-seed",
+        fieldMappings=[
+            FieldMapping(path="id", column=1, type=FieldMappingType.STRING, required=True),
+            FieldMapping(path="trace", column=2, type=FieldMappingType.STRING),
+            FieldMapping(path="amount", column=3, type=FieldMappingType.DECIMAL, required=True),
+            FieldMapping(path="status", column=4, type=FieldMappingType.MAPPING, required=True,
+                         mapping={"SUCCESS": "SUCCESS", "FAILED": "FAILED", "REVERSED": "REVERSED"}),
+            FieldMapping(path="transDate", column=5, type=FieldMappingType.DATE),
+            FieldMapping(path="currency", type=FieldMappingType.CONSTANT, constant="VND"),
+        ],
+        configHealth={"stale": False, "status": "APPROVED", "confidence": 1.0, "reasoning": "Sprint 1 demo fixture."},
+    ))
+    print("Approved mapping saved.")
 
     # --- Prepare File Drop (in ./sftp_data) ---
     print("Creating partner file drop settlement_ACMEPAY_20240707.csv in ./sftp_data...")

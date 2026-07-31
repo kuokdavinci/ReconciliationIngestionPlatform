@@ -12,6 +12,6 @@ Tài liệu: [Phase 1](phase-1/PLAN-01-FOUNDATION.md).
 
 Phạm vi gồm bốn trụ cột: idempotency; incremental processing và recovery; data quality/quarantine; observability.
 
-Phạm vi loại trừ: reconciliation logic, frontend và AI. Các kế hoạch chi tiết nằm trong [Phase 2](phase-2/PLAN-01-IDEMPOTENCY.md).
+Phạm vi loại trừ: reconciliation logic, frontend và AI. Các kế hoạch chi tiết nằm trong [Phase 2](phase-2/sprint-1-idempotency.md).
 
 **Status:** Planning baseline completed; implementation chưa bắt đầu.

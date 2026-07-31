@@ -44,9 +44,21 @@ export function ScheduleTable({ jobs, onRunJob, runningPartners = {} }: Props) {
                 <div className={styles.statusBadges}>
                 {job.enabled ? <Badge severity="low">Enabled</Badge> : <Badge severity="critical">Disabled</Badge>}
                 <Badge severity={job.status === "HEALTHY" ? "low" : "medium"}>{job.status}</Badge>
+                {job.duplicateOutcome && (
+                  <Badge severity="neutral">
+                    {job.duplicateOutcome === "FILE_DUPLICATE" ? "Safe duplicate" : job.duplicateOutcome === "FETCH_UNIT_REPLAY" ? "Fetch replay" : "No new file"}
+                  </Badge>
+                )}
                 {job.hasPendingFile && <Badge severity="medium">Pending file</Badge>}
                 </div>
-                <div className={styles.statusText}>{job.statusMessage}</div>
+                <div className={styles.statusText}>{job.duplicateMessage || job.statusMessage}</div>
+                {job.duplicateOutcome && (
+                  <div className={styles.statusText}>
+                    {job.duplicateOutcome === "NO_NEW_FILE"
+                      ? "No file was available; ingestion and reconciliation were skipped."
+                      : "Ingestion and reconciliation were skipped safely for this schedule run."}
+                  </div>
+                )}
               </div>
             </td>
             <td className={styles.cell}>

@@ -1,6 +1,6 @@
 .PHONY: test test-eval ci clean \
 	momo-e2e-run momo-e2e-job momo-e2e-rebuild \
-	momo-e2e-phase2-file momo-e2e-help momo-e2e-reset momo-e2e-phase2 \
+	momo-e2e-phase2-file momo-e2e-help momo-e2e-reset momo-e2e-phase2 momo-e2e-phase2-full \
 	momo-e2e-missing-partner-demo momo-sprint6-setup momo-sprint6-wave2 \
 	zalopay-e2e-reset
 
@@ -35,13 +35,16 @@ ci:
 
 # ── MOMO E2E shortcuts ────────────────────────────────────────────
 momo-e2e-reset:
-	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py reset
+	PYTHONPATH=. uv run python scripts/seeding/seed_momo_e2e.py reset --file-dir mock_data
 
 momo-e2e-phase2:
-	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py phase2
+	PYTHONPATH=. uv run python scripts/seeding/seed_momo_e2e.py phase2_duplicate --file-dir mock_data
+
+momo-e2e-phase2-full:
+	PYTHONPATH=. uv run python scripts/seeding/seed_momo_e2e.py phase2 --file-dir mock_data
 
 momo-e2e-missing-partner-demo:
-	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py missing_partner_demo
+	PYTHONPATH=. uv run python scripts/seeding/seed_momo_e2e.py missing_partner_demo --file-dir mock_data
 
 momo-sprint6-setup:
 	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py sprint6-setup
@@ -68,7 +71,8 @@ zalopay-e2e-reset:
 momo-e2e-help:
 	@echo "MOMO E2E — start here (2 main commands):"
 	@echo "  make momo-e2e-reset               # clean Phase 1 (20 internal rows 9000-9019 + partner file)"
-	@echo "  make momo-e2e-phase2              # add Phase 2 (20 internal rows 9100-9119 + new partner file)"
+	@echo "  make momo-e2e-phase2              # partial duplicate demo (20 old + 10 new rows)"
+	@echo "  make momo-e2e-phase2-full         # legacy full Wave 2 file (20 new rows)"
 	@echo ""
 	@echo "Optional:"
 	@echo "  make momo-e2e-missing-partner-demo  # inject MOMO_TXN_90_MISSING_PARTNER for engine demo"

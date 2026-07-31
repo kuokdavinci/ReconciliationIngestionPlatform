@@ -6,9 +6,11 @@ export interface ScheduleJob {
   enabled: boolean;
   status: string;
   statusMessage?: string;
+  duplicateOutcome?: "FILE_DUPLICATE" | "FETCH_UNIT_REPLAY" | "NO_NEW_FILE";
+  duplicateMessage?: string | null;
   hasPendingFile?: boolean;
   pendingReviewPackets?: number;
-  latestRuntimeRun?: { date?: string };
+  latestRuntimeRun?: { date?: string; stats?: Record<string, unknown>; message?: string };
   recentPackets?: RecentPacket[];
 }
 

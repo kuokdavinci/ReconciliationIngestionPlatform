@@ -169,14 +169,17 @@ curl -s -H "X-Actor: demo-operator" -X POST http://localhost:8000/api/v1/automat
 
 ---
 
-### 🌊 Bước 4: Thử Nghiệm Nạp Bổ Sung Dữ Liệu Đợt 2 (`make momo-e2e-phase2`)
-Khởi tạo đợt dữ liệu thứ 2 để kiểm tra khả năng nạp gộp tăng trưởng (Incremental Append):
+### 🌊 Bước 4: Thử Nghiệm Nạp Bổ Sung Dữ Liệu Đợt 2 & Kiểm Tra Duplicate Safe (`make momo-e2e-phase2`)
+Khởi tạo đợt dữ liệu thứ 2 để kiểm tra khả năng xử lý trùng lặp một phần (Partial Duplicate Ingestion) và nạp bổ sung tăng trưởng (Incremental Append):
 
 ```bash
 make momo-e2e-phase2
 ```
 
-- **Kết quả thu được**:
-  - Thêm 20 giao dịch mới (`MOMO_TXN_9100` -> `9119`) vào PostgreSQL `internal_transaction`.
-  - Đè file đối soát mới chứa 20 dòng mới vào `./mock_data`.
-  - Người dùng bấm **Run Now** một lần nữa: Pipeline chèn chính xác 20 dòng mới vào Database, tổng số bản ghi giao dịch tăng lên **40 bản ghi**, kết quả đối soát đạt **40 MATCHED**!
+- **Ngữ cảnh kịch bản dữ liệu**:
+  - Script sẽ ghi 10 giao dịch nội bộ mới đợt 2 (`MOMO_TXN_9100` -> `9109`) vào PostgreSQL DB.
+  - Ghi đè file đối soát mới tại `./mock_data` gồm **tổng cộng 30 bản ghi** (chứa **20 bản ghi cũ đợt 1** + **10 bản ghi mới đợt 2**).
+- **Kết quả thu được khi bấm Run Now (hoặc gọi API /automation/jobs/MOMO/run)**:
+  - **Dữ liệu chèn mới (Inserted)**: Đúng **10 bản ghi mới** (`MOMO_TXN_9100` -> `9109`) được chèn vào PostgreSQL `partner_transaction`.
+  - **Bản ghi trùng lặp (Duplicates Skipped)**: **20 bản ghi cũ** bị hệ thống nhận diện trùng lặp và bỏ qua an toàn nhờ `ON CONFLICT (identify, ingestion_key) DO NOTHING`.
+  - **Tổng bản ghi trong Database**: Tăng chính xác từ 20 lên **30 bản ghi**, kết quả đối soát đạt **30 MATCHED (100%)**, chứng minh pipeline vừa chống trùng lặp vừa nạp bổ sung an toàn tuyệt đối.

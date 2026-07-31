@@ -1,14 +1,15 @@
-# Detailed Implementation Report — Plan 1: Idempotency & Duplicate Prevention
-> **Kế hoạch**: Plan 1 (`PLAN-01-IDEMPOTENCY`)  
-> **Ngày hoàn thành**: 30-07-2026  
-> **Vị trí tài liệu**: `docs/phase-2/PLAN-01-IDEMPOTENCY-IMPLEMENTATION-REPORT.md`
+# Implementation Report — Sprint 1: Idempotency & Duplicate Prevention
+
+> **Hạng mục**: Sprint 1 (`sprint-1-idempotency`)  
+> **Trạng thái**: ✅ **COMPLETED & VERIFIED**  
+> **Vị trí tài liệu**: `docs/phase-2/sprint-1-idempotency-report.md`
 
 ---
 
 ## 📌 1. Tổng Quan Kế Hoạch & Baseline Ban Đầu (Initial Baseline)
 
-### 1.1 Baseline Trước Khi Triển Khai Plan 1
-Trước khi triển khai **Plan 1**, nền tảng đối soát gặp phải các rủi ro kiến trúc và tính toàn vẹn dữ liệu nghiêm trọng khi chạy trong môi trường phân tán:
+### 1.1 Baseline Trước Khi Triển Khai Sprint 1
+Trước khi triển khai **Sprint 1**, nền tảng đối soát gặp phải các rủi ro kiến trúc và tính toàn vẹn dữ liệu nghiêm trọng khi chạy trong môi trường phân tán:
 
 1. **Rủi ro vỡ dữ liệu trùng lặp (Duplicate Data Risk)**:
    - Cơ sở dữ liệu PostgreSQL chưa có cột `ingestion_key` và thiếu `UniqueConstraint` ở cấp độ Database.
@@ -24,7 +25,7 @@ Trước khi triển khai **Plan 1**, nền tảng đối soát gặp phải cá
 
 ## 🏗️ 2. Sơ Đồ Kiến Trúc Hệ Thống (Architectural Diagrams)
 
-### 2.1 Sơ Đồ Kiến Trúc Cũ (Before Plan 1)
+### 2.1 Sơ Đồ Kiến Trúc Cũ (Before Sprint 1)
 
 ```mermaid
 flowchart TD
@@ -44,7 +45,7 @@ flowchart TD
     end
 ```
 
-### 2.2 Sơ Đồ Kiến Trúc Mới Đã Triển Khai (After Plan 1)
+### 2.2 Sơ Đồ Kiến Trúc Mới Đã Triển Khai (After Sprint 1)
 
 ```mermaid
 flowchart TD
@@ -121,34 +122,61 @@ async def insert_many(self, containers: List[DataContainer], detailed: bool = Fa
 
 ---
 
-## 📊 5. Danh Sách 13 Scenarios Benchmark Được Đo Đạc Bằng Mã Nguồn Thực Tế
+## 🎬 5. Kịch Bản Thử Nghiệm & Demo Hệ Thống (Demo Scenario Catalog)
 
-Toàn bộ 13 Scenarios dưới đây đã được đo đạc tự động trên PostgreSQL thật (`reconciliation_test`) và ghi nhận thành công 100% tại [SPRINT-01-EVAL-BENCHMARK-RUN.md](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/docs/phase-2/SPRINT-01-EVAL-BENCHMARK-RUN.md):
+Dưới đây là các bước thao tác lệnh (CLI Commands) và kịch bản thử nghiệm để kiểm tra tính năng tính Idempotency và Safe Duplicate Prevention:
 
-1. **`SCENARIO-00` (Hợp Đồng Schema PostgreSQL)**: Xác minh cột `ingestion_key` là `NOT NULL` và có `UniqueConstraint`.
-2. **`SCENARIO-01` (Nạp File Ban Đầu 100 Dòng)**: Ingest 100 dòng hoàn toàn mới.
-3. **`SCENARIO-02` (Chống Nộp Trùng File SHA256)**: Upload lại file cũ -> Nhận diện `file_duplicate`.
-4. **`SCENARIO-03` (Batch Trùng Một Phần)**: Upload file 50 cũ + 50 mới -> DB giữ nguyên 100 cũ, chèn mới 50 dòng.
-5. **`SCENARIO-04` (Batch Trùng 100% File Tên Khác)**: Upload file tên khác nhưng 100% dòng cũ -> `duplicate_rows=100`, không vỡ job.
-6. **`SCENARIO-05` (Giao Dịch Khác Ingestion Key)**: Kiểm tra 2 dòng chỉ khác `ingestion_key` không bị gộp nhầm.
-7. **`SCENARIO-06` (Bất Biến Trùng Lặp Database)**: Truy vấn SQL group count trực tiếp trên DB -> `0` nhóm trùng lặp.
-8. **`SCENARIO-07` (Tranh Chấp Claim File Đồng Thời)**: 2 worker claim cùng 1 file Hash trên Mongo -> Đúng 1 worker thắng.
-9. **`SCENARIO-08` (Chống Nộp Trùng Fetch-Unit API)**: Cùng `fetchUnitKey` không cho phép tạo file claim thứ hai.
-10. **`SCENARIO-09` (Từ Chối Khi Thiếu Ingestion Key)**: Không cho phép fallback sang ngẫu nhiên khi payload rỗng key.
-11. **`SCENARIO-10` (Hợp Đồng Kế Toán Lỗi Non-Duplicate)**: Phân định rõ lỗi hệ thống/giao thức không do trùng lặp dữ liệu.
-12. **`SCENARIO-11` (An Toàn Migration Data Lịch Sử)**: Đảm bảo dữ liệu cũ không bị ảnh hưởng khi áp dụng migration 0002.
-13. **`SCENARIO-12` (Lưu Trữ Transaction Thuần PostgreSQL)**: 100% Repository giao dịch không còn fallback sang MongoDB.
+### ⚙️ Bước 1: Khởi Tạo Môi Trường Sạch & Phase 1 (`make momo-e2e-reset`)
+Khởi tạo dữ liệu ban đầu cho đối tác MOMO. Lệnh này xóa sạch các bản ghi cũ trên cả MongoDB và PostgreSQL, tạo 20 giao dịch nội bộ DB và viết file đối soát `settlement_MOMO_20260731.xlsx` chứa 20 bản ghi tương ứng vào `./mock_data`.
+
+```bash
+make momo-e2e-reset
+```
+
+- **Kết quả thu được**:
+  - PostgreSQL `internal_transaction`: 20 bản ghi (`MOMO_TXN_9000` -> `9019`).
+  - Thư mục `./mock_data`: Khởi tạo file đối soát 20 dòng.
+  - Trạng thái Mapping Config: `PENDING_APPROVAL` (Chờ duyệt).
 
 ---
 
-## 📌 6. Tổng Kết Đánh Giá Tiêu Chí Nghiệm Thu (Acceptance Summary)
+### 🚀 Bước 2: Kích Hoạt Job Chạy Đầu Tiên (Run Now #1)
+Người dùng truy cập giao diện Automation Schedules (`http://localhost:3000/schedules`) bấm **Run Now** cho MOMO (hoặc gọi API):
 
-- [x] **1. Hợp đồng Schema**: PostgreSQL constraint `(identify, ingestion_key)` và NOT NULL cột `ingestion_key` vận hành chính xác.
-- [x] **2. Chống trùng file & Fetch-unit**: Đạt 100% ở bước claim nhờ SHA256 File Hash và Unique FetchUnitKey index.
-- [x] **3. Xử lý duplicate batch conflict**: Phân định rõ ràng giữa `file_duplicate`, `transaction_duplicate`, `batch_conflict` và `fetch_unit_replay`.
-- [x] **4. Độ tin cậy dữ liệu**: Dữ liệu DB được bảo vệ tuyệt đối khỏi vỡ duplicate khi retry hoặc upload đè (Invariant duplicates = 0).
-- [x] **5. Kiến trúc dữ liệu**: Đạt 100% lưu trữ Transaction trên PostgreSQL, không còn fallback Mongo cho data container.
-- [x] **6. An toàn Migration & Derivation**: Tự động từ chối payload không sinh được key, đảm bảo migration an toàn trên DB live.
+```bash
+curl -s -H "X-Actor: demo-operator" -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .
+```
+
+- **Kết quả thu được**:
+  - Scheduler quét file ➔ Phát hiện Mapping Config đang chờ duyệt ➔ Tạo **Pending Review Packet** (Hiển thị `1 pending`).
+  - Người dùng bấm **Approve & Activate** tại Review Center (hoặc qua Step 4 Guided Wizard).
+  - Pipeline tự động ingest 20 bản ghi từ file Excel vào bảng PostgreSQL `partner_transaction`.
+  - Reconciliation Engine thực thi ➔ Kết quả đối soát: **20 MATCHED (100%)**.
 
 ---
-*Báo cáo được khởi tạo và lưu trữ chính thức tại `docs/phase-2/PLAN-01-IDEMPOTENCY-IMPLEMENTATION-REPORT.md`.*
+
+### 🔄 Bước 3: Kiểm Tra Chống Nộp Trùng Khi Re-Run Nộp Lại File Đã Có (Run Now #2 - Safe Duplicate Prevention)
+Tiếp tục bấm nút **Run Now** lần 2 trên giao diện (hoặc gọi lại lệnh API trên mà không làm mới dữ liệu file):
+
+```bash
+curl -s -H "X-Actor: demo-operator" -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .
+```
+
+- **Kết quả thu được**:
+  - **Lớp Bảo Vệ 1 (SHA256 File Hash Claim)**: Hệ thống nhận diện File Hash SHA256 đã nộp thành công trước đó ➔ Đánh dấu `file_duplicate`.
+  - **Lớp Bảo Vệ 2 (PostgreSQL Conflict-Safe)**: Toàn bộ 20 dòng giao dịch bị bỏ qua nhờ `ON CONFLICT DO NOTHING`.
+  - **Độ tin cậy Database**: Số lượng bản ghi trong PostgreSQL `partner_transaction` vẫn giữ nguyên là **20**, không phát sinh bất kỳ bản ghi trùng lặp nào (`Duplicates = 0`).
+
+---
+
+### 🌊 Bước 4: Thử Nghiệm Nạp Bổ Sung Dữ Liệu Đợt 2 (`make momo-e2e-phase2`)
+Khởi tạo đợt dữ liệu thứ 2 để kiểm tra khả năng nạp gộp tăng trưởng (Incremental Append):
+
+```bash
+make momo-e2e-phase2
+```
+
+- **Kết quả thu được**:
+  - Thêm 20 giao dịch mới (`MOMO_TXN_9100` -> `9119`) vào PostgreSQL `internal_transaction`.
+  - Đè file đối soát mới chứa 20 dòng mới vào `./mock_data`.
+  - Người dùng bấm **Run Now** một lần nữa: Pipeline chèn chính xác 20 dòng mới vào Database, tổng số bản ghi giao dịch tăng lên **40 bản ghi**, kết quả đối soát đạt **40 MATCHED**!

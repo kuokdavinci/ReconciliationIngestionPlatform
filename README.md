@@ -56,6 +56,89 @@ Transaction idempotency is enforced by PostgreSQL uniqueness on `(identify, inge
 
 PostgreSQL schema changes are managed through [Alembic](alembic/). Sprint 1 migration: [0002_ingestion_idempotency.py](alembic/versions/0002_ingestion_idempotency.py).
 
+## Ingestion reliability pipeline — Phase 2 focus
+
+The platform's central operational path is the partner ingestion pipeline. Phase 2 hardens this path without changing deterministic reconciliation, AI analysis or the dashboard contract.
+
+```text
+source fetch
+  -> fetch-unit identity
+  -> file hash claim
+  -> mapping/config health gate
+  -> reader
+  -> normalization
+  -> validation
+  -> deterministic ingestion_key
+  -> batch persistence
+  -> runtime/file statistics and status
+  -> downstream reconciliation
+```
+
+The four reliability properties are organized as four sprints:
+
+| Sprint | Reliability property | Current focus | Status / TODO |
+|---|---|---|---|
+| Sprint 1 | **Idempotency** | File replay, fetch-unit replay, deterministic transaction keys, PostgreSQL unique constraint and conflict-safe batch writes. | ✅ Implemented and benchmarked. |
+| Sprint 2 | **Incremental processing & recovery** | Checkpoints, source-unit boundaries, retry after partial failure and backfill isolation. | TODO: implement checkpoint persistence and restart coverage. |
+| Sprint 3 | **Data quality & quarantine** | Structured rejected records, fatal-vs-row errors, quarantine persistence and targeted reprocess. | TODO: add quarantine model, counters, API and integration tests. |
+| Sprint 4 | **Observability** | Stage-level runtime state, counters, timings, attempts, errors and partial-failure visibility. | TODO: persist stage metrics and standardize runtime events. |
+
+<!-- TODO(phase-2): keep this table synchronized with docs/phase-2/ and the implementation status. -->
+
+### Ingestion flow ownership
+
+- `src/fetchers/` retrieves partner data from filedrop, SFTP or API.
+- `src/scheduler/jobs.py` creates fetch-unit metadata and invokes ingestion for automated runs.
+- `src/pipeline/ingestion_pipeline.py` owns hashing, claims, readers, mapping, validation, key derivation, batch writes and processing status.
+- `src/models/reconciliation_file.py` owns file claim identity and processing metadata.
+- `src/models/data_container.py` owns PostgreSQL partner transaction persistence and duplicate-safe writes.
+- `src/models/indexes.py` owns MongoDB claim indexes; `src/models/postgres.py` owns PostgreSQL schema initialization.
+- `src/services/runtime_runs.py` and `src/models/partner_runtime_run.py` expose runtime execution state to operations APIs.
+
+### Sprint 1 idempotency contract
+
+1. `fileHash` is the canonical identity for replaying the same file.
+2. `fetchUnitKey` is the canonical identity for replaying the same API page/cursor/window.
+3. `ingestion_key` is derived from a stable partner identifier; missing identity is rejected.
+4. PostgreSQL uniqueness on `(identify, ingestion_key)` is the final transaction-level guard.
+5. `ON CONFLICT DO NOTHING` makes retries and partial duplicate batches safe; `inserted`, `duplicates` and `failed` remain separately observable.
+
+## Key application flows
+
+### Reconciliation
+
+`ReconciliationEngine.reconcile(partner, date)` reads canonical partner and internal transactions, resolves scope (`FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT` or `UNCONFIRMED`), compares amount/status, writes results in batches and exposes summary/evidence through the API.
+
+### Review and mapping approval
+
+Review packets coordinate scope classification, draft mapping review, runtime validation and approval decisions. Approve-Activate can start post-approval re-ingestion and re-reconciliation; Approve-Keep-Current, Reject and Send-to-Mapping-Studio remain separate decisions.
+
+### Scheduled automation
+
+APScheduler loads enabled `FetchConfig` records, selects a filedrop/SFTP/API fetcher, passes fetch-unit metadata into ingestion, persists runtime outcomes and exposes Run Now/job status through `/api/v1/automation`.
+
+### AI-assisted analysis
+
+`src/analysis/` computes reconciliation metrics, groups discrepancies, calls an OpenAI-compatible provider with guardrails/fallbacks and serves insights/daily reports through the API. AI mapping generation is gated by the mapping approval workflow.
+
+## API surface
+
+The FastAPI app registers these router groups under `/api/v1/`:
+
+| Router | Prefix | Responsibility |
+|---|---|---|
+| Insights/reports | `/api/v1` | Summaries, discrepancies and daily reports |
+| Reconciliation | `/api/v1/reconciliation` | Results, stats, run status, insights and review records |
+| Data explorer | `/api/v1/data` | Transaction, file and operational queries |
+| Mappings | `/api/v1/mappings`, `/api/v1/mapping` | Mapping configuration and AI generation |
+| Copilot | `/api/v1/copilot` | Context and operator actions |
+| Operations | `/api/v1/operations` | Intake and partner operations |
+| Review packets | `/api/v1/review-packets` | Runtime validation and approval lifecycle |
+| Automation | `/api/v1/automation` | Jobs, Run Now and duplicate outcomes |
+| Audit | `/api/v1/audit` | Audit event history |
+
+Interactive API documentation is available at `/docs`.
+
 ## Stack
 
 | Layer | Technology |

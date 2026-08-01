@@ -547,7 +547,7 @@ async def test_run_sprint1_eval_and_generate_report():
         await _run_mongo_claim_scenarios(eval_results, record_eval)
 
     except Exception:
-        report_path = Path("docs/phase-2/SPRINT-01-EVAL-BENCHMARK-RUN.md")
+        report_path = Path("docs/phase-2/sprint-1-eval-benchmark-run.md")
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(_build_markdown_report(eval_results), encoding="utf-8")
         ingestion_module.classify_scope = original_classify_scope
@@ -558,7 +558,7 @@ async def test_run_sprint1_eval_and_generate_report():
 
     # Generate Markdown Output Report
     report_content = _build_markdown_report(eval_results)
-    report_path = Path("docs/phase-2/SPRINT-01-EVAL-BENCHMARK-RUN.md")
+    report_path = Path("docs/phase-2/sprint-1-eval-benchmark-run.md")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report_content, encoding="utf-8")
 

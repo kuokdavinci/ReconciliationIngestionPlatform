@@ -1,185 +1,96 @@
-# Implementation Report — Sprint 1: Idempotency & Duplicate Prevention
+# Báo cáo Sprint 1 — Tính Idempotency và Ngăn ngừa trùng lặp
 
-> **Hạng mục**: Sprint 1 (`sprint-1-idempotency`)  
-> **Trạng thái**: ✅ **COMPLETED & VERIFIED**  
-> **Vị trí tài liệu**: `docs/phase-2/sprint-1-idempotency-report.md`
+> **Nhánh:** `phase2/sprint-1`
+> **Phạm vi:** replay file, replay fetch-unit, loại bỏ giao dịch trùng và ghi dữ liệu an toàn khi xảy ra conflict
+> **Trạng thái:** ✅ **PASS** — đã triển khai và xác minh; benchmark ghi nhận 13/13 kịch bản PASS.
 
----
+## Tóm tắt
 
-## 📌 1. Tổng Quan Kế Hoạch & Baseline Ban Đầu (Initial Baseline)
+Sprint 1 bổ sung các ranh giới idempotency cho pipeline ingestion:
 
-### 1.1 Baseline Trước Khi Triển Khai Sprint 1
-Trước khi triển khai **Sprint 1**, nền tảng đối soát gặp phải các rủi ro kiến trúc và tính toàn vẹn dữ liệu nghiêm trọng khi chạy trong môi trường phân tán:
+- Claim file atomically bằng `fileHash` và claim fetch-unit bằng `fetchUnitKey`.
+- Giao dịch partner trong PostgreSQL có `ingestion_key` bắt buộc, duy nhất theo `(identify, ingestion_key)`.
+- Ghi batch bằng `ON CONFLICT DO NOTHING`, kèm thống kê `inserted`, `duplicates` và `failed`.
+- Suy ra key deterministic; payload không có định danh hợp lệ sẽ bị từ chối.
+- Seed E2E MOMO cho trường hợp trùng một phần: 20 dòng cũ và 10 dòng mới.
 
-1. **Rủi ro vỡ dữ liệu trùng lặp (Duplicate Data Risk)**:
-   - Cơ sở dữ liệu PostgreSQL chưa có cột `ingestion_key` và thiếu `UniqueConstraint` ở cấp độ Database.
-   - Khi một file đối soát được nạp lại (re-ingest) hoặc gặp lỗi mạng giữa chừng làm worker retry, dữ liệu giao dịch bị chèn lặp lại (`INSERT` trùng lặp), gây sai lệch kết quả đối soát.
-2. **Kiến trúc dữ liệu phân tán không triệt để (Architecture Mixing)**:
-   - Dữ liệu giao dịch (Transaction data) vừa được lưu ở PostgreSQL, vừa có cơ chế fallback lưu sang MongoDB Data Container. Điều này vi phạm nguyên tắc tách biệt trách nhiệm (Separation of Concerns).
-3. **Chưa có cơ chế Chống Nộp Trùng Cấp Độ Fetch-Unit**:
-   - Khi scheduler hoặc crawler gọi lại một API Fetch-Unit (Pagination/Page) do nghẽn mạng, hệ thống không nhận biết được trang/kết quả này đã từng được tải về trước đó hay chưa.
-4. **Xử lý Batch Insert dễ làm crash Pipeline**:
-   - Batch insert cũ dùng lệnh `INSERT` thông thường. Khi 1 dòng trong lô 50 dòng bị trùng, toàn bộ lô 50 dòng đó sẽ ném ra lỗi Database Exception và làm dừng công việc đối soát (Pipeline Job Fail).
+Incremental recovery, quarantine dữ liệu lỗi và observability thuộc các sprint Phase 2 tiếp theo.
 
----
+## Các thành phần đã review
 
-## 🏗️ 2. Sơ Đồ Kiến Trúc Hệ Thống (Architectural Diagrams)
+| Khu vực | Thành phần | Kết quả |
+|---|---|---|
+| Schema | `alembic/versions/0002_ingestion_idempotency.py` | Thêm `ingestion_key` và hợp đồng uniqueness trong PostgreSQL. |
+| Persistence | `src/models/postgres.py`, `src/models/data_container.py` | Repository giao dịch PostgreSQL và ghi batch an toàn khi conflict. |
+| Claim | `src/models/reconciliation_file.py`, `src/models/indexes.py` | Cơ chế atomic create-or-get cho file/fetch-unit. |
+| Pipeline | `src/pipeline/ingestion_pipeline.py`, `src/core/types.py` | Suy ra key, xử lý replay và thống kê chi tiết. |
+| Runtime | `src/fetchers/*`, `src/scheduler/jobs.py`, `src/api/automation.py` | Truyền metadata idempotency và công bố duplicate outcome. |
+| E2E | `scripts/seeding/seed_momo_e2e.py`, `tests/test_sprint1_eval_benchmark.py` | Helper seed và bộ đánh giá Sprint 1. |
 
-### 2.1 Sơ Đồ Kiến Trúc Cũ (Before Sprint 1)
+## Hợp đồng idempotency
 
-```mermaid
-flowchart TD
-    subgraph Layer1 ["Client / Scheduler Layer"]
-        A["File Upload / Fetch API"] --> B["Ingestion Pipeline Worker"]
-    end
+Replay file bị chặn bởi claim `fileHash` canonical. Replay API page bị chặn bởi `fetchUnitKey`, kể cả khi payload hoặc tên file khác nhau. Khi replay, hệ thống trả về record canonical đã tồn tại.
 
-    subgraph Layer2 ["Pipeline Processing (Cũ)"]
-        B --> C["Phân tích File / Parse Row"]
-        C --> D{"Chèn Transaction Data"}
-    end
+Với giao dịch, pipeline suy ra `ingestion_key` ổn định từ hợp đồng định danh partner. Hệ thống ném `ValueError` khi không có định danh; không tạo key fallback ngẫu nhiên. PostgreSQL bảo vệ uniqueness theo partner bằng `(identify, ingestion_key)`.
 
-    subgraph Layer3 ["Data Stores (Cũ - Bị Trộn Lẫn Trách Nhiệm)"]
-        D -->|"INSERT Standard - Dễ crash nếu trùng"| E[("PostgreSQL: partner_transaction <br/> Thiếu Unique Constraint")]
-        D -.->|"Fallback nếu PG lỗi"| F[("MongoDB: data_container <br/> Lưu dữ liệu giao dịch")]
-        B --> G[("MongoDB: reconciliation_file <br/> Kiểm tra Hash đơn giản")]
-    end
-```
+Conflict trong batch được bỏ qua ở ranh giới database và tính là duplicate, thay vì làm toàn bộ batch thất bại.
 
-### 2.2 Sơ Đồ Kiến Trúc Mới Đã Triển Khai (After Sprint 1)
+## Bản đồ triển khai theo function
 
-```mermaid
-flowchart TD
-    subgraph Step1 ["1. File & Fetch-Unit Claim Boundary (MongoDB)"]
-        A["Partner File / API Fetch Unit"] --> B["ReconciliationFileRepository"]
-        B -->|"1. Atomic Claim SHA256 / FetchUnitKey"| C{"Đã tồn tại?"}
-        C -->|"Đã claim / Trùng file"| D["Return Early: file_duplicate / fetch_unit_replay"]
-        C -->|"Mới / Chưa claim"| E["Tạo File Claim Status: PROCESSING"]
-    end
+| Function | Vai trò trong hợp đồng idempotency |
+|---|---|
+| `IngestionPipeline._compute_file_hash()` | Tính identity SHA-256 ổn định để bảo vệ chống replay file. |
+| `IngestionPipeline._derive_fetch_unit_key()` | Kiểm tra và suy ra identity ổn định cho API page, cursor hoặc fetch window. |
+| `IngestionPipeline._derive_ingestion_key()` | Suy ra identity giao dịch và từ chối payload không có định danh hợp lệ. |
+| `IngestionPipeline.process_file()` | Điều phối claim, parse, suy ra key, ghi batch, tính duplicate, cập nhật trạng thái và xử lý lỗi. |
+| `ReconciliationFileRepository.create_or_get_by_file_hash()` | Tạo claim file canonical atomically hoặc trả record file/fetch-unit hiện có sau race replay. |
+| `ReconciliationFileRepository.find_by_file_hash()` | Tra cứu claim file canonical bằng SHA-256. |
+| `ReconciliationFileRepository.find_by_fetch_unit_key()` | Tra cứu claim canonical của fetch-unit API. |
+| `DataContainerRepository.insert_many()` | Ghi transaction partner bằng PostgreSQL `ON CONFLICT DO NOTHING` và trả số inserted/duplicate. |
+| `IngestionPipeline._record_batch_result()` | Tổng hợp `inserted`, `duplicates`, `failed` mà không biến duplicate thành lỗi batch. |
+| `DataContainerRepository.rebind_source_file_by_ingestion_keys()` | Gắn lại các transaction đã tồn tại vào logical file hiện tại sau replay trùng một phần. |
+| `scheduler.jobs._fetch_unit_metadata()` | Truyền identity endpoint/page/cursor/window từ scheduler vào ingestion. |
+| `scheduler.jobs.run_fetch_config_once()` và `_run_ingestion()` | Truyền context fetch-unit vào pipeline và lưu duplicate outcome cho vận hành. |
 
-    subgraph Step2 ["2. Transaction Key Derivation & Batch Processing"]
-        E --> F["IngestionPipeline Worker"]
-        F --> G["Ràng buộc ingestion_key Derivation <br/> Chặn payload thiếu thông tin"]
-        G --> H["Phân lô Batch Data Container"]
-    end
-
-    subgraph Step3 ["3. Database Protection & Conflict-Safe Persistence (PostgreSQL Only)"]
-        H --> I["DataContainerRepository.insert_many"]
-        I -->|"ON CONFLICT (identify, ingestion_key) DO NOTHING"| J[("PostgreSQL DB: partner_transaction <br/> Schema Contract: NOT NULL & UniqueConstraint")]
-        J --> K["Trả về Thống kê Chuẩn xác: <br/> Inserted / Duplicates / Failed"]
-        K --> L["Update Processing Status: COMPLETED"]
-    end
-```
-
----
-
-## 🛠️ 3. Chi Tiết Các Thay Đổi & Danh Sách Files / Methods Triển Khai
-
-| STT | File / Mô-đun Thay Đổi | Phương Thức / Thành Phần Thêm Mới hoặc Chỉnh Sửa | Chi Tiết Kỹ Thuật & Tác Dụng |
-|---|---|---|---|
-| 1 | `alembic/versions/0002_add_ingestion_key.py` | Migration Script `upgrade()` & `downgrade()` | Thêm cột `ingestion_key` (`VARCHAR(255) NOT NULL`) và tạo DB Unique Constraint `uq_partner_transaction_identify_ingestion_key` trên cặp `(identify, ingestion_key)`. |
-| 2 | `src/models/postgres.py` | Model `PartnerTransactionTable` & `init_postgres_db()` | Khai báo `UniqueConstraint("identify", "ingestion_key")` trong ORM SQLAlchemy, cấu hình tự động áp dụng Alembic stamp head khi khởi chạy DB lifespan. |
-| 3 | `src/models/data_container.py` | `DataContainerRepository.insert_many()` | Viết lại câu lệnh SQL chèn dữ liệu theo lô conflict-safe: `INSERT ... ON CONFLICT (identify, ingestion_key) DO NOTHING RETURNING ...`. Phân định chính xác `inserted` vs `duplicates`. |
-| 4 | `src/models/internal_transaction.py` & `src/models/reconciliation_result.py` | Chuyển đổi Repository về PostgreSQL-Only | Loại bỏ 100% các đoạn mã lưu trữ fallback dữ liệu giao dịch sang MongoDB collection `data_container`. MongoDB giờ đây chỉ đóng vai trò lưu trữ metadata và cấu hình. |
-| 5 | `src/models/indexes.py` | `ensure_indexes()` | Bổ sung Unique Index `fetchUnitKey` trên MongoDB collection `reconciliation_file` bên cạnh Unique Index `fileHash` hiện tại để bảo vệ chống trùng Fetch-Unit API. |
-| 6 | `src/pipeline/ingestion_pipeline.py` | `process_file()`, `_derive_ingestion_key()`, `create_or_get_by_file_hash()` | - Tính toán key định danh giao dịch chuẩn hóa `ingestion_key`. Từ chối payload không sinh được key.<br>- Kết nối luồng Atomic File/Fetch-Unit Claim.<br>- Đọc số bản ghi `success_rows` và `duplicate_rows` thực tế từ Postgres để ghi nhận thống kê chính xác. |
-| 7 | `src/core/types.py` | Model `ProcessingStats` | Thêm thuộc tính `duplicate_rows` để theo dõi và thống kê chi tiết các bản ghi bị trùng lặp bị bỏ qua. |
-| 8 | `tests/test_sprint1_eval_benchmark.py` | Test Suite `test_run_sprint1_eval_and_generate_report` & `_build_markdown_report` | Bộ test đánh giá và sinh báo cáo Benchmark tiếng Việt tự động cho 13 Scenarios trên PostgreSQL & MongoDB thật. |
-
----
-
-## 🎯 4. Các Phương Thức (Methods) Trọng Tâm Được Sử Dụng
-
-### 4.1 Phương Thức Trích Xuất Key Định Danh (`_derive_ingestion_key`)
-```python
-def _derive_ingestion_key(self, record: dict) -> str:
-    """Tính toán ingestion_key từ payload giao dịch.
-    Quy tắc: Ưu tiên dùng partner transaction ID -> trace / reference ID.
-    Nếu không tìm thấy, lập tức ném lỗi ValueError (Không dùng key ngẫu nhiên).
-    """
-    key = record.get("id") or record.get("transaction_id") or record.get("trace_no")
-    if not key:
-        raise ValueError("Unable to derive ingestion_key from transaction payload")
-    return str(key).strip()
-```
-
-### 4.2 Phương Thức Chèn Dữ Liệu Conflict-Safe (`DataContainerRepository.insert_many`)
-```python
-async def insert_many(self, containers: List[DataContainer], detailed: bool = False):
-    """Sử dụng PostgreSQL ON CONFLICT (identify, ingestion_key) DO NOTHING.
-    Trả về chính xác số bản ghi thật sự được tạo mới và số bản ghi trùng lặp bị bỏ qua.
-    """
-    stmt = insert(PartnerTransactionTable).values(records)
-    stmt = stmt.on_conflict_do_nothing(
-        constraint="uq_partner_transaction_identify_ingestion_key"
-    ).returning(PartnerTransactionTable.ingestion_key)
-    
-    result = await session.execute(stmt)
-    inserted_keys = set(result.scalars().all())
-    inserted_count = len(inserted_keys)
-    duplicate_count = len(records) - inserted_count
-    return BatchInsertResult(inserted=inserted_count, duplicates=duplicate_count, failed=0)
-```
-
----
-
-## 🎬 5. Kịch Bản Thử Nghiệm & Demo Hệ Thống (Demo Scenario Catalog)
-
-Dưới đây là các bước thao tác lệnh (CLI Commands) và kịch bản thử nghiệm để kiểm tra tính năng tính Idempotency và Safe Duplicate Prevention:
-
-### ⚙️ Bước 1: Khởi Tạo Môi Trường Sạch & Phase 1 (`make momo-e2e-reset`)
-Khởi tạo dữ liệu ban đầu cho đối tác MOMO. Lệnh này xóa sạch các bản ghi cũ trên cả MongoDB và PostgreSQL, tạo 20 giao dịch nội bộ DB và viết file đối soát `settlement_MOMO_20260731.xlsx` chứa 20 bản ghi tương ứng vào `./mock_data`.
+## Demo MOMO
 
 ```bash
 make momo-e2e-reset
-```
-
-- **Kết quả thu được**:
-  - PostgreSQL `internal_transaction`: 20 bản ghi (`MOMO_TXN_9000` -> `9019`).
-  - Thư mục `./mock_data`: Khởi tạo file đối soát 20 dòng.
-  - Trạng thái Mapping Config: `PENDING_APPROVAL` (Chờ duyệt).
-
----
-
-### 🚀 Bước 2: Kích Hoạt Job Chạy Đầu Tiên (Run Now #1)
-Người dùng truy cập giao diện Automation Schedules (`http://localhost:3000/schedules`) bấm **Run Now** cho MOMO (hoặc gọi API):
-
-```bash
-curl -s -H "X-Actor: demo-operator" -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .
-```
-
-- **Kết quả thu được**:
-  - Scheduler quét file ➔ Phát hiện Mapping Config đang chờ duyệt ➔ Tạo **Pending Review Packet** (Hiển thị `1 pending`).
-  - Người dùng bấm **Approve & Activate** tại Review Center (hoặc qua Step 4 Guided Wizard).
-  - Pipeline tự động ingest 20 bản ghi từ file Excel vào bảng PostgreSQL `partner_transaction`.
-  - Reconciliation Engine thực thi ➔ Kết quả đối soát: **20 MATCHED (100%)**.
-
----
-
-### 🔄 Bước 3: Kiểm Tra Chống Nộp Trùng Khi Re-Run Nộp Lại File Đã Có (Run Now #2 - Safe Duplicate Prevention)
-Tiếp tục bấm nút **Run Now** lần 2 trên giao diện (hoặc gọi lại lệnh API trên mà không làm mới dữ liệu file):
-
-```bash
-curl -s -H "X-Actor: demo-operator" -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .
-```
-
-- **Kết quả thu được**:
-  - **Lớp Bảo Vệ 1 (SHA256 File Hash Claim)**: Hệ thống nhận diện File Hash SHA256 đã nộp thành công trước đó ➔ Đánh dấu `file_duplicate`.
-  - **Lớp Bảo Vệ 2 (PostgreSQL Conflict-Safe)**: Toàn bộ 20 dòng giao dịch bị bỏ qua nhờ `ON CONFLICT DO NOTHING`.
-  - **Độ tin cậy Database**: Số lượng bản ghi trong PostgreSQL `partner_transaction` vẫn giữ nguyên là **20**, không phát sinh bất kỳ bản ghi trùng lặp nào (`Duplicates = 0`).
-
----
-
-### 🌊 Bước 4: Thử Nghiệm Nạp Bổ Sung Dữ Liệu Đợt 2 & Kiểm Tra Duplicate Safe (`make momo-e2e-phase2`)
-Khởi tạo đợt dữ liệu thứ 2 để kiểm tra khả năng xử lý trùng lặp một phần (Partial Duplicate Ingestion) và nạp bổ sung tăng trưởng (Incremental Append):
-
-```bash
+make momo-e2e-run
 make momo-e2e-phase2
+make momo-e2e-run
 ```
 
-- **Ngữ cảnh kịch bản dữ liệu**:
-  - Script sẽ ghi 10 giao dịch nội bộ mới đợt 2 (`MOMO_TXN_9100` -> `9109`) vào PostgreSQL DB.
-  - Ghi đè file đối soát mới tại `./mock_data` gồm **tổng cộng 30 bản ghi** (chứa **20 bản ghi cũ đợt 1** + **10 bản ghi mới đợt 2**).
-- **Kết quả thu được khi bấm Run Now (hoặc gọi API /automation/jobs/MOMO/run)**:
-  - **Dữ liệu chèn mới (Inserted)**: Đúng **10 bản ghi mới** (`MOMO_TXN_9100` -> `9109`) được chèn vào PostgreSQL `partner_transaction`.
-  - **Bản ghi trùng lặp (Duplicates Skipped)**: **20 bản ghi cũ** bị hệ thống nhận diện trùng lặp và bỏ qua an toàn nhờ `ON CONFLICT (identify, ingestion_key) DO NOTHING`.
-  - **Tổng bản ghi trong Database**: Tăng chính xác từ 20 lên **30 bản ghi**, kết quả đối soát đạt **30 MATCHED (100%)**, chứng minh pipeline vừa chống trùng lặp vừa nạp bổ sung an toàn tuyệt đối.
+Để chuẩn bị riêng kịch bản trùng một phần:
+
+```bash
+PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py phase2_duplicate
+```
+
+File thứ hai gồm 20 dòng cũ và 10 dòng mới. Kết quả kỳ vọng là insert 10 dòng, bỏ qua 20 dòng duplicate và không tạo transaction trùng. Các lệnh này xóa dữ liệu demo theo partner, chỉ chạy trên môi trường test/demo.
+
+## Bằng chứng
+
+- [Đặc tả benchmark](sprint-1-eval-benchmark.md)
+- [Kết quả chạy benchmark](sprint-1-eval-benchmark-run.md)
+- [Ghi chú triển khai](sprint-1-idempotency.md)
+
+Bản chạy thực tế bao phủ schema, insert ban đầu, file replay, conflict một phần/toàn phần, invariant duplicate, kiểm tra key deterministic, an toàn migration, lưu transaction trong PostgreSQL, concurrent file claim và fetch-unit replay.
+
+## Kết quả xác minh hiện tại
+
+| Hạng mục | Kết quả | Ghi chú |
+|---|---|---|
+| Nhánh và working tree | PASS | `phase2/sprint-1`; sạch trước khi chỉnh tài liệu. |
+| Sprint benchmark | PASS | Chạy với `UV_CACHE_DIR` local và Docker PostgreSQL/Mongo; `1 passed in 0.68s`, dùng database `reconciliation_test`. |
+| Tài liệu | PASS | Nội dung khớp tên migration, phạm vi, dữ liệu demo và trạng thái xác minh thực tế. |
+
+Lệnh chạy lại benchmark:
+
+```bash
+UV_CACHE_DIR=$PWD/.uv-cache uv run python -m pytest tests/test_sprint1_eval_benchmark.py -q
+```
+
+## Kết luận review
+
+Triển khai Sprint 1 dùng database constraint làm ranh giới bảo vệ duplicate cuối cùng và tách riêng identity của file, fetch-unit và transaction. Benchmark đã được xác minh thành công trên PostgreSQL/Mongo trong Docker, sử dụng `reconciliation_test`.

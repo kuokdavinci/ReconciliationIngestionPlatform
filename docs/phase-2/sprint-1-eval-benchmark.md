@@ -1,29 +1,29 @@
-# Sprint 1 Master Evaluation & Benchmark Specification (Idempotency & Duplicate Prevention)
+# Đặc tả Đánh giá và Benchmark Sprint 1 (Idempotency và Ngăn ngừa Trùng lặp)
 
-> **Trạng thái**: Tài liệu Mẫu Chuẩn (Master Specification)  
+> **Trạng thái**: Tài liệu đặc tả chuẩn
 > **Kế hoạch (Sprint)**: `sprint-1-idempotency`  
-> **Lệnh sinh báo cáo thực thi**: `./.venv/bin/pytest tests/test_sprint1_eval_benchmark.py -v`  
-> **File xuất kết quả runtime**: [sprint-1-eval-benchmark-run.md](sprint-1-eval-benchmark-run.md)
+> **Lệnh sinh báo cáo thực thi**: `UV_CACHE_DIR=$PWD/.uv-cache uv run python -m pytest tests/test_sprint1_eval_benchmark.py -q`
+> **File kết quả runtime**: [sprint-1-eval-benchmark-run.md](sprint-1-eval-benchmark-run.md)
 
 ---
 
-## 🎯 1. Mục tiêu Đánh giá (Sprint 1 Acceptance Criteria)
+## 🎯 1. Mục tiêu đánh giá và tiêu chí nghiệm thu Sprint 1
 
-Báo cáo này đo lường và xác nhận các cơ chế thuộc **Plan 1 (Idempotency & Duplicate Prevention)** hoạt động chính xác trên môi trường thực tế, đáp ứng đầy đủ các tiêu chí nghiệm thu:
-1. **PostgreSQL Schema & Unique Constraint**: Cột `ingestion_key` duy nhất theo `(identify, ingestion_key)` và NOT NULL.
-2. **File Replay & Fetch-Unit Claim Protection**: Chống nộp trùng file (Hash SHA256) và trùng Fetch-Unit API.
-3. **ON CONFLICT Batch Insertion**: Xử lý chèn dữ liệu conflict-safe tại DB thật mà không crash job.
-4. **Data Isolation & Duplicate Invariant**: Đảm bảo 0 nhóm ghi trùng dòng, phân định rõ ràng lỗi `file_duplicate`, `transaction_duplicate`, `batch_conflict`.
-5. **Architectural Isolation**: Đưa 100% dữ liệu transaction về PostgreSQL, loại bỏ hoàn toàn fallback Mongo cho data container.
-6. **Robustness & Deterministic Key Derivation**: Tính toán key định danh ổn định, từ chối payload thiếu thông tin định danh và đảm bảo migration an toàn.
+Báo cáo này đo lường và xác nhận các cơ chế thuộc **Sprint 1 (Idempotency và Ngăn ngừa Trùng lặp)** trên môi trường thực tế, đáp ứng các tiêu chí:
+1. **Schema PostgreSQL và Unique Constraint**: Cột `ingestion_key` NOT NULL và duy nhất theo `(identify, ingestion_key)`.
+2. **File Replay và Fetch-unit Claim**: Chống nộp trùng file bằng SHA-256 và chống replay cùng fetch-unit API.
+3. **Ghi Batch với ON CONFLICT**: Ghi dữ liệu an toàn khi conflict trên database thật mà không làm job crash.
+4. **Cô lập dữ liệu và Duplicate Invariant**: Không có nhóm record trùng; phân biệt `file_duplicate`, `transaction_duplicate`, `batch_conflict`.
+5. **Cô lập storage**: Đưa transaction vào PostgreSQL, không fallback transaction sang MongoDB.
+6. **Độ bền và Key Deterministic**: Suy ra key ổn định, từ chối payload thiếu định danh và đảm bảo migration an toàn.
 
 ---
 
-## 📋 2. Mô Tả Danh Sách Các Kịch Bản Thử Nghiệm (Scenario Catalog & Inputs)
+## 📋 2. Danh mục kịch bản và dữ liệu đầu vào
 
 Ma trận dưới đây định nghĩa toàn bộ 13 Scenarios bắt buộc phải thực thi và kiểm tra:
 
-| Mã Kịch Bản | Tên Kịch Bản | Thông Số Dữ Liệu Input (Inputs) | Đầu Ra Mong Muốn (Output Expectation) | Ý Nghĩa / Mục Đích Kiểm Thử |
+| Mã kịch bản | Tên kịch bản | Dữ liệu đầu vào | Đầu ra mong muốn | Ý nghĩa / mục đích kiểm thử |
 |---|---|---|---|---|
 | `SCENARIO-00` | **Hợp Đồng Schema PostgreSQL** | Cột ingestion_key và Unique Constraint trên (identify, ingestion_key) | `Cột ingestion_key là NOT NULL và Unique Constraint tồn tại` | Yêu cầu Alembic Migration 0002 đã được áp dụng thành công |
 | `SCENARIO-01` | **Nạp File Ban Đầu (100 Dòng)** | File 100 dòng giao dịch mới hợp lệ | `Đã chèn: 100, Trùng lặp: 0, Thất bại: 0, Trạng thái File: COMPLETED` | Nạp 100 dòng hoàn toàn mới vào cơ sở dữ liệu PostgreSQL thật |
@@ -41,19 +41,19 @@ Ma trận dưới đây định nghĩa toàn bộ 13 Scenarios bắt buộc ph�
 
 ---
 
-## 📊 3. Bảng Kết Quả Benchmark & Thực Thi (Benchmark Execution Matrix)
+## 📊 3. Ma trận benchmark và thực thi
 
-*(Phần này được cập nhật động trong file `sprint-1-eval-benchmark-run.md` sau mỗi lần chạy bộ test benchmark).*
+*(Phần này được cập nhật động trong file `sprint-1-eval-benchmark-run.md` sau mỗi lần chạy benchmark.)*
 
 Ví dụ cấu trúc bảng kết quả đo đạc:
 
-| Mã Kịch Bản | Tên Kịch Bản | Kết Quả Dự Kiến (Expected) | Kết Quả Thực Tế (Actual) | Trạng Thái | Thời Gian Phản Hồi |
+| Mã kịch bản | Tên kịch bản | Kết quả kỳ vọng | Kết quả thực tế | Trạng thái | Thời gian phản hồi |
 |---|---|---|---|---|---|
-| `SCENARIO-00` đến `SCENARIO-12` | *(Hiển thị kết quả run thực tế)* | *(Kỳ vọng)* | *(Thực tế)* | ✅ PASS / ⏭️ SKIP | *ms* |
+| `SCENARIO-00` đến `SCENARIO-12` | *(Hiển thị kết quả chạy thực tế)* | *(Kỳ vọng)* | *(Thực tế)* | ✅ PASS / ⏭️ SKIP | *ms* |
 
 ---
 
-## 📌 4. Kết Luận & Tiêu Chí Nghiệm Thu Cho Sprint 1
+## 📌 4. Kết luận và tiêu chí nghiệm thu Sprint 1
 
 Toàn bộ 6 tiêu chí nghiệm thu dưới đây bắt buộc phải đạt trạng thái Check (`[x]`):
 
@@ -65,4 +65,4 @@ Toàn bộ 6 tiêu chí nghiệm thu dưới đây bắt buộc phải đạt tr
 - [x] **6. An toàn Migration & Derivation**: Tự động từ chối payload không sinh được key, đảm bảo migration an toàn trên DB live.
 
 ---
-*Mẫu tài liệu chuẩn cho Sprint 1 Idempotency Benchmark.*
+*Tài liệu đặc tả chuẩn cho benchmark Idempotency Sprint 1.*

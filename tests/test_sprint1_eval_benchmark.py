@@ -547,7 +547,7 @@ async def test_run_sprint1_eval_and_generate_report():
         await _run_mongo_claim_scenarios(eval_results, record_eval)
 
     except Exception:
-        report_path = Path("docs/phase-2/SPRINT-01-EVAL-BENCHMARK-RUN.md")
+        report_path = Path("docs/phase-2/sprint-1-eval-benchmark-run.md")
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(_build_markdown_report(eval_results), encoding="utf-8")
         ingestion_module.classify_scope = original_classify_scope
@@ -558,7 +558,7 @@ async def test_run_sprint1_eval_and_generate_report():
 
     # Generate Markdown Output Report
     report_content = _build_markdown_report(eval_results)
-    report_path = Path("docs/phase-2/SPRINT-01-EVAL-BENCHMARK-RUN.md")
+    report_path = Path("docs/phase-2/sprint-1-eval-benchmark-run.md")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report_content, encoding="utf-8")
 
@@ -569,11 +569,11 @@ def _build_markdown_report(eval_results):
     skipped_scenarios = sum(1 for r in eval_results if r["passed"] is None)
     failed_scenarios = total_scenarios - passed_scenarios - skipped_scenarios
     status_badge = (
-        "✅ **PASSED (100%)**"
+        "✅ **PASS (100%)**"
         if failed_scenarios == 0 and skipped_scenarios == 0
-        else "⚠️ **PARTIAL (SOME SKIPPED)**"
+        else "⚠️ **PARTIAL (CÓ KỊCH BẢN BỎ QUA)**"
         if failed_scenarios == 0
-        else "❌ **FAILED**"
+        else "❌ **FAIL**"
     )
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -583,7 +583,7 @@ def _build_markdown_report(eval_results):
     for idx, r in enumerate(eval_results, 1):
         status_icon = "✅ PASS" if r["passed"] is True else "⏭️ SKIP" if r["passed"] is None else "❌ FAIL"
         
-        # 1. Catalog row with Output Expectation (Đầu Ra Mong Muốn)
+        # 1. Dòng danh mục với đầu ra mong muốn
         catalog_rows.append(
             f"| `{r['scenario_id']}` | **{r['name']}** | {r['data_params']} | `{r['expected']}` | {r['notes']} |"
         )
@@ -596,17 +596,17 @@ def _build_markdown_report(eval_results):
     catalog_str = "\n".join(catalog_rows)
     table_str = "\n".join(table_rows)
 
-    return f"""# Sprint 1 Benchmark & Evaluation Report (Plan 1: Idempotency & Duplicate Prevention)
+    return f"""# Báo cáo Benchmark và Đánh giá Sprint 1 (Idempotency và Ngăn ngừa Trùng lặp)
 
-> **Môi trường thử nghiệm**: Real PostgreSQL Transaction Store (`reconciliation_test`) & Real MongoDB Metadata Store  
+> **Môi trường thử nghiệm**: PostgreSQL transaction store thật (`reconciliation_test`) và MongoDB metadata store thật
 > **Thời điểm thực thi**: {timestamp}  
-> **Kết quả đánh giá tổng quan**: {status_badge} ({passed_scenarios}/{total_scenarios} Scenarios Passed)
+> **Kết quả đánh giá tổng quan**: {status_badge} ({passed_scenarios}/{total_scenarios} kịch bản PASS)
 
 ---
 
-## 🎯 1. Mục tiêu Đánh giá (Sprint 1 Acceptance Criteria)
+## 🎯 1. Mục tiêu đánh giá và tiêu chí nghiệm thu Sprint 1
 
-Báo cáo này đo lường và xác nhận các cơ chế thuộc **Plan 1 (Idempotency & Duplicate Prevention)** hoạt động chính xác trên môi trường thực tế, đáp ứng đầy đủ các tiêu chí nghiệm thu:
+Báo cáo này đo lường và xác nhận các cơ chế thuộc **Sprint 1 (Idempotency và Ngăn ngừa Trùng lặp)** hoạt động chính xác trên môi trường thực tế, đáp ứng đầy đủ các tiêu chí nghiệm thu:
 1. **PostgreSQL Schema & Unique Constraint**: Cột `ingestion_key` duy nhất theo `(identify, ingestion_key)` và NOT NULL.
 2. **File Replay & Fetch-Unit Claim Protection**: Chống nộp trùng file (Hash SHA256) và trùng Fetch-Unit API.
 3. **ON CONFLICT Batch Insertion**: Xử lý chèn dữ liệu conflict-safe tại DB thật mà không crash job.
@@ -616,27 +616,27 @@ Báo cáo này đo lường và xác nhận các cơ chế thuộc **Plan 1 (Ide
 
 ---
 
-## 📋 2. Mô Tả Danh Sách Các Kịch Bản Thử Nghiệm (Scenario Catalog & Inputs)
+## 📋 2. Danh mục kịch bản và dữ liệu đầu vào
 
-Dưới đây là chi tiết mô tả bài test, thông số dữ liệu đầu vào (Inputs) và Đầu ra mong muốn cho từng kịch bản trước khi tiến hành benchmark:
+Dưới đây là danh mục dữ liệu đầu vào và đầu ra mong muốn cho từng kịch bản trước khi tiến hành benchmark:
 
-| Mã Kịch Bản | Tên Kịch Bản | Thông Số Dữ Liệu Input (Inputs) | Đầu Ra Mong Muốn (Output Expectation) | Ý Nghĩa / Mục Đích Kiểm Thử |
+| Mã kịch bản | Tên kịch bản | Dữ liệu đầu vào | Đầu ra mong muốn | Ý nghĩa / mục đích kiểm thử |
 |---|---|---|---|---|
 {catalog_str}
 
 ---
 
-## 📊 3. Bảng Kết Quả Benchmark & Thực Thi (Benchmark Execution Matrix)
+## 📊 3. Ma trận benchmark và thực thi
 
-Bảng dưới đây tổng hợp kết quả đo đạc thực tế sau khi chạy toàn bộ scenarios trên DB PostgreSQL & MongoDB thật:
+Bảng dưới đây tổng hợp kết quả đo đạc thực tế sau khi chạy toàn bộ kịch bản trên PostgreSQL và MongoDB thật:
 
-| Mã Kịch Bản | Tên Kịch Bản | Kết Quả Dự Kiến (Expected) | Kết Quả Thực Tế (Actual) | Trạng Thái | Thời Gian Phản Hồi |
+| Mã kịch bản | Tên kịch bản | Kết quả kỳ vọng | Kết quả thực tế | Trạng thái | Thời gian phản hồi |
 |---|---|---|---|---|---|
 {table_str}
 
 ---
 
-## 📌 4. Kết Luận & Tiêu Chí Nghiệm Thu Cho Sprint 1
+## 📌 4. Kết luận và tiêu chí nghiệm thu Sprint 1
 
 - [x] **1. Hợp đồng Schema**: PostgreSQL constraint `(identify, ingestion_key)` và NOT NULL cột `ingestion_key` vận hành chính xác.
 - [x] **2. Chống trùng file & Fetch-unit**: Đạt 100% ở bước claim nhờ SHA256 File Hash và Unique FetchUnitKey index.

@@ -2,7 +2,7 @@
 
 > **Môi trường thử nghiệm**: PostgreSQL transaction store thật (`reconciliation_test`) và MongoDB metadata store thật
 > **Thời điểm thực thi**: 2026-08-01 13:35:48 UTC
-> **Kết quả tổng quan**: ✅ **ĐẠT (100%)** (13/13 kịch bản đạt)
+> **Kết quả tổng quan**: ✅ **PASS (100%)** (13/13 kịch bản PASS)
 
 ---
 
@@ -20,7 +20,7 @@ Báo cáo này đo lường và xác nhận các cơ chế thuộc **Sprint 1 (I
 
 ## 📋 2. Danh mục kịch bản và dữ liệu đầu vào
 
-Dưới đây là chi tiết mô tả bài test, thông số dữ liệu đầu vào (Inputs) và Đầu ra mong muốn cho từng kịch bản trước khi tiến hành benchmark:
+Dưới đây là danh mục dữ liệu đầu vào và đầu ra mong muốn cho từng kịch bản trước khi tiến hành benchmark:
 
 | Mã kịch bản | Tên kịch bản | Dữ liệu đầu vào | Đầu ra mong muốn | Ý nghĩa / mục đích kiểm thử |
 |---|---|---|---|---|
@@ -53,8 +53,8 @@ Bảng dưới đây tổng hợp kết quả đo đạc thực tế sau khi ch�
 | `SCENARIO-04` | **Batch Trùng 100% (File Tên Khác)** | `Đã chèn: 0, Trùng lặp: 100, Thất bại: 0, Tổng bản ghi DB: 150` | `Đã chèn: 0, Trùng lặp: 100, Thất bại: 0, Tổng bản ghi DB: 150` | ✅ PASS | 43.72 ms |
 | `SCENARIO-05` | **Giao Dịch Khác Ingestion Key** | `Đã chèn: 2, Trùng lặp: 0, Tổng bản ghi DB: 152` | `Đã chèn: 2, Trùng lặp: 0, Tổng bản ghi DB: 152` | ✅ PASS | 5.0 ms |
 | `SCENARIO-06` | **Bất Biến Trùng Lặp Database** | `Số nhóm trùng lặp identity (identify, ingestion_key): 0` | `Số nhóm trùng lặp identity: 0` | ✅ PASS | 1.54 ms |
-| `SCENARIO-09` | **Từ Chối Khi Thiếu Ingestion Key** | `Báo lỗi ValueError; Không sinh key ngẫu nhiên` | `Đã từ chối: không thể suy ra ingestion_key từ payload giao dịch` | ✅ ĐẠT | 0.01 ms |
-| `SCENARIO-10` | **Hợp Đồng Kế Toán Lỗi Không Trùng** | `Ghi nhận chính xác failed_rows và mã lỗi batch_conflict` | `failed_rows=True, batch_conflict=True` | ✅ ĐẠT | 0.23 ms |
+| `SCENARIO-09` | **Từ Chối Khi Thiếu Ingestion Key** | `Báo lỗi ValueError; Không sinh key ngẫu nhiên` | `Đã từ chối: không thể suy ra ingestion_key từ payload giao dịch` | ✅ PASS | 0.01 ms |
+| `SCENARIO-10` | **Hợp Đồng Kế Toán Lỗi Không Trùng** | `Ghi nhận chính xác failed_rows và mã lỗi batch_conflict` | `failed_rows=True, batch_conflict=True` | ✅ PASS | 0.23 ms |
 | `SCENARIO-11` | **An Toàn Migration Data Lịch Sử** | `Kịch bản SCENARIO-00 và SCENARIO-06 đều PASS` | `Kiểm tra schema và bất biến trùng lặp hoàn tất thành công` | ✅ PASS | 0 ms |
 | `SCENARIO-12` | **Lưu Trữ Transaction Thuần PostgreSQL** | `Không dùng fallback collection Mongo cho dữ liệu giao dịch` | `postgres_only=True` | ✅ PASS | 0.39 ms |
 | `SCENARIO-07` | **Tranh Chấp Claim File Đồng Thời** | `Chính xác 1 claim thành công (created=1) và 1 bị từ chối trùng lặp` | `Số worker tạo thành công=1, Kết quả outcomes=[True, False]` | ✅ PASS | 6.25 ms |

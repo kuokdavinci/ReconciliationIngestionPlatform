@@ -2,7 +2,7 @@
 
 > **Nhánh:** `phase2/sprint-1`
 > **Phạm vi:** replay file, replay fetch-unit, loại bỏ giao dịch trùng và ghi dữ liệu an toàn khi xảy ra conflict
-> **Trạng thái:** Đã triển khai và đã xác minh. Bộ benchmark ghi nhận 13/13 kịch bản đạt.
+> **Trạng thái:** ✅ **PASS** — đã triển khai và xác minh; benchmark ghi nhận 13/13 kịch bản PASS.
 
 ## Tóm tắt
 
@@ -22,7 +22,7 @@ Incremental recovery, quarantine dữ liệu lỗi và observability thuộc cá
 |---|---|---|
 | Schema | `alembic/versions/0002_ingestion_idempotency.py` | Thêm `ingestion_key` và hợp đồng uniqueness trong PostgreSQL. |
 | Persistence | `src/models/postgres.py`, `src/models/data_container.py` | Repository giao dịch PostgreSQL và ghi batch an toàn khi conflict. |
-| Claim | `src/models/reconciliation_file.py`, `src/models/indexes.py` | Cơ chế create-or-get atomically cho file/fetch-unit. |
+| Claim | `src/models/reconciliation_file.py`, `src/models/indexes.py` | Cơ chế atomic create-or-get cho file/fetch-unit. |
 | Pipeline | `src/pipeline/ingestion_pipeline.py`, `src/core/types.py` | Suy ra key, xử lý replay và thống kê chi tiết. |
 | Runtime | `src/fetchers/*`, `src/scheduler/jobs.py`, `src/api/automation.py` | Truyền metadata idempotency và công bố duplicate outcome. |
 | E2E | `scripts/seeding/seed_momo_e2e.py`, `tests/test_sprint1_eval_benchmark.py` | Helper seed và bộ đánh giá Sprint 1. |
@@ -83,7 +83,7 @@ Bản chạy thực tế bao phủ schema, insert ban đầu, file replay, confl
 |---|---|---|
 | Nhánh và working tree | PASS | `phase2/sprint-1`; sạch trước khi chỉnh tài liệu. |
 | Sprint benchmark | PASS | Chạy với `UV_CACHE_DIR` local và Docker PostgreSQL/Mongo; `1 passed in 0.68s`, dùng database `reconciliation_test`. |
-| Tài liệu | Đã cập nhật | Nội dung khớp tên migration, phạm vi, dữ liệu demo và trạng thái xác minh thực tế. |
+| Tài liệu | PASS | Nội dung khớp tên migration, phạm vi, dữ liệu demo và trạng thái xác minh thực tế. |
 
 Lệnh chạy lại benchmark:
 

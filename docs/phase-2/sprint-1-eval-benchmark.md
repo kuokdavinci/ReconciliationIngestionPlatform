@@ -49,7 +49,7 @@ Ví dụ cấu trúc bảng kết quả đo đạc:
 
 | Mã kịch bản | Tên kịch bản | Kết quả kỳ vọng | Kết quả thực tế | Trạng thái | Thời gian phản hồi |
 |---|---|---|---|---|---|
-| `SCENARIO-00` đến `SCENARIO-12` | *(Hiển thị kết quả chạy thực tế)* | *(Kỳ vọng)* | *(Thực tế)* | ✅ ĐẠT / ⏭️ BỎ QUA | *ms* |
+| `SCENARIO-00` đến `SCENARIO-12` | *(Hiển thị kết quả chạy thực tế)* | *(Kỳ vọng)* | *(Thực tế)* | ✅ PASS / ⏭️ SKIP | *ms* |
 
 ---
 

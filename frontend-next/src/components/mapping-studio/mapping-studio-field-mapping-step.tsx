@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import type { StudioWizardState, FieldMapping, DraftMappingConfig } from "@/types/mapping";
+import type { StudioWizardState, FieldMapping } from "@/types/mapping";
 import styles from "./mapping-studio.module.css";
 
 interface Props {

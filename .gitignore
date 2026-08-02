@@ -27,6 +27,11 @@ htmlcov/
 # Planning artifacts (internal GSD docs)
 .planning/
 
+# Local agent/index artifacts
+.codegraph/
+/AGENTS.md
+/frontend-lint-remediation.md
+
 # SFTP data (uploaded files)
 sftp_data/
 

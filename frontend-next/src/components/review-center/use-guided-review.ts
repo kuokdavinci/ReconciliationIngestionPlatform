@@ -1,17 +1,18 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api/review-center";
 import { getCurrentActor } from "@/lib/actor";
 import { getRuntimeValidationState } from "@/lib/review-runtime";
-import type { ReviewPacket } from "@/types/review-center";
+import type { ReviewPacket, PostApprovalRun } from "@/types/review-center";
 import styles from "./review-center.module.css";
 import { usePostApprovalPolling } from "./use-post-approval-polling";
+import type { FieldMappingItem, AiMappingData } from "./guided-review-mapping-step";
+import type { ScopeClassificationInfo } from "./guided-review-scope-step";
 
 function isGenericColumnLabel(value: unknown) {
   return /^column\s+\d+$/i.test(String(value || "").trim());
 }
 
-function resolveSourceFieldLabel(mapping: any, sigHeaders: string[], fallbackIndex?: number) {
+function resolveSourceFieldLabel(mapping: FieldMappingItem, sigHeaders: string[], fallbackIndex?: number) {
   const sourceColumn = Number(mapping?.column);
   const headerLabel = sourceColumn > 0 ? String(sigHeaders[sourceColumn - 1] || "").trim() : "";
   if (headerLabel) return headerLabel;
@@ -41,14 +42,14 @@ export function useGuidedReview({
 
   const [selectedScope, setSelectedScope] = useState(packet?.scopeRecommendation?.scopeType ?? packet?.scopeType ?? "FULL_SNAPSHOT");
   const [isSavingScope, setIsSavingScope] = useState(false);
-  const [scopeClassification, setScopeClassification] = useState<any>(null);
+  const [scopeClassification, setScopeClassification] = useState<ScopeClassificationInfo | null>(null);
   const [scopeLoading, setScopeLoading] = useState(false);
   const [scopeError, setScopeError] = useState("");
 
-  const [aiMapping, setAiMapping] = useState<any>(null);
+  const [aiMapping, setAiMapping] = useState<AiMappingData | null>(null);
   const [aiMappingLoading, setAiMappingLoading] = useState(false);
   const [aiMappingError, setAiMappingError] = useState("");
-  const [fieldMappings, setFieldMappings] = useState<any[]>([]);
+  const [fieldMappings, setFieldMappings] = useState<FieldMappingItem[]>([]);
   const [isSavingMapping, setIsSavingMapping] = useState(false);
 
   const [isValidatingRuntime, setIsValidatingRuntime] = useState(false);
@@ -76,18 +77,26 @@ export function useGuidedReview({
     onClose();
   }, [stopPolling, setPostApprovalRun, onClose]);
 
-  // Sync state if packet prop changes, but ONLY if we are not actively in the decision step or running a post-approval process
+  // Sync state when packet identity or status changes
+  const packetId = packet?._id;
+  const packetStatus = packet?.status;
   useEffect(() => {
-    if (packet && packet._id !== localPacket?._id) {
-      setLocalPacket(packet);
-      setStep(String(packet.status).toUpperCase() === "APPROVED" ? 4 : 1);
-      setSelectedScope(packet.scopeRecommendation?.scopeType ?? packet.scopeType ?? "FULL_SNAPSHOT");
-      setScopeClassification(null);
-      setAiMapping(null);
-      setFieldMappings([]);
-      setPostApprovalRun(null);
+    if (
+      packet &&
+      (packet._id !== localPacket?._id || packet.status !== localPacket?.status)
+    ) {
+      const timer = setTimeout(() => {
+        setLocalPacket(packet);
+        setStep(String(packet.status).toUpperCase() === "APPROVED" ? 4 : 1);
+        setSelectedScope(packet.scopeRecommendation?.scopeType ?? packet.scopeType ?? "FULL_SNAPSHOT");
+        setScopeClassification(null);
+        setAiMapping(null);
+        setFieldMappings([]);
+        setPostApprovalRun(null);
+      }, 0);
+      return () => clearTimeout(timer);
     }
-  }, [packet, localPacket?._id, setPostApprovalRun]);
+  }, [packet, localPacket?._id, localPacket?.status, packetId, packetStatus, setPostApprovalRun]);
 
   // Scope classification auto-load
   useEffect(() => {
@@ -96,13 +105,14 @@ export function useGuidedReview({
         setScopeLoading(true);
         setScopeError("");
         try {
-          const res = (await api.classifyScope(localPacket._id)) as any;
+          const res = (await api.classifyScope(localPacket._id)) as ScopeClassificationInfo & { suggestedScope?: string };
           setScopeClassification(res);
           if (res.suggestedScope) {
             setSelectedScope(res.suggestedScope);
           }
-        } catch (err: any) {
-          setScopeError(err.message || "Failed to load scope classification.");
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : "Failed to load scope classification.";
+          setScopeError(message);
         } finally {
           setScopeLoading(false);
         }
@@ -120,22 +130,23 @@ export function useGuidedReview({
         setAiMappingLoading(true);
         setAiMappingError("");
         try {
-          const res = (await api.generateAiMapping(localPacket._id)) as any;
+          const res = (await api.generateAiMapping(localPacket._id)) as { mapping?: { fieldMappings?: FieldMappingItem[] } & AiMappingData };
           setAiMapping(res.mapping || null);
 
           const rawDraftFieldMappings = res.mapping?.fieldMappings || [];
-          const idMapping = rawDraftFieldMappings.find((m: any) => m.path === "id");
-          const draftFieldMappings = rawDraftFieldMappings.filter((m: any) => {
+          const idMapping = rawDraftFieldMappings.find((m: FieldMappingItem) => m.path === "id");
+          const draftFieldMappings = rawDraftFieldMappings.filter((m: FieldMappingItem) => {
             if (m.path !== "trace") return true;
             if (!idMapping) return true;
             return Number(m.column || 0) !== Number(idMapping.column || 0);
-          }).map((m: any, index: number) => ({
+          }).map((m: FieldMappingItem, index: number) => ({
             ...m,
             sourceField: resolveSourceFieldLabel(m, localPacket?.structureSignature?.headers || [], index),
           }));
           setFieldMappings(draftFieldMappings);
-        } catch (err: any) {
-          setAiMappingError(err.message || "Failed to load AI mapping proposal.");
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : "Failed to load AI mapping proposal.";
+          setAiMappingError(message);
         } finally {
           setAiMappingLoading(false);
         }
@@ -160,7 +171,7 @@ export function useGuidedReview({
         const alreadyValidated = runtimeGate && ["PASS", "PASSED", "FAIL", "FAILED"].includes(String(runtimeGate.status).toUpperCase());
         setStep(alreadyValidated ? 3 : 2);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       throw err;
     } finally {
       setIsSavingScope(false);
@@ -174,7 +185,6 @@ export function useGuidedReview({
           return {
             ...mapping,
             path: newPath,
-            required: ["id", "amount", "transDate"].includes(newPath),
             type: newPath ? "STRING" : mapping.type || "STRING",
           };
         }
@@ -190,13 +200,13 @@ export function useGuidedReview({
       const sheetName = localPacket.parseStrategy?.sheetName || "Sheet1";
       const startRow = localPacket.parseStrategy?.startRow || 2;
       const payloadMappings = fieldMappings.map((m, index) => ({
-        path: m.path,
+        path: m.path || "",
         column: m.column !== null && m.column !== undefined && m.column !== "" ? Number(m.column) : null,
         type: m.type || "STRING",
         required: m.required ?? false,
         constant: m.constant || null,
-        sourceField: resolveSourceFieldLabel(m, localPacket?.structureSignature?.headers || [], index),
         mapping: m.mapping || null,
+        sourceField: resolveSourceFieldLabel(m, localPacket?.structureSignature?.headers || [], index),
       }));
 
       await api.saveDraftMapping(localPacket._id, {
@@ -209,7 +219,7 @@ export function useGuidedReview({
       setLocalPacket(refreshed.packet);
       setStep(3);
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       throw err;
     } finally {
       setIsSavingMapping(false);
@@ -220,11 +230,11 @@ export function useGuidedReview({
     if (!localPacket) return;
     setIsValidatingRuntime(true);
     try {
-      const response = (await api.validateRuntime(localPacket._id)) as any;
+      const response = (await api.validateRuntime(localPacket._id)) as { gate?: { message?: string } };
       const refreshed = await api.getReviewPacket(localPacket._id);
       setLocalPacket(refreshed.packet);
       return response.gate?.message || "Runtime validation completed.";
-    } catch (err: any) {
+    } catch (err: unknown) {
       throw err;
     } finally {
       setIsValidatingRuntime(false);
@@ -235,11 +245,11 @@ export function useGuidedReview({
     if (!localPacket) return;
     setIsSubmitting(true);
     try {
-      const optimisticRun = {
+      const optimisticRun: PostApprovalRun = {
         id: `optimistic-${localPacket._id}`,
         packetId: localPacket._id,
         partner: localPacket.partner,
-        date: localPacket.reconciliationDate,
+        date: localPacket.reconciliationDate ?? "",
         status: "QUEUED",
         stage: "approval",
         message: "Approval accepted. Preparing post-approval processing...",
@@ -251,15 +261,15 @@ export function useGuidedReview({
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      setPostApprovalRun(optimisticRun as any);
-      const response = (await api.approveActivate(localPacket._id, getCurrentActor(), selectedScope)) as any;
+      setPostApprovalRun(optimisticRun);
+      const response = (await api.approveActivate(localPacket._id, getCurrentActor(), selectedScope)) as { postApproveRun?: PostApprovalRun };
       if (response.postApproveRun) {
-        setPostApprovalRun(response.postApproveRun as any);
+        setPostApprovalRun(response.postApproveRun);
       }
       startPolling(localPacket._id);
       onRefresh();
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       throw err;
     } finally {
       setIsSubmitting(false);
@@ -274,7 +284,7 @@ export function useGuidedReview({
       onRefresh();
       handleClose();
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       throw err;
     } finally {
       setIsSubmitting(false);
@@ -284,7 +294,7 @@ export function useGuidedReview({
   const retryScopeClassification = useCallback(() => {
     if (!localPacket) return;
     void api.classifyScope(localPacket._id).then(res => {
-      setScopeClassification(res);
+      setScopeClassification(res as ScopeClassificationInfo);
     });
   }, [localPacket]);
 
@@ -336,7 +346,7 @@ export function useGuidedReview({
 
   const constantFieldEntries = useMemo(() => {
     return constantMappings.map(m => ({
-      canonicalField: m.path,
+      canonicalField: m.path || "",
       sourceColumn: m.constant ?? "-",
       status: "OK" as const,
       issue: null,
@@ -352,7 +362,7 @@ export function useGuidedReview({
     const existingPaths = new Set(fieldResults.map(f => f.canonicalField));
     const merged = [...fieldResults];
     for (const ce of constantFieldEntries) {
-      if (!existingPaths.has(ce.canonicalField)) {
+      if (ce.canonicalField && !existingPaths.has(ce.canonicalField)) {
         merged.push(ce);
       }
     }

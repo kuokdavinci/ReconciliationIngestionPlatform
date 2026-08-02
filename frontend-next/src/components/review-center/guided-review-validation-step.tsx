@@ -3,18 +3,39 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getValidationSuggestion } from "@/lib/review-runtime-validation";
-import type { ReviewPacket } from "@/types/review-center";
+import type {
+  ReviewPacket,
+  RuntimeValidationFieldResult,
+  RuntimeValidationTopIssue,
+  RuntimeTraceSample,
+  RuntimeFieldTrace,
+} from "@/types/review-center";
+import { RuntimeValidationState } from "@/lib/review-runtime";
+import type { FieldMappingItem } from "./guided-review-mapping-step";
 import styles from "./review-center.module.css";
+
+import { ValidationStateSummary } from "./guided-review-decision-step";
+
+interface ValidationSummaryStats {
+  validRowsPercent?: number;
+  validRows?: number;
+  rowsChecked?: number;
+  mappedFields?: number;
+  totalFields?: number;
+  requiredFieldsPassed?: number;
+  requiredFieldsTotal?: number;
+  errorRows?: number;
+}
 
 interface Props {
   localPacket: ReviewPacket | null;
-  validationState: any;
-  runtimeValidationState: any;
-  displayFieldResults: any[];
-  constantMappings: any[];
+  validationState: ValidationStateSummary;
+  runtimeValidationState: RuntimeValidationState | null | undefined;
+  displayFieldResults: RuntimeValidationFieldResult[];
+  constantMappings: FieldMappingItem[];
   sigHeaders: string[];
-  summary: any;
-  topIssues: any[];
+  summary?: ValidationSummaryStats;
+  topIssues: RuntimeValidationTopIssue[];
   traceDetailSampleIndex: number | null;
   isValidatingRuntime: boolean;
   onValidateRuntime: () => void;
@@ -65,11 +86,11 @@ export function GuidedReviewValidationStep({
 
       {summary && (
         <div className={styles.metricPills}>
-          <span className={styles.metricPill}>{summary.rowsChecked} rows checked</span>
-          <span className={styles.metricPill}>{summary.mappedFields}/{summary.totalFields} fields mapped</span>
-          <span className={styles.metricPill}>{summary.requiredFieldsPassed}/{summary.requiredFieldsTotal} required fields</span>
-          <span className={styles.metricPill}>{summary.validRowsPercent}% valid</span>
-          <span className={styles.metricPill}>{summary.errorRows} errors</span>
+          <span className={styles.metricPill}>{summary.rowsChecked ?? 0} rows checked</span>
+          <span className={styles.metricPill}>{summary.mappedFields ?? 0}/{summary.totalFields ?? 0} fields mapped</span>
+          <span className={styles.metricPill}>{summary.requiredFieldsPassed ?? 0}/{summary.requiredFieldsTotal ?? 0} required fields</span>
+          <span className={styles.metricPill}>{summary.validRowsPercent ?? 0}% valid</span>
+          <span className={styles.metricPill}>{summary.errorRows ?? 0} errors</span>
         </div>
       )}
 
@@ -79,31 +100,31 @@ export function GuidedReviewValidationStep({
             <div>
               <div className={styles.progressLabel}>
                 <span className={styles.progressTitle}>Runtime Coverage</span>
-                <span className={styles.progressRate} style={{ color: summary ? (summary.validRowsPercent >= 80 ? "#10B981" : summary.validRowsPercent >= 50 ? "#F59E0B" : "#EF4444") : undefined }}>
-                  {summary ? `${Math.round(summary.validRowsPercent)}% pass rate` : ""}
+                <span className={styles.progressRate} style={{ color: summary ? ((summary.validRowsPercent ?? 0) >= 80 ? "#10B981" : (summary.validRowsPercent ?? 0) >= 50 ? "#F59E0B" : "#EF4444") : undefined }}>
+                  {summary ? `${Math.round(summary.validRowsPercent ?? 0)}% pass rate` : ""}
                 </span>
               </div>
               {summary && (
                 <>
                   <div className={styles.progressBar}>
-                    <div className={styles.progressSegmentGreen} style={{ width: `${Math.max(summary.validRowsPercent, 0)}%` }} />
-                    {summary.errorRows > 0 && summary.validRowsPercent < 100 && (
-                      <div className={styles.progressSegmentRed} style={{ width: `${Math.max(100 - summary.validRowsPercent, 0)}%` }} />
+                    <div className={styles.progressSegmentGreen} style={{ width: `${Math.max(summary.validRowsPercent ?? 0, 0)}%` }} />
+                    {(summary.errorRows ?? 0) > 0 && (summary.validRowsPercent ?? 0) < 100 && (
+                      <div className={styles.progressSegmentRed} style={{ width: `${Math.max(100 - (summary.validRowsPercent ?? 0), 0)}%` }} />
                     )}
                   </div>
                   <div className={styles.progressLegend}>
                     <span className={styles.progressLegendItem}>
                       <span className={styles.progressDot} style={{ background: "#10B981" }} />
-                      <span><strong className={styles.progressLegendCount}>{summary.rowsChecked - summary.errorRows}</strong> success</span>
+                      <span><strong className={styles.progressLegendCount}>{(summary.rowsChecked ?? 0) - (summary.errorRows ?? 0)}</strong> success</span>
                     </span>
-                    {summary.errorRows > 0 && (
+                    {(summary.errorRows ?? 0) > 0 && (
                       <span className={styles.progressLegendItem}>
                         <span className={styles.progressDot} style={{ background: "#EF4444" }} />
-                        <span><strong className={styles.progressLegendCount}>{summary.errorRows}</strong> failed</span>
+                        <span><strong className={styles.progressLegendCount}>{summary.errorRows ?? 0}</strong> failed</span>
                       </span>
                     )}
                     <span style={{ color: "var(--text-muted)" }}>
-                      <strong className={styles.progressLegendCount}>{summary.rowsChecked}</strong> sampled
+                      <strong className={styles.progressLegendCount}>{summary.rowsChecked ?? 0}</strong> sampled
                     </span>
                   </div>
                 </>
@@ -143,8 +164,8 @@ export function GuidedReviewValidationStep({
             </tr>
           </thead>
           <tbody>
-            {displayFieldResults.map((field: any) => {
-              const isConstant = constantMappings.some((m: any) => m.path === field.canonicalField);
+            {displayFieldResults.map((field: RuntimeValidationFieldResult) => {
+              const isConstant = constantMappings.some((m: FieldMappingItem) => m.path === field.canonicalField);
               const colIdx = Number(field.sourceColumn);
               const sourceLabel = isConstant
                 ? `Constant: ${field.sourceColumn}`
@@ -178,12 +199,12 @@ export function GuidedReviewValidationStep({
             </span>
           </div>
           <div className={styles.traceGallery}>
-            {localPacket.runtimeValidation.traceSamples.slice(0, 5).map((sample: any, idx: number) => {
-              const hasError = sample.fieldTraces.some((t: any) => t.status === "error");
-              const hasWarning = sample.fieldTraces.some((t: any) => t.status === "warning");
+            {localPacket.runtimeValidation.traceSamples.slice(0, 5).map((sample: RuntimeTraceSample, idx: number) => {
+              const hasError = sample.fieldTraces.some((t: RuntimeFieldTrace) => t.status === "error");
+              const hasWarning = sample.fieldTraces.some((t: RuntimeFieldTrace) => t.status === "warning");
               const tone = hasError ? "critical" : hasWarning ? "medium" : "low";
               const label = hasError ? "Failed" : hasWarning ? "Warning" : "Passed";
-              const sourceFields = sample.fieldTraces.filter((t: any) => t.sourceField || t.sourceValue != null);
+              const sourceFields = sample.fieldTraces.filter((t: RuntimeFieldTrace) => t.sourceField || t.sourceValue != null);
               const normalizedEntries = Object.entries(sample.normalizedData).filter(([, v]) => v != null && v !== "");
 
               return (
@@ -191,7 +212,7 @@ export function GuidedReviewValidationStep({
                   <div className={styles.traceCardHeader}>
                     <div className={styles.traceCardTitle}>
                       <strong className={styles.traceCardSampleName}>Sample Row {sample.row}</strong>
-                      <Badge severity={tone as any}>{label}</Badge>
+                      <Badge severity={tone as "critical" | "medium" | "low"}>{label}</Badge>
                     </div>
                     <button
                       className={styles.traceDetailButton}
@@ -205,7 +226,7 @@ export function GuidedReviewValidationStep({
                   <div className={styles.traceColumns}>
                     <div className={styles.traceColumn}>
                       <div className={styles.traceColumnTitle}>Before / Raw Source</div>
-                      {sourceFields.length > 0 ? sourceFields.map((trace: any, ti: number) => (
+                      {sourceFields.length > 0 ? sourceFields.map((trace: RuntimeFieldTrace, ti: number) => (
                         <div key={ti} className={styles.traceRow}>
                           <span className={styles.traceRowKey}>{trace.sourceField || trace.path || "-"}</span>
                           <span className={styles.traceRowValue}>{trace.sourceValue ?? "-"}</span>
@@ -238,7 +259,7 @@ export function GuidedReviewValidationStep({
         <h5 className={styles.sectionCardTitle}>Validation Issues</h5>
         <div className={styles.issuesList}>
           {topIssues.length > 0 ? (
-            topIssues.map((issue: any) => (
+            topIssues.map((issue: RuntimeValidationTopIssue) => (
               <div key={`${issue.type}-${issue.message}`} className={styles.issueRow}>
                 <div>
                   <span className={styles.issueText}>{issue.message}</span>
@@ -261,7 +282,7 @@ export function GuidedReviewValidationStep({
             {(() => {
               const sample = localPacket.runtimeValidation!.traceSamples![traceDetailSampleIndex];
               if (!sample) return null;
-              const sourceFields = sample.fieldTraces.filter((t: any) => t.sourceField || t.sourceValue != null || t.path);
+              const sourceFields = sample.fieldTraces.filter((t: RuntimeFieldTrace) => t.sourceField || t.sourceValue != null || t.path);
               const normalizedEntries = Object.entries(sample.normalizedData).filter(([, v]) => v != null && v !== "");
               return (
                 <>
@@ -275,7 +296,7 @@ export function GuidedReviewValidationStep({
                   <div className={styles.traceDetailColumns}>
                     <div className={styles.traceDetailSection}>
                       <div className={styles.traceDetailSectionTitle}>Raw Source Snapshot</div>
-                      {sourceFields.length > 0 ? sourceFields.map((trace: any, ti: number) => (
+                      {sourceFields.length > 0 ? sourceFields.map((trace: RuntimeFieldTrace, ti: number) => (
                         <div key={ti} className={styles.traceRow}>
                           <span className={styles.traceRowKey}>{trace.sourceField || trace.path || "-"}</span>
                           <span className={styles.traceRowValue}>{trace.sourceValue ?? "-"}</span>
@@ -308,7 +329,7 @@ export function GuidedReviewValidationStep({
                           </tr>
                         </thead>
                         <tbody>
-                          {sample.fieldTraces.map((trace: any, ti: number) => (
+                          {sample.fieldTraces.map((trace: RuntimeFieldTrace, ti: number) => (
                             <tr key={ti}>
                               <td style={{ fontFamily: "var(--font-mono)" }}>{trace.sourceField || (trace.column != null ? `Column ${trace.column}` : trace.type === "CONSTANT" ? "Constant" : "-")}</td>
                               <td style={{ fontFamily: "var(--font-mono)" }}>{trace.sourceValue ?? "-"}</td>
@@ -326,7 +347,7 @@ export function GuidedReviewValidationStep({
                   {sample.buildErrors && sample.buildErrors.length > 0 && (
                     <div className={styles.traceBuildErrorBlock}>
                       <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "#fca5a5", marginBottom: 6 }}>Canonical Build Errors</div>
-                      {sample.buildErrors.map((err: any, ei: number) => (
+                      {sample.buildErrors.map((err: { field?: string; errorCode: string; reason: string }, ei: number) => (
                         <div key={ei} style={{ fontSize: 12, marginTop: 4 }}>
                           <strong>{err.field || "-"}</strong> · {err.errorCode} · {err.reason}
                         </div>

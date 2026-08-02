@@ -5,9 +5,21 @@ import { Button } from "@/components/ui/button";
 import type { ReviewPacket } from "@/types/review-center";
 import styles from "./review-center.module.css";
 
+export interface ScopeClassificationInfo {
+  recommendedScope?: string;
+  suggestedScope?: string;
+  confidence?: number;
+  reasons?: string[];
+  explanation?: string;
+  reasoning?: string;
+  probabilities?: Record<string, number>;
+  internalDbRecordCount?: number;
+  receivedRecordCount?: number;
+}
+
 interface Props {
   localPacket: ReviewPacket | null;
-  scopeClassification: any;
+  scopeClassification: ScopeClassificationInfo | null;
   scopeLoading: boolean;
   scopeError: string;
   selectedScope: string;

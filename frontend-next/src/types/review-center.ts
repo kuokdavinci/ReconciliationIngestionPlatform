@@ -75,6 +75,12 @@ export interface RuntimeValidationResult {
   topIssues: RuntimeValidationTopIssue[];
   traceSamples?: RuntimeTraceSample[];
   likelyCause?: string;
+  runtimeGate?: {
+    gateKey?: string;
+    status?: string;
+    label?: string;
+    message?: string;
+  };
 }
 
 export interface ReviewPacket {

@@ -65,7 +65,8 @@ export function MappingStudioExecuteStep({ wizard, onBack, onOpenReconciliation 
       const today = new Date().toISOString().split("T")[0];
       
       // 1. Approve mapping config if it's currently PENDING_APPROVAL
-      const configId = (wizard.config as any)?.id || (wizard.config as any)?._id;
+      const config = wizard.config as ({ id?: string; _id?: string } | null | undefined);
+      const configId = config?.id || config?._id;
       if (configId) {
         await fetch(`/api/v1/mapping-configs/${configId}/approve`, {
           method: "POST",

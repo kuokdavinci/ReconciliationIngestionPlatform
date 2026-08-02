@@ -30,7 +30,7 @@ export default function SchedulesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   const enabledJobs = jobs.filter((j) => j.enabled);
   const pendingReview = jobs.reduce((sum, j) => sum + ((j.pendingReviewPackets as number) ?? 0), 0);
@@ -76,7 +76,7 @@ export default function SchedulesPage() {
       cancelled = true;
       if (intervalId) clearInterval(intervalId);
     };
-  }, [hasActiveJobRunning, loadJobs]);
+  }, [hasActiveJobRunning, loadJobs, showToast]);
 
   const recentPackets = useMemo<RecentPacket[]>(() => {
     return jobs

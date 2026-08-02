@@ -5,10 +5,19 @@ import { Button } from "@/components/ui/button";
 import type { PostApprovalRun } from "@/types/review-center";
 import styles from "./review-center.module.css";
 
+export interface ValidationStateSummary {
+  hasValidation?: boolean;
+  canProceed?: boolean;
+  tone?: string;
+  title?: string;
+  text?: string;
+  status?: string;
+}
+
 interface Props {
   postApprovalRun: PostApprovalRun | null;
   isApproved: boolean;
-  validationState: any;
+  validationState: ValidationStateSummary | null;
   isSubmitting: boolean;
   onApproveActivate: () => void;
   onReject: () => void;
@@ -60,7 +69,7 @@ export function GuidedReviewDecisionStep({
           <div className={styles.recommendPanel}>
             <strong className={styles.recommendLabel}>Decision summary</strong>
             <p className={styles.recommendText}>
-              {validationState.canProceed
+              {validationState?.canProceed
                 ? "The latest draft mapping configuration is ready for approval. Approving will activate it, ingest the uploaded partner file, and run reconciliation."
                 : "This packet still has validation issues. Please return to validation and ensure runtime mapping passes before approving."}
             </p>
@@ -72,7 +81,7 @@ export function GuidedReviewDecisionStep({
               <Button variant="secondary" disabled={isSubmitting} onClick={onReject}>
                 Reject change
               </Button>
-              <Button variant="primary" disabled={!validationState.canProceed || isSubmitting} onClick={onApproveActivate}>
+              <Button variant="primary" disabled={!validationState?.canProceed || isSubmitting} onClick={onApproveActivate}>
                 {isSubmitting ? "Processing..." : "Approve & Activate"}
               </Button>
             </div>

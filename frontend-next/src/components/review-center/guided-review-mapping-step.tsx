@@ -4,14 +4,30 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import styles from "./review-center.module.css";
 
+export interface FieldMappingItem {
+  column?: number | string;
+  sourceField?: string;
+  type?: string;
+  path?: string;
+  constant?: string;
+  required?: boolean;
+  mapping?: Record<string, string>;
+}
+
+export interface AiMappingData {
+  configHealth?: {
+    reasoning?: string;
+  };
+}
+
 interface Props {
-  aiMapping: any;
+  aiMapping: AiMappingData | null;
   aiMappingLoading: boolean;
   aiMappingError: string;
   sigHeaders: string[];
-  sourceBackedMappings: any[];
-  constantMappings: any[];
-  fieldMappings: any[];
+  sourceBackedMappings: FieldMappingItem[];
+  constantMappings: FieldMappingItem[];
+  fieldMappings: FieldMappingItem[];
   isSavingMapping: boolean;
   onMappingChange: (sourceColumn: number, newPath: string) => void;
   onSaveMapping: () => void;
@@ -93,7 +109,7 @@ export function GuidedReviewMappingStep({
             <div className={styles.sectionCard}>
               <h5 className={styles.sectionCardTitle}>Runtime constants and rule-based values</h5>
               <div className={styles.constraintGrid}>
-                {constantMappings.map((m: any, idx: number) => (
+                {constantMappings.map((m: FieldMappingItem, idx: number) => (
                   <div key={idx} className={styles.constraintCard}>
                     <div className={styles.constraintLabel}>{m.path}</div>
                     <div className={styles.constraintValue}>{m.constant || "Rule mapping"}</div>
@@ -114,7 +130,7 @@ export function GuidedReviewMappingStep({
                 </tr>
               </thead>
               <tbody>
-                {sourceBackedMappings.map((m: any, idx: number) => {
+                {sourceBackedMappings.map((m: FieldMappingItem, idx: number) => {
                   const sourceCol = Number(m.column);
                   const headerLabel = sourceCol > 0 && sigHeaders[sourceCol - 1] ? sigHeaders[sourceCol - 1] : (m.sourceField || `Column ${sourceCol}`);
                   const populateVia = m.type === "CONSTANT" ? "Constant" : sourceCol > 0 ? `Source column ${sourceCol}` : "Source column";

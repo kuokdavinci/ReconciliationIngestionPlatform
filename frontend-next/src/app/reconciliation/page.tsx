@@ -144,7 +144,7 @@ export default function ReconciliationPage() {
       const previewRaw = previewResponses.flatMap((res) => res.results ?? []);
       const previewUnique = Array.from(
         new Map(
-          previewRaw.map((r: any) => {
+          previewRaw.map((r: ReconciliationRow) => {
             const id = r.partnerTxnId || r.internalTxnId || r.id;
             return [id, { ...r, reviewState: reviewMap.get(id) || null }];
           })
@@ -319,7 +319,7 @@ export default function ReconciliationPage() {
       const previewRaw = previewResponses.flatMap((res) => res.results ?? []);
       const previewUnique = Array.from(
         new Map(
-          previewRaw.map((r: any) => {
+          previewRaw.map((r: ReconciliationRow) => {
             const id = r.partnerTxnId || r.internalTxnId || r.id;
             return [id, { ...r, reviewState: reviewMap.get(id) || null }];
           })
@@ -340,16 +340,22 @@ export default function ReconciliationPage() {
   }, [loadInsights, setInsights, setLoading, setPagination, setResults, setRunStatus, setStats, showToast]);
 
   useEffect(() => {
-    setPartner(PARTNER);
-    setDate(DATE);
-    void loadPage(PARTNER, DATE);
-  }, [loadPage, setDate, setPartner]);
-
-  useEffect(() => {
-    if (!partner || !date) return;
-    if (partner === PARTNER && date === DATE) return;
-    void loadPage(partner, date);
-  }, [date, loadPage, partner]);
+    let isSubscribed = true;
+    if (!partner || !date) {
+      setPartner(PARTNER);
+      setDate(DATE);
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (isSubscribed) {
+        void loadPage(partner, date);
+      }
+    }, 0);
+    return () => {
+      isSubscribed = false;
+      clearTimeout(timer);
+    };
+  }, [date, loadPage, partner, setDate, setPartner]);
 
   // Load results dynamically when filters change
   useEffect(() => {
@@ -368,14 +374,14 @@ export default function ReconciliationPage() {
           statusesToFetch = ["MISSING_PARTNER", "MISSING_INTERNAL"];
         }
 
-        let rawResults: any[] = [];
+        let rawResults: ReconciliationRow[] = [];
 
         if (statusesToFetch.length > 0) {
           const fetchPromises = statusesToFetch.map(status => 
             api.getResults(partner, date, { status, limit: 250 }).catch(() => ({ results: [] }))
           );
           const resultsResponses = await Promise.all(fetchPromises);
-          rawResults = resultsResponses.flatMap(res => res.results ?? []);
+          rawResults = resultsResponses.flatMap(res => (res.results as ReconciliationRow[]) ?? []);
         } else {
           // Default / "All" tab: Load errors first, then matched records
           const [amtMismatchRes, statusMismatchRes, missingPartnerRes, missingInternalRes, matchedRes] = await Promise.all([
@@ -386,18 +392,18 @@ export default function ReconciliationPage() {
             api.getResults(partner, date, { status: "MATCHED", limit: 250 }).catch(() => ({ results: [] })),
           ]);
           rawResults = [
-            ...(amtMismatchRes.results ?? []),
-            ...(statusMismatchRes.results ?? []),
-            ...(missingPartnerRes.results ?? []),
-            ...(missingInternalRes.results ?? []),
-            ...(matchedRes.results ?? [])
+            ...((amtMismatchRes.results as ReconciliationRow[]) ?? []),
+            ...((statusMismatchRes.results as ReconciliationRow[]) ?? []),
+            ...((missingPartnerRes.results as ReconciliationRow[]) ?? []),
+            ...((missingInternalRes.results as ReconciliationRow[]) ?? []),
+            ...((matchedRes.results as ReconciliationRow[]) ?? [])
           ];
         }
         
         const reviewRecordsRes = await api.getReviewRecords(partner, date).catch(() => ({ records: [] }));
-        const reviewMap = new Map((reviewRecordsRes.records ?? []).map((r: any) => [r.recordKey, r as ReviewRecord]));
+        const reviewMap = new Map(((reviewRecordsRes.records as ReviewRecord[]) ?? []).map((r) => [r.recordKey, r]));
         
-        const mappedResults = rawResults.map((r: any) => {
+        const mappedResults = rawResults.map((r: ReconciliationRow) => {
           const id = r.partnerTxnId || r.internalTxnId || r.id;
           return {
             ...r,
@@ -453,7 +459,7 @@ export default function ReconciliationPage() {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [partner, date, store.runStatus?.status, setRunStatus, loadPage]);
+  }, [partner, date, store.runStatus, setRunStatus, loadPage]);
 
   const filteredRows = useMemo(() => {
     let items = results;

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Topbar } from "@/components/layout/topbar";
 import { PageSection } from "@/components/ui/page-section";
 import { Panel } from "@/components/ui/panel";
@@ -23,11 +23,7 @@ export default function MappingStudioPage() {
   const reviewFileRef = useRef<HTMLInputElement>(null);
   const { showToast } = useToast();
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const [mappingsRes] = await Promise.all([
@@ -51,7 +47,14 @@ export default function MappingStudioPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [showToast]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadData();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [loadData]);
 
   const approvedConfigs = configs.filter((c) => c.status === "APPROVED");
 

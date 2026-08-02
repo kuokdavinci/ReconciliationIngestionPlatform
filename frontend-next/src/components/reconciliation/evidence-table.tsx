@@ -18,7 +18,7 @@ interface Props {
   onSelectRow: (id: string) => void;
   onToggleCheck: (id: string) => void;
   onSetVisibleSelection: (rows: ReconciliationRow[], selected: boolean) => void;
-  onSelectEvidence: (id: string) => void;
+  onSelectEvidence?: (id: string) => void;
 }
 
 export function EvidenceTable({
@@ -34,7 +34,6 @@ export function EvidenceTable({
   onSelectRow,
   onToggleCheck,
   onSetVisibleSelection,
-  onSelectEvidence,
 }: Props) {
   const selectableRows = rows.filter((r) => r.reconciliationStatus !== "MATCHED");
   const allVisibleSelected = selectableRows.length > 0 && selectableRows.every(

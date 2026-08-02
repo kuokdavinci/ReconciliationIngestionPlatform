@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import type { ReviewRecord } from "@/types/reconciliation";
 import * as api from "@/lib/api/reconciliation";
 import { useToast } from "@/components/ui/toast";
 import dialogStyles from "@/components/ui/dialog.module.css";
@@ -15,7 +16,7 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onRefresh: () => void;
-  onLocalBatchUpdate?: (recordKeys: string[], updatedRecords: Record<string, any>) => void;
+  onLocalBatchUpdate?: (recordKeys: string[], updatedRecords: Record<string, ReviewRecord>) => void;
   actionType: "APPROVE" | "FLAG";
 }
 
@@ -39,7 +40,7 @@ export function BatchReviewDialog({
     setIsSubmitting(true);
     let successCount = 0;
     let failCount = 0;
-    const updatedRecords: Record<string, any> = {};
+    const updatedRecords: Record<string, ReviewRecord> = {};
 
     try {
       for (const id of selectedIds) {
@@ -65,7 +66,7 @@ export function BatchReviewDialog({
             });
           }
           if (response && response.record) {
-            updatedRecords[id] = response.record;
+            updatedRecords[id] = response.record as unknown as ReviewRecord;
           }
           successCount++;
         } catch {

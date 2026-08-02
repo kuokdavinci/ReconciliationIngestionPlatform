@@ -45,7 +45,7 @@ export default function AuditLogPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     queueMicrotask(() => {

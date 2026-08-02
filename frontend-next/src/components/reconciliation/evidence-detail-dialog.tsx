@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { ReconciliationRow } from "@/types/reconciliation";
+import type { ReconciliationRow, ReviewRecord } from "@/types/reconciliation";
 import * as api from "@/lib/api/reconciliation";
 import { useToast } from "@/components/ui/toast";
 import dialogStyles from "@/components/ui/dialog.module.css";
@@ -15,7 +15,7 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onRefresh: () => void;
-  onLocalUpdate?: (recordKey: string, updatedRecord: any) => void;
+  onLocalUpdate?: (recordKey: string, updatedRecord: ReviewRecord) => void;
 }
 
 export function EvidenceDetailDialog({ row, partner, date, open, onClose, onRefresh, onLocalUpdate }: Props) {
@@ -45,7 +45,7 @@ export function EvidenceDetailDialog({ row, partner, date, open, onClose, onRefr
       showToast("Feedback note added.", "success");
       setNoteText("");
       if (response && response.record && onLocalUpdate) {
-        onLocalUpdate(traceId, response.record);
+        onLocalUpdate(traceId, response.record as unknown as ReviewRecord);
       } else {
         onRefresh();
       }
@@ -69,7 +69,7 @@ export function EvidenceDetailDialog({ row, partner, date, open, onClose, onRefr
       showToast(`Record marked resolved: ${status}`, "success");
       setNoteText("");
       if (response && response.record && onLocalUpdate) {
-        onLocalUpdate(traceId, response.record);
+        onLocalUpdate(traceId, response.record as unknown as ReviewRecord);
       } else {
         onRefresh();
       }
@@ -93,7 +93,7 @@ export function EvidenceDetailDialog({ row, partner, date, open, onClose, onRefr
       showToast("Record marked as reviewed.", "success");
       setNoteText("");
       if (response && response.record && onLocalUpdate) {
-        onLocalUpdate(traceId, response.record);
+        onLocalUpdate(traceId, response.record as unknown as ReviewRecord);
       } else {
         onRefresh();
       }

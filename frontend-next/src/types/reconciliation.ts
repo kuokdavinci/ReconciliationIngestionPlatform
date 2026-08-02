@@ -49,7 +49,6 @@ export interface ReconciliationRow {
   delta?: number;
   severity?: string;
   reviewState?: ReviewRecord | null;
-  [key: string]: any;
 }
 
 export interface InsightItem {

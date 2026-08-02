@@ -1,9 +1,7 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import type {
   MappingConstraint,
   ReviewPacket,
   ReviewScopeRecommendation,
-  RuntimeFieldTrace,
   RuntimeTraceSample,
   RuntimeValidationFieldResult,
   RuntimeValidationPreviewRow,
@@ -246,7 +244,7 @@ export function normalizePacket(packet: Record<string, unknown>): ReviewPacket {
         }
       : undefined,
     validationGates,
-    structureSignature: packet.structureSignature as any,
+    structureSignature: packet.structureSignature as ReviewPacket["structureSignature"],
     riskSummary: packet.riskSummary
       ? {
           severity: String((packet.riskSummary as Record<string, unknown>).severity || "medium"),

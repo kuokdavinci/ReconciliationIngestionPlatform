@@ -1,8 +1,6 @@
 name: Backend Quality
 
 on:
-  push:
-    branches: [main, "feature/*", "phase2/**"]
   pull_request:
     branches: [main]
   workflow_dispatch:

@@ -1,4 +1,4 @@
-"""Regression tests for `scratch/seed_momo_e2e.py`.
+"""Regression tests for `scripts/demo/sprint1/seed_momo_e2e.py`.
 
 Locks the scope semantics from `src/reconciliation/engine.py:117-163` into
 the canonical seed script so that future refactors of either the seed
@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import openpyxl
 
-from scripts.seeding.seed_momo_e2e import (
+from scripts.demo.sprint1.seed_momo_e2e import (
     MISSING_PARTNER_KEY,
     WAVE1_KEYS,
     WAVE2_KEYS,

@@ -5,7 +5,7 @@ Creates:
 - a weird-format ZaloPay data file that should trigger stale/AI detection
 
 Usage:
-    uv run python scripts/seed_zalopay_ai_test.py
+    uv run python scripts/demo/scenarios/seed_zalopay_ai_test.py
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from motor.motor_asyncio import AsyncIOMotorClient
 

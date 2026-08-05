@@ -25,7 +25,7 @@ Incremental recovery, quarantine dữ liệu lỗi và observability thuộc cá
 | Claim | `src/models/reconciliation_file.py`, `src/models/indexes.py` | Cơ chế atomic create-or-get cho file/fetch-unit. |
 | Pipeline | `src/pipeline/ingestion_pipeline.py`, `src/core/types.py` | Suy ra key, xử lý replay và thống kê chi tiết. |
 | Runtime | `src/fetchers/*`, `src/scheduler/jobs.py`, `src/api/automation.py` | Truyền metadata idempotency và công bố duplicate outcome. |
-| E2E | `scripts/seeding/seed_momo_e2e.py`, `tests/test_sprint1_eval_benchmark.py` | Helper seed và bộ đánh giá Sprint 1. |
+| E2E | `scripts/demo/sprint1/seed_momo_e2e.py`, `tests/test_sprint1_eval_benchmark.py` | Helper seed và bộ đánh giá Sprint 1. |
 
 ## Hợp đồng idempotency
 
@@ -64,7 +64,7 @@ make momo-e2e-run
 Để chuẩn bị riêng kịch bản trùng một phần:
 
 ```bash
-PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py phase2_duplicate
+PYTHONPATH=. python scripts/demo/sprint1/seed_momo_e2e.py phase2_duplicate
 ```
 
 File thứ hai gồm 20 dòng cũ và 10 dòng mới. Kết quả kỳ vọng là insert 10 dòng, bỏ qua 20 dòng duplicate và không tạo transaction trùng. Các lệnh này xóa dữ liệu demo theo partner, chỉ chạy trên môi trường test/demo.

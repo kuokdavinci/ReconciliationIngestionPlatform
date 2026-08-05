@@ -4,7 +4,7 @@ Inserts reconciliation_result documents directly into MongoDB so the
 dashboard and AI insights show a healthy state (mismatch rate < 2%).
 
 Usage:
-    uv run python seed_happy.py
+    uv run python scripts/demo/scenarios/seed_happy.py
 """
 
 import asyncio

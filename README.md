@@ -220,7 +220,7 @@ See [`.env.example`](.env.example) and [src/config/settings.py](src/config/setti
 ```text
 src/                 Python application modules
 frontend-next/       Next.js dashboard
-scripts/              Seed, benchmark and utility scripts
+scripts/              Demo, seed, benchmark and utility scripts
 tests/               Unit, integration and E2E tests
 docs/                Architecture, sprint and operational docs
 alembic/             PostgreSQL migrations

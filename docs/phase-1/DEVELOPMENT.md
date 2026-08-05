@@ -226,25 +226,23 @@ Chi tiết: `docs/performance/INGEST_RECON_TRACE.md`
 
 ## E2E Testing với Seed Scripts
 
-Scripts trong `scratch/` và `scripts/seeding/` dùng để tạo dữ liệu mẫu:
+Demo seed scripts trong `scripts/demo/` dùng để tạo dữ liệu mẫu:
 
 ```bash
 # Reset và seed MOMO E2E data (Phase 1)
-PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py reset
+PYTHONPATH=. python scripts/demo/sprint1/seed_momo_e2e.py reset
 
 # Seed Phase 2
-PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py phase2
+PYTHONPATH=. python scripts/demo/sprint1/seed_momo_e2e.py phase2
 
 # Demo trường hợp missing partner
-PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py missing_partner_demo
+PYTHONPATH=. python scripts/demo/sprint1/seed_momo_e2e.py missing_partner_demo
 
 # ZALOPAY 100k records
 PYTHONPATH=. uv run python scripts/seeding/seed_zalopay_100k.py reset
 
-# Quick helpers trong scratch/
-uv run python scratch/seed_momo_green.py
-uv run python scratch/register_vnpay_job.py
-uv run python scratch/check_db.py
+# Quick helpers
+uv run python scripts/tools/generate_test_data.py --help
 ```
 
 Hoặc dùng Makefile shortcuts:
@@ -265,9 +263,9 @@ make zalopay-e2e-reset
 | `tests/` | Automated tests (pytest) |
 | `docs/` | Project documentation |
 | `docker/` | Docker support files |
-| `scripts/` | Utility scripts và benchmark tools |
-| `scripts/seeding/` | Seed data generators cho E2E tests |
-| `scratch/` | Scripts ad-hoc, thử nghiệm nhanh |
+| `scripts/` | Demo, seed, benchmark và utility scripts |
+| `scripts/demo/` | Demo fixtures, evaluation và scenario seed scripts |
+| `scripts/seeding/` | Seed dữ liệu nền và benchmark fixtures |
 | `tasks/` | Báo cáo đánh giá (eval.md, REPORT.md) |
 | `reports/` | Báo cáo xuất (daily/) |
 | `mock_data/` | Dữ liệu mẫu cho testing |

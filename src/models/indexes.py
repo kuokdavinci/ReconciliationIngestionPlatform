@@ -1,7 +1,7 @@
 """MongoDB index definitions for all collections.
 
-Per requirement.md section 11 (index recommendations) and section 10
-(duplicate prevention via fileHash unique index).
+Index recommendations follow the Phase 1 persistence and data-flow docs;
+duplicate prevention is enforced through the fileHash unique index.
 """
 
 from motor.motor_asyncio import AsyncIOMotorDatabase

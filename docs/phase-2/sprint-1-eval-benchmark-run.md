@@ -1,20 +1,20 @@
 # Báo cáo Benchmark và Đánh giá Sprint 1 (Idempotency và Ngăn ngừa Trùng lặp)
 
 > **Môi trường thử nghiệm**: PostgreSQL transaction store thật (`reconciliation_test`) và MongoDB metadata store thật
-> **Thời điểm thực thi**: 2026-08-01 13:35:48 UTC
-> **Kết quả tổng quan**: ✅ **PASS (100%)** (13/13 kịch bản PASS)
+> **Thời điểm thực thi**: 2026-08-04 04:18:39 UTC  
+> **Kết quả đánh giá tổng quan**: ✅ **PASS (100%)** (13/13 kịch bản PASS)
 
 ---
 
 ## 🎯 1. Mục tiêu đánh giá và tiêu chí nghiệm thu Sprint 1
 
-Báo cáo này đo lường và xác nhận các cơ chế thuộc **Sprint 1 (Idempotency và Ngăn ngừa Trùng lặp)** hoạt động chính xác trên môi trường thực tế:
-1. **Schema PostgreSQL và Unique Constraint**: Cột `ingestion_key` duy nhất theo `(identify, ingestion_key)` và NOT NULL.
-2. **File Replay và Fetch-unit Claim**: Chống nộp trùng file bằng SHA-256 và chống replay fetch-unit API.
-3. **Ghi Batch với ON CONFLICT**: Ghi conflict-safe trên database thật mà không làm job crash.
-4. **Cô lập dữ liệu và Duplicate Invariant**: Không có nhóm record trùng, phân biệt `file_duplicate`, `transaction_duplicate`, `batch_conflict`.
-5. **Cô lập storage**: Đưa transaction vào PostgreSQL, không fallback transaction sang MongoDB.
-6. **Độ bền và Key Deterministic**: Suy ra key ổn định, từ chối payload thiếu định danh và đảm bảo migration an toàn.
+Báo cáo này đo lường và xác nhận các cơ chế thuộc **Sprint 1 (Idempotency và Ngăn ngừa Trùng lặp)** hoạt động chính xác trên môi trường thực tế, đáp ứng đầy đủ các tiêu chí nghiệm thu:
+1. **PostgreSQL Schema & Unique Constraint**: Cột `ingestion_key` duy nhất theo `(identify, ingestion_key)` và NOT NULL.
+2. **File Replay & Fetch-Unit Claim Protection**: Chống nộp trùng file (Hash SHA256) và trùng Fetch-Unit API.
+3. **ON CONFLICT Batch Insertion**: Xử lý chèn dữ liệu conflict-safe tại DB thật mà không crash job.
+4. **Data Isolation & Duplicate Invariant**: Đảm bảo 0 nhóm ghi trùng dòng, phân định rõ ràng lỗi `file_duplicate`, `transaction_duplicate`, `batch_conflict`.
+5. **Architectural Isolation**: Đưa 100% dữ liệu transaction về PostgreSQL, loại bỏ hoàn toàn fallback Mongo cho data container.
+6. **Robustness & Deterministic Key Derivation**: Tính toán key định danh ổn định, từ chối payload thiếu thông tin định danh và đảm bảo migration an toàn.
 
 ---
 
@@ -46,19 +46,19 @@ Bảng dưới đây tổng hợp kết quả đo đạc thực tế sau khi ch�
 
 | Mã kịch bản | Tên kịch bản | Kết quả kỳ vọng | Kết quả thực tế | Trạng thái | Thời gian phản hồi |
 |---|---|---|---|---|---|
-| `SCENARIO-00` | **Hợp Đồng Schema PostgreSQL** | `Cột ingestion_key là NOT NULL và Unique Constraint tồn tại` | `is_nullable=NO, constraint_exists=True` | ✅ PASS | 8.39 ms |
-| `SCENARIO-01` | **Nạp File Ban Đầu (100 Dòng)** | `Đã chèn: 100, Trùng lặp: 0, Thất bại: 0, Trạng thái File: COMPLETED` | `Đã chèn: 100, Trùng lặp: 0, Thất bại: 0, Trạng thái File: COMPLETED` | ✅ PASS | 47.49 ms |
-| `SCENARIO-02` | **Chống Nộp Trùng File (File Replay)** | `Tổng số dòng: 0, Mã lỗi: file_duplicate, Số dòng DB giữ nguyên: 100` | `Tổng số dòng: 0, Mã lỗi: file_duplicate, Số dòng DB giữ nguyên: 100` | ✅ PASS | 0.68 ms |
-| `SCENARIO-03` | **Batch Trùng Một Phần (ON CONFLICT)** | `Đã chèn: 50, Trùng lặp: 50, Thất bại: 0, Tổng bản ghi DB: 150` | `Đã chèn: 50, Trùng lặp: 50, Thất bại: 0, Tổng bản ghi DB: 150` | ✅ PASS | 57.08 ms |
-| `SCENARIO-04` | **Batch Trùng 100% (File Tên Khác)** | `Đã chèn: 0, Trùng lặp: 100, Thất bại: 0, Tổng bản ghi DB: 150` | `Đã chèn: 0, Trùng lặp: 100, Thất bại: 0, Tổng bản ghi DB: 150` | ✅ PASS | 43.72 ms |
-| `SCENARIO-05` | **Giao Dịch Khác Ingestion Key** | `Đã chèn: 2, Trùng lặp: 0, Tổng bản ghi DB: 152` | `Đã chèn: 2, Trùng lặp: 0, Tổng bản ghi DB: 152` | ✅ PASS | 5.0 ms |
-| `SCENARIO-06` | **Bất Biến Trùng Lặp Database** | `Số nhóm trùng lặp identity (identify, ingestion_key): 0` | `Số nhóm trùng lặp identity: 0` | ✅ PASS | 1.54 ms |
-| `SCENARIO-09` | **Từ Chối Khi Thiếu Ingestion Key** | `Báo lỗi ValueError; Không sinh key ngẫu nhiên` | `Đã từ chối: không thể suy ra ingestion_key từ payload giao dịch` | ✅ PASS | 0.01 ms |
-| `SCENARIO-10` | **Hợp Đồng Kế Toán Lỗi Không Trùng** | `Ghi nhận chính xác failed_rows và mã lỗi batch_conflict` | `failed_rows=True, batch_conflict=True` | ✅ PASS | 0.23 ms |
+| `SCENARIO-00` | **Hợp Đồng Schema PostgreSQL** | `Cột ingestion_key là NOT NULL và Unique Constraint tồn tại` | `is_nullable=NO, constraint_exists=True` | ✅ PASS | 7.84 ms |
+| `SCENARIO-01` | **Nạp File Ban Đầu (100 Dòng)** | `Đã chèn: 100, Trùng lặp: 0, Thất bại: 0, Trạng thái File: COMPLETED` | `Đã chèn: 100, Trùng lặp: 0, Thất bại: 0, Trạng thái File: COMPLETED` | ✅ PASS | 44.18 ms |
+| `SCENARIO-02` | **Chống Nộp Trùng File (File Replay)** | `Tổng số dòng: 0, Mã lỗi: file_duplicate, Số dòng DB giữ nguyên: 100` | `Tổng số dòng: 0, Mã lỗi: file_duplicate, Số dòng DB giữ nguyên: 100` | ✅ PASS | 0.54 ms |
+| `SCENARIO-03` | **Batch Trùng Một Phần (ON CONFLICT)** | `Đã chèn: 50, Trùng lặp: 50, Thất bại: 0, Tổng bản ghi DB: 150` | `Đã chèn: 50, Trùng lặp: 50, Thất bại: 0, Tổng bản ghi DB: 150` | ✅ PASS | 52.61 ms |
+| `SCENARIO-04` | **Batch Trùng 100% (File Tên Khác)** | `Đã chèn: 0, Trùng lặp: 100, Thất bại: 0, Tổng bản ghi DB: 150` | `Đã chèn: 0, Trùng lặp: 100, Thất bại: 0, Tổng bản ghi DB: 150` | ✅ PASS | 43.09 ms |
+| `SCENARIO-05` | **Giao Dịch Khác Ingestion Key** | `Đã chèn: 2, Trùng lặp: 0, Tổng bản ghi DB: 152` | `Đã chèn: 2, Trùng lặp: 0, Tổng bản ghi DB: 152` | ✅ PASS | 4.19 ms |
+| `SCENARIO-06` | **Bất Biến Trùng Lặp Database** | `Số nhóm trùng lặp identity (identify, ingestion_key): 0` | `Số nhóm trùng lặp identity: 0` | ✅ PASS | 1.66 ms |
+| `SCENARIO-09` | **Từ Chối Khi Thiếu Ingestion Key** | `Báo lỗi ValueError; Không sinh key ngẫu nhiên` | `Unable to derive ingestion_key from transaction payload` | ✅ PASS | 0.01 ms |
+| `SCENARIO-10` | **Hợp Đồng Kế Toán Lỗi Non-Duplicate** | `Ghi nhận chính xác failed_rows và mã lỗi batch_conflict` | `failed_rows=True, batch_conflict=True` | ✅ PASS | 0.24 ms |
 | `SCENARIO-11` | **An Toàn Migration Data Lịch Sử** | `Kịch bản SCENARIO-00 và SCENARIO-06 đều PASS` | `Kiểm tra schema và bất biến trùng lặp hoàn tất thành công` | ✅ PASS | 0 ms |
-| `SCENARIO-12` | **Lưu Trữ Transaction Thuần PostgreSQL** | `Không dùng fallback collection Mongo cho dữ liệu giao dịch` | `postgres_only=True` | ✅ PASS | 0.39 ms |
-| `SCENARIO-07` | **Tranh Chấp Claim File Đồng Thời** | `Chính xác 1 claim thành công (created=1) và 1 bị từ chối trùng lặp` | `Số worker tạo thành công=1, Kết quả outcomes=[True, False]` | ✅ PASS | 6.25 ms |
-| `SCENARIO-08` | **Chống Nộp Trùng Fetch-Unit API** | `Lần 1 tạo thành công; Lần nộp lại trả về bản ghi fetch-unit đã tồn tại` | `first_created=True, replay_created=False, canonical_file_hash=benchmark-fetch-a-ca64a6f920b04f03b8301a207ffe432d` | ✅ PASS | 3.97 ms |
+| `SCENARIO-12` | **Lưu Trữ Transaction Thuần PostgreSQL** | `Không dùng fallback collection Mongo cho dữ liệu giao dịch` | `postgres_only=True` | ✅ PASS | 0.43 ms |
+| `SCENARIO-07` | **Tranh Chấp Claim File Đồng Thời** | `Chính xác 1 claim thành công (created=1) và 1 bị từ chối trùng lặp` | `Số worker tạo thành công=1, Kết quả outcomes=[True, False]` | ✅ PASS | 5.99 ms |
+| `SCENARIO-08` | **Chống Nộp Trùng Fetch-Unit API** | `Lần 1 tạo thành công; Lần nộp lại trả về bản ghi fetch-unit đã tồn tại` | `first_created=True, replay_created=False, canonical_file_hash=benchmark-fetch-a-0897c69acc9d48b990b89f57236bbfac` | ✅ PASS | 3.83 ms |
 
 ---
 

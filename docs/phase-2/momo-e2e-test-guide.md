@@ -14,7 +14,7 @@ That means a "green" scenario must never preload unrelated finalized internal ro
 
 ## Quick Start
 
-The canonical seed script is [`scratch/seed_momo_e2e.py`](/home/kuokdavinci/AdapterService/scratch/seed_momo_e2e.py). Do **not** use the legacy `seed_momo_scheduler_green.py`.
+The canonical seed script is [`scripts/demo/sprint1/seed_momo_e2e.py`](../../scripts/demo/sprint1/seed_momo_e2e.py). Do **not** use the legacy `seed_momo_scheduler_green.py`.
 
 ### Happy path — exact retry steps
 
@@ -243,7 +243,7 @@ Expected:
 
 Canonical script:
 
-* [scratch/seed_momo_e2e.py](/home/kuokdavinci/AdapterService/scratch/seed_momo_e2e.py)
+* [scripts/demo/sprint1/seed_momo_e2e.py](../../scripts/demo/sprint1/seed_momo_e2e.py)
 
 This is the single source of truth for MOMO E2E seed data. It supports three explicit modes:
 
@@ -255,9 +255,7 @@ The corresponding `make` targets (`momo-e2e-reset`, `momo-e2e-phase2`, `momo-e2e
 
 ### Legacy script — do not use
 
-* [scratch/seed_momo_scheduler_green.py](/home/kuokdavinci/AdapterService/scratch/seed_momo_scheduler_green.py) (legacy script — preloads 40 internal rows against a 19-row file, produces false `MISSING_PARTNER`; do not use for the current flow)
-
-It is kept on disk for historical reference only. If you are debugging a stale E2E fixture and find a `make momo-e2e-seed` target or a `seed_momo_scheduler_green.py` invocation, it is leftover from the old plan and should be replaced with the canonical script above.
+The former `seed_momo_scheduler_green.py` flow is removed. If a stale E2E fixture still references it, replace that invocation with the canonical script above.
 
 ---
 

@@ -35,22 +35,22 @@ ci:
 
 # ── MOMO E2E shortcuts ────────────────────────────────────────────
 momo-e2e-reset:
-	PYTHONPATH=. uv run python scripts/seeding/seed_momo_e2e.py reset --file-dir mock_data
+	PYTHONPATH=. uv run python scripts/demo/sprint1/seed_momo_e2e.py reset --file-dir mock_data
 
 momo-e2e-phase2:
-	PYTHONPATH=. uv run python scripts/seeding/seed_momo_e2e.py phase2_duplicate --file-dir mock_data
+	PYTHONPATH=. uv run python scripts/demo/sprint1/seed_momo_e2e.py phase2_duplicate --file-dir mock_data
 
 momo-e2e-phase2-full:
-	PYTHONPATH=. uv run python scripts/seeding/seed_momo_e2e.py phase2 --file-dir mock_data
+	PYTHONPATH=. uv run python scripts/demo/sprint1/seed_momo_e2e.py phase2 --file-dir mock_data
 
 momo-e2e-missing-partner-demo:
-	PYTHONPATH=. uv run python scripts/seeding/seed_momo_e2e.py missing_partner_demo --file-dir mock_data
+	PYTHONPATH=. uv run python scripts/demo/sprint1/seed_momo_e2e.py missing_partner_demo --file-dir mock_data
 
 momo-sprint6-setup:
-	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py sprint6-setup
+	PYTHONPATH=. python scripts/demo/sprint1/seed_momo_e2e.py sprint6-setup
 
 momo-sprint6-wave2:
-	PYTHONPATH=. python scripts/seeding/seed_momo_e2e.py sprint6-wave2
+	PYTHONPATH=. python scripts/demo/sprint1/seed_momo_e2e.py sprint6-wave2
 
 momo-e2e-run:
 	curl -s -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .

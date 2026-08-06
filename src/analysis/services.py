@@ -233,7 +233,7 @@ def parse_structured_insight(
 # format_findings — formats AnalysisResult list into short strings
 # ---------------------------------------------------------------------------
 
-def format_findings(analysis_results: list[AnalysisResult]) -> list[str]:
+def format_findings(analysis_results: list[AnalysisResult] | None) -> list[str]:
     """Format AnalysisResult list into short string findings.
 
     Used by the summary endpoint to present key findings concisely.

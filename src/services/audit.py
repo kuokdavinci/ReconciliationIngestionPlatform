@@ -2,7 +2,8 @@
 
 from typing import Any, Optional
 
-from src.models.audit_event import AuditEvent, AuditEventRepository
+from src.domain.audit.models import AuditEvent
+from src.infrastructure.audit.repository import AuditEventRepository
 
 
 async def record_audit_event(

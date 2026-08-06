@@ -7,9 +7,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from bson import Decimal128
 
 from src.api.response_utils import camelize
-from src.models.data_container import DataContainer, DataContainerRepository
-from src.models.reconciliation_file import ReconciliationFileRepository
-from src.models.reconciliation_result import ReconciliationResultRepository
+from src.domain.partner_transaction.models import DataContainer
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
+from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 
 logger = logging.getLogger(__name__)
 

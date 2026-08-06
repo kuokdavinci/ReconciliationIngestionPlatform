@@ -5,10 +5,11 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from src.models.copilot_action import CopilotActionRepository
-from src.models.mapping_config import MappingConfigRepository
-from src.models.reconciliation_file import ReconciliationFileRepository
-from src.models.review_packet import ReviewPacketRepository
+from src.infrastructure.review.repository import CopilotActionRepository
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+from src.infrastructure.ingestion.quarantine_repository import IngestionQuarantineRepository
+from src.infrastructure.review.repository import ReviewPacketRepository
 
 router = APIRouter(prefix="/api/v1/operations")
 
@@ -260,5 +261,48 @@ async def get_partner_intake(
         "partners": summaries,
         "selectedPartner": selected_partner,
         "detail": detail,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/ingestion")
+async def get_ingestion_operations(
+    request: Request,
+    partner: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """Return read-only file/stage health for backend operations tracing."""
+    db = _get_db(request)
+    limit_value = limit if isinstance(limit, int) else 50
+    file_repo = ReconciliationFileRepository(db)
+    quarantine_repo = IngestionQuarantineRepository(db)
+    query: dict = {}
+    if partner:
+        query["partner"] = partner
+    if status:
+        query["processingStatus"] = status
+
+    records = await file_repo.find_many(query)
+    records = sorted(
+        records,
+        key=lambda record: record.created_at,
+        reverse=True,
+    )[:limit_value]
+    pending_quarantine = await quarantine_repo.find_pending(
+        partner=partner,
+        limit=limit_value,
+    )
+    files = [_serialize_file(record) for record in records]
+    summary = {
+        "returnedFiles": len(files),
+        "completedFiles": sum(file.get("processingStatus") == "COMPLETED" for file in files),
+        "failedFiles": sum(file.get("processingStatus") == "FAILED" for file in files),
+        "pendingQuarantine": len(pending_quarantine),
+    }
+    return {
+        "files": files,
+        "pendingQuarantine": [record.model_dump(by_alias=True) for record in pending_quarantine],
+        "summary": summary,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
     }

@@ -1,6 +1,9 @@
 import pytest
 from decimal import Decimal
+from datetime import datetime, timezone
 from src.models.reconciliation_result import ReconciliationResult, ReconciliationResultRepository
+from src.models.internal_transaction import InternalTransaction, InternalTransactionRepository
+from src.core.enums import TransactionStatus
 from src.core.enums import ReconciliationStatus
 from src.models.postgres import ReconciliationResultTable
 
@@ -116,3 +119,26 @@ async def test_postgres_repository_filters_dict_and_list(setup_postgres_test_db)
     )
     assert amounts["total_partner_amount"] == Decimal("3000.0")
     assert amounts["total_internal_amount"] == Decimal("2500.0")
+
+
+@pytest.mark.asyncio
+async def test_internal_transaction_repository_is_postgres_source_of_truth(setup_postgres_test_db):
+    repository = InternalTransactionRepository()
+    partner = "STEP3_TEST"
+    transaction_id = "STEP3_TXN_001"
+    transaction = InternalTransaction(
+        _id="STEP3_INTERNAL_001",
+        partner=partner,
+        partnerTxnId=transaction_id,
+        amount=Decimal("125000"),
+        currency="VND",
+        status=TransactionStatus.SUCCESS,
+        transactionTime=datetime.now(timezone.utc),
+    )
+
+    await repository.delete_by_partner(partner)
+    try:
+        assert await repository.insert_many([transaction]) == 1
+        assert await repository.find_existing_partner_txn_ids(partner, [transaction_id]) == {transaction_id}
+    finally:
+        assert await repository.delete_by_partner_and_txn_id(partner, transaction_id) == 1

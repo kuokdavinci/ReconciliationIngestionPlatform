@@ -23,8 +23,10 @@ npm install
 npm run dev
 
 # Build for production
-npm run build
+npm run build -- --webpack
 ```
+
+`next build` defaults to Turbopack in the current Next.js version. Use `--webpack` for the verified production-build path in this repository; the default Turbopack build may hang during optimized compilation.
 
 The dev server runs on `http://localhost:3000` and proxies `/api/*` requests to `http://localhost:8000` (configured in `next.config.ts`).
 

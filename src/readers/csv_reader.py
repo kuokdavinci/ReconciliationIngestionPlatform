@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Self, TextIO
 
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 
 VALID_EXTENSIONS = {".csv", ".tsv"}
 

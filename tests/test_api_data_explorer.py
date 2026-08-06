@@ -39,16 +39,21 @@ class _AsyncCursor:
 
 class TestListTransactions:
     def test_missing_partner_and_date_returns_200(self):
-        app, mock_db, _ = _create_test_app()
-        mock_cursor = _AsyncCursor([])
-        mock_db.__getitem__.return_value.find = MagicMock(return_value=mock_cursor)
+        app, _, _ = _create_test_app()
+        mock_find_many = AsyncMock(return_value=[])
 
-        client = TestClient(app)
-        response = client.get("/api/v1/data/transactions")
+        with patch(
+            "src.api.data_explorer.DataContainerRepository.find_many",
+            mock_find_many,
+        ):
+            client = TestClient(app)
+            response = client.get("/api/v1/data/transactions")
+
         assert response.status_code == 200
         data = response.json()
         assert "transactions" in data
         assert data["total"] == 0
+        mock_find_many.assert_awaited_once_with({})
 
     def test_with_partner_filter(self):
         app, mock_db, _ = _create_test_app()

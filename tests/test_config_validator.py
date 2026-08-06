@@ -11,11 +11,11 @@ def _make_config(field_mappings: list[FieldMapping], version: str | None = None)
     """Helper to create a MappingConfig with given field mappings."""
     return MappingConfig(
         partner="MOMO",
-        workflow_type="UPC",
-        file_type=FileType.SETTLEMENT,
-        sheet_name="Sheet1",
-        field_mappings=field_mappings,
-        config_version=version,
+        workflowType="UPC",
+        fileType=FileType.SETTLEMENT,
+        sheetName="Sheet1",
+        fieldMappings=field_mappings,
+        configVersion=version,
     )
 
 

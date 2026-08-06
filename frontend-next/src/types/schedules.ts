@@ -10,8 +10,21 @@ export interface ScheduleJob {
   duplicateMessage?: string | null;
   hasPendingFile?: boolean;
   pendingReviewPackets?: number;
-  latestRuntimeRun?: { date?: string; stats?: Record<string, unknown>; message?: string };
+  latestRuntimeRun?: RuntimeRunSummary | null;
+  activeRuntimeRun?: RuntimeRunSummary | null;
   recentPackets?: RecentPacket[];
+}
+
+export interface RuntimeRunSummary {
+  id?: string;
+  partner?: string;
+  date?: string;
+  status?: string;
+  message?: string;
+  stats?: Record<string, unknown>;
+  reconciliationCount?: number | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 }
 
 export interface RecentPacket {

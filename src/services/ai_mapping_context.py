@@ -2,7 +2,8 @@
 
 from typing import Optional
 from src.core.enums import FileType
-from src.models.mapping_config import MappingConfig, MappingConfigRepository
+from src.domain.mapping.models import MappingConfig
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
 
 async def resolve_ai_generation_context(db, packet, existing_draft: Optional[MappingConfig]) -> dict:
     """Resolve headers, sample rows, and parsing structures for the AI mapping config generator."""

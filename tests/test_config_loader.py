@@ -17,15 +17,15 @@ def _make_config(partner: str = "MOMO", version: str | None = "v1.0") -> Mapping
     """Helper to create a minimal valid MappingConfig for testing."""
     return MappingConfig(
         partner=partner,
-        workflow_type="UPC",
-        file_type=FileType.SETTLEMENT,
-        sheet_name="Sheet1",
-        field_mappings=[
+        workflowType="UPC",
+        fileType=FileType.SETTLEMENT,
+        sheetName="Sheet1",
+        fieldMappings=[
             FieldMapping(path="amount", column="D", type=FieldMappingType.DECIMAL, required=True),
             FieldMapping(path="currency", constant="VND", type=FieldMappingType.CONSTANT),
             FieldMapping(path="status", column="F", type=FieldMappingType.STRING),
         ],
-        config_version=version,
+        configVersion=version,
     )
 
 

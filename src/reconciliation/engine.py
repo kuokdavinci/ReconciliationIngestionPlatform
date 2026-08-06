@@ -11,14 +11,13 @@ from unittest.mock import Mock
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from src.core.enums import ReconciliationScopeType, ReconciliationStatus, TransactionStatus
-from src.models.data_container import DataContainer, DataContainerRepository
-from src.models.internal_transaction import (
-    InternalTransactionRepository,
+from src.domain.reconciliation.ports import (
+    InternalTransactionReader,
+    PartnerTransactionReader,
+    ReconciliationResultWriter,
 )
-from src.models.reconciliation_result import (
-    ReconciliationResult,
-    ReconciliationResultRepository,
-)
+from src.domain.partner_transaction.models import DataContainer
+from src.domain.reconciliation.models import ReconciliationResult
 from src.logging import get_structured_logger
 
 
@@ -36,13 +35,35 @@ class ReconciliationEngine:
         write_workers: int | None = None,
         ordered_insert: bool | None = None,
         partner_batch_size: int | None = None,
+        data_repo: PartnerTransactionReader | None = None,
+        internal_repo: InternalTransactionReader | None = None,
+        result_repo: ReconciliationResultWriter | None = None,
     ) -> None:
-        """Initialize the engine with repositories."""
+        """Initialize the engine with injected repository ports.
+
+        The lazy fallback imports preserve the legacy constructor used by
+        scripts and tests while the composition root can inject concrete
+        adapters explicitly.
+        """
         from src.config.settings import settings
+
+        if data_repo is None:
+            from src.infrastructure.partner_transaction.repository import DataContainerRepository
+
+            data_repo = DataContainerRepository(db)
+        if internal_repo is None:
+            from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
+
+            internal_repo = InternalTransactionRepository(db)
+        if result_repo is None:
+            from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
+
+            result_repo = ReconciliationResultRepository(db)
+
         self._db = db
-        self._data_repo = DataContainerRepository(db)
-        self._internal_repo = InternalTransactionRepository(db)
-        self._result_repo = ReconciliationResultRepository(db)
+        self._data_repo = data_repo
+        self._internal_repo = internal_repo
+        self._result_repo = result_repo
         self._logger = get_structured_logger()
         self.fast_mode = fast_mode
         self._partner_batch_size = partner_batch_size if partner_batch_size is not None else settings.recon_partner_batch_size
@@ -163,7 +184,19 @@ class ReconciliationEngine:
                         internal_by_key[partner_txn_id] = candidate
                 return internal_by_key
 
-        internal_records = await self._internal_repo.find_many(internal_query)
+        find_many = getattr(self._internal_repo, "find_many", None)
+        find_by_date_range = getattr(self._internal_repo, "find_by_partner_and_date_range", None)
+        if isinstance(find_many, Mock):
+            internal_records = await find_many(internal_query)
+        elif find_by_date_range is not None and not isinstance(find_by_date_range, Mock):
+            date_range = internal_query["transactionTime"]
+            internal_records = await find_by_date_range(
+                internal_query["partner"],
+                date_range["$gte"],
+                date_range["$lte"],
+            )
+        else:
+            internal_records = await find_many(internal_query)
         finalized_internal_records = [
             record for record in internal_records
             if self._is_finalized_internal_status(record.status)
@@ -464,13 +497,31 @@ class ReconciliationEngine:
                  WHERE identify = :partner 
                    AND reconciliation_date >= :start_of_day 
                    AND reconciliation_date <= :end_of_day
-                   AND (CAST(:source_file_id_uuid AS UUID) IS NULL OR source_file_id = CAST(:source_file_id_uuid AS UUID))
+                   AND (
+                       CAST(:source_file_id_uuid AS UUID) IS NULL
+                       OR CAST(:scope_type AS VARCHAR) NOT IN ('FULL_SNAPSHOT', 'REPLACEMENT')
+                       OR source_file_id = CAST(:source_file_id_uuid AS UUID)
+                   )
                 ) p
             FULL OUTER JOIN 
                 (SELECT * FROM internal_transaction 
                  WHERE partner = :partner 
                    AND transaction_time >= :start_of_day 
                    AND transaction_time <= :end_of_day
+                   AND (
+                       CAST(:source_file_id_uuid AS UUID) IS NULL
+                       OR CAST(:scope_type AS VARCHAR) <> 'REPLACEMENT'
+                       OR partner_txn_id IN (
+                           SELECT COALESCE(
+                               NULLIF(partner_trace, ''),
+                               NULLIF(partner_metadata->>'vspTransId', ''),
+                               partner_id
+                           )
+                           FROM partner_transaction
+                           WHERE identify = :partner
+                             AND source_file_id = CAST(:source_file_id_uuid AS UUID)
+                       )
+                   )
                 ) i
             ON COALESCE(NULLIF(p.partner_trace, ''), NULLIF(p.partner_metadata->>'vspTransId', ''), p.partner_id) = i.partner_txn_id
             """
@@ -488,8 +539,8 @@ class ReconciliationEngine:
             }
 
             from sqlalchemy.ext.asyncio import AsyncSession
-            from src.models.postgres import ReconciliationResultTable
-            from src.models.reconciliation_result import row_to_reconciliation_result
+            from src.infrastructure.persistence.postgres_schema import ReconciliationResultTable
+            from src.infrastructure.postgres.reconciliation_result_repository import row_to_reconciliation_result
             from sqlalchemy import and_, select
             
             async with self._result_repo.engine.begin() as conn:

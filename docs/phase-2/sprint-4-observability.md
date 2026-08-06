@@ -8,7 +8,7 @@ Xác định pipeline đang ở đâu, lỗi ở bước nào, số lượng và
 
 - `src/logging/logger.py` đã có event file/row và JSON formatter.
 - `src/models/partner_runtime_run.py`/`src/services/runtime_runs.py` đã có trạng thái unified cho scheduler, nhưng state hiện còn gắn với flow tiếp tục sang reconciliation.
-- `IngestionPipeline` có timing nội bộ và in `PERF_INGEST`, song metrics chưa được persist theo stage và không có checkpoint/attempt correlation đầy đủ.
+- `IngestionPipeline` có timing nội bộ và ghi `PERF_INGEST` qua logger; metrics chưa được persist theo stage và chưa có checkpoint/attempt correlation đầy đủ.
 - `src/scheduler/jobs.py` cập nhật runtime status nhưng chưa ghi stage-level counts/errors/fetch metadata thống nhất.
 
 ## Quyết định đề xuất
@@ -43,4 +43,3 @@ Không sửa `src/reconciliation/engine.py`, reconciliation API/result, `fronten
 - Partial failure không mang status `COMPLETED`.
 - Retry/duplicate/invalid/schema-change có integration hoặc E2E coverage.
 - Benchmark 100.000 records có số liệu stage-level và không làm thay đổi kết quả ingestion hiện tại.
-

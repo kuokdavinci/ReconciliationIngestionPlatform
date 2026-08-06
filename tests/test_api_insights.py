@@ -9,6 +9,7 @@ Uses FastAPI TestClient with mocked orchestration layer to verify:
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from src.analysis.schemas import AnalysisResult
@@ -51,11 +52,23 @@ class MockLLMProvider:
         self._should_fail = should_fail
         self.call_count = 0
 
-    async def generate(self, prompt: str, system_prompt: str = None) -> str:
+    async def generate(self, prompt: str, system_prompt: str | None = None) -> str:
         self.call_count += 1
         if self._should_fail:
             raise RuntimeError("LLM call failed")
         return self._response
+
+    @property
+    def model(self) -> str:
+        return "test-model"
+
+    @property
+    def provider_name(self) -> str:
+        return "test"
+
+    @property
+    def last_token_usage(self) -> dict[str, int] | None:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +391,7 @@ class TestValidationHelpers:
     def test_validate_date_rejects_invalid_format(self) -> None:
         from src.api.insights import _validate_date
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             _validate_date("07-07-2024")
 
         assert exc_info.value.status_code == 400
@@ -399,7 +412,7 @@ class TestValidationHelpers:
     def test_validate_partner_rejects_empty(self) -> None:
         from src.api.insights import _validate_partner
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             _validate_partner("")
 
         assert exc_info.value.status_code == 400
@@ -408,7 +421,7 @@ class TestValidationHelpers:
     def test_validate_partner_rejects_none(self) -> None:
         from src.api.insights import _validate_partner
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             _validate_partner(None)
 
         assert exc_info.value.status_code == 400

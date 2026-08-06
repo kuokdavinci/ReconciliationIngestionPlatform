@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # Ensure the project root is on sys.path so `src` can be imported
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.models.postgres import Base
+from src.infrastructure.persistence.postgres_schema import Base
 
 config = context.config
 if config.config_file_name is not None:

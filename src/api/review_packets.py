@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -12,15 +13,17 @@ from pydantic import BaseModel, Field
 from src.api.actor import require_actor
 from src.config.ai_generator import generate_config_from_samples
 from src.core.enums import FileType
-from src.models.mapping_config import MappingConfig, MappingConfigRepository, MappingConfigStatus
-from src.models.post_approval_run import PostApprovalRunRepository
-from src.models.review_packet import (
+from src.domain.mapping.models import MappingConfig, MappingConfigStatus
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
+from src.infrastructure.review.repository import PostApprovalRunRepository
+from src.domain.review.models import (
     ReviewPacket,
     ReviewDecisionMode,
-    ReviewPacketRepository,
     ReviewPacketSourceType,
     ReviewPacketStatus,
 )
+from src.infrastructure.review.repository import ReviewPacketRepository
 from src.services.mapping_contract import (
     canonicalize_field_mappings,
     serialize_field_mappings,
@@ -41,6 +44,7 @@ from src.services.runtime_validation import (
 
 
 router = APIRouter(prefix="/api/v1/review-packets")
+_SCOPE_LLM_TIMEOUT_SECONDS = 8.0
 
 
 def _normalized_filename_tokens(file_name: str) -> str:
@@ -187,6 +191,134 @@ def _apply_scope_guardrails(
         )
 
     return ai_probabilities, ai_scope, ai_reasoning, "llm"
+
+
+def _column_index(column: object) -> int | None:
+    """Convert a 1-based mapping column (number or Excel letters) to an index."""
+    if isinstance(column, int):
+        return column - 1 if column > 0 else None
+    if not isinstance(column, str):
+        return None
+    value = column.strip().upper()
+    if value.isdigit():
+        number = int(value)
+        return number - 1 if number > 0 else None
+    if not value.isalpha():
+        return None
+    index = 0
+    for character in value:
+        index = index * 26 + ord(character) - ord("A") + 1
+    return index - 1
+
+
+def _scope_mapping_columns(
+    config: object,
+    structure_signature: dict | None = None,
+) -> dict[str, object] | None:
+    """Find the canonical fields needed to derive a reconciliation key."""
+    mappings = getattr(config, "field_mappings", None) or []
+
+    columns: dict[str, object] = {}
+    for mapping in mappings:
+        path = str(getattr(mapping, "path", "")).strip().lower()
+        field_name = path.rsplit(".", 1)[-1]
+        if field_name not in {"id", "trace", "vsptransid"}:
+            continue
+        column = getattr(mapping, "column", None)
+        if column is not None:
+            columns[field_name] = column
+
+    if columns:
+        return columns
+
+    # Config generation is intentionally deferred for some review packets.
+    # Use the source signature as a read-only fallback so scope analysis can
+    # still count rows and compare an obvious transaction-id column.
+    headers = (structure_signature or {}).get("headers") or []
+    preferred_tokens = (
+        "mstransid",
+        "transactionid",
+        "transid",
+        "trace",
+        "partnerid",
+        "invoice",
+        "reference",
+    )
+    for index, header in enumerate(headers):
+        normalized = "".join(character for character in str(header).lower() if character.isalnum())
+        if any(token in normalized for token in preferred_tokens):
+            return {"trace": index + 1}
+    return None
+
+
+def _extract_scope_keys(
+    rows: object,
+    config: object,
+    structure_signature: dict | None = None,
+) -> tuple[int, set[str]]:
+    """Extract unique incoming reconciliation keys without normalizing the row."""
+    columns = _scope_mapping_columns(config, structure_signature)
+
+    received_count = 0
+    keys: set[str] = set()
+    for row in rows:
+        received_count += 1
+        if columns is None:
+            continue
+        values: dict[str, str] = {}
+        for name, column in columns.items():
+            if isinstance(row, dict):
+                value = row.get(column)
+                if value is None and isinstance(column, int):
+                    column_number = column
+                    letters = ""
+                    while column_number > 0:
+                        column_number, remainder = divmod(column_number - 1, 26)
+                        letters = chr(ord("A") + remainder) + letters
+                    value = row.get(str(column)) or row.get(letters)
+                if value is None and isinstance(column, str) and column.isdigit():
+                    value = row.get(int(column))
+            else:
+                index = _column_index(column)
+                value = row[index] if index is not None and index < len(row) else None
+            if value is not None and str(value).strip():
+                values[name] = str(value).strip()
+        key = values.get("trace") or values.get("vsptransid") or values.get("id")
+        if key:
+            keys.add(key)
+    return received_count, keys
+
+
+def _apply_duplicate_overlap_guardrail(
+    *,
+    probabilities: dict[str, float],
+    suggested_scope: str,
+    reasoning: str,
+    file_name: str,
+    duplicate_key_count: int,
+    new_key_count: int,
+    incoming_key_count: int,
+) -> tuple[dict[str, float], str, str, str | None]:
+    """Prefer append when one file visibly combines old and new business keys."""
+    if incoming_key_count <= 0 or duplicate_key_count <= 0 or new_key_count <= 0:
+        return probabilities, suggested_scope, reasoning, None
+
+    lowered = _normalized_filename_tokens(file_name)
+    replacement_tokens = ("replace", "replacement", "rerun", "retry", "resend", "correct", "correction")
+    duplicate_ratio = duplicate_key_count / incoming_key_count
+    if duplicate_ratio < 0.5 or any(token in lowered for token in replacement_tokens):
+        return probabilities, suggested_scope, reasoning, None
+
+    return (
+        {"FULL_SNAPSHOT": 0.04, "INCREMENTAL_APPEND": 0.92, "REPLACEMENT": 0.04},
+        "INCREMENTAL_APPEND",
+        (
+            f"The incoming file overlaps {duplicate_key_count} previously ingested business keys "
+            f"and adds {new_key_count} new keys ({duplicate_ratio:.0%} overlap), which is strong "
+            "evidence of an incremental append batch."
+        ),
+        "duplicate_overlap",
+    )
 
 
 def _get_db(request: Request):
@@ -804,7 +936,7 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str, force:
     from src.analysis.config import AnalysisConfig
     from src.analysis.provider import create_provider
     from src.readers import create_reader
-    from src.models.mapping_config import MappingConfigRepository
+    from src.infrastructure.mapping.config_repository import MappingConfigRepository
     
     logger = logging.getLogger(__name__)
     repo = _repo(request)
@@ -822,15 +954,15 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str, force:
             try:
                 recon_date = datetime.strptime(f"{match.group(1)}-{match.group(2)}-{match.group(3)}", "%Y-%m-%d")
             except ValueError:
-                recon_date = datetime.utcnow()
+                recon_date = datetime.now(timezone.utc)
         else:
-            recon_date = datetime.utcnow()
+            recon_date = datetime.now(timezone.utc)
             
     # 2. Count internal transactions
     start_of_day = datetime.combine(recon_date, datetime_time.min)
     end_of_day = datetime.combine(recon_date, datetime_time.max)
     
-    from src.models.internal_transaction import InternalTransactionRepository
+    from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
 
     internal_count = await InternalTransactionRepository(
         db
@@ -840,8 +972,9 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str, force:
         end_of_day,
     )
     
-    # 3. Count received records
+    # 3. Count received records and collect the incoming business keys.
     received_count = 0
+    incoming_keys: set[str] = set()
     source_file_path = getattr(packet, "source_file_path", None)
     if source_file_path and os.path.exists(source_file_path):
         try:
@@ -849,21 +982,66 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str, force:
             config = None
             if packet.draft_mapping_id:
                 config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
-            with create_reader(source_file_path, config) as reader:
-                received_count = sum(1 for _ in reader.iter_rows())
+            if config is not None:
+                with create_reader(source_file_path, config) as reader:
+                    received_count, incoming_keys = _extract_scope_keys(
+                        reader.iter_rows(),
+                        config,
+                        packet.structure_signature,
+                    )
+            else:
+                received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
         except Exception as exc:
             logger.error(f"Error counting rows in file: {exc}")
             received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
     else:
         received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
-        
+
+    existing_keys: set[str] = set()
+    if incoming_keys:
+        excluded_source_file_id = None
+        try:
+            if packet.source_file_id:
+                excluded_source_file_id = UUID(str(packet.source_file_id))
+        except (ValueError, TypeError):
+            logger.warning("Ignoring invalid review packet source_file_id=%s", packet.source_file_id)
+        try:
+            existing_keys = await DataContainerRepository(db).find_reconciliation_keys_by_date_range(
+                packet.partner,
+                start_of_day,
+                end_of_day,
+                exclude_source_file_id=excluded_source_file_id,
+            )
+        except Exception as exc:
+            logger.warning("Could not load existing reconciliation keys: %s", exc)
+
+    duplicate_key_count = len(incoming_keys & existing_keys)
+    new_key_count = len(incoming_keys - existing_keys)
+    incoming_key_count = len(incoming_keys)
+    duplicate_ratio = duplicate_key_count / incoming_key_count if incoming_key_count else 0.0
+
     heuristic_probabilities, heuristic_scope, heuristic_reasoning = _scope_probabilities(
         file_name=packet.file_name,
         internal_count=internal_count,
         received_count=received_count,
     )
+    (
+        heuristic_probabilities,
+        heuristic_scope,
+        heuristic_reasoning,
+        overlap_resolution,
+    ) = _apply_duplicate_overlap_guardrail(
+        probabilities=heuristic_probabilities,
+        suggested_scope=heuristic_scope,
+        reasoning=heuristic_reasoning,
+        file_name=packet.file_name,
+        duplicate_key_count=duplicate_key_count,
+        new_key_count=new_key_count,
+        incoming_key_count=incoming_key_count,
+    )
 
-    llm_provider = create_provider(AnalysisConfig())
+    analysis_config = AnalysisConfig()
+    llm_provider = create_provider(analysis_config)
     system_prompt = (
         "You are an expert reconciliation analyst. "
         "Classify file scope for review workflow. "
@@ -889,6 +1067,10 @@ Metadata:
 - Internal DB Record Count (same day): {internal_count}
 - Absolute Count Gap: {abs(internal_count - received_count)}
 - Relative Count Gap: {abs(internal_count - received_count) / max(internal_count, received_count, 1):.6f}
+- Incoming Unique Business Key Count: {incoming_key_count}
+- Keys Already Present In DB: {duplicate_key_count}
+- New Business Keys: {new_key_count}
+- Incoming Key Overlap Ratio: {duplicate_ratio:.6f}
 - Heuristic Baseline Suggestion: {heuristic_scope}
 - Heuristic Baseline Reasoning: {heuristic_reasoning}
 
@@ -904,11 +1086,21 @@ Return JSON:
 }}
 """
 
-    resolution = "rule_based"
+    resolution = "rule_based_duplicate_overlap" if overlap_resolution else "rule_based"
     probabilities = heuristic_probabilities
     suggested_scope = heuristic_scope
     reasoning = heuristic_reasoning
-    response_text = await llm_provider.generate(prompt=prompt, system_prompt=system_prompt)
+    try:
+        response_text = await asyncio.wait_for(
+            llm_provider.generate(prompt=prompt, system_prompt=system_prompt),
+            timeout=min(float(analysis_config.timeout), _SCOPE_LLM_TIMEOUT_SECONDS),
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Scope classification LLM timed out; returning heuristic result"
+        )
+        response_text = None
+        resolution = "rule_based_timeout"
     if response_text:
         try:
             clean_text = response_text.strip()
@@ -936,6 +1128,22 @@ Return JSON:
                 received_count=received_count,
                 file_name=packet.file_name,
             )
+            (
+                probabilities,
+                suggested_scope,
+                reasoning,
+                overlap_resolution,
+            ) = _apply_duplicate_overlap_guardrail(
+                probabilities=probabilities,
+                suggested_scope=suggested_scope,
+                reasoning=reasoning,
+                file_name=packet.file_name,
+                duplicate_key_count=duplicate_key_count,
+                new_key_count=new_key_count,
+                incoming_key_count=incoming_key_count,
+            )
+            if overlap_resolution:
+                resolution = "guardrail_override_duplicate_overlap"
         except Exception as exc:
             logger.warning(f"Scope classification JSON parse failed: {exc}")
         
@@ -947,6 +1155,13 @@ Return JSON:
         "suggestedScope": suggested_scope,
         "reasoning": reasoning,
         "resolution": resolution,
+        "scopeEvidence": {
+            "incomingUniqueBusinessKeyCount": incoming_key_count,
+            "duplicateBusinessKeyCount": duplicate_key_count,
+            "newBusinessKeyCount": new_key_count,
+            "duplicateRatio": duplicate_ratio,
+            "available": bool(incoming_keys),
+        },
         "heuristicBaseline": {
             "suggestedScope": heuristic_scope,
             "probabilities": heuristic_probabilities,

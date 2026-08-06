@@ -3,6 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,9 +13,9 @@ from src.core.types import CanonicalTransaction, ValidationError
 from src.validators import Validator, ValidationResult
 
 
-def _make_valid_txn(**overrides: dict) -> CanonicalTransaction:
+def _make_valid_txn(**overrides: Any) -> CanonicalTransaction:
     """Helper to create a valid CanonicalTransaction with optional overrides."""
-    defaults = {
+    defaults: dict[str, Any] = {
         "id": "TXN001",
         "amount": Decimal("100000"),
         "currency": "VND",
@@ -309,9 +310,9 @@ class TestFullValidation:
 class TestDuplicateDetection:
     """Test duplicate detection with mocked repositories."""
 
-    def _make_valid_txn(self, **overrides: dict) -> CanonicalTransaction:
+    def _make_valid_txn(self, **overrides: Any) -> CanonicalTransaction:
         """Helper to create a valid CanonicalTransaction with optional overrides."""
-        defaults = {
+        defaults: dict[str, Any] = {
             "id": "TXN001",
             "amount": Decimal("100000"),
             "currency": "VND",
@@ -557,9 +558,9 @@ class TestDuplicateDetection:
 class TestFullValidationPipeline:
     """End-to-end integration tests: all validation rules + duplicate detection combined."""
 
-    def _make_valid_txn(self, **overrides: dict) -> CanonicalTransaction:
+    def _make_valid_txn(self, **overrides: Any) -> CanonicalTransaction:
         """Helper to create a valid CanonicalTransaction with optional overrides."""
-        defaults = {
+        defaults: dict[str, Any] = {
             "id": "TXN001",
             "amount": Decimal("100000"),
             "currency": "VND",

@@ -63,7 +63,7 @@ class TestIngestionResult:
     def test_ingestion_result_construction(self):
         """IngestionResult can be constructed with file_record, stats, errors."""
         from src.pipeline import IngestionResult
-        from src.models.reconciliation_file import ReconciliationFile
+        from src.domain.ingestion.models import ReconciliationFile
 
         now = datetime.now(timezone.utc)
         file_record = ReconciliationFile(
@@ -248,9 +248,9 @@ class TestIngestionKeyPropagation:
         import tempfile
         import openpyxl
         from src.config.loader import ConfigLoader
-        from src.models.mapping_config import MappingConfig
-        from src.models.reconciliation_file import ReconciliationFileRepository
-        from src.models.data_container import DataContainerRepository
+        from src.domain.mapping.models import MappingConfig
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
         from src.pipeline import IngestionPipeline
         field_mappings = [FieldMapping(path="id", column="A", type=FieldMappingType.STRING, required=True), FieldMapping(path="trace", column="B", type=FieldMappingType.STRING), FieldMapping(path="amount", column="C", type=FieldMappingType.DECIMAL, required=True), FieldMapping(path="currency", constant="VND", type=FieldMappingType.CONSTANT), FieldMapping(path="status", column="D", type=FieldMappingType.MAPPING, mapping={"Thành công": "SUCCESS"})]
         mock_config = MappingConfig(partner="MOMO", workflow_type="UPC", file_type=FileType.SETTLEMENT, sheet_name="Sheet1", start_row=2, field_mappings=field_mappings)
@@ -303,7 +303,8 @@ class TestFileClaimAtomic:
     @pytest.mark.asyncio
     async def test_process_file_duplicate_uses_create_or_get(self, tmp_path):
         from src.config.loader import ConfigLoader
-        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+        from src.domain.ingestion.models import ReconciliationFile
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
         from src.pipeline import IngestionPipeline
 
         mock_db = _make_mock_db()
@@ -356,9 +357,9 @@ class TestBatchInsertAccounting:
     @pytest.mark.asyncio
     async def test_process_file_tracks_duplicate_rows_from_batch_result(self, tmp_path):
         from src.config.loader import ConfigLoader
-        from src.models.mapping_config import MappingConfig
-        from src.models.reconciliation_file import ReconciliationFileRepository
-        from src.models.data_container import DataContainerRepository
+        from src.domain.mapping.models import MappingConfig
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
         from src.pipeline import IngestionPipeline
 
         field_mappings = [
@@ -430,13 +431,18 @@ class TestBatchInsertAccounting:
         assert result.stats.duplicate_rows == 1
         assert result.stats.failed_rows == 0
         assert result.errors[0]["field"] == "transaction_duplicate"
+        assert result.file_record.duplicate_rows == 1
+        mock_data_repo.rebind_source_file_by_ingestion_keys.assert_not_called()
+        mock_recon_repo.update_processing_stats.assert_awaited_once_with(
+            result.file_record.id, 2, 1, 0, 1
+        )
 
     @pytest.mark.asyncio
     async def test_process_file_tracks_non_duplicate_batch_failures(self, tmp_path):
         from src.config.loader import ConfigLoader
-        from src.models.mapping_config import MappingConfig
-        from src.models.reconciliation_file import ReconciliationFileRepository
-        from src.models.data_container import DataContainerRepository
+        from src.domain.mapping.models import MappingConfig
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
         from src.pipeline import IngestionPipeline
 
         field_mappings = [
@@ -516,11 +522,11 @@ class TestProcessFileHappyPath:
     async def test_process_file_all_rows_valid(self):
         """process_file processes all rows successfully with correct stats."""
         from src.pipeline import IngestionPipeline, IngestionResult
-        from src.models.reconciliation_file import (
+        from src.infrastructure.ingestion.file_repository import (
             ReconciliationFileRepository,
         )
-        from src.models.data_container import DataContainerRepository
-        from src.models.mapping_config import MappingConfig
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
+        from src.domain.mapping.models import MappingConfig
         from src.config.loader import ConfigLoader
 
         # Build a mock config with field mappings
@@ -616,9 +622,9 @@ class TestProcessFileMixedRows:
     async def test_process_file_mixed_valid_invalid_rows(self):
         """Invalid rows are collected as errors without stopping the pipeline."""
         from src.pipeline import IngestionPipeline
-        from src.models.reconciliation_file import ReconciliationFileRepository
-        from src.models.data_container import DataContainerRepository
-        from src.models.mapping_config import MappingConfig
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
+        from src.domain.mapping.models import MappingConfig
         from src.config.loader import ConfigLoader
 
         field_mappings = [
@@ -704,7 +710,8 @@ class TestProcessFileDuplicate:
     async def test_process_file_duplicate_hash_early_return(self):
         """Duplicate file hash returns early with error."""
         from src.pipeline import IngestionPipeline
-        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+        from src.domain.ingestion.models import ReconciliationFile
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
         from src.config.loader import ConfigLoader
 
         mock_db = MagicMock()
@@ -749,7 +756,7 @@ class TestProcessFileException:
     async def test_process_file_exception_sets_failed_status(self, tmp_path):
         """Exception during processing sets status to FAILED."""
         from src.pipeline import IngestionPipeline
-        from src.models.reconciliation_file import ReconciliationFileRepository
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
         from src.config.loader import ConfigLoader
 
         # Create a real temp file so _compute_file_hash succeeds
@@ -794,9 +801,9 @@ class TestBatchInsertion:
     async def test_batch_insertion_called_with_correct_batch_size(self):
         """insert_many is called when batch buffer reaches batch_size."""
         from src.pipeline import IngestionPipeline
-        from src.models.reconciliation_file import ReconciliationFileRepository
-        from src.models.data_container import DataContainerRepository
-        from src.models.mapping_config import MappingConfig
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
+        from src.domain.mapping.models import MappingConfig
         from src.config.loader import ConfigLoader
 
         field_mappings = [
@@ -885,9 +892,9 @@ class TestPipelineLogging:
     async def test_logger_emits_events_happy_path(self):
         """process_file emits FILE_STARTED → ROW_SUCCESS×N → FILE_COMPLETED."""
         from src.pipeline import IngestionPipeline
-        from src.models.reconciliation_file import ReconciliationFileRepository
-        from src.models.data_container import DataContainerRepository
-        from src.models.mapping_config import MappingConfig
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
+        from src.domain.mapping.models import MappingConfig
         from src.config.loader import ConfigLoader
 
         field_mappings = [
@@ -974,9 +981,9 @@ class TestPipelineLogging:
     async def test_logger_emits_mixed_rows(self):
         """process_file emits ROW_SUCCESS and ROW_FAILED for mixed rows."""
         from src.pipeline import IngestionPipeline
-        from src.models.reconciliation_file import ReconciliationFileRepository
-        from src.models.data_container import DataContainerRepository
-        from src.models.mapping_config import MappingConfig
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
+        from src.domain.mapping.models import MappingConfig
         from src.config.loader import ConfigLoader
 
         field_mappings = [
@@ -1066,7 +1073,8 @@ class TestPipelineLogging:
     async def test_logger_duplicate_emits_file_failed_only(self, tmp_path):
         """Duplicate file emits FILE_FAILED without FILE_STARTED."""
         from src.pipeline import IngestionPipeline
-        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+        from src.domain.ingestion.models import ReconciliationFile
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
         from src.config.loader import ConfigLoader
 
         # Create a real file so _compute_file_hash succeeds
@@ -1114,7 +1122,7 @@ class TestPipelineLogging:
     async def test_logger_exception_emits_file_failed(self, tmp_path):
         """Exception during processing emits FILE_FAILED with error message."""
         from src.pipeline import IngestionPipeline
-        from src.models.reconciliation_file import ReconciliationFileRepository
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
         from src.config.loader import ConfigLoader
 
         excel_file = tmp_path / "file.xlsx"
@@ -1165,9 +1173,9 @@ class TestPipelineAllInvalidRows:
     async def test_process_file_all_rows_invalid(self):
         """All rows invalid — COMPLETED with 0 success_rows."""
         from src.pipeline import IngestionPipeline
-        from src.models.reconciliation_file import ReconciliationFileRepository
-        from src.models.data_container import DataContainerRepository
-        from src.models.mapping_config import MappingConfig
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
+        from src.domain.mapping.models import MappingConfig
         from src.config.loader import ConfigLoader
 
         field_mappings = [

@@ -12,10 +12,10 @@ from motor.motor_asyncio import AsyncIOMotorClient
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config.settings import settings
-from src.pipeline.ingestion_pipeline import IngestionPipeline
+from src.infrastructure.ingestion.composition import build_ingestion_pipeline
 from src.reconciliation.engine import ReconciliationEngine
 from src.config.loader import ConfigLoader
-from src.models.mapping_config import MappingConfigRepository
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.config.cache import ConfigCache
 from src.config.validator import ConfigValidator
 from src.core.enums import FileType
@@ -72,7 +72,7 @@ async def run_benchmark():
     )
     config = await config_loader.load_by_partner_type(PARTNER, "UPC", FileType.SETTLEMENT)
     
-    pipeline = IngestionPipeline(
+    pipeline = build_ingestion_pipeline(
         db=db,
         config_loader=config_loader,
         batch_size=100000,

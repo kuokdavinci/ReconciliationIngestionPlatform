@@ -19,6 +19,7 @@ It writes benchmark result documents into:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 import time
@@ -27,12 +28,20 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
+from typing import Any
 
 from bson.decimal128 import Decimal128
 from pymongo import MongoClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.domain.internal_transaction.models import InternalTransaction
+from src.core.enums import TransactionStatus
+from src.infrastructure.postgres.internal_transaction_repository import (
+    InternalTransactionRepository,
+)
 
 
 PARTNER = "VNPAY_1M_BENCH"
@@ -113,37 +122,59 @@ def build_partner_doc(idx: int, trace: str, amount: int, status: str, recon_date
     }
 
 
-def build_internal_doc(idx: int, trace: str, amount: int, status: str, recon_date: datetime) -> dict:
-    return {
-        "_id": f"INT_{idx:07d}",
-        "partner": PARTNER,
-        "partnerTxnId": trace,
-        "amount": Decimal128(str(amount)),
-        "currency": "VND",
-        "status": status,
-        "transactionTime": recon_date,
-        "createdAt": recon_date,
-        "updatedAt": recon_date,
-    }
+def build_internal_doc(
+    idx: int, trace: str, amount: int, status: str, recon_date: datetime
+) -> InternalTransaction:
+    return InternalTransaction(
+        _id=f"INT_{idx:07d}",
+        partner=PARTNER,
+        partnerTxnId=trace,
+        amount=Decimal(amount),
+        currency="VND",
+        status=TransactionStatus(status),
+        transactionTime=recon_date,
+        createdAt=recon_date,
+        updatedAt=recon_date,
+    )
+
+
+def load_internal_records(start: datetime, end: datetime) -> list[dict[str, Any]]:
+    """Load source-of-truth internal transactions through PostgreSQL."""
+
+    async def _load() -> list[dict[str, Any]]:
+        repository = InternalTransactionRepository()
+        records = await repository.find_by_partner_and_date_range(PARTNER, start, end)
+        return [
+            {
+                "_id": record.id,
+                "partnerTxnId": record.partner_txn_id,
+                "amount": record.amount,
+                "status": record.status,
+                "updatedAt": record.updated_at,
+            }
+            for record in records
+        ]
+
+    return asyncio.run(_load())
 
 
 def seed_dataset(db) -> dict:
     start_of_day, _ = iso_day_bounds(DATE_STR)
     dc = db["data_container"]
-    internal = db["internal_transaction"]
     recon = db["reconciliation_result"]
     baseline_recon = db["reconciliation_result_baseline_tmp"]
     runs = db["partner_runtime_run"]
 
     dc.delete_many({"identify": PARTNER, "reconciliationDate": {"$gte": start_of_day, "$lte": start_of_day.replace(hour=23, minute=59, second=59, microsecond=999999)}})
-    internal.delete_many({"partner": PARTNER, "transactionTime": {"$gte": start_of_day, "$lte": start_of_day.replace(hour=23, minute=59, second=59, microsecond=999999)}})
     recon.delete_many({"partner": PARTNER, "date": DATE_STR})
     baseline_recon.delete_many({"partner": PARTNER, "date": DATE_STR})
     runs.delete_many({"partner": PARTNER, "date": DATE_STR})
 
     partner_batch: list[dict] = []
-    internal_batch: list[dict] = []
-    counts = defaultdict(int)
+    internal_batch: list[InternalTransaction] = []
+    internal_repository = InternalTransactionRepository()
+    asyncio.run(internal_repository.delete_by_partner(PARTNER))
+    counts: defaultdict[str, int] = defaultdict(int)
     idx = 1
 
     def flush():
@@ -152,7 +183,7 @@ def seed_dataset(db) -> dict:
             dc.insert_many(partner_batch, ordered=False)
             partner_batch = []
         if internal_batch:
-            internal.insert_many(internal_batch, ordered=False)
+            asyncio.run(internal_repository.insert_many(internal_batch))
             internal_batch = []
 
     for status_name, count in STATUS_COUNTS_1M.items():
@@ -186,7 +217,7 @@ def seed_dataset(db) -> dict:
     return dict(counts)
 
 
-def normalize_status(status_str: str) -> str:
+def normalize_status(status_str: object) -> str:
     status_lower = str(status_str).strip().lower()
     if status_lower in ("success", "thành công", "matched"):
         return "SUCCESS"
@@ -197,7 +228,7 @@ def normalize_status(status_str: str) -> str:
     return "PENDING"
 
 
-def is_finalized_internal_status(status: str) -> bool:
+def is_finalized_internal_status(status: object) -> bool:
     return normalize_status(status) in {"SUCCESS", "FAILED", "REVERSED"}
 
 
@@ -236,7 +267,7 @@ def result_doc(
     partner_record_id=None,
     internal_record_id=None,
 ) -> dict:
-    doc = {
+    doc: dict[str, Any] = {
         "_id": partner_txn_id,
         "partner": PARTNER,
         "date": DATE_STR,
@@ -262,29 +293,31 @@ def result_doc(
     return doc
 
 
+def _updated_at(record: dict[str, Any]) -> datetime:
+    value = record.get("updatedAt")
+    return value if isinstance(value, datetime) else datetime.min.replace(tzinfo=timezone.utc)
+
+
 def optimized_reconcile(db) -> dict:
     start_of_day, end_of_day = iso_day_bounds(DATE_STR)
     partner_query = {"identify": PARTNER, "reconciliationDate": {"$gte": start_of_day, "$lte": end_of_day}}
-    internal_query = {"partner": PARTNER, "transactionTime": {"$gte": start_of_day, "$lte": end_of_day}}
     dc = db["data_container"]
-    internal = db["internal_transaction"]
     recon = db["reconciliation_result"]
     recon.delete_many({"partner": PARTNER, "date": DATE_STR})
 
-    projection = {"_id": 1, "partnerTxnId": 1, "amount": 1, "status": 1, "updatedAt": 1}
-    internal_by_key: dict[str, dict] = {}
-    for raw in internal.find(internal_query, projection=projection):
+    internal_by_key: dict[str, dict[str, Any]] = {}
+    for raw in load_internal_records(start_of_day, end_of_day):
         partner_txn_id = str(raw.get("partnerTxnId") or "").strip()
         if not partner_txn_id or not is_finalized_internal_status(raw.get("status")):
             continue
         existing = internal_by_key.get(partner_txn_id)
-        if existing is None or raw.get("updatedAt") > existing.get("updatedAt"):
+        if existing is None or _updated_at(raw) > _updated_at(existing):
             internal_by_key[partner_txn_id] = raw
 
     matched_internal_keys: set[str] = set()
     result_buffer: list[dict] = []
     inserted = 0
-    status_counts = defaultdict(int)
+    status_counts: defaultdict[str, int] = defaultdict(int)
 
     def flush():
         nonlocal result_buffer, inserted
@@ -297,9 +330,9 @@ def optimized_reconcile(db) -> dict:
     for partner_record in cursor:
         is_valid, _ = pre_check(partner_record)
         if not is_valid:
-            partner_txn_id = str(partner_record["_id"])
+            invalid_partner_txn_id = str(partner_record["_id"])
             result_buffer.append(result_doc(
-                partner_txn_id=partner_txn_id,
+                partner_txn_id=invalid_partner_txn_id,
                 reconciliation_status="UNMAPPED_SKIPPED",
                 partner_record_id=str(partner_record["_id"]),
             ))
@@ -308,9 +341,10 @@ def optimized_reconcile(db) -> dict:
                 flush()
             continue
 
-        partner_txn_id = resolve_partner_txn_id(partner_record)
-        if not partner_txn_id:
+        resolved_partner_txn_id = resolve_partner_txn_id(partner_record)
+        if not resolved_partner_txn_id:
             continue
+        partner_txn_id = resolved_partner_txn_id
 
         partner_amount_raw = partner_record["partnerData"]["amount"]
         partner_amount = partner_amount_raw.to_decimal() if hasattr(partner_amount_raw, "to_decimal") else Decimal(str(partner_amount_raw))
@@ -383,28 +417,26 @@ def optimized_reconcile(db) -> dict:
 def baseline_reconcile(db) -> dict:
     start_of_day, end_of_day = iso_day_bounds(DATE_STR)
     partner_query = {"identify": PARTNER, "reconciliationDate": {"$gte": start_of_day, "$lte": end_of_day}}
-    internal_query = {"partner": PARTNER, "transactionTime": {"$gte": start_of_day, "$lte": end_of_day}}
     dc = db["data_container"]
-    internal = db["internal_transaction"]
     recon = db["reconciliation_result_baseline_tmp"]
     recon.delete_many({"partner": PARTNER, "date": DATE_STR})
 
     partner_records = list(dc.find(partner_query))
-    internal_records = list(internal.find(internal_query))
+    internal_records = load_internal_records(start_of_day, end_of_day)
     finalized_internal = [record for record in internal_records if is_finalized_internal_status(record.get("status"))]
 
-    internal_by_key: dict[str, dict] = {}
+    internal_by_key: dict[str, dict[str, Any]] = {}
     for record in finalized_internal:
         key = str(record.get("partnerTxnId") or "").strip()
         if not key:
             continue
         existing = internal_by_key.get(key)
-        if existing is None or record.get("updatedAt") > existing.get("updatedAt"):
+        if existing is None or _updated_at(record) > _updated_at(existing):
             internal_by_key[key] = record
 
     results: list[dict] = []
     matched_internal_keys: set[str] = set()
-    status_counts = defaultdict(int)
+    status_counts: defaultdict[str, int] = defaultdict(int)
 
     for partner_record in partner_records:
         is_valid, _ = pre_check(partner_record)
@@ -486,9 +518,9 @@ def baseline_reconcile(db) -> dict:
     return {"inserted": len(results), "status_counts": dict(status_counts), "internal_index_size": len(internal_by_key)}
 
 
-def to_results(docs: list[dict]) -> list[object]:
+def to_results(docs: list[dict]) -> list[SimpleNamespace]:
     from types import SimpleNamespace
-    results = []
+    results: list[SimpleNamespace] = []
     for doc in docs:
         result = SimpleNamespace()
         result.partner = doc.get("partner", PARTNER)
@@ -525,7 +557,7 @@ def build_summary_from_aggregate(col) -> dict:
             }
         },
     ]
-    by_status = {}
+    by_status: dict[str, int] = {}
     total_transactions = 0
     matched = 0
     total_amount_mismatch = 0.0
@@ -554,7 +586,7 @@ def build_summary_from_aggregate(col) -> dict:
 
 def bench(fn, repeats: int = 1) -> BenchmarkResult:
     times = []
-    output = None
+    output: dict[str, Any] = {}
     for _ in range(repeats):
         started = time.perf_counter()
         output = fn()

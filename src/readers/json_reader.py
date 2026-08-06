@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Self, Any
 
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 
 VALID_EXTENSIONS = {".json"}
 

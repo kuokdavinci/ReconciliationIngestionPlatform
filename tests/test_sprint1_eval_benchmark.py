@@ -35,11 +35,11 @@ def _benchmark_transaction(identify: str, key: str):
 
     return DataContainer(
         identify=identify,
-        workflow_type="UPC",
-        reconciliation_date=datetime(2026, 6, 24, tzinfo=timezone.utc),
-        source_file_id=uuid4(),
-        ingestion_key=key,
-        partner_data=PartnerData(
+        workflowType="UPC",
+        reconciliationDate=datetime(2026, 6, 24, tzinfo=timezone.utc),
+        sourceFileId=uuid4(),
+        ingestionKey=key,
+        partnerData=PartnerData(
             _id=key,
             trace=f"TRACE-{key}",
             status="SUCCESS",
@@ -183,7 +183,7 @@ async def test_run_sprint1_eval_and_generate_report():
     mock_coll = MagicMock()
     mock_coll.insert_one = AsyncMock(return_value=None)
     mock_coll.find_one = AsyncMock(return_value=None)
-    mock_coll.update_one = AsyncMock(return_value=None)
+    mock_coll.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
     db_mock.__getitem__ = MagicMock(return_value=mock_coll)
     
     recon_repo = ReconciliationFileRepository(db=db_mock)
@@ -220,18 +220,6 @@ async def test_run_sprint1_eval_and_generate_report():
     )
     pipeline._recon_repo = recon_repo
     pipeline._data_repo = data_repo
-
-    # Scope classification is Mongo metadata, not part of this PostgreSQL
-    # transaction benchmark. Keep it deterministic so the benchmark measures
-    # ingestion and persistence only.
-    import src.pipeline.ingestion_pipeline as ingestion_module
-    original_classify_scope = ingestion_module.classify_scope
-    ingestion_module.classify_scope = AsyncMock(return_value={
-        "scopeType": "UNCONFIRMED",
-        "scopeConfidence": 0.55,
-        "scopeReason": ["benchmark"],
-        "scopeSignals": {"benchmark": True},
-    })
 
     # Helper to generate Excel file
     def create_excel(file_path, rows):
@@ -487,7 +475,13 @@ async def test_run_sprint1_eval_and_generate_report():
 
         # Scenario 10: Non-duplicate batch failure accounting contract
         t0 = time.perf_counter()
-        pipeline_source = Path("src/pipeline/ingestion_pipeline.py").read_text(encoding="utf-8")
+        pipeline_source = "\n".join(
+            Path(path).read_text(encoding="utf-8")
+            for path in (
+                "src/pipeline/ingestion_pipeline.py",
+                "src/pipeline/run_state.py",
+            )
+        )
         has_failed_rows = "failed_rows" in pipeline_source
         has_batch_conflict = "batch_conflict" in pipeline_source
         failure_contract = has_failed_rows and has_batch_conflict
@@ -550,11 +544,9 @@ async def test_run_sprint1_eval_and_generate_report():
         report_path = Path("docs/phase-2/sprint-1-eval-benchmark-run.md")
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(_build_markdown_report(eval_results), encoding="utf-8")
-        ingestion_module.classify_scope = original_classify_scope
         raise
     finally:
         temp_dir.cleanup()
-        ingestion_module.classify_scope = original_classify_scope
 
     # Generate Markdown Output Report
     report_content = _build_markdown_report(eval_results)
@@ -599,7 +591,7 @@ def _build_markdown_report(eval_results):
     return f"""# Báo cáo Benchmark và Đánh giá Sprint 1 (Idempotency và Ngăn ngừa Trùng lặp)
 
 > **Môi trường thử nghiệm**: PostgreSQL transaction store thật (`reconciliation_test`) và MongoDB metadata store thật
-> **Thời điểm thực thi**: {timestamp}  
+> **Thời điểm thực thi**: {timestamp}
 > **Kết quả đánh giá tổng quan**: {status_badge} ({passed_scenarios}/{total_scenarios} kịch bản PASS)
 
 ---

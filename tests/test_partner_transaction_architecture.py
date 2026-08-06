@@ -1,0 +1,52 @@
+from datetime import datetime, timezone
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
+
+import pytest
+
+from src.domain.partner_transaction.models import DataContainer, PartnerData
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
+from src.models.data_container import (
+    DataContainer as LegacyDataContainer,
+    DataContainerRepository as LegacyRepository,
+    PartnerData as LegacyPartnerData,
+)
+
+
+def test_partner_transaction_implementation_has_legacy_compatibility_identity():
+    assert LegacyDataContainer is DataContainer
+    assert LegacyPartnerData is PartnerData
+    assert LegacyRepository is DataContainerRepository
+
+
+def test_partner_transaction_repository_accepts_explicit_postgres_engine():
+    engine = MagicMock()
+
+    repository = DataContainerRepository(engine=engine)
+
+    assert repository.engine is engine
+
+
+@pytest.mark.asyncio
+async def test_copy_records_uses_conflict_safe_insert():
+    document = DataContainer(
+        identify="MOMO",
+        workflow_type="UPC",
+        reconciliation_date=datetime.now(timezone.utc),
+        source_file_id=uuid4(),
+        partner_data=PartnerData(
+            _id="txn-1",
+            trace="trace-1",
+            status="SUCCESS",
+            amount=Decimal("10"),
+            currency="VND",
+        ),
+    )
+    repository = DataContainerRepository(engine=MagicMock())
+    repository._insert_rows_conflict_safe = AsyncMock(return_value=1)
+
+    inserted = await repository.copy_records([document])
+
+    assert inserted == 1
+    repository._insert_rows_conflict_safe.assert_awaited_once()

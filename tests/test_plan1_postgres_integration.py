@@ -21,11 +21,11 @@ pytestmark = pytest.mark.integration
 def _transaction(identify: str, key: str) -> DataContainer:
     return DataContainer(
         identify=identify,
-        workflow_type="UPC",
-        reconciliation_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
-        source_file_id=uuid4(),
-        ingestion_key=key,
-        partner_data=PartnerData(
+        workflowType="UPC",
+        reconciliationDate=datetime(2024, 1, 15, tzinfo=timezone.utc),
+        sourceFileId=uuid4(),
+        ingestionKey=key,
+        partnerData=PartnerData(
             _id=key,
             trace=f"TRACE-{key}",
             status="SUCCESS",

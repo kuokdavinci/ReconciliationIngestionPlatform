@@ -176,6 +176,23 @@ class TestStructuredLogger:
         assert parsed["file_id"] == "file-001"
         assert parsed["error"] == "File not found"
 
+    def test_emit_ingestion_stage_json(self):
+        logger = StructuredLogger(name="test_ingestion_stage")
+        logger._logger.setLevel(logging.DEBUG)
+        stream, _ = self._capture_json_output(logger)
+        logger.emit_ingestion_stage(
+            "PERSISTING",
+            "run-001",
+            "file-001",
+            "batch_conflict",
+        )
+        parsed = json.loads(stream.getvalue().strip())
+        assert parsed["event"] == "INGESTION_STAGE"
+        assert parsed["stage"] == "PERSISTING"
+        assert parsed["run_id"] == "run-001"
+        assert parsed["source_file_id"] == "file-001"
+        assert parsed["error_code"] == "batch_conflict"
+
     def test_emit_row_success_json(self):
         logger = StructuredLogger(name="test_row_success")
         logger._logger.setLevel(logging.DEBUG)

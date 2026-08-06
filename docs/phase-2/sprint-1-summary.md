@@ -25,7 +25,7 @@ Sprint 1 tập trung giải quyết bài toán **Tính An Toàn Dữ Liệu (Ide
 2. **Guided Wizard Step 4 (Approve & Execute)**:
    - Tích hợp Step 4 vào Popup AI Assist / Mapping Studio cho phép thực hiện 3 bước liên hoàn trong 1 click: `Approve Mapping Config` ➔ `Trigger Ingestion` ➔ `Run Reconciliation`.
 3. **Automated E2E Seeding Alignment (`make momo-e2e-reset`)**:
-   - Cập nhật script nạp dữ liệu demo hỗ trợ xóa sạch dữ liệu cũ trên cả MongoDB và PostgreSQL, tự động sinh 20 bản ghi khớp 1-1 giữa Postgres Internal DB và File Excel của Partner.
+   - Cập nhật script nạp dữ liệu demo xóa/ghi `internal_transaction` trên PostgreSQL source of truth, tự động sinh 20 bản ghi khớp 1-1 giữa Postgres Internal DB và File Excel của Partner.
 
 ---
 
@@ -38,7 +38,7 @@ Sprint 1 tập trung giải quyết bài toán **Tính An Toàn Dữ Liệu (Ide
 | **Ingestion Pipeline** | [`src/pipeline/ingestion_pipeline.py`](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/pipeline/ingestion_pipeline.py) | Thực thi chèn batch dữ liệu conflict-safe `ON CONFLICT (identify, ingestion_key) DO NOTHING`. |
 | **Backend API** | [`src/api/reconciliation.py`](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/api/reconciliation.py)<br>[`src/api/automation.py`](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/api/automation.py) | Cung cấp API trạng thái chạy, filter theo date/source_file_id và bắt buộc kiểm tra actor `X-Actor`. |
 | **Frontend UI** | [`frontend-next/src/app/reconciliation/page.tsx`](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/frontend-next/src/app/reconciliation/page.tsx)<br>[`frontend-next/src/components/reconciliation/run-status-panel.tsx`](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/frontend-next/src/components/reconciliation/run-status-panel.tsx)<br>[`frontend-next/src/components/mapping-studio/mapping-studio-execute-step.tsx`](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/frontend-next/src/components/mapping-studio/mapping-studio-execute-step.tsx) | Bổ sung Pipeline Metrics Dashboard, liên kết số liệu thực tế từ Backend và bổ sung Step 4 Execute Wizard. |
-| **Seeding & Tools** | [`scripts/demo/sprint1/seed_momo_e2e.py`](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/scripts/demo/sprint1/seed_momo_e2e.py)<br>[`Makefile`](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/Makefile) | Viết lại logic wipe & seed đồng bộ cả Postgres và Mongo, hỗ trợ tham số `--file-dir mock_data`. |
+| **Seeding & Tools** | [`scripts/demo/sprint1/seed_momo_e2e.py`](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/scripts/demo/sprint1/seed_momo_e2e.py)<br>[`Makefile`](file:///home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/Makefile) | Wipe/seed `internal_transaction` qua PostgreSQL source of truth, hỗ trợ tham số `--file-dir mock_data`. |
 
 ---
 
@@ -50,8 +50,8 @@ Sprint 1 tập trung giải quyết bài toán **Tính An Toàn Dữ Liệu (Ide
 2. `ReconciliationEngine.reconcile(partner, reconciliation_date)`:
    - **Chức năng**: Khởi chạy thuật toán đối soát 2 chiều giữa Postgres `internal_transaction` và `partner_transaction`.
    - **Tác dụng**: Phân loại kết quả thành `MATCHED`, `AMOUNT_MISMATCH`, `STATUS_MISMATCH`, `MISSING_PARTNER`, `MISSING_INTERNAL`.
-3. `_seed_internal(db, keys, day)`:
-   - **Chức năng**: Khởi tạo bản ghi giao dịch nội bộ đồng thời vào cả 2 cơ sở dữ liệu MongoDB và PostgreSQL.
+3. `_seed_internal(keys, day)`:
+   - **Chức năng**: Khởi tạo bản ghi giao dịch nội bộ qua `InternalTransactionRepository` trên PostgreSQL, bỏ qua source key đã tồn tại.
 4. `_full_wipe(db)`:
    - **Chức năng**: Dọn dẹp sạch toàn bộ các collection trên MongoDB và các bảng trên PostgreSQL của Partner trước khi thực hiện reset demo.
 

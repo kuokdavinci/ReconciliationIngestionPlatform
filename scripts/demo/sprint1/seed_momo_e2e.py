@@ -27,17 +27,18 @@ from pathlib import Path
 from typing import Optional
 
 import openpyxl
-from bson.decimal128 import Decimal128
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import settings
 from src.core.enums import FileType, TransactionStatus
-from src.models.fetch_config import (
+from src.domain.fetch_config.models import (
     FetchConfig,
-    FetchConfigRepository,
     FetchMethod,
     FileDropConfig,
 )
+from src.infrastructure.fetch_config.repository import FetchConfigRepository
+from src.domain.internal_transaction.models import InternalTransaction
+from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
 
 
 PARTNER = "MOMO"
@@ -154,105 +155,73 @@ def _write_partner_file(
 # ── Internal transaction helpers ─────────────────────────────────────────────
 
 
-def _build_internal_doc(
+def _build_internal_transaction(
     txn_id: str,
     day: datetime,
     *,
     amount: Optional[Decimal] = None,
-) -> dict:
-    """Build a Mongo doc for `internal_transaction` (camelCase aliases, Decimal128)."""
+) -> InternalTransaction:
+    """Build a PostgreSQL source-of-truth transaction."""
     if amount is None:
         amount = _amount_for_key(txn_id)
     now = datetime.now(timezone.utc)
-    return {
-        "_id": f"INT_{PARTNER}_{txn_id}",
-        "partner": PARTNER,
-        "partnerTxnId": txn_id,
-        "amount": Decimal128(str(amount)),
-        "currency": "VND",
-        "status": TransactionStatus.SUCCESS.value,
-        "transactionTime": day,
-        "createdAt": now,
-        "updatedAt": now,
-    }
+    return InternalTransaction(
+        _id=f"INT_{PARTNER}_{txn_id}",
+        partner=PARTNER,
+        partnerTxnId=txn_id,
+        amount=amount,
+        currency="VND",
+        status=TransactionStatus.SUCCESS,
+        transactionTime=day.replace(tzinfo=None),
+        createdAt=now.replace(tzinfo=None),
+        updatedAt=now.replace(tzinfo=None),
+    )
 
 
 async def _seed_internal(
-    db,
     keys: list[str],
     *,
     day: Optional[datetime] = None,
+    repository: Optional[InternalTransactionRepository] = None,
 ) -> int:
-    """Insert internal rows into BOTH PostgreSQL and MongoDB for the given keys."""
+    """Insert internal rows into PostgreSQL without duplicating existing keys."""
     if day is None:
         day = _today_utc()
-    
-    # 1. Seed MongoDB internal_transaction
-    collection = db["internal_transaction"]
-    inserted = 0
-    docs_to_insert = []
-    for txn_id in keys:
-        existing = await collection.find_one(
-            {"partner": PARTNER, "partnerTxnId": txn_id}
-        )
-        if existing:
-            continue
-        doc = _build_internal_doc(txn_id, day)
-        await collection.insert_one(doc)
-        docs_to_insert.append(doc)
-        inserted += 1
+    if repository is None:
+        repository = InternalTransactionRepository()
+    existing_keys = await repository.find_existing_partner_txn_ids(PARTNER, keys)
+    documents = [
+        _build_internal_transaction(txn_id, day)
+        for txn_id in keys
+        if txn_id not in existing_keys
+    ]
+    return await repository.insert_many(documents)
 
-    # 2. Seed PostgreSQL internal_transaction table
-    try:
-        from src.models.postgres import get_pg_engine, InternalTransactionTable
-        from sqlalchemy import insert
-        from uuid import uuid4
-        engine = get_pg_engine()
-        pg_rows = []
-        for txn_id in keys:
-            amount_val = Decimal(_amount_for_key(txn_id))
-            pg_rows.append({
-                "id": str(uuid4()),
-                "partner": PARTNER,
-                "partner_txn_id": txn_id,
-                "amount": amount_val,
-                "currency": "VND",
-                "status": "SUCCESS",
-                "transaction_time": day.replace(tzinfo=None) if day.tzinfo else day,
-                "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
-                "updated_at": datetime.now(timezone.utc).replace(tzinfo=None),
-            })
-        async with engine.begin() as conn:
-            await conn.execute(insert(InternalTransactionTable), pg_rows)
-        await engine.dispose()
-    except Exception as exc:
-        print(f"Warning seeding Postgres internal_transaction: {exc}")
 
-    return inserted
+async def _clear_momo_transaction_rows() -> None:
+    """Clear MOMO source transactions before a canonical reset."""
+    from sqlalchemy import delete
+    from src.infrastructure.persistence.postgres_connection import get_pg_engine
+    from src.infrastructure.persistence.postgres_schema import InternalTransactionTable, PartnerTransactionTable
+
+    engine = get_pg_engine()
+    async with engine.begin() as conn:
+        await conn.execute(delete(InternalTransactionTable).where(InternalTransactionTable.partner == PARTNER))
+        await conn.execute(delete(PartnerTransactionTable).where(PartnerTransactionTable.identify == PARTNER))
 
 
 # ── High-level mode helpers (testable surface) ───────────────────────────────
 
 
 async def _reset_and_seed_phase1(db, partner_file_path: str | Path) -> int:
-    """Wipe MOMO internal & partner rows in both Mongo and Postgres, seed 20 wave1 rows."""
+    """Wipe MOMO transaction rows in PostgreSQL and seed 20 wave1 rows."""
     day = _today_utc()
-    collection = db["internal_transaction"]
-    await collection.delete_many({"partner": PARTNER})
-    
-    # Wipe Postgres internal_transaction & partner_transaction for MOMO
     try:
-        from src.models.postgres import get_pg_engine, InternalTransactionTable, PartnerTransactionTable
-        from sqlalchemy import delete
-        engine = get_pg_engine()
-        async with engine.begin() as conn:
-            await conn.execute(delete(InternalTransactionTable).where(InternalTransactionTable.partner == PARTNER))
-            await conn.execute(delete(PartnerTransactionTable).where(PartnerTransactionTable.identify == PARTNER))
-        await engine.dispose()
+        await _clear_momo_transaction_rows()
     except Exception as exc:
         print(f"Warning wiping Postgres tables: {exc}")
 
-    inserted = await _seed_internal(db, _wave1_keys(), day=day)
+    inserted = await _seed_internal(_wave1_keys(), day=day)
     _write_partner_file(partner_file_path, _wave1_keys(), day=day)
     return inserted
 
@@ -266,7 +235,7 @@ async def _add_phase2(db, partner_file_path: str | Path) -> int:
     0 MISSING_PARTNER.
     """
     day = _today_utc()
-    inserted = await _seed_internal(db, _wave2_keys(), day=day)
+    inserted = await _seed_internal(_wave2_keys(), day=day)
     _write_partner_file(partner_file_path, _wave2_keys(), day=day)
     return inserted
 
@@ -274,7 +243,7 @@ async def _add_phase2(db, partner_file_path: str | Path) -> int:
 async def _add_phase2_duplicate(db, partner_file_path: str | Path) -> int:
     """Prepare Sprint 1 partial-duplicate demo: 20 old + 10 new keys."""
     day = _today_utc()
-    inserted = await _seed_internal(db, WAVE2_KEYS[:10], day=day)
+    inserted = await _seed_internal(WAVE2_KEYS[:10], day=day)
     _write_partner_file(partner_file_path, WAVE1_KEYS + WAVE2_KEYS[:10], day=day)
     return inserted
 
@@ -288,12 +257,11 @@ async def _add_missing_partner_demo(db, partner_file_path: str | Path) -> int:
     Idempotent: deletes any pre-existing missing-partner row before inserting.
     """
     day = _today_utc()
-    collection = db["internal_transaction"]
-    await collection.delete_many(
-        {"partner": PARTNER, "partnerTxnId": MISSING_PARTNER_KEY}
-    )
-    doc = _build_internal_doc(MISSING_PARTNER_KEY, day, amount=MISSING_PARTNER_AMOUNT)
-    await collection.insert_one(doc)
+    repository = InternalTransactionRepository()
+    await repository.delete_by_partner_and_txn_id(PARTNER, MISSING_PARTNER_KEY)
+    await repository.insert_many([
+        _build_internal_transaction(MISSING_PARTNER_KEY, day, amount=MISSING_PARTNER_AMOUNT)
+    ])
     _write_partner_file(partner_file_path, _wave1_keys(), day=day)
     return 1
 
@@ -313,7 +281,7 @@ async def _full_wipe(db) -> None:
     await db["reconciliation_mapping_config"].delete_many({"partner": PARTNER})
     await db["reconciliation_mapping_config_history"].delete_many({"partner": PARTNER})
     await db["fetch_config"].delete_many({"partner": PARTNER})
-    await db["internal_transaction"].delete_many({"partner": PARTNER})
+    await db["ingestion_checkpoint"].delete_many({"partner": PARTNER})
     await db["partner_runtime_run"].delete_many({"partner": PARTNER})
     await db["post_approval_run"].delete_many({"partner": PARTNER})
     await db["reconciliation_review_record"].delete_many({"partner": PARTNER})
@@ -322,21 +290,21 @@ async def _full_wipe(db) -> None:
 
     # Wipe PostgreSQL tables for MOMO
     try:
-        from src.models.postgres import get_pg_engine, InternalTransactionTable, PartnerTransactionTable, ReconciliationResultTable
+        from src.infrastructure.persistence.postgres_connection import get_pg_engine
+        from src.infrastructure.persistence.postgres_schema import InternalTransactionTable, PartnerTransactionTable, ReconciliationResultTable
         from sqlalchemy import delete
         engine = get_pg_engine()
         async with engine.begin() as conn:
             await conn.execute(delete(ReconciliationResultTable).where(ReconciliationResultTable.partner == PARTNER))
             await conn.execute(delete(PartnerTransactionTable).where(PartnerTransactionTable.identify == PARTNER))
             await conn.execute(delete(InternalTransactionTable).where(InternalTransactionTable.partner == PARTNER))
-        await engine.dispose()
     except Exception as exc:
         print(f"Warning wiping Postgres tables in _full_wipe: {exc}")
 
 
 async def _ensure_mapping_config(db, status: str = "APPROVED") -> None:
     """Ensure a valid mapping configuration with given status is present for MOMO."""
-    from src.models.mapping_config import MappingConfigStatus
+    from src.domain.mapping.models import MappingConfigStatus
     from src.core.enums import FileType
     collection = db["reconciliation_mapping_config"]
     await collection.delete_many({"partner": PARTNER})
@@ -407,15 +375,13 @@ async def _setup_sprint6(db, day: datetime) -> int:
     await _full_wipe(db)
     
     # 2. Seed configs
-    from src.models.mapping_config import MappingConfigStatus
+    from src.domain.mapping.models import MappingConfigStatus
     await _ensure_mapping_config(db, status=MappingConfigStatus.PENDING_APPROVAL.value)
     await _ensure_fetch_config(db)
     
     # 3. Seed only Wave 1 internal transactions.
     # Wave 2 must stay out of reconciliation until it is explicitly activated.
-    collection = db["internal_transaction"]
-    await collection.delete_many({"partner": PARTNER})
-    inserted = await _seed_internal(db, _wave1_keys(), day=day)
+    inserted = await _seed_internal(_wave1_keys(), day=day)
     
     # 4. Generate Wave 1 partner file (20 keys: MOMO_TXN_9000..MOMO_TXN_9019)
     sftp_dir = Path("./sftp_data")
@@ -440,7 +406,7 @@ async def _activate_sprint6_wave2(db, day: datetime) -> tuple[Path, Path, int]:
     sftp_dir = Path("./sftp_data")
     date_compact = day.strftime("%Y%m%d")
 
-    inserted = await _seed_internal(db, _wave2_keys(), day=day)
+    inserted = await _seed_internal(_wave2_keys(), day=day)
 
     # Remove any existing active wave1 files
     for old_file in sftp_dir.glob("*_wave1.xlsx*"):
@@ -460,7 +426,7 @@ async def _activate_sprint6_wave2(db, day: datetime) -> tuple[Path, Path, int]:
 
 async def main(mode: str, file_dir: str = "mock_data") -> None:
     import os
-    client = AsyncIOMotorClient(settings.mongodb_url)
+    client: AsyncIOMotorClient = AsyncIOMotorClient(settings.mongodb_url)
     db = client[settings.db_name]
     
     day_str = os.getenv("SEED_DATE")

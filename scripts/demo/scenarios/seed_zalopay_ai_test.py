@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import settings
-from src.models.fetch_config import FetchConfigRepository
-from src.models.mapping_config import MappingConfigRepository
+from src.infrastructure.fetch_config.repository import FetchConfigRepository
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
 
 
 WEIRD_DIR = Path("./sftp_data/zalopay_weird")
@@ -51,7 +51,7 @@ def _write_weird_file_2(path: Path) -> None:
 
 
 async def main() -> None:
-    client = AsyncIOMotorClient(settings.mongodb_url)
+    client: AsyncIOMotorClient = AsyncIOMotorClient(settings.mongodb_url)
     db = client[settings.db_name]
 
     # Fetch config: FileDrop so cronjob can pick the file locally.

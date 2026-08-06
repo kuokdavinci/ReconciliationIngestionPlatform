@@ -9,7 +9,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 
 
 class ConfigValidationError(BaseModel):

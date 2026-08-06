@@ -7,20 +7,20 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
-from src.models.partner_runtime_run import (
-    PartnerRuntimeRunRepository,
+from src.domain.runtime.models import (
     PartnerRuntimeRunStatus,
     PartnerRuntimeTriggerType,
 )
+from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
 from src.core.error_formatting import summarize_runtime_error
-from src.models.reconciliation_result import (
-    ReconciliationResult,
-    ReconciliationResultRepository,
-)
-from src.models.reconciliation_review_record import ReconciliationReviewRecordRepository
-from src.models.data_container import DataContainerRepository
+from src.domain.reconciliation.models import ReconciliationResult
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
+from src.infrastructure.review.repository import ReconciliationReviewRecordRepository
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
 from src.core.enums import ReconciliationStatus
-from src.reconciliation.engine import ReconciliationEngine
+from src.application.reconciliation.service import ReconciliationCommand
+from src.infrastructure.reconciliation.composition import build_reconciliation_service
+from src.reconciliation.engine import ReconciliationEngine  # noqa: F401 - legacy patch seam
 from src.services.audit import record_audit_event
 from src.services.runtime_runs import (
     create_runtime_run,
@@ -529,12 +529,19 @@ async def _run_reconciliation_in_background(
     )
     try:
         recon_date = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        results = await ReconciliationEngine(db, fast_mode=True).reconcile(
-            partner,
-            recon_date,
-            source_file_id=source_file_id,
-            reconciliation_run_id=run_id,
-            mapping_version=mapping_version,
+        results = await build_reconciliation_service(
+            db,
+            fast_mode=True,
+            # Keep the API-level engine seam injectable for manual-run tests.
+            engine_factory=ReconciliationEngine,
+        ).execute(
+            ReconciliationCommand(
+                partner=partner,
+                reconciliation_date=recon_date,
+                source_file_id=source_file_id,
+                reconciliation_run_id=run_id,
+                mapping_version=mapping_version,
+            )
         )
         finished_at = datetime.now(timezone.utc)
         await update_runtime_run(

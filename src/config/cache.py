@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 
 
 @dataclass

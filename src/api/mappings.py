@@ -16,23 +16,20 @@ from src.config.ai_generator import generate_config_from_samples
 from src.config.settings import settings
 from src.config.signature import compute_signature
 from src.core.enums import FileType
-from src.models.copilot_action import (
+from src.domain.review.models import (
     CopilotAction,
-    CopilotActionRepository,
     CopilotActionStatus,
     CopilotActionType,
 )
-from src.models.mapping_config import (
-    MappingConfig,
-    MappingConfigRepository,
-    MappingConfigStatus,
-)
-from src.models.review_packet import (
+from src.infrastructure.review.repository import CopilotActionRepository
+from src.domain.mapping.models import MappingConfig, MappingConfigStatus
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.domain.review.models import (
     ReviewPacketStatus,
     ReviewPacket,
-    ReviewPacketRepository,
     ReviewPacketSourceType,
 )
+from src.infrastructure.review.repository import ReviewPacketRepository
 from src.reconciliation.scope import classify_scope
 from src.services.audit import record_audit_event
 from src.services.mapping_contract import (

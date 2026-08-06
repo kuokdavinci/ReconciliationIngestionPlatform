@@ -6,8 +6,8 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 from src.core.enums import ReconciliationStatus, TransactionStatus
-from src.models.data_container import DataContainer, PartnerData
-from src.models.internal_transaction import InternalTransaction
+from src.domain.internal_transaction.models import InternalTransaction
+from src.domain.partner_transaction.models import DataContainer, PartnerData
 from src.reconciliation.engine import ReconciliationEngine
 
 

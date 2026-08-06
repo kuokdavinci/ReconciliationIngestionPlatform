@@ -100,26 +100,33 @@ export function useGuidedReview({
 
   // Scope classification auto-load
   useEffect(() => {
-    if (open && localPacket?._id && step === 1 && !scopeClassification && !scopeLoading) {
+    if (open && localPacket?._id && step === 1 && !scopeClassification && !scopeError) {
+      let cancelled = false;
       const loadScope = async () => {
         setScopeLoading(true);
         setScopeError("");
         try {
           const res = (await api.classifyScope(localPacket._id)) as ScopeClassificationInfo & { suggestedScope?: string };
+          if (cancelled) return;
           setScopeClassification(res);
           if (res.suggestedScope) {
             setSelectedScope(res.suggestedScope);
           }
         } catch (err: unknown) {
+          if (cancelled) return;
           const message = err instanceof Error ? err.message : "Failed to load scope classification.";
           setScopeError(message);
         } finally {
-          setScopeLoading(false);
+          if (!cancelled) setScopeLoading(false);
         }
       };
       void loadScope();
+
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [open, localPacket?._id, step, scopeClassification, scopeLoading]);
+  }, [open, localPacket?._id, step, scopeClassification, scopeError]);
 
   // AI mapping auto-load
   useEffect(() => {
@@ -292,11 +299,9 @@ export function useGuidedReview({
   }, [localPacket, onRefresh, handleClose]);
 
   const retryScopeClassification = useCallback(() => {
-    if (!localPacket) return;
-    void api.classifyScope(localPacket._id).then(res => {
-      setScopeClassification(res as ScopeClassificationInfo);
-    });
-  }, [localPacket]);
+    setScopeClassification(null);
+    setScopeError("");
+  }, []);
 
   // Derived state
   const validationState = useMemo(() => {

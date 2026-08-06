@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 from src.readers.csv_reader import CSVStreamReader
 from src.readers.excel_reader import ExcelStreamReader
 from src.readers.json_reader import JSONStreamReader

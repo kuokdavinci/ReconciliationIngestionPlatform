@@ -41,8 +41,8 @@ class _AsyncCursor:
     def __init__(self, docs: list[dict]):
         self._docs = docs
         self._idx = 0
-        self._limit = None
-        self._skip = 0
+        self._limit: int | None = None
+        self._skip: int = 0
 
     def sort(self, *args, **kwargs):
         return self
@@ -248,6 +248,32 @@ class TestRunStatus:
 
 
 class TestRunReconciliation:
+    @pytest.mark.asyncio
+    async def test_background_reconciliation_uses_api_engine_injection_seam(self):
+        from src.api.reconciliation import _run_reconciliation_in_background
+
+        db = MagicMock()
+        db["partner_runtime_run"].find_one = AsyncMock(return_value={"_id": "run-1"})
+        runner = MagicMock()
+        runner.reconcile = AsyncMock(return_value=["result"])
+
+        with (
+            patch("src.api.reconciliation.ReconciliationEngine", return_value=runner) as engine_factory,
+            patch("src.api.reconciliation.update_runtime_run", new=AsyncMock()),
+            patch("src.api.reconciliation.record_audit_event", new=AsyncMock()),
+        ):
+            await _run_reconciliation_in_background(
+                db,
+                "run-1",
+                "MOMO",
+                "2024-07-07",
+                source_file_id="file-1",
+                mapping_version="v1",
+            )
+
+        engine_factory.assert_called_once()
+        runner.reconcile.assert_awaited_once()
+
     @pytest.mark.asyncio
     async def test_run_reconciliation_returns_count(self):
         from src.api.reconciliation import run_reconciliation_now, RunReconciliationPayload

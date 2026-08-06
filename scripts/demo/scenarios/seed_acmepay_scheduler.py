@@ -10,9 +10,12 @@ from src.config.settings import settings
 from src.core.enums import TransactionStatus
 from src.core.enums import FileType
 from src.core.types import FieldMapping, FieldMappingType
-from src.models.internal_transaction import InternalTransaction, InternalTransactionRepository
-from src.models.fetch_config import FetchConfig, FetchMethod, FileDropConfig, FetchConfigRepository
-from src.models.mapping_config import MappingConfig, MappingConfigRepository, MappingConfigStatus
+from src.domain.internal_transaction.models import InternalTransaction
+from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
+from src.domain.fetch_config.models import FetchConfig, FetchMethod, FileDropConfig
+from src.infrastructure.fetch_config.repository import FetchConfigRepository
+from src.domain.mapping.models import MappingConfig, MappingConfigStatus
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
 
 async def seed_acmepay_case():
     print("Connecting to MongoDB...")
@@ -25,7 +28,7 @@ async def seed_acmepay_case():
 
     print("Cleaning up old ACMEPAY data...")
     internal_repo = InternalTransactionRepository()
-    from src.models.postgres import InternalTransactionTable
+    from src.infrastructure.persistence.postgres_schema import InternalTransactionTable
     async with internal_repo.engine.begin() as conn:
         await conn.execute(delete(InternalTransactionTable).where(InternalTransactionTable.partner == "ACMEPAY"))
     await db["reconciliation_file"].delete_many({"partner": "ACMEPAY"})

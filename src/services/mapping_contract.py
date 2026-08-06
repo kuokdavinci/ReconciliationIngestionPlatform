@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from src.config.validator import ConfigValidator
 from src.core.constants import DEFAULT_CURRENCY
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 
 REQUIRED_MAPPING_PATHS = {"id", "amount", "status"}
 STATUS_MAPPING_DEFAULTS = {

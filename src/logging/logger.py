@@ -26,6 +26,7 @@ class LogEventType(StrEnum):
     FILE_FAILED = "FILE_FAILED"
     ROW_SUCCESS = "ROW_SUCCESS"
     ROW_FAILED = "ROW_FAILED"
+    INGESTION_STAGE = "INGESTION_STAGE"
 
 
 # Internal logging fields to exclude from JSON output
@@ -166,6 +167,23 @@ class StructuredLogger:
             "file_id": _sanitize(file_id),
             "error": _sanitize(error),
         })
+
+    def emit_ingestion_stage(
+        self,
+        stage: str,
+        run_id: str,
+        source_file_id: str | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        """Log a stage transition with traceable ingestion context."""
+        extra: dict[str, Any] = {
+            "stage": _sanitize(stage),
+            "run_id": _sanitize(run_id),
+            "source_file_id": _sanitize(source_file_id),
+        }
+        if error_code is not None:
+            extra["error_code"] = _sanitize(error_code)
+        self._log_event(LogEventType.INGESTION_STAGE, extra)
 
     def emit_row_success(self, file_id: str, row_number: int, trace: str) -> None:
         """Log ROW_SUCCESS event with row context."""

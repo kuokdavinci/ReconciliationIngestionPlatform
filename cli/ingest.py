@@ -13,7 +13,8 @@ from src.config.loader import ConfigLoader
 from src.config.validator import ConfigValidator
 from src.core.enums import FileType
 from src.core.types import FieldMapping, FieldMappingType
-from src.models.mapping_config import MappingConfig, MappingConfigRepository
+from src.domain.mapping.models import MappingConfig
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.pipeline.ingestion_pipeline import IngestionPipeline
 from cli import get_db, init_databases
 

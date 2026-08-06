@@ -5,6 +5,21 @@ from pymongo import ASCENDING, DESCENDING, IndexModel
 
 
 INDEXES: dict[str, list[IndexModel]] = {
+    "ingestion_checkpoint": [
+        IndexModel(
+            [("partner", ASCENDING), ("fetchConfigId", ASCENDING), ("sourceType", ASCENDING), ("streamKey", ASCENDING), ("mode", ASCENDING)],
+            unique=True,
+            name="idx_checkpoint_stream_unique",
+        ),
+        IndexModel(
+            [("status", ASCENDING), ("updatedAt", DESCENDING)],
+            name="idx_checkpoint_status_updated",
+        ),
+        IndexModel(
+            [("mode", ASCENDING), ("status", ASCENDING), ("updatedAt", DESCENDING)],
+            name="idx_checkpoint_mode_status_updated",
+        ),
+    ],
     "reconciliation_file": [
         IndexModel("fileHash", unique=True, name="idx_file_hash_unique"),
         IndexModel("fetchUnitKey", unique=True, sparse=True, name="idx_fetch_unit_key_unique"),

@@ -2,6 +2,7 @@
 
 from src.domain.fetch_config.models import (
     APIConfig,
+    APIPaginationConfig,
     FetchConfig,
     FetchMethod,
     FileDropConfig,
@@ -10,6 +11,7 @@ from src.domain.fetch_config.models import (
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.models.fetch_config import (
     APIConfig as LegacyAPIConfig,
+    APIPaginationConfig as LegacyAPIPaginationConfig,
     FetchConfig as LegacyFetchConfig,
     FetchConfigRepository as LegacyFetchConfigRepository,
     FetchMethod as LegacyFetchMethod,
@@ -22,6 +24,7 @@ def test_legacy_fetch_config_module_is_a_compatibility_facade() -> None:
     """Legacy imports must resolve to domain and infrastructure implementations."""
 
     assert LegacyAPIConfig is APIConfig
+    assert LegacyAPIPaginationConfig is APIPaginationConfig
     assert LegacyFetchConfig is FetchConfig
     assert LegacyFetchConfigRepository is FetchConfigRepository
     assert LegacyFetchMethod is FetchMethod

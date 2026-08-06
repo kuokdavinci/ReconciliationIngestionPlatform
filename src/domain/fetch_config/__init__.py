@@ -2,6 +2,7 @@
 
 from .models import (
     APIConfig,
+    APIPaginationConfig,
     FetchConfig,
     FetchMethod,
     FileDropConfig,
@@ -10,6 +11,7 @@ from .models import (
 
 __all__ = [
     "APIConfig",
+    "APIPaginationConfig",
     "FetchConfig",
     "FetchMethod",
     "FileDropConfig",

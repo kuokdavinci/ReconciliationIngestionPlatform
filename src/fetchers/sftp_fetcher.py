@@ -7,11 +7,13 @@ and date interpolation support.
 import asyncio
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import paramiko
 
 from src.fetchers.base import BaseFetcher, FetchResult
-from src.models.fetch_config import SFTPConfig
+from src.domain.fetch_config.models import SFTPConfig
+from src.domain.ingestion.source_units import SourceUnitMetadata
 
 
 class SFTPFetcher(BaseFetcher):
@@ -22,7 +24,10 @@ class SFTPFetcher(BaseFetcher):
     """
 
     async def fetch(
-        self, config: SFTPConfig, reconciliation_date: datetime
+        self,
+        config: SFTPConfig,
+        reconciliation_date: datetime,
+        fetch_metadata: dict[str, Any] | None = None,
     ) -> FetchResult:
         """Download file from SFTP server.
 
@@ -47,40 +52,74 @@ class SFTPFetcher(BaseFetcher):
             download_dir = config.download_dir or "./downloads"
             local_dir = Path(download_dir)
             local_dir.mkdir(parents=True, exist_ok=True)
-            local_filename = Path(remote_path).name
-            local_path = local_dir / local_filename
-
-            # Download file via SFTP (async wrapper)
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
+            remote_paths = await loop.run_in_executor(
                 None,
-                self._download_via_sftp,
+                self._resolve_remote_paths_via_sftp,
                 config.host,
                 config.port,
                 username,
                 password,
                 remote_path,
-                str(local_path),
                 config.timeout,
             )
+            remote_paths = sorted(remote_paths)
+            units: list[SourceUnitMetadata] = []
+            for resolved_remote_path in remote_paths:
+                local_path = local_dir / Path(resolved_remote_path).name
+                await loop.run_in_executor(
+                    None,
+                    self._download_via_sftp,
+                    config.host,
+                    config.port,
+                    username,
+                    password,
+                    resolved_remote_path,
+                    str(local_path),
+                    config.timeout,
+                )
+                if not self.validate_file(str(local_path)):
+                    return FetchResult(
+                        success=False,
+                        local_path=str(units[0]["localPath"]) if units else None,
+                        error=f"Downloaded file is empty or missing: {local_path}",
+                        units=units,
+                    )
 
-            # Validate downloaded file
-            if not self.validate_file(str(local_path)):
-                return FetchResult(
-                    success=False,
-                    error=f"Downloaded file is empty or missing: {local_path}",
+                units.append(
+                    self.build_file_source_unit(
+                        str(local_path),
+                        "SFTP",
+                        {
+                            "host": config.host,
+                            "remotePath": resolved_remote_path,
+                            "remotePattern": remote_path,
+                            # Local mtime changes on every download. Keep the
+                            # remote mtime slot explicit until SFTP stat data
+                            # is available, so replay identity stays stable.
+                            "modifiedAt": None,
+                            **(
+                                {"configVersion": fetch_metadata["configVersion"]}
+                                if fetch_metadata and fetch_metadata.get("configVersion")
+                                else {}
+                            ),
+                        },
+                    )
                 )
 
-            file_size = local_path.stat().st_size
+            local_path = Path(units[0]["localPath"])
+            file_size = units[0]["fileSize"]
 
             return FetchResult(
                 success=True,
                 local_path=str(local_path),
                 file_size=file_size,
                 metadata={
-                    "remote_path": remote_path,
+                    "remote_path": str(remote_paths[0]),
+                    "remote_paths": remote_paths,
                     "host": config.host,
                 },
+                units=units,
             )
 
         except ValueError as exc:
@@ -88,6 +127,52 @@ class SFTPFetcher(BaseFetcher):
             return FetchResult(success=False, error=str(exc))
         except Exception as exc:
             return FetchResult(success=False, error=f"SFTP fetch failed: {exc}")
+
+    @staticmethod
+    def _resolve_remote_paths_via_sftp(
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        remote_path: str,
+        timeout: int,
+    ) -> list[str]:
+        """Resolve a remote path or wildcard into deterministic remote objects."""
+        if "*" not in remote_path and "?" not in remote_path:
+            return [remote_path]
+
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
+        sftp = None
+        try:
+            ssh.connect(
+                host,
+                port=port,
+                username=username,
+                password=password,
+                timeout=timeout,
+            )
+            sftp = ssh.open_sftp()
+            remote_dir = str(Path(remote_path).parent)
+            pattern = Path(remote_path).name
+            try:
+                files = sftp.listdir(remote_dir)
+            except FileNotFoundError:
+                raise FileNotFoundError(f"Remote directory not found: {remote_dir}")
+
+            matching_files = sorted(
+                filename for filename in files if _match_pattern(filename, pattern)
+            )
+            if not matching_files:
+                raise FileNotFoundError(
+                    f"No files matching pattern '{pattern}' in {remote_dir}"
+                )
+            return [f"{remote_dir}/{filename}" for filename in matching_files]
+        finally:
+            if sftp is not None:
+                sftp.close()
+            ssh.close()
 
     @staticmethod
     def _download_via_sftp(
@@ -114,7 +199,8 @@ class SFTPFetcher(BaseFetcher):
             Exception: If SFTP connection or download fails.
         """
         ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.load_system_host_keys()
+        ssh.set_missing_host_key_policy(paramiko.RejectPolicy())
 
         try:
             ssh.connect(host, port=port, username=username, password=password, timeout=timeout)

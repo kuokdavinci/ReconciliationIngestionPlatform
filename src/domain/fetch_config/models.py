@@ -41,6 +41,23 @@ class APIConfig(BaseModel):
     query_params: Optional[dict[str, str]] = Field(default=None, alias="queryParams")
     timeout: int = 30
     download_dir: Optional[str] = Field(default="./downloads", alias="downloadDir")
+    pagination: Optional["APIPaginationConfig"] = None
+
+
+class APIPaginationConfig(BaseModel):
+    """Config-driven pagination contract for API responses."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    page_param: Optional[str] = Field(default=None, alias="pageParam")
+    cursor_param: Optional[str] = Field(default=None, alias="cursorParam")
+    page_size_param: Optional[str] = Field(default=None, alias="pageSizeParam")
+    page_size: Optional[int] = Field(default=None, alias="pageSize")
+    items_path: Optional[str] = Field(default=None, alias="itemsPath")
+    next_cursor_path: Optional[str] = Field(default=None, alias="nextCursorPath")
+    max_pages: int = Field(default=100, alias="maxPages", gt=0)
+
+
 class FileDropConfig(BaseModel):
     """Configuration for FileDrop fetch method."""
 

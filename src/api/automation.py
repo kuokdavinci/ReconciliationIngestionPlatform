@@ -1,6 +1,7 @@
 """Automation visibility endpoints for scheduler/admin views."""
 
 import asyncio
+import inspect
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
@@ -9,15 +10,13 @@ from src.api.actor import require_actor
 from src.config.cache import ConfigCache
 from src.config.loader import ConfigLoader
 from src.config.validator import ConfigValidator
-from src.models.fetch_config import FetchConfigRepository
-from src.models.mapping_config import MappingConfigRepository
-from src.models.partner_runtime_run import (
-    PartnerRuntimeRunRepository,
-    PartnerRuntimeRunStatus,
-)
-from src.models.review_packet import ReviewPacketRepository
+from src.infrastructure.fetch_config.repository import FetchConfigRepository
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.domain.runtime.models import PartnerRuntimeRunStatus, PartnerRuntimeTriggerType
+from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
+from src.infrastructure.review.repository import ReviewPacketRepository
 from src.scheduler.jobs import run_fetch_config_once
-from src.services.runtime_runs import serialize_partner_runtime_run
+from src.services.runtime_runs import create_runtime_run, serialize_partner_runtime_run
 
 router = APIRouter(prefix="/api/v1/automation")
 
@@ -38,9 +37,15 @@ def _track_background_task(request: Request, task: asyncio.Task) -> None:
     task.add_done_callback(tasks.discard)
 
 
-async def _run_fetch_job_in_background(db, config) -> None:
+async def _run_fetch_job_in_background(db, config, runtime_run_id: str | None = None) -> None:
     config_repo = MappingConfigRepository(db)
     config_loader = ConfigLoader(config_repo, ConfigCache(), ConfigValidator())
+    runtime_run_kwargs = {}
+    if (
+        runtime_run_id is not None
+        and "runtime_run_id" in inspect.signature(run_fetch_config_once).parameters
+    ):
+        runtime_run_kwargs["runtime_run_id"] = runtime_run_id
     await run_fetch_config_once(
         config=config,
         db=db,
@@ -48,6 +53,7 @@ async def _run_fetch_job_in_background(db, config) -> None:
         reconciliation_date=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
         batch_size=100,
         structured_logger=None,
+        **runtime_run_kwargs,
     )
 
 
@@ -110,6 +116,13 @@ async def list_automation_jobs(request: Request):
         latest_run_data = serialize_partner_runtime_run(latest_run) if latest_run else None
         latest_run_stats = (latest_run_data or {}).get("stats") or {}
         duplicate_outcome = latest_run_stats.get("outcome")
+        if duplicate_outcome is None and latest_run_stats.get("replayed", 0) > 0:
+            duplicate_outcome = "FETCH_UNIT_REPLAY"
+        is_duplicate_outcome = duplicate_outcome in {
+            "FILE_DUPLICATE",
+            "FETCH_UNIT_REPLAY",
+            "NO_NEW_FILE",
+        }
         active_statuses = {
             PartnerRuntimeRunStatus.QUEUED.value,
             PartnerRuntimeRunStatus.FETCHING.value,
@@ -122,6 +135,7 @@ async def list_automation_jobs(request: Request):
         has_pending_file = bool(
             latest_file
             and latest_file.get("processingStatus") == "COMPLETED"
+            and not is_duplicate_outcome
             and (
                 latest_run is None
                 or latest_run.source_file_id != latest_file["id"]
@@ -136,11 +150,15 @@ async def list_automation_jobs(request: Request):
         elif latest_run_data and latest_run_data.get("status") == PartnerRuntimeRunStatus.FAILED.value:
             status = "FAILED"
             status_message = latest_run_data.get("message") or "Latest runtime run failed."
+        elif is_duplicate_outcome:
+            status_message = {
+                "FILE_DUPLICATE": "File already processed. Ingestion and reconciliation were skipped safely.",
+                "FETCH_UNIT_REPLAY": "Fetch unit already processed. Ingestion and reconciliation were skipped safely.",
+                "NO_NEW_FILE": "No new file was found. Ingestion and reconciliation were skipped.",
+            }[duplicate_outcome]
         elif has_pending_file:
             status = "PENDING"
             status_message = "A partner file is available and waiting for reconciliation."
-        elif duplicate_outcome in {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY", "NO_NEW_FILE"}:
-            status_message = latest_run_data.get("message") or "No new file was processed."
         jobs.append({
             "partner": config.partner,
             "fetchMethod": config.fetch_method.value,
@@ -154,11 +172,7 @@ async def list_automation_jobs(request: Request):
             "status": status,
             "statusMessage": status_message,
             "duplicateOutcome": duplicate_outcome,
-            "duplicateMessage": (
-                latest_run_data.get("message")
-                if duplicate_outcome in {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY", "NO_NEW_FILE"}
-                else None
-            ),
+            "duplicateMessage": status_message if is_duplicate_outcome else None,
             "hasPendingFile": has_pending_file,
             "latestRuntimeRun": latest_run_data,
             "activeRuntimeRun": active_run,
@@ -178,7 +192,16 @@ async def run_automation_job_now(request: Request, partner: str):
     if not config.enabled:
         raise HTTPException(status_code=400, detail="Automation job is disabled.")
 
-    task = asyncio.create_task(_run_fetch_job_in_background(db, config))
+    run = await create_runtime_run(
+        db,
+        partner=partner,
+        date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        trigger_type=PartnerRuntimeTriggerType.SCHEDULER,
+        triggered_by=actor,
+        status=PartnerRuntimeRunStatus.QUEUED,
+        message="Automation run queued. Watch runtime state for live progress.",
+    )
+    task = asyncio.create_task(_run_fetch_job_in_background(db, config, str(run.id)))
     _track_background_task(request, task)
     return {
         "ok": True,
@@ -186,4 +209,6 @@ async def run_automation_job_now(request: Request, partner: str):
         "actor": actor,
         "partner": partner,
         "message": "Automation run queued. Watch runtime state for live progress.",
+        "runtimeRunId": str(run.id),
+        "run": serialize_partner_runtime_run(run),
     }

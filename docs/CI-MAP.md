@@ -23,9 +23,14 @@ flowchart LR
     E --> E2[Provider fallback]
     E --> E3[Analysis scenarios]
     E --> E4[Analysis quality tests]
+
+    PR --> F[Frontend CI]
+    F --> F1[ESLint + TypeScript]
+    F --> F2[Next.js production build]
+    F --> F3[Playwright interaction smoke tests]
 ```
 
-All three workflows use Python 3.11, `uv sync --all-extras --dev`, PostgreSQL 16 and `AI_API_KEY=sk-test-fake-key` for tests that need the analysis configuration.
+The backend, ingestion and analysis workflows use Python 3.11, `uv sync --all-extras --dev`, PostgreSQL 16 and `AI_API_KEY=sk-test-fake-key` where required. Frontend CI uses Node.js 22 and runs independently of backend services.
 
 ## Workflow matrix
 
@@ -34,6 +39,7 @@ All three workflows use Python 3.11, `uv sync --all-extras --dev`, PostgreSQL 16
 | [Backend Quality](../.github/workflows/backend-quality.yml) | PR to `main`, manual | Alembic, Ruff, Mypy | All backend tests except E2E, ingestion integration/pipeline, MOMO E2E and Sprint 1 benchmark | `src/api/`, `src/config/`, `src/services/`, reconciliation and backend models |
 | [Ingestion Pipeline](../.github/workflows/ingestion-pipeline.yml) | PR to `main`, manual | Alembic, ingestion Ruff | Index, ingestion integration/pipeline, MOMO E2E and Sprint 1 benchmark | `src/fetchers/`, `src/pipeline/`, `src/scheduler/`, ingestion services/models |
 | [Eval — AI Analysis Quality](../.github/workflows/eval.yml) | Push to `main`/`feature/*`, PR to `main`, manual | Analysis behavior without a real LLM | Guardrails, providers, scenarios, insights, services, schemas, metrics, grouping, alerter and reporter | `src/analysis/`, related analysis APIs/services/schemas |
+| [Frontend CI](../.github/workflows/frontend-ci.yml) | Push/PR to `main`, manual | ESLint, TypeScript, Next.js webpack build, Playwright | Dashboard route navigation and Mapping Studio interaction smoke tests | `frontend-next/` |
 
 ## Exact command map
 
@@ -78,6 +84,17 @@ uv run pytest tests/test_analysis_insights.py tests/test_analysis_services.py
   tests/test_analysis_reporter.py
 ```
 
+### Frontend CI
+
+```text
+npm --prefix frontend-next ci
+npm --prefix frontend-next run lint
+npm --prefix frontend-next exec tsc -- --noEmit
+npm --prefix frontend-next run build -- --webpack
+npm --prefix frontend-next exec playwright -- install --with-deps chromium
+npm --prefix frontend-next run test:e2e
+```
+
 ## Blast-radius guide
 
 | Changed area | Run first | Also inspect |
@@ -91,7 +108,7 @@ uv run pytest tests/test_analysis_insights.py tests/test_analysis_services.py
 | `src/analysis/` | Eval | Backend Quality because its general test command also includes analysis tests |
 | `alembic/` | Backend Quality and Ingestion Pipeline | PostgreSQL integration behavior and migration ordering |
 | `.github/workflows/` | The edited workflow | Its exact local command and YAML scope/exclusions |
-| `frontend-next/` | No dedicated GitHub workflow currently exists | Run frontend lint/build locally; add a frontend workflow if CI coverage is required |
+| `frontend-next/` | Frontend CI | Run frontend lint, type check, webpack build and Playwright interaction tests |
 
 ## Change review sequence
 
@@ -109,7 +126,7 @@ uv run pytest tests/test_analysis_insights.py tests/test_analysis_services.py
 - Backend Quality intentionally excludes ingestion integration/pipeline tests; a backend-only green check does not prove the ingestion pipeline is healthy.
 - Ingestion Pipeline covers the pipeline and benchmark path but does not replace the broader backend test suite.
 - Eval validates analysis behavior separately and uses fake configuration; it does not verify production provider connectivity.
-- No workflow currently validates `frontend-next`, so frontend changes have no automatic CI gate in this repository.
+- Frontend CI runs browser interaction smoke tests with API requests mocked at the browser boundary, so it does not require a backend or database service.
 - Codegraph provides structural dependency information. Workflow semantics, database state, Docker networking and environment-specific behavior still require CI/test verification.
 
 ## Maintenance rule

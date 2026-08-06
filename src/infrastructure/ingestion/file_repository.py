@@ -1,0 +1,110 @@
+"""MongoDB adapter for ingestion file claims."""
+
+from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
+
+from src.core.enums import ProcessingStatus
+from src.domain.ingestion.models import ReconciliationFile
+from src.infrastructure.persistence.mongo_repository import BaseRepository
+
+
+class ReconciliationFileRepository(BaseRepository[ReconciliationFile]):
+    """Persistence adapter for ``reconciliation_file`` claims."""
+
+    def __init__(self, db: AsyncIOMotorDatabase):
+        super().__init__(collection_name="reconciliation_file", db=db)
+        self._set_model_class(ReconciliationFile)
+
+    async def find_by_file_hash(self, file_hash: str) -> Optional[ReconciliationFile]:
+        return await self.find_one({"fileHash": file_hash})
+
+    async def reclaim_failed_by_file_hash(
+        self,
+        file_hash: str,
+    ) -> Optional[ReconciliationFile]:
+        raw = await self.collection.find_one_and_update(
+            {
+                "fileHash": file_hash,
+                "processingStatus": ProcessingStatus.FAILED.value,
+            },
+            {
+                "$set": {
+                    "processingStatus": ProcessingStatus.PROCESSING.value,
+                    "totalRows": 0,
+                    "successRows": 0,
+                    "failedRows": 0,
+                    "duplicateRows": 0,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        return self._from_mongo(raw) if raw is not None else None
+
+    async def find_by_fetch_unit_key(
+        self,
+        fetch_unit_key: str,
+    ) -> Optional[ReconciliationFile]:
+        return await self.find_one({"fetchUnitKey": fetch_unit_key})
+
+    async def create_or_get_by_file_hash(
+        self, doc: ReconciliationFile
+    ) -> tuple[ReconciliationFile, bool]:
+        try:
+            created = await self.create(doc)
+            return created, True
+        except DuplicateKeyError:
+            existing = await self.find_by_file_hash(doc.file_hash)
+            if existing is None and doc.fetch_unit_key:
+                existing = await self.find_by_fetch_unit_key(doc.fetch_unit_key)
+            if existing is None:
+                raise
+            return existing, False
+
+    async def find_by_partner_and_date(
+        self, partner: str, reconciliation_date: datetime
+    ) -> list[ReconciliationFile]:
+        return await self.find_many(
+            {
+                "partner": partner,
+                "reconciliationDate": reconciliation_date,
+            }
+        )
+
+    async def update_processing_stats(
+        self,
+        file_id: UUID,
+        total: int,
+        success: int,
+        failed: int,
+        duplicate: int = 0,
+    ) -> bool:
+        return await self.update_one(
+            {"_id": str(file_id)},
+            {
+                "totalRows": total,
+                "successRows": success,
+                "failedRows": failed,
+                "duplicateRows": duplicate,
+            },
+        )
+
+    async def update_status(self, file_id: UUID, status: ProcessingStatus) -> bool:
+        return await self.update_one(
+            {"_id": str(file_id)},
+            {"processingStatus": status.value},
+        )
+
+    async def update_stage_summary(
+        self,
+        file_id: UUID,
+        summary: dict,
+    ) -> bool:
+        return await self.update_one(
+            {"_id": str(file_id)},
+            {"stageSummary": summary},
+        )

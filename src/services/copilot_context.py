@@ -8,11 +8,13 @@ from typing import Any, Optional
 
 from fastapi import HTTPException
 
-from src.models.mapping_config import MappingConfigRepository, MappingConfigStatus
-from src.models.reconciliation_file import ReconciliationFileRepository
-from src.models.review_packet import ReviewPacketRepository, ReviewPacketStatus
-from src.models.reconciliation_result import ReconciliationResultRepository
-from src.models.fetch_config import FetchConfigRepository
+from src.domain.mapping.models import MappingConfigStatus
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+from src.domain.review.models import ReviewPacketStatus
+from src.infrastructure.review.repository import ReviewPacketRepository
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
+from src.infrastructure.fetch_config.repository import FetchConfigRepository
 
 
 def _enum_value(value: Any) -> str:

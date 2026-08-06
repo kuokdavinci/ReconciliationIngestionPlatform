@@ -13,27 +13,30 @@ from src.config.loader import ConfigLoader
 from src.config.validator import ConfigValidator
 from src.core.error_formatting import summarize_runtime_error
 from src.core.enums import ProcessingStatus
-from src.models.copilot_action import CopilotActionRepository, CopilotActionStatus
-from src.models.mapping_config import MappingConfigRepository, MappingConfigStatus
-from src.models.post_approval_run import (
+from src.domain.review.models import CopilotActionStatus
+from src.infrastructure.review.repository import CopilotActionRepository
+from src.domain.mapping.models import MappingConfigStatus
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.domain.review.models import (
     PostApprovalRun,
-    PostApprovalRunRepository,
     PostApprovalRunStage,
     PostApprovalRunStatus,
 )
-from src.models.reconciliation_file import ReconciliationFileRepository
-from src.models.data_container import DataContainerRepository
-from src.models.reconciliation_result import ReconciliationResultRepository
-from src.models.review_packet import (
+from src.infrastructure.review.repository import PostApprovalRunRepository
+from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
+from src.domain.review.models import (
     ReviewDecisionMode,
-    ReviewPacketRepository,
     ReviewPacketStatus,
 )
-from src.pipeline.ingestion_pipeline import IngestionPipeline
-from src.reconciliation.engine import ReconciliationEngine
+from src.infrastructure.review.repository import ReviewPacketRepository
+from src.infrastructure.ingestion.composition import build_ingestion_pipeline
+from src.application.reconciliation.service import ReconciliationCommand
+from src.infrastructure.reconciliation.composition import build_reconciliation_service
 from src.services.audit import record_audit_event
 from src.services.runtime_runs import create_runtime_run, update_runtime_run
-from src.models.partner_runtime_run import PartnerRuntimeRunStatus, PartnerRuntimeTriggerType
+from src.domain.runtime.models import PartnerRuntimeRunStatus, PartnerRuntimeTriggerType
 
 
 def _get_db(request: Request):
@@ -405,7 +408,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
     )
 
     from src.config.settings import settings
-    pipeline = IngestionPipeline(
+    pipeline = build_ingestion_pipeline(
         db=db,
         config_loader=build_config_loader_from_db(db),
         batch_size=settings.ingest_batch_size,
@@ -499,12 +502,14 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
     )
 
     recon_date = source_file.reconciliation_date
-    recon_results = await ReconciliationEngine(db, fast_mode=True).reconcile(
-        config.partner,
-        recon_date,
-        source_file_id=str(ingestion_result.file_record.id),
-        reconciliation_run_id=runtime_run_id,
-        mapping_version=getattr(config, "config_version", None) or str(config.id),
+    recon_results = await build_reconciliation_service(db, fast_mode=True).execute(
+        ReconciliationCommand(
+            partner=config.partner,
+            reconciliation_date=recon_date,
+            source_file_id=str(ingestion_result.file_record.id),
+            reconciliation_run_id=runtime_run_id,
+            mapping_version=getattr(config, "config_version", None) or str(config.id),
+        )
     )
 
     await _update_post_approval_run(

@@ -18,8 +18,8 @@ from src.core.enums import TransactionStatus
 from src.core.types import CanonicalTransaction, ValidationError
 
 if TYPE_CHECKING:
-    from src.models.data_container import DataContainerRepository
-    from src.models.reconciliation_file import ReconciliationFileRepository
+    from src.infrastructure.partner_transaction.repository import DataContainerRepository
+    from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 
 
 @dataclass
@@ -41,9 +41,10 @@ class Validator:
     Never raises exceptions — all errors are collected as ValidationError
     objects. Multiple errors are collected (not fail-fast).
 
-    Optional repository injection enables duplicate detection:
-    - data_container_repo: For transaction-level duplicate checks
-    - reconciliation_file_repo: For file-level duplicate checks
+    Optional repository injection is retained for the legacy
+    ``validate_with_duplicates`` compatibility API. The active ingestion
+    pipeline uses ``validate`` only; duplicate authority is the atomic
+    database write.
     """
 
     def __init__(
@@ -95,10 +96,11 @@ class Validator:
         row_number: Optional[int] = None,
         trace: Optional[str] = None,
     ) -> ValidationResult:
-        """Validate a CanonicalTransaction including duplicate detection.
+        """Legacy validation API that also performs duplicate lookups.
 
         Runs core validation first, then checks for duplicates if repositories
-        are available. All errors (core + duplicate) are collected together.
+        are available. The active ingestion pipeline does not call this
+        method; database conflict handling is its duplicate authority.
 
         Args:
             txn: The canonical transaction to validate.

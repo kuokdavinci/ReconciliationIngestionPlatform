@@ -9,6 +9,8 @@ Provides:
 - mock_data_container_repo: Tracks insert_many calls
 """
 
+from typing import Any
+
 import pytest
 
 
@@ -41,11 +43,9 @@ from src.core.types import (
     FieldMapping,
     FieldMappingType,
 )
-from src.models.data_container import DataContainerRepository
-from src.models.mapping_config import MappingConfig
-from src.models.reconciliation_file import (
-    ReconciliationFileRepository,
-)
+from src.domain.mapping.models import MappingConfig
+from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
 
 
 @pytest.fixture
@@ -114,11 +114,11 @@ def sample_mapping_config() -> MappingConfig:
 
     return MappingConfig(
         partner="MOMO",
-        workflow_type="UPC",
-        file_type=FileType.SETTLEMENT,
-        sheet_name="Sheet1",
-        start_row=2,
-        field_mappings=field_mappings,
+        workflowType="UPC",
+        fileType=FileType.SETTLEMENT,
+        sheetName="Sheet1",
+        startRow=2,
+        fieldMappings=field_mappings,
     )
 
 
@@ -131,7 +131,7 @@ def mock_config_loader(sample_mapping_config: MappingConfig) -> MagicMock:
     return loader
 
 
-def _write_row(ws, row_num: int, values: dict[int, any]) -> None:
+def _write_row(ws, row_num: int, values: dict[int, Any]) -> None:
     """Write values to specific columns in a worksheet row.
 
     Args:
@@ -279,10 +279,11 @@ def large_excel_file() -> Generator[str, None, None]:
     Path(temp_path).unlink(missing_ok=True)
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def setup_postgres_test_db():
-    """Create test database and tables for PostgreSQL testing, then configure the engine."""
+    """Create PostgreSQL test schema for tests that explicitly require it."""
     import asyncio
+    import asyncpg
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
     from src.config.settings import settings
@@ -292,7 +293,27 @@ def setup_postgres_test_db():
     base_url = url.rsplit("/", 1)[0] + "/postgres"
     if base_url.startswith("postgresql://"):
         base_url = base_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        
+
+    asyncpg_url = base_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+    async def probe_database():
+        connection = await asyncio.wait_for(
+            asyncpg.connect(asyncpg_url, timeout=3),
+            timeout=4,
+        )
+        await connection.close()
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(probe_database())
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL is not available at {asyncpg_url}: {exc}")
+
     engine = create_async_engine(base_url, isolation_level="AUTOCOMMIT")
     
     async def create_db():
@@ -307,17 +328,6 @@ def setup_postgres_test_db():
                     if "already exists" not in str(exc):
                         raise
         await engine.dispose()
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-    if loop.is_running():
-        # In case we're inside a running loop, create task or use event loop
-        import nest_asyncio
-        nest_asyncio.apply()
-        
     loop.run_until_complete(create_db())
     
     test_url = url.rsplit("/", 1)[0] + "/reconciliation_test"
@@ -338,8 +348,8 @@ def setup_postgres_test_db():
     loop.run_until_complete(clean_db())
 
 
-@pytest.fixture(autouse=True)
-async def clean_postgres_tables():
+@pytest.fixture
+async def clean_postgres_tables(setup_postgres_test_db):
     """Wipe all PostgreSQL tables before each test to ensure test isolation."""
     from src.models.postgres import get_pg_engine
     from sqlalchemy import text

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from src.models.audit_event import AuditEventRepository
+from src.infrastructure.audit.repository import AuditEventRepository
 
 router = APIRouter(prefix="/api/v1/audit")
 DATE_OPTIONAL_ENTITY_TYPES = {"MAPPING_CONFIG"}

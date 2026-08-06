@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook
 
+from src.core.enums import FileType
 from src.models.mapping_config import MappingConfig
 from src.readers.excel_reader import ExcelStreamReader
 
@@ -418,7 +419,7 @@ class TestMappingConfigIntegration:
         config = MappingConfig(
             partner="test",
             workflowType="recon",
-            fileType="SETTLEMENT",
+            fileType=FileType.SETTLEMENT,
             sheetName="Sheet2",
             startRow=1,
             fieldMappings=[],
@@ -436,7 +437,7 @@ class TestMappingConfigIntegration:
         config = MappingConfig(
             partner="test",
             workflowType="recon",
-            fileType="SETTLEMENT",
+            fileType=FileType.SETTLEMENT,
             sheetName="Sheet",
             startRow=2,
             fieldMappings=[],
@@ -453,7 +454,7 @@ class TestMappingConfigIntegration:
         config = MappingConfig(
             partner="test",
             workflowType="recon",
-            fileType="SETTLEMENT",
+            fileType=FileType.SETTLEMENT,
             sheetName="Data",
             startRow=1,
             fieldMappings=[],
@@ -470,7 +471,7 @@ class TestMappingConfigIntegration:
         config = MappingConfig(
             partner="test",
             workflowType="recon",
-            fileType="SETTLEMENT",
+            fileType=FileType.SETTLEMENT,
             sheetName="Data",
             startRow=1,
             fieldMappings=[],

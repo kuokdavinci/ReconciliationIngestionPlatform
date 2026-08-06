@@ -21,9 +21,10 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from bson import Decimal128
 
 from src.config.settings import settings
-from src.models.data_container import DataContainer, PartnerData
-from src.models.internal_transaction import InternalTransaction
-from src.models.reconciliation_file import ReconciliationFile
+from src.domain.partner_transaction.models import DataContainer, PartnerData
+from src.domain.internal_transaction.models import InternalTransaction
+from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
+from src.domain.ingestion.models import ReconciliationFile
 from src.core.enums import FileType, ProcessingStatus
 
 # --- constants ---
@@ -119,15 +120,19 @@ def _generate_data_container(source_file_id, partner, idx, status, amount, trace
 async def seed(args):
     client = AsyncIOMotorClient(settings.mongodb_url)
     db = client[settings.db_name]
+    internal_repository = InternalTransactionRepository()
 
     count = args.count
     clear = args.clear
 
     # --- clear mode ---
     if clear:
-        for coll in ["data_container", "internal_transaction", "reconciliation_result", "reconciliation_file"]:
+        for coll in ["data_container", "reconciliation_result", "reconciliation_file"]:
             result = await db[coll].delete_many({"createdBy": SEED_TAG})
             print(f"  Cleared {result.deleted_count} from {coll}")
+        for partner in PARTNERS:
+            deleted = await internal_repository.delete_by_partner(partner)
+            print(f"  Cleared {deleted} internal transactions for {partner} from PostgreSQL")
         result = await db["reconciliation_file"].delete_many({"partner": {"$in": PARTNERS}})
         print(f"  Cleared {result.deleted_count} old reconciliation_file records")
         print("Done clearing.")
@@ -136,7 +141,6 @@ async def seed(args):
     # auto-clear previous seed data to avoid duplicate key errors
     clear_filters = {
         "data_container": {"createdBy": SEED_TAG},
-        "internal_transaction": {},
         "reconciliation_result": {},
         "reconciliation_file": {"createdBy": SEED_TAG},
     }
@@ -144,6 +148,10 @@ async def seed(args):
         deleted = await db[coll].delete_many(filt)
         if deleted.deleted_count:
             print(f"  Cleared {deleted.deleted_count} old seed records from {coll}")
+    for partner in PARTNERS:
+        deleted = await internal_repository.delete_by_partner(partner)
+        if deleted:
+            print(f"  Cleared {deleted} old internal transactions for {partner} from PostgreSQL")
 
     print(f"Seeding {count} records per core collection...\n")
 
@@ -294,13 +302,9 @@ async def seed(args):
         )
     print(f"  Inserted {len(all_data_containers)} data_container records (MOMO={count}, VNPAY={count})")
 
-    # batch insert internal_transaction
-    for i in range(0, len(all_internal_txns), batch_size):
-        batch = all_internal_txns[i:i + batch_size]
-        await db["internal_transaction"].insert_many(
-            [_to_mongo(it) for it in batch]
-        )
-    print(f"  Inserted {len(all_internal_txns)} internal_transaction records")
+    # batch insert internal_transaction into its PostgreSQL source of truth
+    inserted_internal = await internal_repository.insert_many(all_internal_txns)
+    print(f"  Inserted {inserted_internal} internal_transaction records into PostgreSQL")
 
     # --- summary (no pre-generated reconciliation — engine will produce it) ---
     total_dc = len(all_data_containers)

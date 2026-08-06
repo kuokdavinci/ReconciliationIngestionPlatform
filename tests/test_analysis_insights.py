@@ -3,6 +3,7 @@
 import json
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -43,11 +44,23 @@ class MockLLMProvider:
         self._should_fail = should_fail
         self.call_count = 0
 
-    async def generate(self, prompt: str, system_prompt: str = None) -> str:
+    async def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         self.call_count += 1
         if self._should_fail:
             raise RuntimeError("LLM call failed")
         return self._response
+
+    @property
+    def model(self) -> str:
+        return "test-model"
+
+    @property
+    def provider_name(self) -> str:
+        return "test"
+
+    @property
+    def last_token_usage(self) -> Optional[dict[str, int]]:
+        return None
 
 
 class TestQueryReconciliationResults:

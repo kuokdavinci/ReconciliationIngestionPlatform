@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import openpyxl
 
+from scripts.demo.sprint1 import seed_momo_e2e
 from scripts.demo.sprint1.seed_momo_e2e import (
     MISSING_PARTNER_KEY,
     WAVE1_KEYS,
@@ -28,24 +29,15 @@ from scripts.demo.sprint1.seed_momo_e2e import (
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _setup_internal_collection(mock_db: MagicMock) -> MagicMock:
-    """Wire `mock_db['internal_transaction']` with AsyncMocks for the seed helpers.
-
-    The conftest `mock_db` fixture returns a *fresh* MagicMock on every
-    `db[name]` call (via `side_effect=lambda name: MagicMock()`), which would
-    drop the AsyncMock setup between calls. We override `__getitem__` to
-    return one consistent collection object so all calls see the same mock.
-
-    `find_one` always returns None (no pre-existing docs) so `_seed_internal`
-    inserts every requested key. The test captures `insert_one.call_args_list`
-    to assert on the inserted docs.
-    """
-    collection = MagicMock()
-    collection.delete_many = AsyncMock(return_value=None)
-    collection.find_one = AsyncMock(return_value=None)
-    collection.insert_one = AsyncMock(return_value=None)
-    mock_db.__getitem__ = MagicMock(return_value=collection)
-    return collection
+def _setup_internal_repository(monkeypatch) -> MagicMock:
+    """Use a fake PostgreSQL repository for seed helper unit tests."""
+    repository = MagicMock()
+    repository.find_existing_partner_txn_ids = AsyncMock(return_value=set())
+    repository.insert_many = AsyncMock(side_effect=lambda docs: len(docs))
+    repository.delete_by_partner_and_txn_id = AsyncMock(return_value=0)
+    monkeypatch.setattr(seed_momo_e2e, "InternalTransactionRepository", lambda: repository)
+    monkeypatch.setattr(seed_momo_e2e, "_clear_momo_transaction_rows", AsyncMock())
+    return repository
 
 
 def _read_partner_txn_ids(partner_file_path: Path) -> list[str]:
@@ -62,27 +54,28 @@ def _read_partner_txn_ids(partner_file_path: Path) -> list[str]:
     return keys
 
 
-def _inserted_partner_txn_ids(collection: MagicMock) -> list[str]:
-    """Return the `partnerTxnId` of every doc passed to `insert_one`."""
+def _inserted_partner_txn_ids(repository: MagicMock) -> list[str]:
+    """Return the source key of every document passed to PostgreSQL insert."""
     return [
-        call.args[0]["partnerTxnId"]
-        for call in collection.insert_one.call_args_list
+        document.partner_txn_id
+        for call in repository.insert_many.call_args_list
+        for document in call.args[0]
     ]
 
 
 # ── Test 1: reset seeds wave1 only ───────────────────────────────────────────
 
 
-async def test_reset_seeds_wave1_only(mock_db: MagicMock, tmp_path: Path):
+async def test_reset_seeds_wave1_only(mock_db: MagicMock, monkeypatch, tmp_path: Path):
     """`_reset_and_seed_phase1` inserts exactly 20 wave1 keys and no others."""
-    collection = _setup_internal_collection(mock_db)
+    repository = _setup_internal_repository(monkeypatch)
     partner_file = tmp_path / "settlement_MOMO_20260605.xlsx"
 
     inserted = await _reset_and_seed_phase1(mock_db, str(partner_file))
 
     # 20 internal rows inserted, all wave1
     assert inserted == 20
-    inserted_keys = _inserted_partner_txn_ids(collection)
+    inserted_keys = _inserted_partner_txn_ids(repository)
     assert len(inserted_keys) == 20
     assert set(inserted_keys) == set(_wave1_keys())
     # No wave2 keys
@@ -90,9 +83,10 @@ async def test_reset_seeds_wave1_only(mock_db: MagicMock, tmp_path: Path):
     # No missing-partner key
     assert MISSING_PARTNER_KEY not in inserted_keys
     # Broad wipe happened first
-    delete_call = collection.delete_many.await_args
-    assert delete_call is not None
-    assert delete_call.args[0] == {"partner": "MOMO"}
+    seed_call = repository.find_existing_partner_txn_ids.await_args
+    assert seed_call is not None
+    assert seed_call.args[0] == "MOMO"
+    assert seed_call.args[1] == WAVE1_KEYS
     # Partner file on disk contains the 20 wave1 keys
     file_keys = _read_partner_txn_ids(partner_file)
     assert sorted(file_keys) == sorted(WAVE1_KEYS)
@@ -101,9 +95,9 @@ async def test_reset_seeds_wave1_only(mock_db: MagicMock, tmp_path: Path):
 # ── Test 2: phase2 adds wave2 only ──────────────────────────────────────────
 
 
-async def test_phase2_adds_wave2_only(mock_db: MagicMock, tmp_path: Path):
+async def test_phase2_adds_wave2_only(mock_db: MagicMock, monkeypatch, tmp_path: Path):
     """`_add_phase2` (after reset) inserts 20 wave2 keys and overwrites the file."""
-    collection = _setup_internal_collection(mock_db)
+    repository = _setup_internal_repository(monkeypatch)
     partner_file = tmp_path / "settlement_MOMO_20260605.xlsx"
 
     # Establish wave1 baseline
@@ -111,14 +105,14 @@ async def test_phase2_adds_wave2_only(mock_db: MagicMock, tmp_path: Path):
     assert wave1_inserted == 20
 
     # Reset the mock call list so we can isolate phase2's inserts
-    collection.insert_one.reset_mock()
+    repository.insert_many.reset_mock()
 
     # Add phase2
     wave2_inserted = await _add_phase2(mock_db, str(partner_file))
     assert wave2_inserted == 20
 
     # Phase2's insert payload is exactly the wave2 keys
-    phase2_keys = _inserted_partner_txn_ids(collection)
+    phase2_keys = _inserted_partner_txn_ids(repository)
     assert len(phase2_keys) == 20
     assert set(phase2_keys) == set(_wave2_keys())
     # No wave1 keys re-inserted by phase2
@@ -133,18 +127,18 @@ async def test_phase2_adds_wave2_only(mock_db: MagicMock, tmp_path: Path):
     assert len(file_keys) == 20
 
 
-async def test_phase2_duplicate_keeps_all_existing_rows(mock_db: MagicMock, tmp_path: Path):
+async def test_phase2_duplicate_keeps_all_existing_rows(mock_db: MagicMock, monkeypatch, tmp_path: Path):
     """Partial duplicate fixture must not introduce missing-partner rows."""
-    collection = _setup_internal_collection(mock_db)
+    repository = _setup_internal_repository(monkeypatch)
     partner_file = tmp_path / "settlement_MOMO_20260605.xlsx"
 
     assert await _reset_and_seed_phase1(mock_db, str(partner_file)) == 20
-    collection.insert_one.reset_mock()
+    repository.insert_many.reset_mock()
 
     inserted = await _add_phase2_duplicate(mock_db, str(partner_file))
 
     assert inserted == 10
-    assert set(_inserted_partner_txn_ids(collection)) == set(WAVE2_KEYS[:10])
+    assert set(_inserted_partner_txn_ids(repository)) == set(WAVE2_KEYS[:10])
     file_keys = _read_partner_txn_ids(partner_file)
     assert len(file_keys) == 30
     assert file_keys == WAVE1_KEYS + WAVE2_KEYS[:10]
@@ -153,12 +147,12 @@ async def test_phase2_duplicate_keeps_all_existing_rows(mock_db: MagicMock, tmp_
 # ── Test 3: missing_partner_demo ────────────────────────────────────────────
 
 
-async def test_missing_partner_demo(mock_db: MagicMock, tmp_path: Path):
+async def test_missing_partner_demo(mock_db: MagicMock, monkeypatch, tmp_path: Path):
     """`_add_missing_partner_demo` (after reset) inserts the anomaly row and keeps the wave1 file.
 
     After this, a FULL_SNAPSHOT ingestion should produce 20 MATCHED + 1 MISSING_PARTNER.
     """
-    collection = _setup_internal_collection(mock_db)
+    repository = _setup_internal_repository(monkeypatch)
     partner_file = tmp_path / "settlement_MOMO_20260605.xlsx"
 
     # Establish wave1 baseline
@@ -166,14 +160,14 @@ async def test_missing_partner_demo(mock_db: MagicMock, tmp_path: Path):
     assert wave1_inserted == 20
 
     # Reset mock so we can isolate the missing-partner insert
-    collection.insert_one.reset_mock()
+    repository.insert_many.reset_mock()
 
     # Inject the missing-partner row
     mp_inserted = await _add_missing_partner_demo(mock_db, str(partner_file))
     assert mp_inserted == 1
 
     # The missing-partner row was inserted with the correct key
-    mp_keys = _inserted_partner_txn_ids(collection)
+    mp_keys = _inserted_partner_txn_ids(repository)
     assert mp_keys == [MISSING_PARTNER_KEY]
 
     # Partner file on disk STILL has the 20 wave1 keys (no missing-partner key)

@@ -11,10 +11,16 @@ export interface RunJobResponse {
   actor: string;
   partner: string;
   message: string;
+  runtimeRunId: string;
 }
 
 export async function listJobs() {
   return get<AutomationJobsResponse>("/automation/jobs");
+}
+
+export async function getJob(partner: string) {
+  const response = await listJobs();
+  return response.jobs.find((job) => job.partner === partner) ?? null;
 }
 
 export async function runJob(partner: string) {

@@ -46,6 +46,7 @@ def _create_test_app():
 @pytest.mark.asyncio
 async def test_run_automation_job_now():
     from src.api.automation import run_automation_job_now
+    from src.domain.runtime.models import PartnerRuntimeRun, PartnerRuntimeRunStatus, PartnerRuntimeTriggerType
 
     app, fetch_collection = _create_test_app()
     fetch_collection.find_one = AsyncMock(return_value={
@@ -59,13 +60,25 @@ async def test_run_automation_job_now():
         "updatedAt": "2026-06-02T10:24:34.686000",
     })
 
-    with patch("src.api.automation.run_fetch_config_once", new=AsyncMock(return_value={
-        "success": True,
-        "partner": "ZALOPAY",
-        "filePath": "downloads/zalopay.csv",
-        "fileSize": 512,
-        "processingStatus": "COMPLETED",
-    })):
+    queued_run = PartnerRuntimeRun(
+        partner="ZALOPAY",
+        date="2026-08-05",
+        triggerType=PartnerRuntimeTriggerType.SCHEDULER,
+        triggeredBy="admin",
+        status=PartnerRuntimeRunStatus.QUEUED,
+        message="Automation run queued. Watch runtime state for live progress.",
+    )
+
+    def _discard_background_task(coro):
+        coro.close()
+        task = MagicMock()
+        task.add_done_callback = MagicMock()
+        return task
+
+    with (
+        patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
+        patch("src.api.automation.asyncio.create_task", side_effect=_discard_background_task),
+    ):
         request = SimpleNamespace(
             app=SimpleNamespace(state=SimpleNamespace(db=app.state.db)),
             headers={"X-Actor": "admin"},
@@ -74,3 +87,5 @@ async def test_run_automation_job_now():
         assert payload["ok"] is True
         assert payload["actor"] == "admin"
         assert payload["partner"] == "ZALOPAY"
+        assert payload["runtimeRunId"] == str(queued_run.id)
+        assert payload["run"]["_id"] == str(queued_run.id)

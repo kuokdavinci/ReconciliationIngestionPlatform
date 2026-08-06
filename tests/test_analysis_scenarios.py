@@ -16,6 +16,7 @@ Covers:
 import json
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -72,9 +73,9 @@ def make_mongo_doc(
     partner_amount: str | None = "100000",
     internal_amount: str | None = "100000",
     camel_case: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Create a mock MongoDB document with camelCase or snake_case fields."""
-    doc = {"partner": partner, "date": date}
+    doc: dict[str, Any] = {"partner": partner, "date": date}
     if camel_case:
         if partner_amount is not None:
             doc["partnerAmount"] = Decimal(partner_amount)
@@ -97,16 +98,28 @@ class MockLLMProvider:
         self._response = response
         self._should_fail = should_fail
         self.call_count = 0
-        self.last_prompt = None
-        self.last_system_prompt = None
+        self.last_prompt: str | None = None
+        self.last_system_prompt: str | None = None
 
-    async def generate(self, prompt: str, system_prompt: str = None) -> str:
+    async def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         self.call_count += 1
         self.last_prompt = prompt
         self.last_system_prompt = system_prompt
         if self._should_fail:
             raise RuntimeError("LLM call failed")
         return self._response
+
+    @property
+    def model(self) -> str:
+        return "test-model"
+
+    @property
+    def provider_name(self) -> str:
+        return "test"
+
+    @property
+    def last_token_usage(self) -> Optional[dict[str, int]]:
+        return None
 
 
 # ---------------------------------------------------------------------------

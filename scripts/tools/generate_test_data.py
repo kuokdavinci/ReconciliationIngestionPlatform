@@ -2,7 +2,7 @@
 """Generate test data for reconciliation pipeline testing.
 
 Produces partner data files in all supported formats (.xlsx, .csv, .json, .tsv)
-and optionally seeds InternalTransaction records to MongoDB for end-to-end testing.
+and optionally seeds InternalTransaction records to PostgreSQL for end-to-end testing.
 
 Usage:
     # Generate all formats
@@ -11,7 +11,7 @@ Usage:
     # Generate single format
     python scripts/generate_test_data.py --format csv --output-dir test_data
 
-    # Seed internal transactions to MongoDB (run after pipeline)
+    # Seed internal transactions to PostgreSQL (run after pipeline)
     python scripts/generate_test_data.py --seed-db --partner VNPAY --date 2024-07-08 --count 1000
 """
 
@@ -27,10 +27,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config.settings import settings
 from src.core.enums import TransactionStatus, ReconciliationStatus
-from src.models.internal_transaction import InternalTransaction, InternalTransactionRepository
-from src.models.reconciliation_result import ReconciliationResult, ReconciliationResultRepository
+from src.domain.internal_transaction.models import InternalTransaction
+from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
+from src.domain.reconciliation.models import ReconciliationResult
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 
 PARTNER = "VNPAY"
 RECON_DATE = "2024-07-08"
@@ -119,14 +120,10 @@ def write_tsv(filepath: str, records: list[dict]):
     print(f"  Wrote: {filepath}  ({len(records)} rows + header)")
 
 
-async def seed_internal(db, partner: str, date_str: str, total: int):
-    from motor.motor_asyncio import AsyncIOMotorClient
-
-    client = AsyncIOMotorClient(settings.mongodb_url)
-    db = client[settings.db_name]
-
-    internal_repo = InternalTransactionRepository(db)
-    result_repo = ReconciliationResultRepository(db)
+async def seed_internal(db: object, partner: str, date_str: str, total: int):
+    del db
+    internal_repo = InternalTransactionRepository()
+    result_repo = ReconciliationResultRepository()
 
     partner_records = _generate_partner_records(total)
     dist = _generate_internal_distribution(total)
@@ -135,8 +132,8 @@ async def seed_internal(db, partner: str, date_str: str, total: int):
     recon_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     # Clear existing data
-    await internal_repo.collection.delete_many({"partner": partner})
-    await result_repo.collection.delete_many({"partner": partner, "date": date_str})
+    await internal_repo.delete_by_partner(partner)
+    await result_repo.delete_by_partner_and_date(partner, date_str)
     print(f"  Cleared existing {partner} data")
 
     internal_docs: list[InternalTransaction] = []
@@ -157,7 +154,7 @@ async def seed_internal(db, partner: str, date_str: str, total: int):
             transactionTime=recon_date,
         ))
         results.append(ReconciliationResult(
-            id=rec["trace"],
+            _id=rec["trace"],
             partner=partner,
             date=date_str,
             partnerTxnId=rec["trace"],
@@ -187,7 +184,7 @@ async def seed_internal(db, partner: str, date_str: str, total: int):
             transactionTime=recon_date,
         ))
         results.append(ReconciliationResult(
-            id=rec["trace"],
+            _id=rec["trace"],
             partner=partner,
             date=date_str,
             partnerTxnId=rec["trace"],
@@ -216,7 +213,7 @@ async def seed_internal(db, partner: str, date_str: str, total: int):
             transactionTime=recon_date,
         ))
         results.append(ReconciliationResult(
-            id=rec["trace"],
+            _id=rec["trace"],
             partner=partner,
             date=date_str,
             partnerTxnId=rec["trace"],
@@ -237,7 +234,7 @@ async def seed_internal(db, partner: str, date_str: str, total: int):
     for j in range(partner_only_start, idx):
         rec = partner_records[j]
         results.append(ReconciliationResult(
-            id=rec["trace"],
+            _id=rec["trace"],
             partner=partner,
             date=date_str,
             partnerTxnId=rec["trace"],
@@ -262,7 +259,7 @@ async def seed_internal(db, partner: str, date_str: str, total: int):
             transactionTime=recon_date,
         ))
         results.append(ReconciliationResult(
-            id=trace,
+            _id=trace,
             partner=partner,
             date=date_str,
             partnerTxnId=trace,
@@ -273,16 +270,12 @@ async def seed_internal(db, partner: str, date_str: str, total: int):
             internalRecordId=f"INT_VNP_ONLY_{uid:06d}",
         ))
 
-    # Insert to Mongo
+    # Insert into PostgreSQL source-of-truth tables.
     int_inserted = await internal_repo.insert_many(internal_docs)
     print(f"  Inserted {int_inserted} InternalTransaction records")
 
-    # Clean + insert results
-    target_ids = [r.id for r in results]
-    await result_repo.collection.delete_many({"_id": {"$in": target_ids}})
     if results:
-        serialized = [result_repo._to_mongo(r) for r in results]
-        await result_repo.collection.insert_many(serialized)
+        await result_repo.insert_many(results)
     print(f"  Inserted {len(results)} ReconciliationResult records")
 
     # Summary
@@ -303,9 +296,6 @@ async def seed_internal(db, partner: str, date_str: str, total: int):
     print(f"  Total internal records:         {int_inserted}")
     print(f"  Mismatch rate (partner-side):   {mismatch_rate}%")
 
-    client.close()
-
-
 def main():
     parser = argparse.ArgumentParser(description="Generate reconciliation test data")
     parser.add_argument("--output-dir", default="test_data", help="Output directory for data files")
@@ -314,7 +304,7 @@ def main():
     parser.add_argument("--count", type=int, default=1000, help="Number of partner records (default: 1000)")
     parser.add_argument("--partner", default=PARTNER, help="Partner name")
     parser.add_argument("--date", default=RECON_DATE, help="Reconciliation date (YYYY-MM-DD)")
-    parser.add_argument("--seed-db", action="store_true", help="Seed internal transactions + results to MongoDB")
+    parser.add_argument("--seed-db", action="store_true", help="Seed internal transactions + results to PostgreSQL")
     args = parser.parse_args()
 
     if args.seed_db:

@@ -13,17 +13,18 @@ from decimal import Decimal
 from pathlib import Path
 
 import xlsxwriter
-from bson.decimal128 import Decimal128
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import settings
 from src.core.enums import TransactionStatus
-from src.models.fetch_config import (
+from src.domain.fetch_config.models import (
     FetchConfig,
-    FetchConfigRepository,
     FetchMethod,
     FileDropConfig,
 )
+from src.infrastructure.fetch_config.repository import FetchConfigRepository
+from src.domain.internal_transaction.models import InternalTransaction
+from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -108,7 +109,7 @@ def _write_partner_file(path: Path, day: datetime, count: int):
     logger.info("Excel file generated successfully.")
 
 async def _ensure_mapping_config(db) -> None:
-    from src.models.mapping_config import MappingConfigStatus
+    from src.domain.mapping.models import MappingConfigStatus
     from src.core.enums import FileType
     collection = db["reconciliation_mapping_config"]
     await collection.delete_many({"$or": [{"partner": PARTNER}, {"_id": "88888888-8888-8888-8888-888888888888"}]})
@@ -155,14 +156,12 @@ async def _ensure_fetch_config(db) -> None:
     await repo.create(fetch_config)
 
 async def _seed_internal(db, day: datetime, count: int):
-    logger.info(f"Seeding {count} internal transactions to database...")
-    collection = db["internal_transaction"]
-    
-    # Clean previous ZALOPAY data
-    await collection.delete_many({"partner": PARTNER})
+    logger.info("Seeding %s internal transactions to PostgreSQL...", count)
+    repository = InternalTransactionRepository()
+    await repository.delete_by_partner(PARTNER)
     
     # Generate all documents in memory first (extremely fast in Python)
-    docs = []
+    docs: list[InternalTransaction] = []
     now = datetime.now(timezone.utc)
     
     for i in range(1, count + 1):
@@ -170,21 +169,20 @@ async def _seed_internal(db, day: datetime, count: int):
 
         amount = Decimal(50000 + (i % 10) * 10000)
         
-        docs.append({
-            "_id": f"INT_{PARTNER}_{txn_id}",
-            "partner": PARTNER,
-            "partnerTxnId": txn_id,
-            "amount": Decimal128(str(amount)),
-            "currency": "VND",
-            "status": TransactionStatus.SUCCESS.value,
-            "transactionTime": day,
-            "createdAt": now,
-            "updatedAt": now,
-        })
-        
-    # Insert everything in one single MongoDB call (Zero TCP roundtrip overhead)
-    await collection.insert_many(docs, ordered=False)
-    logger.info(f"Inserted all {len(docs)} internal transactions successfully.")
+        docs.append(InternalTransaction(
+            _id=f"INT_{PARTNER}_{txn_id}",
+            partner=PARTNER,
+            partnerTxnId=txn_id,
+            amount=amount,
+            currency="VND",
+            status=TransactionStatus.SUCCESS,
+            transactionTime=day,
+            createdAt=now,
+            updatedAt=now,
+        ))
+
+    inserted = await repository.insert_many(docs)
+    logger.info("Inserted %s internal transactions successfully.", inserted)
 
 async def _cleanup_existing_run_data(db) -> None:
     logger.info("Cleaning up existing ZALOPAY execution data...")

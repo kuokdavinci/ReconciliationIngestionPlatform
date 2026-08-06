@@ -10,21 +10,19 @@ from src.config.settings import settings
 from src.config.signature import StructureSignature, compute_signature
 from src.config.validator import ConfigValidator
 from src.core.enums import FileType
-from src.models.copilot_action import (
+from src.domain.review.models import (
     CopilotAction,
-    CopilotActionRepository,
     CopilotActionType,
 )
-from src.models.mapping_config import (
-    MappingConfig,
-    MappingConfigRepository,
-    MappingConfigStatus,
-)
-from src.models.review_packet import (
+from src.infrastructure.review.repository import CopilotActionRepository
+from src.domain.mapping.models import MappingConfig, MappingConfigStatus
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.domain.review.models import (
     ReviewPacket,
-    ReviewPacketRepository,
+    ReviewPacketStatus,
     ReviewPacketSourceType,
 )
+from src.infrastructure.review.repository import ReviewPacketRepository
 from src.reconciliation.scope import classify_scope
 
 logger = logging.getLogger(__name__)
@@ -284,6 +282,33 @@ async def _create_mapping_proposal(
                         },
                         runtimeDecisionHint="KEEP_CURRENT_RUNTIME_UNTIL_APPROVED" if active_runtime else "BLOCK_UNTIL_APPROVED",
                     )
+                )
+            else:
+                # A pending proposal can be reused by multiple scheduled files.
+                # Keep the review packet attached to the latest file so scope
+                # analysis can exclude the current source file from its DB key
+                # comparison and approval reprocessing uses the right payload.
+                await packet_repo.update_one(
+                    {"_id": str(existing_packet.id), "status": ReviewPacketStatus.PENDING.value},
+                    {
+                        "fileName": source_file_name or f"{partner.lower()}-scheduled-fetch",
+                        "structureSignature": sig.to_dict(),
+                        "sourceFileId": source_file_id,
+                        "sourceFilePath": source_file_path,
+                        "reconciliationDate": reconciliation_date,
+                        "scopeType": scope_meta["scopeType"],
+                        "scopeConfidence": scope_meta["scopeConfidence"],
+                        "scopeReason": scope_meta["scopeReason"],
+                        "scopeSignals": scope_meta["scopeSignals"],
+                        "samplePreview": [
+                            {"rowIndex": idx + 1, "values": row}
+                            for idx, row in enumerate(sig.sample_rows[:5])
+                        ],
+                        "riskSummary": {
+                            "severity": "medium",
+                            "summary": reason,
+                        },
+                    },
                 )
             return existing_pending, existing_action
 

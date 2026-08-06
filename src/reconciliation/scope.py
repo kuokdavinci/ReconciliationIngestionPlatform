@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from src.core.enums import ReconciliationScopeType
-from src.models.internal_transaction import InternalTransactionRepository
+from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
 
 
 def _filename_hints(file_name: str) -> tuple[list[str], ReconciliationScopeType | None]:

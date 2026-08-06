@@ -13,7 +13,8 @@ from typing import Optional
 from src.config.cache import ConfigCache
 from src.config.validator import ConfigValidationError, ConfigValidator
 from src.core.enums import FileType
-from src.models.mapping_config import MappingConfig, MappingConfigRepository
+from src.domain.mapping.models import MappingConfig
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
 
 
 @dataclass

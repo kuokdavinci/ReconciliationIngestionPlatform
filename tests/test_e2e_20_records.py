@@ -11,24 +11,26 @@ Requires:
 - --e2e flag: pytest tests/test_e2e_20_records.py -v --e2e
 """
 
-import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
 import openpyxl
 import pytest
-from bson.decimal128 import Decimal128
 from motor.motor_asyncio import AsyncIOMotorClient
 from src.config.settings import settings
 
 from src.config.cache import ConfigCache
 from src.config.loader import ConfigLoader
 from src.config.validator import ConfigValidator
-from src.core.enums import FileType
-from src.models.mapping_config import MappingConfigRepository
-
-from src.pipeline.ingestion_pipeline import IngestionPipeline
+from src.core.enums import FileType, TransactionStatus
+from src.domain.internal_transaction.models import InternalTransaction
+from src.infrastructure.ingestion.composition import build_ingestion_pipeline
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
+from src.infrastructure.postgres.internal_transaction_repository import (
+    InternalTransactionRepository,
+)
 from src.reconciliation.engine import ReconciliationEngine
 
 
@@ -40,11 +42,19 @@ TEST_DATE = "2026-06-24"
 TEST_NUM_RECORDS = 20
 
 
+def _reconciliation_summary(results) -> dict[str, int]:
+    statuses = [str(result.reconciliation_status) for result in results]
+    return {
+        "recon_total": len(results),
+        "recon_matched": statuses.count("MATCHED"),
+    }
+
+
 def _today_utc() -> datetime:
     return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def _ensure_mapping_config(db, partner: str, config_id: str) -> None:
+async def _ensure_mapping_config(db, partner: str, config_id: str) -> None:
     """Ensure an APPROVED mapping config exists for the given partner."""
 
     async def _inner():
@@ -94,7 +104,7 @@ def _ensure_mapping_config(db, partner: str, config_id: str) -> None:
         }
         await collection.insert_one(doc)
 
-    asyncio.get_event_loop().run_until_complete(_inner())
+    await _inner()
 
 
 def _write_partner_file(path: Path, partner: str, num_records: int) -> None:
@@ -132,75 +142,96 @@ def _write_partner_file(path: Path, partner: str, num_records: int) -> None:
 
 async def _seed_internal(db, partner: str, num_records: int) -> int:
     """Seed internal transactions for the given partner."""
-    collection = db["internal_transaction"]
-    await collection.delete_many({"partner": partner})
+    del db
+    repository = InternalTransactionRepository()
+    await repository.delete_by_partner(partner)
     now = datetime.now(timezone.utc)
-    day = _today_utc()
+    day = datetime.strptime(TEST_DATE, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     prefix = "MOMO_TXN_" if partner == PARTNER_MOMO else "ZALO_TXN_"
-    docs = []
+    docs: list[InternalTransaction] = []
     for i in range(1, num_records + 1):
         txn_id = f"{prefix}E2E{i:04d}"
         amount = Decimal(100000 + i * 5000)
-        docs.append({
-            "_id": f"INT_{partner}_{txn_id}",
-            "partner": partner,
-            "partnerTxnId": txn_id,
-            "amount": Decimal128(str(amount)),
-            "currency": "VND",
-            "status": "SUCCESS",
-            "transactionTime": day,
-            "createdAt": now,
-            "updatedAt": now,
-        })
+        docs.append(InternalTransaction(
+            _id=f"INT_{partner}_{txn_id}",
+            partner=partner,
+            partnerTxnId=txn_id,
+            amount=amount,
+            currency="VND",
+            status=TransactionStatus.SUCCESS,
+            transactionTime=day,
+            createdAt=now,
+            updatedAt=now,
+        ))
     if docs:
-        await collection.insert_many(docs, ordered=False)
-    return len(docs)
+        return await repository.insert_many(docs)
+    return 0
 
 
 async def _cleanup_partner_data(db, partner: str) -> None:
     """Clean up all data for a partner across collections."""
     for coll_name in [
         "reconciliation_result", "reconciliation_file",
-        "review_packet", "reconciliation_mapping_config", "internal_transaction",
+        "review_packet", "reconciliation_mapping_config",
         "partner_runtime_run", "post_approval_run", "reconciliation_review_record",
     ]:
         try:
             await db[coll_name].delete_many({"partner": partner})
         except Exception:
             pass
+    try:
+        await DataContainerRepository().delete_by_partner(partner)
+    except Exception:
+        pass
+    try:
+        await InternalTransactionRepository().delete_by_partner(partner)
+    except Exception:
+        pass
 
 
 async def _run_full_flow(
     db, partner: str, partner_file: Path, num_records: int
 ) -> dict:
     """Run seed → ingestion → reconciliation and return results summary."""
+    reconciliation_date = datetime.strptime(TEST_DATE, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
     # Seed internal transactions
     inserted = await _seed_internal(db, partner, num_records)
     assert inserted == num_records, f"Expected {num_records} internal rows, got {inserted}"
 
     # Run ingestion
+    mapping_repo = MappingConfigRepository(db)
     config_loader = ConfigLoader(
-        db=db,
-        repo=MappingConfigRepository(db),
+        repository=mapping_repo,
         cache=ConfigCache(),
         validator=ConfigValidator(),
     )
-    pipeline = IngestionPipeline(db=db, config_loader=config_loader)
-    ingestion_result = await pipeline.process_file(str(partner_file), partner, TEST_DATE)
+    pipeline = build_ingestion_pipeline(
+        db,
+        config_loader=config_loader,
+        mapping_repo=mapping_repo,
+    )
+    ingestion_result = await pipeline.process_file(
+        str(partner_file),
+        partner,
+        "UPC",
+        FileType.SETTLEMENT,
+        reconciliation_date,
+    )
     assert ingestion_result.stats.total_rows > 0, "Ingestion should process rows"
     assert ingestion_result.stats.success_rows > 0, "Ingestion should have successful rows"
 
     # Run reconciliation
     engine = ReconciliationEngine(db=db, fast_mode=True)
-    result = await engine.reconcile(partner, TEST_DATE)
+    result = await engine.reconcile(partner, reconciliation_date)
 
     return {
         "partner": partner,
         "total_internal": inserted,
         "ingestion_total": ingestion_result.stats.total_rows,
         "ingestion_success": ingestion_result.stats.success_rows,
-        "recon_total": result.get("total_processed", 0),
-        "recon_matched": result.get("matched", 0),
+        **_reconciliation_summary(result),
     }
 
 
@@ -229,7 +260,7 @@ async def test_e2e_20_records_momo():
         await _cleanup_partner_data(db, PARTNER_MOMO)
 
         # Setup mapping config
-        _ensure_mapping_config(db, PARTNER_MOMO, "e2e-momo-20-00000000-0000-0000-0000-000000000001")
+        await _ensure_mapping_config(db, PARTNER_MOMO, "e2e-momo-20-00000000-0000-0000-0000-000000000001")
 
         # Write partner file
         partner_file = Path(f"/tmp/e2e_momo_20_{TEST_DATE.replace('-', '')}.xlsx")
@@ -271,7 +302,7 @@ async def test_e2e_20_records_zalopay():
         await _cleanup_partner_data(db, PARTNER_ZALOPAY)
 
         # Setup mapping config
-        _ensure_mapping_config(db, PARTNER_ZALOPAY, "e2e-zalo-20-00000000-0000-0000-0000-000000000002")
+        await _ensure_mapping_config(db, PARTNER_ZALOPAY, "e2e-zalo-20-00000000-0000-0000-0000-000000000002")
 
         # Write partner file
         partner_file = Path(f"/tmp/e2e_zalopay_20_{TEST_DATE.replace('-', '')}.xlsx")
@@ -315,7 +346,7 @@ async def test_e2e_20_records_both_partners():
     ]:
         try:
             await _cleanup_partner_data(db, partner)
-            _ensure_mapping_config(db, partner, config_id)
+            await _ensure_mapping_config(db, partner, config_id)
             partner_file = Path(f"/tmp/e2e_{file_label}_20_{TEST_DATE.replace('-', '')}.xlsx")
             _write_partner_file(partner_file, partner, TEST_NUM_RECORDS)
             results[partner] = await _run_full_flow(db, partner, partner_file, TEST_NUM_RECORDS)

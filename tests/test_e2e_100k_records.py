@@ -19,16 +19,20 @@ from pathlib import Path
 
 import xlsxwriter
 import pytest
-from bson.decimal128 import Decimal128
 from motor.motor_asyncio import AsyncIOMotorClient
 from src.config.settings import settings
 
 from src.config.cache import ConfigCache
 from src.config.loader import ConfigLoader
 from src.config.validator import ConfigValidator
-from src.core.enums import FileType
-from src.models.mapping_config import MappingConfigRepository
-from src.pipeline.ingestion_pipeline import IngestionPipeline
+from src.core.enums import FileType, TransactionStatus
+from src.domain.internal_transaction.models import InternalTransaction
+from src.infrastructure.ingestion.composition import build_ingestion_pipeline
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
+from src.infrastructure.postgres.internal_transaction_repository import (
+    InternalTransactionRepository,
+)
 from src.reconciliation.engine import ReconciliationEngine
 
 
@@ -42,6 +46,17 @@ NUM_RECORDS = 100000
 # For ZALOPAY: simulate some real-world mismatches
 ZALO_MISSING_PARTNER_INDICES = {20000, 40000, 60000}
 ZALO_AMOUNT_MISMATCH_INDICES = {500, 25000, 75000, 99999}
+
+
+def _reconciliation_summary(results) -> dict[str, int]:
+    statuses = [str(result.reconciliation_status) for result in results]
+    return {
+        "recon_total": len(results),
+        "recon_matched": statuses.count("MATCHED"),
+        "recon_amount_mismatch": statuses.count("AMOUNT_MISMATCH"),
+        "recon_missing_internal": statuses.count("MISSING_INTERNAL"),
+        "recon_missing_partner": statuses.count("MISSING_PARTNER"),
+    }
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -165,67 +180,75 @@ def _write_zalopay_partner_file(path: Path, count: int) -> None:
 
 async def _seed_internal_momo(db, count: int) -> int:
     """Bulk seed MOMO internal transactions."""
-    collection = db["internal_transaction"]
-    await collection.delete_many({"partner": PARTNER_MOMO})
+    del db
+    repository = InternalTransactionRepository()
+    await repository.delete_by_partner(PARTNER_MOMO)
     now = datetime.now(timezone.utc)
-    day = _today_utc()
-    docs = []
+    day = datetime.strptime(TEST_DATE, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    docs: list[InternalTransaction] = []
     for i in range(1, count + 1):
         txn_id = f"MOMO_E2E_{i:06d}"
         amount = Decimal(50000 + (i % 10) * 10000)
-        docs.append({
-            "_id": f"INT_{PARTNER_MOMO}_{txn_id}",
-            "partner": PARTNER_MOMO,
-            "partnerTxnId": txn_id,
-            "amount": Decimal128(str(amount)),
-            "currency": "VND",
-            "status": "SUCCESS",
-            "transactionTime": day,
-            "createdAt": now,
-            "updatedAt": now,
-        })
-    await collection.insert_many(docs, ordered=False)
-    return len(docs)
+        docs.append(InternalTransaction(
+            _id=f"INT_{PARTNER_MOMO}_{txn_id}",
+            partner=PARTNER_MOMO,
+            partnerTxnId=txn_id,
+            amount=amount,
+            currency="VND",
+            status=TransactionStatus.SUCCESS,
+            transactionTime=day,
+            createdAt=now,
+            updatedAt=now,
+        ))
+    return await repository.insert_many(docs)
 
 
 async def _seed_internal_zalopay(db, count: int) -> int:
     """Bulk seed ZALOPAY internal transactions with intentional mismatches."""
-    collection = db["internal_transaction"]
-    await collection.delete_many({"partner": PARTNER_ZALOPAY})
+    del db
+    repository = InternalTransactionRepository()
+    await repository.delete_by_partner(PARTNER_ZALOPAY)
     now = datetime.now(timezone.utc)
-    day = _today_utc()
-    docs = []
+    day = datetime.strptime(TEST_DATE, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    docs: list[InternalTransaction] = []
     for i in range(1, count + 1):
         txn_id = f"ZALO_E2E_{i:06d}"
         amount = Decimal(50000 + (i % 10) * 10000)
         if i in ZALO_AMOUNT_MISMATCH_INDICES:
             amount += Decimal("5000")
-        docs.append({
-            "_id": f"INT_{PARTNER_ZALOPAY}_{txn_id}",
-            "partner": PARTNER_ZALOPAY,
-            "partnerTxnId": txn_id,
-            "amount": Decimal128(str(amount)),
-            "currency": "VND",
-            "status": "SUCCESS",
-            "transactionTime": day,
-            "createdAt": now,
-            "updatedAt": now,
-        })
-    await collection.insert_many(docs, ordered=False)
-    return len(docs)
+        docs.append(InternalTransaction(
+            _id=f"INT_{PARTNER_ZALOPAY}_{txn_id}",
+            partner=PARTNER_ZALOPAY,
+            partnerTxnId=txn_id,
+            amount=amount,
+            currency="VND",
+            status=TransactionStatus.SUCCESS,
+            transactionTime=day,
+            createdAt=now,
+            updatedAt=now,
+        ))
+    return await repository.insert_many(docs)
 
 
 async def _cleanup_partner_data(db, partner: str) -> None:
     """Clean up all data for a partner."""
     for coll_name in [
         "reconciliation_result", "reconciliation_file",
-        "review_packet", "reconciliation_mapping_config", "internal_transaction",
+        "review_packet", "reconciliation_mapping_config",
         "partner_runtime_run", "post_approval_run", "reconciliation_review_record",
     ]:
         try:
             await db[coll_name].delete_many({"partner": partner})
         except Exception:
             pass
+    try:
+        await DataContainerRepository().delete_by_partner(partner)
+    except Exception:
+        pass
+    try:
+        await InternalTransactionRepository().delete_by_partner(partner)
+    except Exception:
+        pass
 
 
 async def _run_100k_flow(
@@ -234,6 +257,9 @@ async def _run_100k_flow(
 ) -> dict:
     """Run seed → ingestion → reconciliation for large volume, measure timing."""
     timings = {}
+    reconciliation_date = datetime.strptime(TEST_DATE, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
 
     # Seed
     t0 = time.monotonic()
@@ -242,21 +268,28 @@ async def _run_100k_flow(
     timings["seed_seconds"] = round(t1 - t0, 3)
 
     # Run ingestion with optimized batch sizes
+    mapping_repo = MappingConfigRepository(db)
     config_loader = ConfigLoader(
-        db=db,
-        repo=MappingConfigRepository(db),
+        repository=mapping_repo,
         cache=ConfigCache(),
         validator=ConfigValidator(),
     )
-    pipeline = IngestionPipeline(
-        db=db,
+    pipeline = build_ingestion_pipeline(
+        db,
         config_loader=config_loader,
+        mapping_repo=mapping_repo,
         batch_size=20000,
         write_workers=2,
         ordered_insert=False,
     )
     t0 = time.monotonic()
-    ingestion_result = await pipeline.process_file(str(partner_file), partner, TEST_DATE)
+    ingestion_result = await pipeline.process_file(
+        str(partner_file),
+        partner,
+        "UPC",
+        FileType.SETTLEMENT,
+        reconciliation_date,
+    )
     t1 = time.monotonic()
     timings["ingest_seconds"] = round(t1 - t0, 3)
 
@@ -269,7 +302,7 @@ async def _run_100k_flow(
         ordered_insert=False,
     )
     t0 = time.monotonic()
-    result = await engine.reconcile(partner, TEST_DATE)
+    result = await engine.reconcile(partner, reconciliation_date)
     t1 = time.monotonic()
     timings["recon_seconds"] = round(t1 - t0, 3)
 
@@ -281,12 +314,8 @@ async def _run_100k_flow(
         "expected_partner_rows": expected_partner_rows,
         "ingestion_total": ingestion_result.stats.total_rows,
         "ingestion_success": ingestion_result.stats.success_rows,
-        "ingestion_errors": ingestion_result.stats.error_rows or 0,
-        "recon_total": result.get("total_processed", 0),
-        "recon_matched": result.get("matched", 0),
-        "recon_amount_mismatch": result.get("amount_mismatch", 0),
-        "recon_missing_internal": result.get("missing_internal", 0),
-        "recon_missing_partner": result.get("missing_partner", 0),
+        "ingestion_errors": ingestion_result.quality_counters.get("failedRows", 0),
+        **_reconciliation_summary(result),
         "timing_seconds": timings,
         "total_seconds": round(total_seconds, 3),
         "records_per_sec_ingest": round(expected_partner_rows / timings["ingest_seconds"], 1) if timings["ingest_seconds"] > 0 else 0,

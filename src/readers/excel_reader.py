@@ -9,7 +9,7 @@ from typing import Any, Self
 import python_calamine
 from python_calamine import CalamineWorkbook, CalamineSheet
 
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 
 VALID_EXTENSIONS = {".xlsx", ".xlsm"}
 
@@ -248,4 +248,3 @@ class ExcelStreamReader:
             if self._should_skip_row(cleaned_row):
                 continue
             yield cleaned_row
-

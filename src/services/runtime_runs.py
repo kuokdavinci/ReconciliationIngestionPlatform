@@ -3,12 +3,12 @@
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from src.models.partner_runtime_run import (
+from src.domain.runtime.models import (
     PartnerRuntimeRun,
-    PartnerRuntimeRunRepository,
     PartnerRuntimeRunStatus,
     PartnerRuntimeTriggerType,
 )
+from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
 
 
 def serialize_partner_runtime_run(run: PartnerRuntimeRun) -> dict[str, Any]:

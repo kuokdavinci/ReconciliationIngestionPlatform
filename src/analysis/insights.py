@@ -41,7 +41,7 @@ from src.analysis.services import (
     rule_based_pre_process,
 )
 from src.core.enums import ReconciliationStatus
-from src.models.reconciliation_result import ReconciliationResultRepository
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 
 logger = logging.getLogger(__name__)
 

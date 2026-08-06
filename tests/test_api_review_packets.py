@@ -1,5 +1,6 @@
 """Tests for review packet approval desk endpoints."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,8 +14,11 @@ from src.api.review_packets import (
     list_review_packets,
     save_draft_mapping_for_packet,
     validate_runtime_packet,
+    classify_scope_llm_for_packet,
+    _extract_scope_keys,
     SaveDraftMappingPayload,
 )
+from src.domain.review.models import ReviewPacket
 from src.services.runtime_validation import run_runtime_validation
 from src.models.mapping_config import MappingConfig
 
@@ -24,6 +28,17 @@ def _make_request(db: MagicMock, headers: dict | None = None):
         app=SimpleNamespace(state=SimpleNamespace(db=db)),
         headers=headers or {},
     )
+
+
+def test_scope_key_extraction_counts_rows_when_mapping_is_deferred():
+    received_count, keys = _extract_scope_keys(
+        [("1", "MOMO_TXN_9000"), ("2", "MOMO_TXN_9001")],
+        SimpleNamespace(field_mappings=[]),
+        {"headers": ["STT", "msTransId"]},
+    )
+
+    assert received_count == 2
+    assert keys == {"MOMO_TXN_9000", "MOMO_TXN_9001"}
 
 
 def _make_db(
@@ -57,6 +72,133 @@ def _make_db(
 
     db.__getitem__ = MagicMock(side_effect=_get_collection)
     return db
+
+
+@pytest.mark.asyncio
+async def test_scope_classification_falls_back_when_llm_times_out():
+    packet = ReviewPacket(
+        _id="pkt-timeout",
+        sourceType="UPLOAD",
+        partner="MOMO",
+        fileName="momo.xlsx",
+        fileTypeDetected="SETTLEMENT",
+        structureSignature={"sampleRows": []},
+    )
+    review_repo = MagicMock()
+    review_repo.find_one = AsyncMock(return_value=packet)
+    internal_repo = MagicMock()
+    internal_repo.count_by_partner_and_date_range = AsyncMock(return_value=0)
+    provider = MagicMock()
+
+    async def slow_generate(*args, **kwargs):
+        await asyncio.sleep(1)
+        return "{}"
+
+    provider.generate = AsyncMock(side_effect=slow_generate)
+    request = _make_request(_make_db())
+
+    with patch("src.api.review_packets._repo", return_value=review_repo), patch(
+        "src.infrastructure.postgres.internal_transaction_repository.InternalTransactionRepository",
+        return_value=internal_repo,
+    ), patch("src.analysis.config.AnalysisConfig", return_value=SimpleNamespace(timeout=0.01)), patch(
+        "src.analysis.provider.create_provider", return_value=provider,
+    ):
+        result = await classify_scope_llm_for_packet(request, "pkt-timeout")
+
+    assert result["ok"] is True
+    assert result["resolution"] == "rule_based_timeout"
+    assert result["suggestedScope"] == "FULL_SNAPSHOT"
+
+
+@pytest.mark.asyncio
+async def test_scope_classification_detects_incremental_duplicate_overlap(tmp_path):
+    source_path = tmp_path / "settlement_MOMO_20260806_phase2.xlsx"
+    source_path.touch()
+    packet = ReviewPacket(
+        _id="pkt-overlap",
+        sourceType="UPLOAD",
+        partner="MOMO",
+        fileName=source_path.name,
+        fileTypeDetected="SETTLEMENT",
+        draftMappingId="mapping-001",
+        sourceFilePath=str(source_path),
+        reconciliationDate="2026-08-06T00:00:00+00:00",
+        structureSignature={"sampleRows": []},
+    )
+    review_repo = MagicMock()
+    review_repo.find_one = AsyncMock(return_value=packet)
+    internal_repo = MagicMock()
+    internal_repo.count_by_partner_and_date_range = AsyncMock(return_value=30)
+    partner_repo = MagicMock()
+    partner_repo.find_reconciliation_keys_by_date_range = AsyncMock(
+        return_value={f"MOMO_TXN_90{i:02d}" for i in range(20)}
+    )
+    mapping_repo = MagicMock()
+    mapping_repo.find_one = AsyncMock(
+        return_value=SimpleNamespace(
+            field_mappings=[
+                SimpleNamespace(path="id", column="A"),
+                SimpleNamespace(path="trace", column="B"),
+            ]
+        )
+    )
+
+    class _Reader:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def iter_rows(self):
+            return iter(
+                [
+                    (f"id-{index}", f"MOMO_TXN_90{index:02d}")
+                    for index in range(20)
+                ]
+                + [
+                    (f"id-new-{index}", f"MOMO_TXN_92{index:02d}")
+                    for index in range(10)
+                ]
+            )
+
+    provider = MagicMock()
+    provider.generate = AsyncMock(
+        return_value=(
+            '{"probabilities":{"FULL_SNAPSHOT":1,"INCREMENTAL_APPEND":0,"REPLACEMENT":0},'
+            '"suggested_scope":"FULL_SNAPSHOT","reasoning":"same row count"}'
+        )
+    )
+    request = _make_request(_make_db())
+
+    with patch("src.api.review_packets._repo", return_value=review_repo), patch(
+        "src.infrastructure.postgres.internal_transaction_repository.InternalTransactionRepository",
+        return_value=internal_repo,
+    ), patch(
+        "src.infrastructure.mapping.config_repository.MappingConfigRepository",
+        return_value=mapping_repo,
+    ), patch(
+        "src.api.review_packets.DataContainerRepository",
+        return_value=partner_repo,
+    ), patch(
+        "src.readers.create_reader", return_value=_Reader(),
+    ), patch(
+        "src.analysis.config.AnalysisConfig",
+        return_value=SimpleNamespace(timeout=1),
+    ), patch(
+        "src.analysis.provider.create_provider", return_value=provider,
+    ):
+        result = await classify_scope_llm_for_packet(request, "pkt-overlap")
+
+    assert result["suggestedScope"] == "INCREMENTAL_APPEND"
+    assert result["resolution"] == "guardrail_override_duplicate_overlap"
+    assert result["scopeEvidence"] == {
+        "incomingUniqueBusinessKeyCount": 30,
+        "duplicateBusinessKeyCount": 20,
+        "newBusinessKeyCount": 10,
+        "duplicateRatio": pytest.approx(2 / 3),
+        "available": True,
+    }
 
 
 class _AsyncCursor:

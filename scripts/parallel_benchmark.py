@@ -16,10 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from src.config.settings import settings
-from src.pipeline.ingestion_pipeline import IngestionPipeline
+from src.infrastructure.ingestion.composition import build_ingestion_pipeline
 from src.reconciliation.engine import ReconciliationEngine
 from src.config.loader import ConfigLoader
-from src.models.mapping_config import MappingConfigRepository
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.config.cache import ConfigCache
 from src.config.validator import ConfigValidator
 from src.core.enums import FileType
@@ -44,8 +44,8 @@ WORKERS = [1, 2, 4]
 ORDERED_OPTIONS = [True, False]
 
 
-def _parse_perf_log(log_output: str, prefix: str) -> dict:
-    data = {}
+def _parse_perf_log(log_output: str, prefix: str) -> dict[str, float | str]:
+    data: dict[str, float | str] = {}
     for line in log_output.split("\n"):
         if prefix in line:
             for part in line.split():
@@ -138,7 +138,7 @@ async def benchmark_matrix():
                 await db["data_container"].delete_many({"identify": PARTNER})
                 await db["reconciliation_file"].delete_many({"partner": PARTNER})
 
-                pipeline = IngestionPipeline(
+                pipeline = build_ingestion_pipeline(
                     db=db,
                     config_loader=config_loader,
                     batch_size=batch_size,
@@ -196,7 +196,7 @@ async def benchmark_matrix():
         print(f"\nRe-seeding with best ingest config for reconciliation: batch={best_ingest['batch_size']}, workers={best_ingest['workers']}")
         await db["data_container"].delete_many({"identify": PARTNER})
         await db["reconciliation_file"].delete_many({"partner": PARTNER})
-        pipeline = IngestionPipeline(
+        pipeline = build_ingestion_pipeline(
             db=db,
             config_loader=config_loader,
             batch_size=best_ingest["batch_size"],

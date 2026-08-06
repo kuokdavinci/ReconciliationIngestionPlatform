@@ -29,11 +29,9 @@ from src.core.types import (
     FieldMappingType,
     ProcessingStats,
 )
-from src.models.data_container import DataContainer, PartnerData
-from src.models.mapping_config import MappingConfig
-from src.models.reconciliation_file import (
-    ReconciliationFile,
-)
+from src.domain.ingestion.models import ReconciliationFile
+from src.domain.mapping.models import MappingConfig
+from src.domain.partner_transaction.models import DataContainer, PartnerData
 from src.pipeline import IngestionPipeline, IngestionResult
 
 
@@ -94,11 +92,11 @@ class TestStandardFile:
         ]
         mock_config = MappingConfig(
             partner="MOMO",
-            workflow_type="UPC",
-            file_type=FileType.SETTLEMENT,
-            sheet_name="Sheet1",
-            start_row=2,
-            field_mappings=field_mappings,
+            workflowType="UPC",
+            fileType=FileType.SETTLEMENT,
+            sheetName="Sheet1",
+            startRow=2,
+            fieldMappings=field_mappings,
         )
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
@@ -119,6 +117,7 @@ class TestStandardFile:
         assert result.stats.success_rows == 8
         assert result.stats.failed_rows == 2
         assert len(result.errors) >= 2
+        assert result.file_record is not None
         assert result.file_record.processing_status == ProcessingStatus.COMPLETED
 
         # Verify insert_many was called
@@ -160,11 +159,11 @@ class TestCSVFile:
         ]
         mock_config = MappingConfig(
             partner="MOMO",
-            workflow_type="UPC",
-            file_type=FileType.SETTLEMENT,
-            sheet_name="IgnoredForCsv",
-            start_row=2,
-            field_mappings=field_mappings,
+            workflowType="UPC",
+            fileType=FileType.SETTLEMENT,
+            sheetName="IgnoredForCsv",
+            startRow=2,
+            fieldMappings=field_mappings,
         )
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
@@ -184,6 +183,7 @@ class TestCSVFile:
             assert result.stats.total_rows == 3
             assert result.stats.success_rows == 2
             assert result.stats.failed_rows == 1
+            assert result.file_record is not None
             assert result.file_record.processing_status == ProcessingStatus.COMPLETED
 
             mock_data_container_repo.insert_many.assert_called_once()
@@ -229,11 +229,11 @@ class TestMixedRows:
         ]
         mock_config = MappingConfig(
             partner="MOMO",
-            workflow_type="UPC",
-            file_type=FileType.SETTLEMENT,
-            sheet_name="Sheet1",
-            start_row=2,
-            field_mappings=field_mappings,
+            workflowType="UPC",
+            fileType=FileType.SETTLEMENT,
+            sheetName="Sheet1",
+            startRow=2,
+            fieldMappings=field_mappings,
         )
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
@@ -290,11 +290,11 @@ class TestAllInvalidRows:
         ]
         mock_config = MappingConfig(
             partner="MOMO",
-            workflow_type="UPC",
-            file_type=FileType.SETTLEMENT,
-            sheet_name="Sheet1",
-            start_row=2,
-            field_mappings=field_mappings,
+            workflowType="UPC",
+            fileType=FileType.SETTLEMENT,
+            sheetName="Sheet1",
+            startRow=2,
+            fieldMappings=field_mappings,
         )
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
@@ -314,6 +314,7 @@ class TestAllInvalidRows:
         assert result.stats.success_rows == 0
         assert result.stats.failed_rows == 3
         # Status is COMPLETED because processing itself succeeded
+        assert result.file_record is not None
         assert result.file_record.processing_status == ProcessingStatus.COMPLETED
         # No data was inserted
         mock_data_container_repo.insert_many.assert_not_called()
@@ -346,11 +347,11 @@ class TestEmptyFile:
         ]
         mock_config = MappingConfig(
             partner="MOMO",
-            workflow_type="UPC",
-            file_type=FileType.SETTLEMENT,
-            sheet_name="Sheet1",
-            start_row=2,
-            field_mappings=field_mappings,
+            workflowType="UPC",
+            fileType=FileType.SETTLEMENT,
+            sheetName="Sheet1",
+            startRow=2,
+            fieldMappings=field_mappings,
         )
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
@@ -369,6 +370,7 @@ class TestEmptyFile:
         assert result.stats.total_rows == 0
         assert result.stats.success_rows == 0
         assert result.stats.failed_rows == 0
+        assert result.file_record is not None
         assert result.file_record.processing_status == ProcessingStatus.COMPLETED
         assert len(result.errors) == 0
         mock_data_container_repo.insert_many.assert_not_called()
@@ -391,10 +393,10 @@ class TestDuplicateDetection:
         # Simulate existing file with same hash
         existing_file = ReconciliationFile(
             partner="MOMO",
-            file_name="already_processed.xlsx",
-            file_hash="some_hash_value",
-            file_type=FileType.SETTLEMENT,
-            reconciliation_date=_rec_date(),
+            fileName="already_processed.xlsx",
+            fileHash="some_hash_value",
+            fileType=FileType.SETTLEMENT,
+            reconciliationDate=_rec_date(),
         )
         mock_reconciliation_file_repo.find_by_file_hash = AsyncMock(return_value=existing_file)
 
@@ -450,11 +452,11 @@ class TestBatchInsertion:
         ]
         mock_config = MappingConfig(
             partner="MOMO",
-            workflow_type="UPC",
-            file_type=FileType.SETTLEMENT,
-            sheet_name="Sheet1",
-            start_row=2,
-            field_mappings=field_mappings,
+            workflowType="UPC",
+            fileType=FileType.SETTLEMENT,
+            sheetName="Sheet1",
+            startRow=2,
+            fieldMappings=field_mappings,
         )
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
@@ -515,6 +517,7 @@ class TestExceptionHandling:
             reconciliation_date=_rec_date(),
         )
 
+        assert result.file_record is not None
         assert result.file_record.processing_status == ProcessingStatus.FAILED
         assert len(result.errors) >= 1
         assert any("Config load failed" in e.get("reason", "") for e in result.errors)
@@ -581,11 +584,11 @@ class TestSourceFileIdLinking:
             ]
             mock_config = MappingConfig(
                 partner="MOMO",
-                workflow_type="UPC",
-                file_type=FileType.SETTLEMENT,
-                sheet_name="Sheet1",
-                start_row=2,
-                field_mappings=field_mappings,
+                workflowType="UPC",
+                fileType=FileType.SETTLEMENT,
+                sheetName="Sheet1",
+                startRow=2,
+                fieldMappings=field_mappings,
             )
             mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
@@ -604,6 +607,7 @@ class TestSourceFileIdLinking:
             assert result.stats.success_rows == 3
 
             # Get the file_record ID that was created
+            assert result.file_record is not None
             file_record_id = result.file_record.id
             assert file_record_id is not None
 
@@ -674,11 +678,11 @@ class TestPartnerDataNesting:
             ]
             mock_config = MappingConfig(
                 partner="MOMO",
-                workflow_type="UPC",
-                file_type=FileType.SETTLEMENT,
-                sheet_name="Sheet1",
-                start_row=2,
-                field_mappings=field_mappings,
+                workflowType="UPC",
+                fileType=FileType.SETTLEMENT,
+                sheetName="Sheet1",
+                startRow=2,
+                fieldMappings=field_mappings,
             )
             mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
@@ -751,11 +755,11 @@ class TestStatsAccuracy:
         ]
         mock_config = MappingConfig(
             partner="MOMO",
-            workflow_type="UPC",
-            file_type=FileType.SETTLEMENT,
-            sheet_name="Sheet1",
-            start_row=2,
-            field_mappings=field_mappings,
+            workflowType="UPC",
+            fileType=FileType.SETTLEMENT,
+            sheetName="Sheet1",
+            startRow=2,
+            fieldMappings=field_mappings,
         )
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
 
@@ -778,6 +782,7 @@ class TestStatsAccuracy:
         assert result.stats.failed_rows == 2
 
         # ReconciliationFile stats match ProcessingStats
+        assert result.file_record is not None
         file_record = result.file_record
         assert file_record.total_rows == result.stats.total_rows
         assert file_record.success_rows == result.stats.success_rows

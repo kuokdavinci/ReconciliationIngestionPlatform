@@ -18,7 +18,7 @@ from typing import Any, Optional
 from motor.motor_asyncio import AsyncIOMotorCollection
 
 from src.analysis.config import AnalysisConfig
-from src.models.reconciliation_result import ReconciliationResultRepository
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 from src.analysis.provider import LLMProvider
 
 logger = logging.getLogger(__name__)

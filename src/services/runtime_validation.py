@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 
-from src.models.review_packet import ReviewPacketRepository
+from src.infrastructure.review.repository import ReviewPacketRepository
 from src.normalizer.normalizer import TransactionNormalizer
 from src.readers import create_reader
 

@@ -59,11 +59,11 @@ def _create_test_app():
     mock_db.__getitem__ = MagicMock(side_effect=_get_collection)
     app.state.db = mock_db
     app.state.mongo_client = MagicMock()
-    return app, fetch_collection, packet_collection
+    return app, fetch_collection, packet_collection, runtime_run_collection, recon_file_collection
 
 
 def test_list_automation_jobs_filters_to_scheduler_packets():
-    app, fetch_collection, packet_collection = _create_test_app()
+    app, fetch_collection, packet_collection, _, _ = _create_test_app()
     fetch_collection.find = MagicMock(return_value=_AsyncCursor([
         {
             "_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -135,3 +135,52 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
     assert len(job["recentPackets"]) == 2
     assert all(packet["sourceType"] == "SCHEDULER_JOB" for packet in job["recentPackets"])
     assert job["recentPackets"][1]["decisionMode"] == "APPROVE_KEEP_CURRENT_FOR_FILE"
+
+
+def test_duplicate_run_takes_precedence_over_pending_file_status():
+    app, fetch_collection, _, runtime_run_collection, recon_file_collection = _create_test_app()
+    fetch_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "123e4567-e89b-12d3-a456-426614174000",
+            "partner": "MOMO",
+            "fetchMethod": "FILEDROP",
+            "schedule": "0 0 * * *",
+            "enabled": True,
+            "localDownloadDir": "./mock_data",
+            "filedrop": {"directory": "./mock_data", "pattern": "settlement_MOMO_*.xlsx"},
+            "updatedAt": "2026-08-06T04:00:00",
+        }
+    ]))
+    runtime_run_collection.find_one = AsyncMock(return_value={
+        "_id": "run-duplicate",
+        "partner": "MOMO",
+        "date": "2026-08-06",
+        "triggerType": "SCHEDULER",
+        "status": "COMPLETED",
+        "message": "Sequential source-unit ingestion completed successfully.",
+        "stats": {
+            "outcome": "FILE_DUPLICATE",
+            "reconciliationSkipped": True,
+        },
+        "createdAt": "2026-08-06T04:17:00",
+        "updatedAt": "2026-08-06T04:17:00",
+    })
+    recon_file_collection.find_one = AsyncMock(return_value={
+        "_id": "file-existing",
+        "partner": "MOMO",
+        "fileName": "settlement_MOMO_20260806_phase2.xlsx",
+        "processingStatus": "COMPLETED",
+        "reconciliationDate": "2026-08-06T00:00:00",
+        "createdAt": "2026-08-06T04:16:00",
+    })
+
+    client = TestClient(app)
+    response = client.get("/api/v1/automation/jobs")
+
+    assert response.status_code == 200
+    job = response.json()["jobs"][0]
+    assert job["duplicateOutcome"] == "FILE_DUPLICATE"
+    assert job["hasPendingFile"] is False
+    assert job["statusMessage"] == (
+        "File already processed. Ingestion and reconciliation were skipped safely."
+    )

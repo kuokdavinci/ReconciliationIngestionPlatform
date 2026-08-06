@@ -1,33 +1,51 @@
 import asyncio
+from datetime import UTC, datetime
+from bson.decimal128 import Decimal128
+
 from src.config.settings import settings
-from src.models.internal_transaction import InternalTransactionRepository
+from src.domain.internal_transaction.models import InternalTransaction
+from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
 from motor.motor_asyncio import AsyncIOMotorClient
+
+
+def _from_mongo_document(document: dict) -> InternalTransaction:
+    amount = document["amount"]
+    if isinstance(amount, Decimal128):
+        amount = amount.to_decimal()
+    return InternalTransaction(
+        _id=str(document["_id"]),
+        partner=document["partner"],
+        partnerTxnId=document["partnerTxnId"],
+        amount=amount,
+        currency=document.get("currency", "VND"),
+        status=document["status"],
+        transactionTime=document["transactionTime"],
+        createdAt=document.get("createdAt") or datetime.now(UTC),
+        updatedAt=document.get("updatedAt") or datetime.now(UTC),
+    )
+
 
 async def sync():
     client = AsyncIOMotorClient(settings.mongodb_url)
     db = client[settings.db_name]
-    
-    repo = InternalTransactionRepository(db)
-    
-    # 1. Fetch all internal transactions from MongoDB
-    all_mongo_docs = []
-    async for doc in repo.collection.find():
-        all_mongo_docs.append(repo._from_mongo(doc))
-        
-    print(f"Found {len(all_mongo_docs)} internal transactions in MongoDB.")
-    
-    if not all_mongo_docs:
-        return
-        
-    # 2. Clear Postgres internal transactions for clean sync
-    from sqlalchemy import delete
-    from src.models.postgres import InternalTransactionTable
-    async with repo.engine.begin() as conn:
-        await conn.execute(delete(InternalTransactionTable))
-        
-    # 3. Write to PostgreSQL using insert_many (which writes to PG since use_postgres=True)
-    inserted = await repo.insert_many(all_mongo_docs)
-    print(f"Successfully sync'ed {inserted} internal transactions to PostgreSQL!")
+    repository = InternalTransactionRepository()
+
+    try:
+        documents = []
+        async for document in db["internal_transaction"].find():
+            documents.append(_from_mongo_document(document))
+
+        print(f"Found {len(documents)} internal transactions in legacy MongoDB.")
+        if not documents:
+            return
+
+        for partner in {document.partner for document in documents}:
+            await repository.delete_by_partner(partner)
+
+        inserted = await repository.insert_many(documents)
+        print(f"Successfully migrated {inserted} internal transactions to PostgreSQL.")
+    finally:
+        client.close()
 
 if __name__ == "__main__":
     asyncio.run(sync())

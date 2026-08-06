@@ -23,6 +23,7 @@ Tests verify:
 """
 
 import os
+from typing import Any
 
 import pytest
 
@@ -49,21 +50,23 @@ def _get_env(name: str, default: str | None = None) -> str | None:
 def _require_e2e_env() -> tuple[str, str, str | None, str]:
     """Validate required E2E environment variables."""
     mongo_url = _get_env("MONGODB_URL")
-    ai_endpoint = _get_env("AI_ENDPOINT", "https://api.openai.com/v1")
+    ai_endpoint = _get_env("AI_ENDPOINT") or "https://api.openai.com/v1"
     ai_api_key = _get_env("AI_API_KEY")
-    ai_model = _get_env("AI_MODEL", "gpt-4o-mini")
+    ai_model = _get_env("AI_MODEL") or "gpt-4o-mini"
 
     if not mongo_url:
         pytest.skip("E2E_MONGODB_URL or MONGODB_URL not set")
     if not ai_api_key:
         pytest.skip("E2E_AI_API_KEY or AI_API_KEY not set")
 
+    assert mongo_url is not None
+    assert ai_api_key is not None
     return mongo_url, ai_endpoint, ai_api_key, ai_model
 
 
 def _get_test_db_name() -> str:
     """Get the test database name."""
-    return _get_env("DB_NAME", "reconciliation")
+    return _get_env("DB_NAME") or "reconciliation"
 
 
 # ---------------------------------------------------------------------------
@@ -76,12 +79,12 @@ def _make_reconciliation_doc(
     date: str = "2024-07-07",
     partner_amount: str | None = "100000",
     internal_amount: str | None = "100000",
-) -> dict:
+) -> dict[str, Any]:
     """Create a reconciliation_result document for MongoDB insertion.
     
     Note: Always pass the correct date parameter - default is 2024-07-07.
     """
-    doc = {
+    doc: dict[str, Any] = {
         "partner": partner,
         "date": date,
         "reconciliationStatus": status,

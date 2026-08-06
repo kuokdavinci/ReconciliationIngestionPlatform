@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from src.models.reconciliation_result import ReconciliationResultRepository
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 
 from src.api.response_utils import camelize
 from src.analysis.config import AnalysisConfig

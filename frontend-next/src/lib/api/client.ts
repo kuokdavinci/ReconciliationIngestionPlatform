@@ -3,18 +3,30 @@ import { getCurrentActor } from "@/lib/actor";
 const BASE_URL = "/api/v1";
 
 async function handleResponse<T>(res: Response): Promise<T> {
+  const rawBody = await res.text();
+  let body: unknown;
+
+  if (rawBody) {
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      body = undefined;
+    }
+  }
+
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
-    try {
-      const body = await res.json();
-      detail = body.detail || detail;
-    } catch {
-      const text = await res.text();
-      detail = text.slice(0, 200) || detail;
+    if (body && typeof body === "object" && "detail" in body) {
+      detail = String(body.detail) || detail;
+    } else {
+      detail = rawBody.slice(0, 200) || detail;
     }
     throw new Error(detail);
   }
-  return res.json();
+
+  if (body !== undefined) return body as T;
+  if (!rawBody) return undefined as T;
+  throw new Error(`Invalid JSON response (HTTP ${res.status})`);
 }
 
 function actorHeaders(): Record<string, string> {

@@ -18,7 +18,8 @@ from src.api.review_packets import (
     approve_keep_current_packet_action,
     reject_packet_action,
 )
-from src.models.copilot_action import CopilotActionRepository, CopilotActionStatus
+from src.domain.review.models import CopilotActionStatus
+from src.infrastructure.review.repository import CopilotActionRepository
 from src.services.copilot_context import CopilotContextService
 
 router = APIRouter(prefix="/api/v1/copilot")

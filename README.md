@@ -1,233 +1,278 @@
 # Reconciliation Ingestion Platform
 
-Config-driven platform for ingesting partner settlement data, normalizing canonical transactions, reconciling them against internal records, and operating the ingestion and review lifecycle.
+Config-driven platform for fetching partner settlement data, ingesting it safely, reconciling it with internal transactions, and operating review workflows.
 
-The current repository combines the foundation system with Phase 2 ingestion-reliability work: Sprint 1 idempotency, Sprint 2 incremental recovery, Sprint 3 data quality/quarantine and Sprint 4 observability. Phase 1 documents remain foundation/reference material; the current reliability scope is documented in [docs/INDEX.md](docs/INDEX.md).
+The repository contains a FastAPI backend, a Next.js dashboard, PostgreSQL/MongoDB persistence, scheduled partner jobs, and an ingestion-reliability roadmap.
 
-## Features
+## What the platform does
 
-- CSV, JSON and Excel ingestion from filedrop, API or SFTP.
-- Configurable mapping, normalization and validation.
-- PostgreSQL transaction storage and deterministic reconciliation.
-- File, fetch-unit and transaction idempotency with duplicate-safe retries.
-- MongoDB-backed configuration, review packets, schedules and audit metadata.
-- Next.js dashboard for reconciliation, review, mapping studio, schedules and audit history.
+- Fetches CSV, JSON and Excel data from filedrop, API or SFTP.
+- Applies partner-specific mapping, normalization and validation rules.
+- Persists canonical partner transactions in PostgreSQL.
+- Prevents duplicate files, fetch units and transactions from being processed twice.
+- Reconciles partner transactions with internal transactions deterministically.
+- Exposes review packets, mapping approval, runtime status and audit history.
+- Provides AI-assisted insights with provider fallback and guardrails.
+- Serves an operations dashboard through Next.js.
 
-## Architecture
+## Architecture at a glance
 
-```text
-Partner file/API/SFTP
-        |
-        v
-Fetch + claim (fileHash/fetchUnitKey)
-        |
-        v
-Read -> normalize -> validate -> derive ingestion_key
-        |
-        v
-PostgreSQL: partner transactions, internal transactions, results
-MongoDB: configs, file claims, review packets, schedules, audit metadata
-        |
-        v
-FastAPI + Next.js dashboard
+```mermaid
+flowchart LR
+    S[Partner file / API / SFTP]
+    F[src/fetchers]
+    J[src/scheduler]
+    P[src/pipeline]
+    A[src/application]
+    D[src/domain]
+    I[src/infrastructure]
+    PG[(PostgreSQL)]
+    MG[(MongoDB)]
+    R[src/reconciliation]
+    API[FastAPI]
+    UI[Next.js dashboard]
+
+    S --> F --> J --> P
+    P --> A
+    P --> I
+    A --> D
+    I --> PG
+    I --> MG
+    P --> R
+    R --> PG
+    API --> A
+    API --> I
+    UI --> API
 ```
 
-Transaction idempotency is enforced by PostgreSQL uniqueness on `(identify, ingestion_key)`. A replay is safe at both the claim boundary and the database boundary.
+### Architectural boundaries
 
-### Runtime components
-
-| Layer | Responsibility | Main location |
+| Boundary | Responsibility | Main locations |
 |---|---|---|
+| Delivery | HTTP routes, request validation and response contracts | `src/api/` |
+| Application | Use cases and orchestration between domain and adapters | `src/application/` |
+| Domain | Business models, enums, ports and stable contracts | `src/domain/` |
+| Infrastructure | MongoDB/PostgreSQL repositories and composition roots | `src/infrastructure/` |
+| Ingestion pipeline | File claims, row processing, metrics and lifecycle state | `src/pipeline/` |
 | Fetchers | Filedrop, SFTP and API retrieval | `src/fetchers/` |
-| Pipeline | Claims, reading, mapping, validation, key derivation and persistence | `src/pipeline/ingestion_pipeline.py` |
-| Persistence | PostgreSQL transaction and MongoDB metadata repositories | `src/models/` |
-| Scheduler | Partner jobs, fetch metadata and runtime outcomes | `src/scheduler/` |
+| Scheduler | Partner jobs, source units and runtime execution | `src/scheduler/` |
 | Reconciliation | Scope classification, matching and result persistence | `src/reconciliation/` |
-| Review/runtime | Runtime validation, review packets and approvals | `src/services/`, `src/api/review_packets.py` |
-| API | Operations, automation, reconciliation, review and audit endpoints | `src/api/` |
-| Dashboard | Reconciliation, review, mapping, schedules and audit views | `frontend-next/src/` |
+| Dashboard | Review, mapping, schedules and operational views | `frontend-next/src/` |
 
-### Data ownership
+`src/models/` remains as a compatibility/persistence boundary for existing imports. New code should depend on domain contracts and infrastructure repositories through the application layer.
 
-| Store | Data |
-|---|---|
-| PostgreSQL | `partner_transaction`, `internal_transaction`, `reconciliation_result` |
-| MongoDB | `reconciliation_file`, mapping/fetch configuration, review packets, audit events, schedules and runtime metadata |
+## Core runtime flows
 
-PostgreSQL schema changes are managed through [Alembic](alembic/). Sprint 1 migration: [0002_ingestion_idempotency.py](alembic/versions/0002_ingestion_idempotency.py).
-
-## Ingestion reliability pipeline — Phase 2 focus
-
-The platform's central operational path is the partner ingestion pipeline. Phase 2 hardens this path without changing deterministic reconciliation, AI analysis or the dashboard contract.
+### 1. Ingestion
 
 ```text
-source fetch
-  -> fetch-unit identity
-  -> file hash claim
-  -> mapping/config health gate
-  -> reader
-  -> normalization
-  -> validation
-  -> deterministic ingestion_key
-  -> batch persistence
-  -> runtime/file statistics and status
-  -> downstream reconciliation
+fetch source
+  -> identify fetch unit
+  -> claim file by fileHash/fetchUnitKey
+  -> load mapping and configuration
+  -> read rows
+  -> normalize
+  -> validate
+  -> derive deterministic ingestion_key
+  -> batch-write PostgreSQL
+  -> persist file/runtime statistics
+  -> trigger downstream reconciliation
 ```
 
-The four reliability properties are organized as four sprints:
+The pipeline is intentionally split by responsibility:
 
-| Sprint | Reliability property | Current focus | Status / TODO |
-|---|---|---|---|
-| Sprint 1 | **Idempotency** | File replay, fetch-unit replay, deterministic transaction keys, PostgreSQL unique constraint and conflict-safe batch writes. | ✅ Implemented and benchmarked. |
-| Sprint 2 | **Incremental processing & recovery** | Checkpoints, source-unit boundaries, retry after partial failure and backfill isolation. | TODO: implement checkpoint persistence and restart coverage. |
-| Sprint 3 | **Data quality & quarantine** | Structured rejected records, fatal-vs-row errors, quarantine persistence and targeted reprocess. | TODO: add quarantine model, counters, API and integration tests. |
-| Sprint 4 | **Observability** | Stage-level runtime state, counters, timings, attempts, errors and partial-failure visibility. | TODO: persist stage metrics and standardize runtime events. |
+- `src/pipeline/ingestion_pipeline.py` coordinates claims, configuration, lifecycle and final status.
+- `src/pipeline/row_pipeline.py` wires readers, normalizers, validators and batch writers.
+- `src/pipeline/row_batch_coordinator.py` coordinates row-level execution.
+- `src/pipeline/file_claim.py` owns duplicate-safe file identity and claim behavior.
+- `src/pipeline/batch_writer.py` performs conflict-safe persistence.
+- `src/pipeline/metrics.py`, `run_state.py` and `observability.py` expose execution state.
 
-<!-- TODO(phase-2): keep this table synchronized with docs/phase-2/ and the implementation status. -->
+### 2. Reconciliation
 
-### Ingestion flow ownership
+`src/application/reconciliation/service.py` coordinates the reconciliation use case. The domain/reconciliation layer determines scope, compares amount/status, writes results in batches and returns summary/evidence for the API.
 
-- `src/fetchers/` retrieves partner data from filedrop, SFTP or API.
-- `src/scheduler/jobs.py` creates fetch-unit metadata and invokes ingestion for automated runs.
-- `src/pipeline/ingestion_pipeline.py` owns hashing, claims, readers, mapping, validation, key derivation, batch writes and processing status.
-- `src/models/reconciliation_file.py` owns file claim identity and processing metadata.
-- `src/models/data_container.py` owns PostgreSQL partner transaction persistence and duplicate-safe writes.
-- `src/models/indexes.py` owns MongoDB claim indexes; `src/models/postgres.py` owns PostgreSQL schema initialization.
-- `src/services/runtime_runs.py` and `src/models/partner_runtime_run.py` expose runtime execution state to operations APIs.
+Supported scope decisions include `FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT` and `UNCONFIRMED`.
 
-### Sprint 1 idempotency contract
+### 3. Review and approval
 
-1. `fileHash` is the canonical identity for replaying the same file.
-2. `fetchUnitKey` is the canonical identity for replaying the same API page/cursor/window.
-3. `ingestion_key` is derived from a stable partner identifier; missing identity is rejected.
-4. PostgreSQL uniqueness on `(identify, ingestion_key)` is the final transaction-level guard.
-5. `ON CONFLICT DO NOTHING` makes retries and partial duplicate batches safe; `inserted`, `duplicates` and `failed` remain separately observable.
+Review packets coordinate scope analysis, mapping review, runtime validation and approval decisions. The main route group is `/api/v1/review-packets`.
 
-## Key application flows
+### 4. Scheduled automation
 
-### Reconciliation
+APScheduler loads enabled fetch configurations, selects the correct fetcher, starts ingestion and exposes job state through `/api/v1/automation`.
 
-`ReconciliationEngine.reconcile(partner, date)` reads canonical partner and internal transactions, resolves scope (`FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT` or `UNCONFIRMED`), compares amount/status, writes results in batches and exposes summary/evidence through the API.
+## Reliability contracts
 
-### Review and mapping approval
-
-Review packets coordinate scope classification, draft mapping review, runtime validation and approval decisions. Approve-Activate can start post-approval re-ingestion and re-reconciliation; Approve-Keep-Current, Reject and Send-to-Mapping-Studio remain separate decisions.
-
-### Scheduled automation
-
-APScheduler loads enabled `FetchConfig` records, selects a filedrop/SFTP/API fetcher, passes fetch-unit metadata into ingestion, persists runtime outcomes and exposes Run Now/job status through `/api/v1/automation`.
-
-### AI-assisted analysis
-
-`src/analysis/` computes reconciliation metrics, groups discrepancies, calls an OpenAI-compatible provider with guardrails/fallbacks and serves insights/daily reports through the API. AI mapping generation is gated by the mapping approval workflow.
-
-## API surface
-
-The FastAPI app registers these router groups under `/api/v1/`:
-
-| Router | Prefix | Responsibility |
-|---|---|---|
-| Insights/reports | `/api/v1` | Summaries, discrepancies and daily reports |
-| Reconciliation | `/api/v1/reconciliation` | Results, stats, run status, insights and review records |
-| Data explorer | `/api/v1/data` | Transaction, file and operational queries |
-| Mappings | `/api/v1/mappings`, `/api/v1/mapping` | Mapping configuration and AI generation |
-| Copilot | `/api/v1/copilot` | Context and operator actions |
-| Operations | `/api/v1/operations` | Intake and partner operations |
-| Review packets | `/api/v1/review-packets` | Runtime validation and approval lifecycle |
-| Automation | `/api/v1/automation` | Jobs, Run Now and duplicate outcomes |
-| Audit | `/api/v1/audit` | Audit event history |
-
-Interactive API documentation is available at `/docs`.
-
-## Stack
-
-| Layer | Technology |
+| Contract | Mechanism |
 |---|---|
-| Backend | Python 3.11+, FastAPI, Uvicorn, SQLAlchemy/asyncpg |
-| Frontend | Next.js 16, React 19, TypeScript 5 |
-| Databases | PostgreSQL 16 and MongoDB 7 |
-| Scheduling | APScheduler |
-| Parsing | python-calamine, CSV and JSON readers |
-| Infrastructure | Docker Compose, SFTP/Paramiko |
+| File replay safety | MongoDB unique `fileHash` claim |
+| Fetch-unit replay safety | MongoDB unique `fetchUnitKey` claim when available |
+| Transaction replay safety | PostgreSQL uniqueness on `(identify, ingestion_key)` |
+| Duplicate batch writes | PostgreSQL `ON CONFLICT DO NOTHING` |
+| Runtime visibility | MongoDB `partner_runtime_run` records |
+| Schema evolution | Alembic migrations in `alembic/versions/` |
+
+## Project status
+
+| Area | Status |
+|---|---|
+| Foundation and deterministic reconciliation | Implemented |
+| Sprint 1 — idempotency | Implemented and benchmarked |
+| Sprint 2 — incremental processing and recovery | Active development on `phase2/sprint-2` |
+| Sprint 3 — data quality and quarantine | Planned/partially documented |
+| Sprint 4 — observability | Runtime visibility exists; further hardening is ongoing |
+
+See [docs/INDEX.md](docs/INDEX.md) for the milestone documents and [docs/CI-MAP.md](docs/CI-MAP.md) for CI scope and blast-radius guidance.
 
 ## Quick start
 
-Prerequisites: Python 3.11+, `uv`, Node.js 20+ and Docker Compose.
+### Prerequisites
+
+- Python 3.11+
+- [`uv`](https://docs.astral.sh/uv/)
+- Node.js 20+
+- Docker Compose
+
+### Backend and services
 
 ```bash
-uv sync --all-extras
+uv sync --all-extras --dev
 cp .env.example .env
-docker compose up -d mongodb postgres sftp mongo-express
+docker compose up -d postgres mongodb sftp mongo-express
+uv run alembic upgrade head
 uv run python run.py --serve --port 8000
 ```
 
-In another terminal:
+Backend API: <http://localhost:8000><br>
+OpenAPI docs: <http://localhost:8000/docs><br>
+Mongo Express: <http://localhost:8082>
+
+### Dashboard
 
 ```bash
 npm --prefix frontend-next install
 npm --prefix frontend-next run dev
 ```
 
-Dashboard: http://localhost:3000
-API docs: http://localhost:8000/docs
-Mongo Express: http://localhost:8082
+Dashboard: <http://localhost:3000>
 
-## CLI and operational commands
+The dashboard proxies `/api/*` requests to the backend at `http://localhost:8000`.
+
+For production builds, use the verified Webpack path:
+
+```bash
+npm --prefix frontend-next run build -- --webpack
+```
+
+## Common commands
 
 | Command | Purpose |
 |---|---|
-| `uv run python run.py --serve` | Start FastAPI |
+| `uv run python run.py --serve --port 8000` | Start the FastAPI server |
+| `uv run python run.py --start-scheduler` | Start APScheduler |
+| `uv run python run.py --list-jobs` | List configured jobs |
+| `uv run python run.py --run-job-now` | Trigger a scheduled job manually |
 | `uv run python run.py --reconcile YYYY-MM-DD --partner MOMO` | Run reconciliation |
-| `uv run python run.py --data ./file.xlsx --partner MOMO --date YYYY-MM-DD` | Ingest a file directly |
-| `uv run python run.py --start-scheduler` | Start scheduler |
-| `uv run python run.py --list-jobs` | List scheduled jobs |
-| `uv run python run.py --run-job-now` | Trigger a job immediately |
+| `make test` | Run the broad local test target |
+| `make ci` | Run tests excluding real LLM E2E and phase-specific E2E |
 | `make momo-e2e-reset` | Reset MOMO demo data |
-| `make momo-e2e-phase2` | Prepare the 20-old + 10-new partial-duplicate demo |
+| `make momo-e2e-phase2` | Prepare the MOMO duplicate/replay demo |
 | `make momo-e2e-run` | Trigger the MOMO automation job |
-| `make test` | Run the project test target |
+| `make momo-e2e-rebuild` | Rebuild API and scheduler containers |
+| `codegraph index` | Rebuild the repository dependency index |
 
-## Testing
+## Testing and quality checks
+
+### Backend
 
 ```bash
-uv run python -m pytest -v
-UV_CACHE_DIR=$PWD/.uv-cache uv run python -m pytest tests/test_sprint1_eval_benchmark.py -q
-npm --prefix frontend-next run lint
+uv run ruff check src/ tests/
+uv run mypy src/ --show-error-codes
+uv run pytest tests/ \
+  --ignore=tests/test_analysis_e2e.py \
+  --ignore=tests/test_phase8.py \
+  --ignore=tests/test_ingestion_integration.py \
+  --ignore=tests/test_ingestion_pipeline.py \
+  --ignore=tests/test_seed_momo_e2e.py \
+  --ignore=tests/test_sprint1_eval_benchmark.py
 ```
 
-Full-stack E2E tests require running Docker services and the `--e2e` flag.
+### Frontend
 
-## Documentation
+```bash
+npm --prefix frontend-next run lint
+npm --prefix frontend-next exec tsc -- --noEmit
+npm --prefix frontend-next run build -- --webpack
+npm --prefix frontend-next run test:e2e
+```
 
-- [Documentation index](docs/INDEX.md)
-- [Phase 2 roadmap and sprint plans](docs/MILESTONES.md)
-- [Foundation architecture reference](docs/phase-1/ARCHITECTURE.md)
-- [Configuration reference](docs/phase-1/CONFIGURATION.md)
-- [Sprint 1 summary](docs/phase-2/sprint-1-summary.md)
-- [Sprint 1 idempotency report](docs/phase-2/sprint-1-idempotency-report.md)
-- [Sprint 1 benchmark specification](docs/phase-2/sprint-1-eval-benchmark.md)
-- [Sprint 1 benchmark run](docs/phase-2/sprint-1-eval-benchmark-run.md)
-- [Docker guide](docker/README.md)
+### CI workflows
+
+| Workflow | Scope |
+|---|---|
+| [Backend Quality](.github/workflows/backend-quality.yml) | Migration, Ruff, Mypy and backend tests |
+| [Ingestion Pipeline](.github/workflows/ingestion-pipeline.yml) | Ingestion lint, integration, pipeline and benchmark tests |
+| [Analysis Eval](.github/workflows/eval.yml) | Analysis guardrails, providers and scenario quality |
+| [Frontend CI](.github/workflows/frontend-ci.yml) | Frontend lint, TypeScript, production build and Playwright interaction smoke tests |
+
+See [docs/CI-MAP.md](docs/CI-MAP.md) for the workflow-to-source mapping and change blast radius.
 
 ## Configuration
 
-Copy `.env.example` to `.env`. Application settings use the `APP_` prefix; AI settings use `AI_`. Important variables include `APP_MONGODB_URL`, `APP_POSTGRES_URL`, `APP_DB_NAME`, `AI_ENDPOINT`, `AI_MODEL` and `AI_API_KEY`.
+Copy `.env.example` to `.env`. Important settings include:
 
-See [`.env.example`](.env.example) and [src/config/settings.py](src/config/settings.py) for authoritative defaults.
+| Variable group | Purpose |
+|---|---|
+| `APP_MONGODB_URL`, `APP_DB_NAME` | MongoDB connection and database |
+| `APP_POSTGRES_URL` | PostgreSQL connection |
+| `SFTP_HOST`, `SFTP_PORT`, `SFTP_USER`, `SFTP_PASS` | SFTP source configuration |
+| `APP_INGEST_*` | Ingestion batch size and write behavior |
+| `APP_RECON_*` | Reconciliation batch size and write behavior |
+| `AI_*` | Analysis provider, model, timeout and fallback settings |
+
+The authoritative configuration model is `src/config/settings.py`; example values are in [.env.example](.env.example).
 
 ## Repository layout
 
 ```text
-src/                 Python application modules
-frontend-next/       Next.js dashboard
-scripts/              Demo, seed, benchmark and utility scripts
-tests/               Unit, integration and E2E tests
-docs/                Architecture, sprint and operational docs
+src/                 Backend application
+  api/               FastAPI delivery layer
+  application/       Use-case orchestration
+  domain/            Domain models and ports
+  infrastructure/    Database and external adapters
+  pipeline/          Ingestion pipeline stages
+  fetchers/          FileDrop, SFTP and API fetchers
+  reconciliation/    Matching and scope logic
+  scheduler/         Scheduled and manual job execution
+  analysis/          Insights and AI-provider integration
+frontend-next/       Active Next.js dashboard
+tests/               Unit, architecture, integration and E2E tests
+docs/                Architecture, milestone, CI and operational docs
 alembic/             PostgreSQL migrations
+scripts/             Demo, seed and benchmark utilities
+docker/              Compose initialization and service notes
 ```
+
+## Documentation map
+
+- [Documentation index](docs/INDEX.md)
+- [CI map and blast-radius guide](docs/CI-MAP.md)
+- [Foundation architecture](docs/phase-1/ARCHITECTURE.md)
+- [Foundation data flow](docs/phase-1/DATA_FLOW.md)
+- [Module map](docs/phase-1/MODULES.md)
+- [Sprint 1 core index](docs/phase-2/sprint-1-index.md)
+- [Sprint 1 idempotency](docs/phase-2/sprint-1-idempotency.md)
+- [Sprint 2 incremental recovery](docs/phase-2/sprint-2-incremental-recovery.md)
+- [Docker services](docker/README.md)
+- [Frontend guide](frontend-next/README.md)
 
 ## Documentation contract
 
-Phase 1 documents are foundation/reference material; Phase 2 documents describe current reliability work.
+Code is the source of truth. Keep the README and linked docs aligned with:
 
-Code is the source of truth. CLI behavior must match `run.py` and `Makefile`; environment variables must match `src/config/settings.py` and `.env.example`; API descriptions must match `src/api/`; and dashboard descriptions must match `frontend-next/src/app/`. Update documentation when these contracts change.
+- CLI behavior in `run.py` and `Makefile`;
+- environment variables in `src/config/settings.py` and `.env.example`;
+- API routes in `src/api/`;
+- dashboard routes in `frontend-next/src/app/`; and
+- workflow commands in `.github/workflows/`.

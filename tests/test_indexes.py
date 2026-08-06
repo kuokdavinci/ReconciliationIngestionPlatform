@@ -13,6 +13,7 @@ class TestIndexesDefinition:
         from src.models.indexes import INDEXES
 
         assert "reconciliation_file" in INDEXES
+        assert "ingestion_checkpoint" in INDEXES
         assert "reconciliation_mapping_config" in INDEXES
         assert "data_container" not in INDEXES
 
@@ -79,6 +80,36 @@ class TestReconciliationFileIndexes:
                 break
         assert partner_date_found, (
             "No compound index on partner + reconciliation_date"
+        )
+
+
+class TestIngestionCheckpointIndexes:
+    """Tests for the Sprint 2 checkpoint index contract."""
+
+    def test_unique_stream_identity_index(self):
+        from src.models.indexes import INDEXES
+
+        indexes = INDEXES["ingestion_checkpoint"]
+        unique = [
+            idx
+            for idx in indexes
+            if idx.document.get("unique", False)
+            and list(idx.document["key"]) == [
+                "partner",
+                "fetchConfigId",
+                "sourceType",
+                "streamKey",
+                "mode",
+            ]
+        ]
+        assert len(unique) == 1
+
+    def test_retry_query_index_contains_status_and_updated_time(self):
+        from src.models.indexes import INDEXES
+
+        assert any(
+            list(idx.document["key"]) == ["status", "updatedAt"]
+            for idx in INDEXES["ingestion_checkpoint"]
         )
 
 

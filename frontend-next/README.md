@@ -43,7 +43,12 @@ The dev server runs on `http://localhost:3000` and proxies `/api/*` requests to 
 npm run lint        # ESLint
 npx tsc --noEmit    # Type check
 npx prettier --check src/  # Format check
+npm run build -- --webpack # Production build used by CI
+npx playwright install chromium # Install the local test browser
+npm run test:e2e     # Playwright interaction smoke tests
 ```
+
+The browser smoke tests start the production Next.js server and mock `/api/**` requests, so they run without the backend service. From a clean checkout, build first with `npm run build -- --webpack` before running `npm run test:e2e` locally.
 
 ## Project Structure
 

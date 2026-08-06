@@ -13,7 +13,7 @@ async def get_db():
 
 async def init_databases(db):
     """Apply MongoDB indexes and initialize PostgreSQL tables."""
-    from src.models.indexes import apply_indexes
-    from src.models.postgres import init_postgres_db
+    from src.infrastructure.persistence.mongo_indexes import apply_indexes
+    from src.infrastructure.persistence.postgres_connection import init_postgres_db
     await apply_indexes(db)
     await init_postgres_db(settings.postgres_url)

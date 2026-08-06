@@ -5,13 +5,17 @@ common utilities for file validation, cleanup, and credential resolution.
 """
 
 import os
-import re
 import shutil
+import hashlib
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+from src.domain.ingestion.source_units import SourceUnitMetadata
+from src.core.date_templates import interpolate_date
 
 
 @dataclass
@@ -23,6 +27,7 @@ class FetchResult:
     error: Optional[str] = None
     file_size: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
+    units: list[SourceUnitMetadata] = field(default_factory=list)
 
 
 class BaseFetcher(ABC):
@@ -33,7 +38,12 @@ class BaseFetcher(ABC):
     """
 
     @abstractmethod
-    async def fetch(self, config: Any, reconciliation_date: datetime) -> FetchResult:
+    async def fetch(
+        self,
+        config: Any,
+        reconciliation_date: datetime,
+        fetch_metadata: Optional[dict[str, Any]] = None,
+    ) -> FetchResult:
         """Fetch data from partner.
 
         Args:
@@ -115,11 +125,7 @@ class BaseFetcher(ABC):
             'file_20240707.xlsx'
         """
 
-        def replace(match: re.Match) -> str:
-            fmt = match.group(1) or "%Y%m%d"
-            return date.strftime(fmt)
-
-        return re.sub(r"\{date:(.*?)\}", replace, template)
+        return interpolate_date(template, date)
 
     @staticmethod
     def validate_file(file_path: str) -> bool:
@@ -133,6 +139,46 @@ class BaseFetcher(ABC):
         """
         path = Path(file_path)
         return path.exists() and path.stat().st_size > 0
+
+    @staticmethod
+    def compute_file_hash(file_path: str) -> str:
+        """Return a stable SHA-256 fingerprint for a local source file."""
+        digest = hashlib.sha256()
+        with open(file_path, "rb") as source_file:
+            for chunk in iter(lambda: source_file.read(8192), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def build_file_source_unit(
+        file_path: str,
+        source_type: str,
+        source_identity: dict[str, Any],
+    ) -> SourceUnitMetadata:
+        """Build a deterministic source-unit record for a local file."""
+        path = Path(file_path)
+        stat = path.stat()
+        content_hash = BaseFetcher.compute_file_hash(file_path)
+        identity = {
+            "sourceType": source_type,
+            **source_identity,
+        }
+        identity.setdefault("size", stat.st_size)
+        # Content hash is the stable version boundary. File modification time
+        # changes when a producer rewrites the same payload and must not turn a
+        # replay into a new source unit.
+        identity.setdefault("contentHash", content_hash)
+        source_unit_key = hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return SourceUnitMetadata(
+            sourceUnitKey=source_unit_key,
+            sourceIdentity=identity,
+            localPath=str(path),
+            fileSize=stat.st_size,
+            contentHash=content_hash,
+            status="DISCOVERED",
+        )
 
     @staticmethod
     def cleanup_file(file_path: str) -> bool:

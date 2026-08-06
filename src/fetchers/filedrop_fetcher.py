@@ -4,13 +4,15 @@ Uses scheduled scan (glob/os.listdir) instead of watchdog daemon to avoid
 resource overhead. Scans directory at scheduled time and picks up matching files.
 """
 
+import asyncio
 import glob
 import os
 import time
 from datetime import datetime
+from typing import Any
 
 from src.fetchers.base import BaseFetcher, FetchResult
-from src.models.fetch_config import FileDropConfig
+from src.domain.fetch_config.models import FileDropConfig
 
 
 class FileDropFetcher(BaseFetcher):
@@ -23,7 +25,10 @@ class FileDropFetcher(BaseFetcher):
     FILE_LOCK_TIMEOUT = 5  # seconds to wait for file to stop growing
 
     async def fetch(
-        self, config: FileDropConfig, reconciliation_date: datetime
+        self,
+        config: FileDropConfig,
+        reconciliation_date: datetime,
+        fetch_metadata: dict[str, Any] | None = None,
     ) -> FetchResult:
         """Scan directory for matching files.
 
@@ -47,7 +52,7 @@ class FileDropFetcher(BaseFetcher):
 
             # Scan for matching files
             search_pattern = os.path.join(directory, pattern)
-            matching_files = glob.glob(search_pattern)
+            matching_files = sorted(glob.glob(search_pattern))
 
             if not matching_files:
                 return FetchResult(
@@ -59,7 +64,7 @@ class FileDropFetcher(BaseFetcher):
             # Filter out files that are still being written (file lock check)
             ready_files = []
             for file_path in matching_files:
-                if self._is_file_ready(file_path):
+                if await asyncio.to_thread(self._is_file_ready, file_path):
                     ready_files.append(file_path)
 
             if not ready_files:
@@ -69,9 +74,27 @@ class FileDropFetcher(BaseFetcher):
                     metadata={"scanned_files": len(matching_files)},
                 )
 
-            # Use the first ready file (can be enhanced to pick by date/name)
+            ready_files = sorted(ready_files)
+            units = [
+                BaseFetcher.build_file_source_unit(
+                    file_path,
+                    "FILEDROP",
+                    {
+                        "directory": os.path.abspath(directory),
+                        "pattern": pattern,
+                        "path": os.path.abspath(file_path),
+                        "filename": os.path.basename(file_path),
+                        **(
+                            {"configVersion": fetch_metadata["configVersion"]}
+                            if fetch_metadata and fetch_metadata.get("configVersion")
+                            else {}
+                        ),
+                    },
+                )
+                for file_path in ready_files
+            ]
             selected_file = ready_files[0]
-            file_size = os.path.getsize(selected_file)
+            file_size = units[0]["fileSize"]
 
             return FetchResult(
                 success=True,
@@ -81,7 +104,9 @@ class FileDropFetcher(BaseFetcher):
                     "scanned_files": len(matching_files),
                     "ready_files": len(ready_files),
                     "selected_file": selected_file,
+                    "discovered_files": [unit["localPath"] for unit in units],
                 },
+                units=units,
             )
 
         except Exception as exc:

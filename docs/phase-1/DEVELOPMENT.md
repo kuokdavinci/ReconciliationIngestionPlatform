@@ -64,7 +64,10 @@ uv run uvicorn src.api:create_app --factory --host 0.0.0.0 --port 8000
 ```bash
 npm --prefix frontend-next install
 npm run dev
+npm --prefix frontend-next run build -- --webpack
 ```
+
+Use the Webpack flag for production verification. With the current Next.js 16 setup, the default Turbopack build may stop at `Creating an optimized production build...`, while the Webpack path completes successfully.
 
 ## Useful CLI Commands
 

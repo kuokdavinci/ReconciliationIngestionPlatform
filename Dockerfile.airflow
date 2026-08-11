@@ -1,0 +1,18 @@
+FROM apache/airflow:3.3.0-python3.11
+
+COPY --chown=airflow:root requirements-airflow.txt /opt/airflow/requirements-airflow.txt
+# The official image already supplies the pinned Airflow distribution. Keep
+# application/runtime extras in this constrained overlay instead of reinstalling
+# Airflow or mixing the API image's FastAPI/Uvicorn stack into the control plane.
+RUN pip install --no-cache-dir -r /opt/airflow/requirements-airflow.txt
+
+COPY --chown=airflow:root src /opt/airflow/app/src
+COPY --chown=airflow:root alembic /opt/airflow/app/alembic
+COPY --chown=airflow:root alembic.ini /opt/airflow/app/alembic.ini
+COPY --chown=airflow:root dags /opt/airflow/dags
+
+ENV PYTHONPATH=/opt/airflow/app
+
+# Keep relative FileDrop/SFTP download paths aligned with the application
+# volume mounts used by the Airflow scheduler container.
+WORKDIR /opt/airflow/app

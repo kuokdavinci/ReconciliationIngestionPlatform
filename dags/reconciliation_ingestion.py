@@ -1,0 +1,311 @@
+"""Airflow control plane for sequential reconciliation ingestion streams."""
+
+import asyncio
+import json
+import logging
+import os
+from datetime import timedelta
+from typing import Any
+
+import pendulum
+from airflow.sdk import dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException
+from motor.motor_asyncio import AsyncIOMotorClient
+
+from src.application.automation import ExecuteStreamCommand, OrchestrationContext, execute_stream
+from src.application.automation.airflow_runtime import (
+    resolve_reconciliation_date,
+    resolve_schedule,
+    select_stream_commands,
+)
+from src.application.automation.contracts import ExecuteStreamOutcome
+from src.config.cache import ConfigCache
+from src.config.loader import ConfigLoader
+from src.config.settings import settings
+from src.config.validator import ConfigValidator
+from src.infrastructure.fetch_config.repository import FetchConfigRepository
+from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.services.runtime_runs import update_runtime_run
+from src.domain.runtime.models import PartnerRuntimeRunStatus
+
+SUCCESS_OUTCOMES = {
+    ExecuteStreamOutcome.COMPLETED,
+    ExecuteStreamOutcome.NO_DATA,
+    ExecuteStreamOutcome.ALREADY_PROCESSED,
+    # Missing/changed mapping configuration is an operator gate, not a task
+    # failure.  The application runtime remains WAITING_REVIEW and the
+    # generated review packet is the source of truth for the next action.
+    ExecuteStreamOutcome.WAITING_REVIEW,
+}
+
+logger = logging.getLogger("reconciliation.airflow")
+
+# Keep task-level retry policy operator-configurable. The UI's manual retry
+# clears the task instance in the same DAG run; native Airflow retry remains a
+# bounded fallback when the operator does nothing.
+# Operator recovery is deliberately manual-only.  Airflow may still expose
+# the task's failed state, but it must not start a second try on its own.
+AIRFLOW_TASK_RETRIES = int(os.getenv("AIRFLOW_TASK_RETRIES", "0"))
+AIRFLOW_TASK_RETRY_DELAY_SECONDS = int(
+    os.getenv("AIRFLOW_TASK_RETRY_DELAY_SECONDS", "300")
+)
+
+
+async def _select_streams(
+    conf: dict,
+    reconciliation_date,
+    dag_run_id: str,
+) -> list[dict]:
+    client: AsyncIOMotorClient[dict[str, Any]] = AsyncIOMotorClient(settings.mongodb_url)
+    try:
+        repository = FetchConfigRepository(client[settings.db_name])
+        return await select_stream_commands(
+            conf=conf,
+            reconciliation_date=reconciliation_date,
+            dag_run_id=dag_run_id,
+            repository=repository,
+        )
+    finally:
+        client.close()
+
+
+async def _execute_stream(payload: dict) -> dict:
+    client: AsyncIOMotorClient[dict[str, Any]] = AsyncIOMotorClient(settings.mongodb_url)
+    try:
+        db = client[settings.db_name]
+        config_loader = ConfigLoader(
+            MappingConfigRepository(db),
+            ConfigCache(),
+            ConfigValidator(),
+        )
+        result = await execute_stream(
+            ExecuteStreamCommand.model_validate(payload),
+            db=db,
+            config_loader=config_loader,
+        )
+        return result.model_dump(by_alias=True, mode="json")
+    finally:
+        client.close()
+
+
+async def _mark_runtime_retrying(payload: dict, result: dict) -> None:
+    """Keep the application runtime active while Airflow waits for its retry."""
+
+    runtime_run_id = payload.get("runtimeRunId")
+    if not runtime_run_id:
+        return
+    client: AsyncIOMotorClient[dict[str, Any]] = AsyncIOMotorClient(settings.mongodb_url)
+    try:
+        db = client[settings.db_name]
+        await update_runtime_run(
+            db,
+            str(runtime_run_id),
+            status=PartnerRuntimeRunStatus.QUEUED,
+            message="Transient source failure; Airflow retry is scheduled.",
+            stats={
+                "errorCode": result.get("errorCode") or "stream_execution_failed",
+                "retryable": True,
+                **(result.get("counters") or {}),
+            },
+            attempt_event={
+                "eventId": f"{runtime_run_id}:retrying:{payload.get('orchestration', {}).get('tryNumber', 1)}",
+                "status": "RETRYING",
+                "timestamp": pendulum.now("UTC").to_iso8601_string(),
+                "attempt": payload.get("orchestration", {}).get("tryNumber", 1),
+                "errorCode": result.get("errorCode") or "stream_execution_failed",
+                "message": "Transient source failure; Airflow retry is scheduled.",
+            },
+        )
+    finally:
+        client.close()
+
+
+async def _mark_runtime_failed(
+    payload: dict,
+    *,
+    error_code: str,
+    message: str,
+) -> None:
+    """Persist a terminal Airflow-side failure for manually queued runtimes."""
+
+    runtime_run_id = payload.get("runtimeRunId")
+    if not runtime_run_id:
+        return
+    client: AsyncIOMotorClient[dict[str, Any]] = AsyncIOMotorClient(settings.mongodb_url)
+    try:
+        db = client[settings.db_name]
+        await update_runtime_run(
+            db,
+            str(runtime_run_id),
+            status=PartnerRuntimeRunStatus.FAILED,
+            message=message,
+            stats={"errorCode": error_code, "retryable": False},
+            finished_at=pendulum.now("UTC"),
+            attempt_event={
+                "eventId": f"{runtime_run_id}:failed:{pendulum.now('UTC').int_timestamp}",
+                "status": "FAILED",
+                "timestamp": pendulum.now("UTC").to_iso8601_string(),
+                "attempt": payload.get("orchestration", {}).get("tryNumber", 1),
+                "errorCode": error_code,
+                "message": message,
+            },
+        )
+    finally:
+        client.close()
+
+
+@dag(
+    dag_id="reconciliation_ingestion",
+    schedule=resolve_schedule(os.getenv("AIRFLOW_GLOBAL_SCHEDULE", "0 0 * * *")),
+    start_date=pendulum.datetime(2026, 1, 1, tz="Asia/Ho_Chi_Minh"),
+    catchup=False,
+    max_active_runs=1,
+    tags=["reconciliation", "ingestion"],
+)
+def reconciliation_ingestion():
+    @task(task_id="select_streams", retries=0)
+    def select_streams_task() -> list[dict]:
+        context = get_current_context()
+        dag_run = context["dag_run"]
+        conf = dict(dag_run.conf or {})
+        try:
+            return asyncio.run(
+                _select_streams(
+                    conf,
+                    resolve_reconciliation_date(conf, context.get("data_interval_end")),
+                    dag_run.run_id,
+                )
+            )
+        except Exception as exc:
+            message = f"Airflow stream selection failed: {str(exc)[:400]}"
+            asyncio.run(
+                _mark_runtime_failed(
+                    conf,
+                    error_code="STREAM_SELECTION_FAILED",
+                    message=message,
+                )
+            )
+            raise
+
+    @task(
+        task_id="run_stream",
+        pool="ingestion_streams",
+        retries=AIRFLOW_TASK_RETRIES,
+        retry_delay=timedelta(seconds=AIRFLOW_TASK_RETRY_DELAY_SECONDS),
+        execution_timeout=timedelta(
+            seconds=int(os.getenv("AIRFLOW_STREAM_TIMEOUT_SECONDS", "7200"))
+        ),
+        max_active_tis_per_dag=1,
+    )
+    def run_stream_task(payload: dict) -> dict:
+        context = get_current_context()
+        task_instance = context["ti"]
+        dag_run = context["dag_run"]
+        try:
+            command = ExecuteStreamCommand.model_validate(payload)
+        except Exception as exc:
+            message = f"Airflow stream payload is invalid: {str(exc)[:400]}"
+            asyncio.run(
+                _mark_runtime_failed(
+                    payload,
+                    error_code="STREAM_PAYLOAD_INVALID",
+                    message=message,
+                )
+            )
+            raise
+        command.orchestration = OrchestrationContext(
+            dagId=task_instance.dag_id,
+            dagRunId=dag_run.run_id,
+            taskId=task_instance.task_id,
+            mapIndex=task_instance.map_index,
+            tryNumber=task_instance.try_number,
+            logicalDate=dag_run.logical_date,
+        )
+        logger.info(
+            "stream_execution_started partner=%s runtimeRunId=%s dagRunId=%s taskId=%s mapIndex=%s tryNumber=%s",
+            command.partner,
+            command.runtime_run_id,
+            dag_run.run_id,
+            task_instance.task_id,
+            task_instance.map_index,
+            task_instance.try_number,
+        )
+        try:
+            result = asyncio.run(
+                _execute_stream(command.model_dump(by_alias=True, mode="json", exclude_none=True))
+            )
+        except Exception as exc:
+            logger.exception(
+                "stream_execution_exception partner=%s runtimeRunId=%s dagRunId=%s taskId=%s tryNumber=%s",
+                command.partner,
+                command.runtime_run_id,
+                dag_run.run_id,
+                task_instance.task_id,
+                task_instance.try_number,
+            )
+            if not isinstance(exc, ValueError) and task_instance.try_number <= AIRFLOW_TASK_RETRIES:
+                asyncio.run(
+                    _mark_runtime_retrying(
+                        command.model_dump(by_alias=True, mode="json", exclude_none=True),
+                        {
+                            "errorCode": "STREAM_EXECUTION_EXCEPTION",
+                            "retryable": True,
+                            "counters": {},
+                        },
+                    )
+                )
+            else:
+                asyncio.run(
+                    _mark_runtime_failed(
+                        command.model_dump(by_alias=True, mode="json", exclude_none=True),
+                        error_code="STREAM_EXECUTION_EXCEPTION",
+                        message=f"Airflow stream execution failed: {str(exc)[:400]}",
+                    )
+                )
+            if isinstance(exc, ValueError):
+                raise AirflowFailException(str(exc)) from exc
+            raise
+        logger.info(
+            "stream_execution_result payload=%s",
+            json.dumps(result, ensure_ascii=True, sort_keys=True, default=str),
+        )
+        if result["outcome"] not in SUCCESS_OUTCOMES:
+            error_code = result.get("errorCode") or "stream_execution_failed"
+            message = result.get("message") or "No application error message returned."
+            checkpoint = result.get("checkpoint") or {}
+            counters = result.get("counters") or {}
+            failure_message = (
+                "Stream execution stopped: "
+                f"outcome={result.get('outcome')} errorCode={error_code} "
+                f"message={message} checkpoint={checkpoint} counters={counters}"
+            )
+            # AirflowFailException is intentionally non-retryable.  Use a
+            # normal exception for transient application failures so the task
+            # retry policy can run (for example, a 504 on page 2).  Terminal
+            # errors and blocked streams must still stop immediately.
+            if (
+                result.get("retryable") is True
+                and task_instance.try_number <= AIRFLOW_TASK_RETRIES
+            ):
+                asyncio.run(
+                    _mark_runtime_retrying(
+                        command.model_dump(by_alias=True, mode="json", exclude_none=True),
+                        result,
+                    )
+                )
+                raise RuntimeError(failure_message)
+            raise AirflowFailException(failure_message)
+        logger.info(
+            "stream_execution_succeeded partner=%s runtimeRunId=%s outcome=%s checkpoint=%s counters=%s",
+            command.partner,
+            command.runtime_run_id,
+            result.get("outcome"),
+            result.get("checkpoint"),
+            result.get("counters"),
+        )
+        return result
+
+    run_stream_task.expand(payload=select_streams_task())
+
+
+reconciliation_ingestion()

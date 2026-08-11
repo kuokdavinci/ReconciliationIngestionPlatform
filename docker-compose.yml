@@ -1,3 +1,28 @@
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: Dockerfile.airflow
+  env_file:
+    - .env
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__PARALLELISM: 2
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: ${APP_BUSINESS_TIMEZONE:-Asia/Ho_Chi_Minh}
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-local-dev-only-airflow-jwt-secret-change-before-production-0123456789abcdef0123456789abcdef}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@postgres:5432/airflow
+    AIRFLOW_GLOBAL_SCHEDULE: ${AIRFLOW_GLOBAL_SCHEDULE:-none}
+    AIRFLOW_STREAM_TIMEOUT_SECONDS: ${AIRFLOW_STREAM_TIMEOUT_SECONDS:-7200}
+    AIRFLOW_TASK_RETRIES: ${AIRFLOW_TASK_RETRIES:-0}
+    AIRFLOW_TASK_RETRY_DELAY_SECONDS: ${AIRFLOW_TASK_RETRY_DELAY_SECONDS:-300}
+    AIRFLOW_ADMIN_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-airflow}
+    AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflow}
+  volumes:
+    - airflow_logs:/opt/airflow/logs
+
 services:
   postgres:
     image: postgres:16
@@ -30,7 +55,7 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
       MONGO_INITDB_DATABASE: reconciliation
     healthcheck:
-      test: ["CMD-SHELL", "mongosh -u $MONGO_INITDB_ROOT_USERNAME -p $MONGO_INITDB_ROOT_PASSWORD --eval 'db.runCommand(\"ping\").ok' --quiet"]
+      test: ["CMD-SHELL", "mongosh -u $${MONGO_INITDB_ROOT_USERNAME} -p $${MONGO_INITDB_ROOT_PASSWORD} --eval 'db.runCommand(\"ping\").ok' --quiet"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -79,14 +104,21 @@ services:
     env_file:
       - .env
     environment:
-      - APP_MONGODB_URL=mongodb://admin:123456@mongodb:27017/reconciliation?authSource=admin
+      - APP_MONGODB_URL=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
       - APP_POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/reconciliation
+      - APP_AUTOMATION_ORCHESTRATOR=${APP_AUTOMATION_ORCHESTRATOR:-airflow}
+      - APP_BUSINESS_TIMEZONE=${APP_BUSINESS_TIMEZONE:-Asia/Ho_Chi_Minh}
+      - APP_AIRFLOW_BASE_URL=http://airflow-api-server:8080
+      - APP_AIRFLOW_DAG_ID=${APP_AIRFLOW_DAG_ID:-reconciliation_ingestion}
+      - APP_AIRFLOW_USERNAME=${AIRFLOW_ADMIN_USERNAME:-airflow}
+      - APP_AIRFLOW_PASSWORD=${AIRFLOW_ADMIN_PASSWORD:-airflow}
     volumes:
       - ./downloads:/app/downloads
       - ./sftp_data:/app/sftp_data
       - ./mock_data:/app/mock_data
 
   scheduler:
+    profiles: ["apscheduler"]
     build:
       context: .
       dockerfile: Dockerfile
@@ -101,17 +133,117 @@ services:
     env_file:
       - .env
     environment:
-      - APP_MONGODB_URL=mongodb://admin:123456@mongodb:27017/reconciliation?authSource=admin
+      - APP_MONGODB_URL=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
       - APP_POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/reconciliation
+      - APP_AUTOMATION_ORCHESTRATOR=apscheduler
       - SFTP_HOST=sftp
     volumes:
       - ./downloads:/app/downloads
       - ./sftp_data:/app/sftp_data
       - ./mock_data:/app/mock_data
 
+  airflow-db-bootstrap:
+    image: postgres:16
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: postgres
+      AIRFLOW_DB_USER: ${AIRFLOW_DB_USER:-airflow}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
+    volumes:
+      - ./docker/bootstrap-airflow-db.sh:/bootstrap-airflow-db.sh:ro
+    command: ["bash", "/bootstrap-airflow-db.sh"]
+    restart: "no"
+
+  airflow-init:
+    <<: *airflow-common
+    depends_on:
+      airflow-db-bootstrap:
+        condition: service_completed_successfully
+    command:
+      - bash
+      - -c
+      - |
+        airflow db migrate
+        airflow pools set ingestion_streams 1 "Sequential ingestion streams"
+        airflow users create \
+          --username "$${AIRFLOW_ADMIN_USERNAME}" \
+          --password "$${AIRFLOW_ADMIN_PASSWORD}" \
+          --firstname Airflow \
+          --lastname Operator \
+          --role Admin \
+          --email airflow@example.local || true
+    restart: "no"
+
+  airflow-api-server:
+    <<: *airflow-common
+    container_name: reconciliation-airflow-api
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    command: api-server
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: reconciliation-airflow-scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    command: scheduler
+    environment:
+      <<: *airflow-common-env
+      APP_MONGODB_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
+      APP_POSTGRES_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/reconciliation
+      APP_DB_NAME: reconciliation
+      SFTP_HOST: sftp
+    volumes:
+      - airflow_logs:/opt/airflow/logs
+      - ./downloads:/opt/airflow/app/downloads
+      - ./sftp_data:/opt/airflow/app/sftp_data
+      - ./mock_data:/opt/airflow/app/mock_data
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: reconciliation-airflow-dag-processor
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_healthy
+    command: dag-processor
+    restart: unless-stopped
+
+  viettelpay-mock:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: viettelpay-mock
+    command: python -m scripts.demo.sprint2.mock_api --host 0.0.0.0 --port 8001 --state-file /app/mock_data/viettelpay_sprint2/mock_api_state.json
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./mock_data:/app/mock_data
+    restart: unless-stopped
+
 
 volumes:
   mongo_data:
     driver: local
   postgres_data:
+    driver: local
+  airflow_logs:
     driver: local

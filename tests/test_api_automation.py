@@ -1,8 +1,20 @@
 """Tests for automation visibility endpoints."""
 
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi.testclient import TestClient
+import pytest
+from tests.asgi_test_client import TestClient
+
+from src.domain.ingestion.checkpoints import (
+    CheckpointStatus,
+    IngestionCheckpoint,
+    IngestionMode,
+    SourceUnitStatus,
+    SourceUnitSummary,
+)
 
 
 class _AsyncCursor:
@@ -19,6 +31,18 @@ class _AsyncCursor:
         item = self._docs[self._idx]
         self._idx += 1
         return item
+
+
+def _checkpoint_raw(config_id: str, **overrides):
+    values: dict[str, Any] = {
+        "partner": "ZALOPAY",
+        "fetchConfigId": config_id,
+        "sourceType": "FILEDROP",
+        "streamKey": "ZALOPAY:FILEDROP:filedrop://sftp_data/zalopay_weird/*.csv",
+        "mode": IngestionMode.SCHEDULED,
+    }
+    values.update(overrides)
+    return IngestionCheckpoint(**values).model_dump(by_alias=True)
 
 
 def _create_test_app():
@@ -44,6 +68,7 @@ def _create_test_app():
     packet_collection = _create_mock_coll()
     runtime_run_collection = _create_mock_coll()
     recon_file_collection = _create_mock_coll()
+    checkpoint_collection = _create_mock_coll()
 
     def _get_collection(name):
         if name == "fetch_config":
@@ -54,16 +79,18 @@ def _create_test_app():
             return runtime_run_collection
         if name == "reconciliation_file":
             return recon_file_collection
+        if name == "ingestion_checkpoint":
+            return checkpoint_collection
         return _create_mock_coll()
 
     mock_db.__getitem__ = MagicMock(side_effect=_get_collection)
     app.state.db = mock_db
     app.state.mongo_client = MagicMock()
-    return app, fetch_collection, packet_collection, runtime_run_collection, recon_file_collection
+    return app, fetch_collection, packet_collection, runtime_run_collection, recon_file_collection, checkpoint_collection
 
 
 def test_list_automation_jobs_filters_to_scheduler_packets():
-    app, fetch_collection, packet_collection, _, _ = _create_test_app()
+    app, fetch_collection, packet_collection, _, _, _ = _create_test_app()
     fetch_collection.find = MagicMock(return_value=_AsyncCursor([
         {
             "_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -90,6 +117,20 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
             "riskSummary": {"severity": "high"},
             "status": "PENDING",
             "createdAt": "2026-06-04T03:00:00",
+        },
+        {
+            "_id": "pkt-scheduler-duplicate",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "ZALOPAY",
+            "fileName": "scheduled-page-1.csv",
+            "fileTypeDetected": "SETTLEMENT",
+            "recommendedAction": {"reason": "Duplicate retry packet."},
+            "parseStrategy": {"strategy": "AI inferred parser from scheduled partner fetch sample"},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {"severity": "high"},
+            "status": "PENDING",
+            "createdAt": "2026-06-04T02:59:00",
         },
         {
             "_id": "pkt-upload-1",
@@ -138,7 +179,7 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
 
 
 def test_duplicate_run_takes_precedence_over_pending_file_status():
-    app, fetch_collection, _, runtime_run_collection, recon_file_collection = _create_test_app()
+    app, fetch_collection, _, runtime_run_collection, recon_file_collection, _ = _create_test_app()
     fetch_collection.find = MagicMock(return_value=_AsyncCursor([
         {
             "_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -184,3 +225,344 @@ def test_duplicate_run_takes_precedence_over_pending_file_status():
     assert job["statusMessage"] == (
         "File already processed. Ingestion and reconciliation were skipped safely."
     )
+
+
+def test_list_automation_jobs_exposes_safe_recovery_read_model():
+    app, fetch_collection, packet_collection, runtime_run_collection, recon_file_collection, checkpoint_collection = _create_test_app()
+    config_id = "123e4567-e89b-12d3-a456-426614174000"
+    fetch_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": config_id,
+            "partner": "VIETTELPAY",
+            "fetchMethod": "API",
+            "schedule": "0 0 * * *",
+            "enabled": True,
+            "api": {
+                "baseUrl": "https://private.example/api",
+                "pagination": {"pageParam": "page", "maxPages": 3},
+            },
+            "updatedAt": "2026-08-06T04:00:00",
+        }
+    ]))
+    packet_collection.find = MagicMock(return_value=_AsyncCursor([]))
+    runtime_run_collection.find_one = AsyncMock(return_value={
+        "_id": "run-failed",
+        "partner": "VIETTELPAY",
+        "date": "2026-08-06",
+        "triggerType": "SCHEDULER",
+        "status": "FAILED",
+        "message": "Gateway timeout while fetching page 2",
+        "stats": {},
+        "createdAt": "2026-08-06T04:17:00",
+        "updatedAt": "2026-08-06T04:17:00",
+    })
+    recon_file_collection.find_one = AsyncMock(return_value=None)
+    checkpoint = IngestionCheckpoint(
+        partner="VIETTELPAY",
+        fetchConfigId=config_id,
+        sourceType="API",
+        streamKey="VIETTELPAY:API:https://private.example/api",
+        mode=IngestionMode.SCHEDULED,
+        status=CheckpointStatus.FAILED,
+        currentUnitKey="page:2",
+        lastCompletedUnitKey="page:1",
+        cursorBefore="cursor-1",
+        attemptCount=2,
+        errorCode="fetch_timeout",
+        lastError="Gateway timeout while fetching page 2",
+        retryable=True,
+        unitTimeline=[
+            SourceUnitSummary(
+                unitKey="page:1",
+                page=1,
+                status=SourceUnitStatus.COMPLETED,
+            ),
+            SourceUnitSummary(
+                unitKey="page:2",
+                page=2,
+                status=SourceUnitStatus.FAILED,
+                errorCode="fetch_timeout",
+                lastError="Gateway timeout while fetching page 2",
+                attemptCount=2,
+            ),
+        ],
+    )
+    checkpoint_collection.find = MagicMock(return_value=_AsyncCursor([
+        checkpoint.model_dump(by_alias=True)
+    ]))
+
+    response = TestClient(app).get("/api/v1/automation/jobs")
+
+    assert response.status_code == 200
+    recovery = response.json()["jobs"][0]["recovery"]
+    assert recovery["status"] == "FAILED"
+    assert recovery["streamKey"] == "VIETTELPAY:API:scheduled"
+    assert recovery["lastCompletedUnitKey"] == "page:1"
+    assert recovery["currentUnitKey"] == "page:2"
+    assert recovery["currentPage"] == 2
+    assert recovery["attemptCount"] == 2
+    assert recovery["maxAttempts"] == 3
+    assert recovery["duplicateCount"] == 0
+    assert recovery["units"][1]["status"] == "FAILED"
+    assert "private.example" not in str(recovery)
+
+
+@pytest.mark.asyncio
+async def test_retry_automation_job_resumes_failed_checkpoint_with_actor():
+    from src.api.automation import retry_automation_job
+    from src.api.automation import settings
+    from src.domain.runtime.models import (
+        PartnerRuntimeRun,
+        PartnerRuntimeRunStatus,
+        PartnerRuntimeTriggerType,
+    )
+
+    app, fetch_collection, _, _, _, checkpoint_collection = _create_test_app()
+    config_id = "123e4567-e89b-12d3-a456-426614174000"
+    fetch_collection.find_one = AsyncMock(return_value={
+        "_id": config_id,
+        "partner": "ZALOPAY",
+        "fetchMethod": "FILEDROP",
+        "enabled": True,
+        "filedrop": {"directory": "sftp_data/zalopay_weird", "pattern": "*.csv"},
+        "updatedAt": "2026-08-06T04:00:00",
+    })
+    checkpoint = IngestionCheckpoint(
+        partner="ZALOPAY",
+        fetchConfigId=config_id,
+        sourceType="FILEDROP",
+        streamKey="ZALOPAY:FILEDROP:filedrop://sftp_data/zalopay_weird/*.csv",
+        mode=IngestionMode.SCHEDULED,
+        status=CheckpointStatus.FAILED,
+        currentUnitKey="file:20260806.csv",
+        retryable=True,
+        nextRetryAt=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    checkpoint_collection.find_one = AsyncMock(
+        return_value=checkpoint.model_dump(by_alias=True)
+    )
+    checkpoint_collection.update_one.return_value = MagicMock(modified_count=1)
+    queued_run = PartnerRuntimeRun(
+        partner="ZALOPAY",
+        date="2026-08-06",
+        triggerType=PartnerRuntimeTriggerType.SCHEDULER,
+        triggeredBy="ops-user",
+        status=PartnerRuntimeRunStatus.QUEUED,
+        message="Recovery retry queued from checkpoint.",
+    )
+
+    def _discard_background_task(coro):
+        coro.close()
+        task = MagicMock()
+        task.add_done_callback = MagicMock()
+        return task
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=app.state.db)),
+        headers={"X-Actor": "ops-user"},
+    )
+    with (
+        patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
+        patch("src.api.automation.asyncio.create_task", side_effect=_discard_background_task),
+        patch.object(settings, "automation_orchestrator", "apscheduler"),
+    ):
+        payload = await retry_automation_job(request, "ZALOPAY")
+
+    assert payload["ok"] is True
+    assert payload["actor"] == "ops-user"
+    assert payload["resumedFromUnitKey"] == "file:20260806.csv"
+    assert payload["runtimeRunId"] == str(queued_run.id)
+    update = checkpoint_collection.update_one.await_args.args[1]
+    assert update["$set"]["resolutionMetadata"]["operatorId"] == "ops-user"
+
+
+@pytest.mark.asyncio
+async def test_retry_automation_job_rejects_blocked_checkpoint():
+    from fastapi import HTTPException
+
+    from src.api.automation import retry_automation_job
+
+    app, fetch_collection, _, _, _, checkpoint_collection = _create_test_app()
+    config_id = "123e4567-e89b-12d3-a456-426614174000"
+    fetch_collection.find_one = AsyncMock(return_value={
+        "_id": config_id,
+        "partner": "ZALOPAY",
+        "fetchMethod": "FILEDROP",
+        "enabled": True,
+        "filedrop": {"directory": "sftp_data/zalopay_weird", "pattern": "*.csv"},
+        "updatedAt": "2026-08-06T04:00:00",
+    })
+    checkpoint_collection.find_one = AsyncMock(return_value=_checkpoint_raw(
+        config_id,
+        status=CheckpointStatus.BLOCKED,
+        retryable=False,
+        currentUnitKey="file:20260806.csv",
+    ))
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=app.state.db)),
+        headers={"X-Actor": "ops-user"},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await retry_automation_job(request, "ZALOPAY")
+
+    assert error.value.status_code == 409
+    assert "BLOCKED" in str(error.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_retry_automation_job_rejects_live_processing_claim():
+    from fastapi import HTTPException
+
+    from src.api.automation import retry_automation_job
+
+    app, fetch_collection, _, _, _, checkpoint_collection = _create_test_app()
+    config_id = "123e4567-e89b-12d3-a456-426614174000"
+    fetch_collection.find_one = AsyncMock(return_value={
+        "_id": config_id,
+        "partner": "ZALOPAY",
+        "fetchMethod": "FILEDROP",
+        "enabled": True,
+        "filedrop": {"directory": "sftp_data/zalopay_weird", "pattern": "*.csv"},
+        "updatedAt": "2026-08-06T04:00:00",
+    })
+    checkpoint_collection.find_one = AsyncMock(return_value=_checkpoint_raw(
+        config_id,
+        status=CheckpointStatus.PROCESSING,
+        currentUnitKey="file:20260806.csv",
+        startedAt=datetime.now(UTC),
+    ))
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=app.state.db)),
+        headers={"X-Actor": "ops-user"},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await retry_automation_job(request, "ZALOPAY")
+
+    assert error.value.status_code == 409
+    assert "live source-unit claim" in str(error.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_run_automation_job_rejects_live_processing_claim():
+    from fastapi import HTTPException
+
+    from src.api.automation import run_automation_job_now
+
+    app, fetch_collection, _, _, _, checkpoint_collection = _create_test_app()
+    config_id = "123e4567-e89b-12d3-a456-426614174000"
+    fetch_collection.find_one = AsyncMock(return_value={
+        "_id": config_id,
+        "partner": "ZALOPAY",
+        "fetchMethod": "FILEDROP",
+        "enabled": True,
+        "filedrop": {"directory": "sftp_data/zalopay_weird", "pattern": "*.csv"},
+        "updatedAt": "2026-08-06T04:00:00",
+    })
+    checkpoint_collection.find_one = AsyncMock(return_value=_checkpoint_raw(
+        config_id,
+        status=CheckpointStatus.PROCESSING,
+        currentUnitKey="file:20260806.csv",
+        startedAt=datetime.now(UTC),
+    ))
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=app.state.db)),
+        headers={"X-Actor": "ops-user"},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await run_automation_job_now(request, "ZALOPAY")
+
+    assert error.value.status_code == 409
+    assert "live source-unit claim" in str(error.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_resolve_automation_recovery_requires_reason_and_records_audit_event():
+    from src.api.automation import resolve_automation_recovery
+
+    app, fetch_collection, _, _, _, checkpoint_collection = _create_test_app()
+    config_id = "123e4567-e89b-12d3-a456-426614174000"
+    fetch_collection.find_one = AsyncMock(return_value={
+        "_id": config_id,
+        "partner": "ZALOPAY",
+        "fetchMethod": "FILEDROP",
+        "enabled": True,
+        "filedrop": {"directory": "sftp_data/zalopay_weird", "pattern": "*.csv"},
+        "updatedAt": "2026-08-06T04:00:00",
+    })
+    checkpoint_collection.find_one = AsyncMock(return_value=_checkpoint_raw(
+        config_id,
+        status=CheckpointStatus.BLOCKED,
+        retryable=False,
+        currentUnitKey="file:20260806.csv",
+    ))
+    checkpoint_collection.update_one.return_value = MagicMock(modified_count=1)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=app.state.db)),
+        headers={"X-Actor": "ops-user"},
+        json=AsyncMock(return_value={"action": "SKIP", "reason": "Validated duplicate source file"}),
+    )
+
+    with patch("src.api.automation.record_audit_event", new=AsyncMock()) as record_audit:
+        payload = await resolve_automation_recovery(request, "ZALOPAY")
+
+    assert payload["ok"] is True
+    assert payload["action"] == "SKIP"
+    assert payload["unitKey"] == "file:20260806.csv"
+    record_audit.assert_awaited_once()
+    audit_kwargs = record_audit.await_args.kwargs
+    assert audit_kwargs["entity_id"] == "ZALOPAY:FILEDROP:scheduled"
+    assert audit_kwargs["metadata"]["reason"] == "Validated duplicate source file"
+
+
+def test_list_jobs_marks_airflow_up_for_retry_as_active_runtime():
+    from src.config.settings import settings
+    from src.domain.runtime.models import (
+        PartnerRuntimeRun,
+        PartnerRuntimeRunStatus,
+        PartnerRuntimeTriggerType,
+        RuntimeOrchestrationContext,
+    )
+
+    app, fetch_collection, _, _, _, _ = _create_test_app()
+    fetch_collection.find = MagicMock(return_value=_AsyncCursor([{
+        "_id": "123e4567-e89b-12d3-a456-426614174000",
+        "partner": "VIETTELPAY",
+        "fetchMethod": "API",
+        "schedule": "0 0 * * *",
+        "enabled": True,
+        "api": {"baseUrl": "http://viettelpay-mock:8001/settlement"},
+        "updatedAt": "2026-08-09T01:02:03+00:00",
+    }]))
+    latest_run = PartnerRuntimeRun(
+        partner="VIETTELPAY",
+        date="2026-08-09",
+        triggerType=PartnerRuntimeTriggerType.SCHEDULER,
+        status=PartnerRuntimeRunStatus.FAILED,
+        orchestration=RuntimeOrchestrationContext(
+            dagId="reconciliation_ingestion",
+            dagRunId="manual__runtime-1",
+            taskId="run_stream",
+            mapIndex=0,
+        ),
+    )
+    with (
+        patch.object(settings, "automation_orchestrator", "airflow"),
+        patch(
+            "src.api.automation.PartnerRuntimeRunRepository.find_latest_by_partner",
+            new=AsyncMock(return_value=latest_run),
+        ),
+        patch(
+            "src.api.automation.PartnerRuntimeRunRepository.find_recent_by_partner",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("src.api.automation._airflow_task_state", new=AsyncMock(return_value="up_for_retry")),
+    ):
+        response = TestClient(app).get("/api/v1/automation/jobs")
+
+    assert response.status_code == 200
+    job = response.json()["jobs"][0]
+    assert job["status"] == "RETRYING"
+    assert job["activeRuntimeRun"]["orchestration"]["taskState"] == "up_for_retry"

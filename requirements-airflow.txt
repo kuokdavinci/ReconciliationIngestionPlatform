@@ -1,0 +1,19 @@
+# Airflow-specific overlay for Dockerfile.airflow.
+# Airflow core is supplied by apache/airflow:3.3.0. The app image keeps its
+# complete runtime set in requirements.txt because the Airflow image has its
+# own dependency constraints and process topology.
+openpyxl>=3.1.0
+pydantic>=2.0
+pydantic-settings>=2.0
+motor>=3.0
+python-decouple>=3.8
+paramiko>=3.5.1,<4.0.0
+httpx>=0.28.1
+httpx2>=2.0.0
+cryptography>=48.0.0
+xlsxwriter>=3.2.9
+python-calamine>=0.7.0
+asyncpg>=0.31.0
+sqlalchemy>=2.0.51
+alembic>=1.14.0
+greenlet>=3.5.2

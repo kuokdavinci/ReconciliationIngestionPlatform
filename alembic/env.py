@@ -48,9 +48,10 @@ def do_run_migrations(connection):
 
 async def run_async_migrations() -> None:
     """Run migrations in 'online' mode with async engine."""
-    connectable = create_async_engine(
-        config.get_main_option("sqlalchemy.url"),
-    )
+    database_url = config.get_main_option("sqlalchemy.url")
+    if not database_url:
+        raise RuntimeError("Alembic sqlalchemy.url is not configured")
+    connectable = create_async_engine(database_url)
     async with connectable.begin() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

@@ -1,8 +1,8 @@
 .PHONY: test test-eval ci clean \
-	momo-e2e-run momo-e2e-job momo-e2e-rebuild \
+	momo-e2e-run momo-e2e-job momo-e2e-rebuild momo-e2e-fail \
 	momo-e2e-phase2-file momo-e2e-help momo-e2e-reset momo-e2e-phase2 momo-e2e-phase2-full \
 	momo-e2e-missing-partner-demo momo-sprint6-setup momo-sprint6-wave2 \
-	zalopay-e2e-reset viettelpay-sprint2-reset viettelpay-sprint2-eval
+	zalopay-e2e-reset viettelpay-sprint2-reset viettelpay-sprint2-phase2 viettelpay-sprint2-eval
 
 # ── Test ──────────────────────────────────────────────────────────
 test:
@@ -35,16 +35,19 @@ ci:
 
 # ── MOMO E2E shortcuts ────────────────────────────────────────────
 momo-e2e-reset:
-	PYTHONPATH=. uv run python scripts/demo/sprint1/seed_momo_e2e.py reset --file-dir mock_data
+	docker compose exec -T api env PYTHONPATH=/app python scripts/demo/sprint1/seed_momo_e2e.py reset --file-dir /app/mock_data
+
+momo-e2e-fail:
+	docker compose exec -T api env PYTHONPATH=/app python scripts/demo/sprint1/seed_momo_e2e.py fail --file-dir /app/mock_data
 
 momo-e2e-phase2:
-	PYTHONPATH=. uv run python scripts/demo/sprint1/seed_momo_e2e.py phase2_duplicate --file-dir mock_data
+	docker compose exec -T api env PYTHONPATH=/app python scripts/demo/sprint1/seed_momo_e2e.py phase2_duplicate --file-dir /app/mock_data
 
 momo-e2e-phase2-full:
-	PYTHONPATH=. uv run python scripts/demo/sprint1/seed_momo_e2e.py phase2 --file-dir mock_data
+	docker compose exec -T api env PYTHONPATH=/app python scripts/demo/sprint1/seed_momo_e2e.py phase2 --file-dir /app/mock_data
 
 momo-e2e-missing-partner-demo:
-	PYTHONPATH=. uv run python scripts/demo/sprint1/seed_momo_e2e.py missing_partner_demo --file-dir mock_data
+	docker compose exec -T api env PYTHONPATH=/app python scripts/demo/sprint1/seed_momo_e2e.py missing_partner_demo --file-dir /app/mock_data
 
 momo-sprint6-setup:
 	PYTHONPATH=. python scripts/demo/sprint1/seed_momo_e2e.py sprint6-setup
@@ -59,17 +62,22 @@ momo-e2e-job:
 	curl -s http://localhost:8000/api/v1/automation/jobs | jq '.jobs[] | select(.partner == "MOMO")'
 
 momo-e2e-rebuild:
-	docker compose up -d --build api scheduler
+	docker compose up -d --build api airflow-api-server airflow-scheduler airflow-dag-processor
 
 momo-e2e-phase2-file:
 	python -c 'import openpyxl, datetime; date_str = datetime.datetime.now().strftime("%Y-%m-%d"); wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Sheet1"; [ws.append([]) for _ in range(6)]; headers = [""] * 30; headers[0], headers[1], headers[4], headers[7], headers[10], headers[17] = "STT", "msTransId", "msTotalAmount", "msNgayHoanThanh", "msMaHDon", "msTrangThaiGd"; ws.append(headers); [ws.append([(str(i + 1) if c == 0 else (f"MOMO_TXN_91{i:02d}" if c in (1, 10) else (str(100000 + i * 5000) if c == 4 else (f"{date_str} 12:00:00" if c == 7 else ("Thành công" if c == 17 else ""))))) for c in range(30)]) for i in range(20)]; filename = f"sftp_data/settlement_MOMO_{date_str.replace(\"-\", \"\")}.xlsx"; wb.save(filename); print(f"Generated Phase 2 Excel sheet: {filename}")'
 
 # ── Sprint 2 — ViettelPay recovery demo ─────────────────────────
 viettelpay-sprint2-reset:
-	PYTHONPATH=. uv run python scripts/demo/sprint2/seed.py reset
+	docker compose exec -T api python -m scripts.demo.sprint2.seed reset
+	docker compose up -d viettelpay-mock
+
+viettelpay-sprint2-phase2:
+	docker compose up -d viettelpay-mock
+	docker compose exec -T viettelpay-mock python -m scripts.demo.sprint2.mock_api --phase2 --state-file /app/mock_data/viettelpay_sprint2/mock_api_state.json
 
 viettelpay-sprint2-eval:
-	PYTHONPATH=. uv run python scripts/demo/sprint2/run.py
+	PYTHONPATH=. uv run python -m scripts.demo.sprint2.run
 
 # ── ZALOPAY E2E shortcuts ─────────────────────────────────────────
 zalopay-e2e-reset:
@@ -78,6 +86,7 @@ zalopay-e2e-reset:
 momo-e2e-help:
 	@echo "MOMO E2E — start here (2 main commands):"
 	@echo "  make momo-e2e-reset               # clean Phase 1 (20 internal rows 9000-9019 + partner file)"
+	@echo "  make momo-e2e-fail                # Docker-native fixture; missing id/trace; next Run Now must show FAILED"
 	@echo "  make momo-e2e-phase2              # partial duplicate demo (20 old + 10 new rows)"
 	@echo "  make momo-e2e-phase2-full         # legacy full Wave 2 file (20 new rows)"
 	@echo ""
@@ -90,7 +99,7 @@ momo-e2e-help:
 	@echo "  make momo-e2e-run         # trigger MOMO automation run"
 	@echo "  make momo-e2e-job         # inspect MOMO automation job"
 	@echo "  make momo-e2e-phase2-file # write Wave 2 partner file (9100-9119) only"
-	@echo "  make momo-e2e-rebuild     # rebuild api + scheduler containers"
+	@echo "  make momo-e2e-rebuild     # rebuild api + Airflow containers"
 
 # ── Frontend (Next.js) ────────────────────────────────────────────
 .PHONY: frontend-dev frontend-build

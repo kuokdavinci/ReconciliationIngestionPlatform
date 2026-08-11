@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -22,11 +23,13 @@ from src.application.reconciliation.service import ReconciliationCommand
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
 from src.reconciliation.engine import ReconciliationEngine  # noqa: F401 - legacy patch seam
 from src.services.audit import record_audit_event
+from src.api.background_tasks import track_background_task
 from src.services.runtime_runs import (
     create_runtime_run,
     serialize_partner_runtime_run,
     update_runtime_run,
 )
+from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +56,7 @@ class RunReconciliationPayload(BaseModel):
 
 
 def _track_background_task(request: Request, task: asyncio.Task) -> None:
-    tasks = getattr(request.app.state, "background_tasks", None)
-    if tasks is None:
-        tasks = set()
-        request.app.state.background_tasks = tasks
-    tasks.add(task)
-    task.add_done_callback(tasks.discard)
+    track_background_task(request.app, task)
 
 
 def _validate_date(date_str: Optional[str]) -> str:
@@ -94,9 +92,11 @@ def _validate_status(status: Optional[str]) -> Optional[str]:
 
 def _date_bounds(date_str: str) -> tuple[datetime, datetime]:
     day = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    business_timezone = ZoneInfo(settings.business_timezone)
+    day = day.astimezone(business_timezone)
     return (
-        day.replace(hour=0, minute=0, second=0, microsecond=0),
-        day.replace(hour=23, minute=59, second=59, microsecond=999999),
+        day.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc),
+        day.replace(hour=23, minute=59, second=59, microsecond=999999).astimezone(timezone.utc),
     )
 
 
@@ -145,21 +145,8 @@ async def _resolve_latest_run_filters(db, partner: str, date: str) -> dict[str, 
     context = await _resolve_latest_run_context(db, partner, date)
     if context.get("source_file_id"):
         file_id = context["source_file_id"]
-        file_doc = await db["reconciliation_file"].find_one({"_id": file_id})
-        if file_doc and file_doc.get("scopeType") == "INCREMENTAL_APPEND":
-            start_of_day, end_of_day = _date_bounds(date)
-            cursor = db["reconciliation_file"].find(
-                {
-                    "partner": partner,
-                    "reconciliationDate": {"$gte": start_of_day, "$lte": end_of_day},
-                    "createdAt": {"$lte": file_doc["createdAt"]},
-                }
-            )
-            file_ids = []
-            async for f in cursor:
-                file_ids.append(str(f["_id"]))
-            if file_ids:
-                return {"source_file_id": {"$in": file_ids}}
+        # Append is batch-only. The latest reconciliation view must show the
+        # current source file, not a cumulative same-day union of prior files.
         return {"source_file_id": file_id}
     run = await PartnerRuntimeRunRepository(db).find_latest_by_partner_and_date(partner, date)
     if run is not None and getattr(run, "id", None):
@@ -428,18 +415,28 @@ async def list_results(
 
     try:
         repo = _get_repo(request)
+        scope_filters = await _resolve_latest_run_filters(
+            getattr(request.app.state, "db", None), partner, date
+        )
         page, total = await repo.find_page_by_partner_and_date(
             partner,
             date,
             status=ReconciliationStatus(status) if status else None,
-            **(
-                await _resolve_latest_run_filters(
-                    getattr(request.app.state, "db", None), partner, date
-                )
-            ),
+            **scope_filters,
             limit=limit,
             offset=offset,
         )
+        # Results written before runtime IDs were propagated have no
+        # reconciliation_run_id. Keep those legacy rows visible while new
+        # runs remain strictly scoped to their own runtime ID.
+        if total == 0 and scope_filters.get("reconciliation_run_id"):
+            page, total = await repo.find_page_by_partner_and_date(
+                partner,
+                date,
+                status=ReconciliationStatus(status) if status else None,
+                limit=limit,
+                offset=offset,
+            )
         return {
             "results": [_serialize(r) for r in page],
             "total": total,
@@ -489,6 +486,11 @@ async def reconciliation_stats(
             repo.count_by_status(partner, date, **scope_filters),
             repo.get_total_amounts(partner, date, **scope_filters),
         )
+        if not by_status and scope_filters.get("reconciliation_run_id"):
+            by_status, totals = await asyncio.gather(
+                repo.count_by_status(partner, date),
+                repo.get_total_amounts(partner, date),
+            )
         total = sum(by_status.values())
         return {
             "partner": partner,

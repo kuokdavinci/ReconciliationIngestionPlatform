@@ -19,11 +19,45 @@ class CheckpointStatus(StrEnum):
     BLOCKED = "BLOCKED"
 
 
+class SourceUnitStatus(StrEnum):
+    """Lifecycle shown for one persisted source-unit timeline entry."""
+
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    BLOCKED = "BLOCKED"
+    WAITING_REVIEW = "WAITING_REVIEW"
+    REPLAYED = "REPLAYED"
+    SKIPPED = "SKIPPED"
+
+
 class IngestionMode(StrEnum):
     """Execution mode used to isolate scheduled streams from backfills."""
 
     SCHEDULED = "SCHEDULED"
     BACKFILL = "BACKFILL"
+
+
+class SourceUnitSummary(BaseModel):
+    """Safe, compact progress record for one source unit."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    unit_key: str = Field(alias="unitKey")
+    label: Optional[str] = None
+    page: Optional[int] = None
+    status: SourceUnitStatus = SourceUnitStatus.PENDING
+    cursor_before: Optional[str] = Field(default=None, alias="cursorBefore")
+    cursor_after: Optional[str] = Field(default=None, alias="cursorAfter")
+    attempt_count: int = Field(default=0, alias="attemptCount", ge=0)
+    last_error: Optional[str] = Field(default=None, alias="lastError")
+    error_code: Optional[str] = Field(default=None, alias="errorCode")
+    retryable: Optional[bool] = None
+    next_retry_at: Optional[datetime] = Field(default=None, alias="nextRetryAt")
+    started_at: Optional[datetime] = Field(default=None, alias="startedAt")
+    completed_at: Optional[datetime] = Field(default=None, alias="completedAt")
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC), alias="updatedAt")
 
 
 class IngestionCheckpoint(BaseModel):
@@ -42,6 +76,7 @@ class IngestionCheckpoint(BaseModel):
     cursor_before: Optional[str] = Field(default=None, alias="cursorBefore")
     cursor_after: Optional[str] = Field(default=None, alias="cursorAfter")
     high_water_mark: Optional[dict[str, Any]] = Field(default=None, alias="highWaterMark")
+    stream_ended: bool = Field(default=False, alias="streamEnded")
     status: CheckpointStatus = CheckpointStatus.ABSENT
     attempt_count: int = Field(default=0, alias="attemptCount", ge=0)
     claim_id: Optional[str] = Field(default=None, alias="claimId")
@@ -59,6 +94,8 @@ class IngestionCheckpoint(BaseModel):
     config_version: Optional[str] = Field(default=None, alias="configVersion")
     source_endpoint: Optional[str] = Field(default=None, alias="sourceEndpoint")
     stream_metadata: dict[str, Any] = Field(default_factory=dict, alias="streamMetadata")
+    unit_timeline: list[SourceUnitSummary] = Field(default_factory=list, alias="unitTimeline")
+    recovery_events: list[dict[str, Any]] = Field(default_factory=list, alias="recoveryEvents")
 
 
 class CheckpointRepository(Protocol):
@@ -113,3 +150,26 @@ class CheckpointRepository(Protocol):
     ) -> bool: ...
 
     async def advance(self, checkpoint: IngestionCheckpoint, *, unit_key: str) -> bool: ...
+
+    async def find_by_streams(
+        self,
+        identities: list[dict[str, Any]],
+    ) -> list[IngestionCheckpoint]: ...
+
+    async def prepare_manual_retry(
+        self,
+        checkpoint: IngestionCheckpoint,
+        *,
+        operator_id: str,
+        reason: str,
+    ) -> bool: ...
+
+    async def resolve_blocked(
+        self,
+        checkpoint: IngestionCheckpoint,
+        *,
+        unit_key: str,
+        action: str,
+        reason: str,
+        operator_id: str,
+    ) -> bool: ...

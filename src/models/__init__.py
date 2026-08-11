@@ -22,6 +22,7 @@ from src.domain.ingestion.checkpoints import (
     IngestionMode,
 )
 from src.domain.ingestion.models import ReconciliationFile
+from src.domain.ingestion.raw_pages import RawIngestionPage, RawPageStatus
 from src.domain.ingestion.source_units import IngestionOutcome, SourceUnitMetadata
 from src.domain.internal_transaction.models import InternalTransaction
 from src.domain.mapping.models import MappingConfig, MappingConfigStatus
@@ -51,6 +52,7 @@ from src.infrastructure.audit.repository import AuditEventRepository
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+from src.infrastructure.ingestion.raw_page_repository import RawIngestionPageRepository
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.infrastructure.partner_transaction.repository import (
     DataContainerRepository,
@@ -133,6 +135,9 @@ __all__ = [
     "PostApprovalRunStatus",
     "ReconciliationFile",
     "ReconciliationFileRepository",
+    "RawIngestionPage",
+    "RawPageStatus",
+    "RawIngestionPageRepository",
     "ReconciliationResult",
     "ReconciliationResultRepository",
     "ReconciliationResultTable",

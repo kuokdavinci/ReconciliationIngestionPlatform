@@ -27,6 +27,7 @@ class APIFetcher(BaseFetcher):
     MAX_RETRIES = 3
     BACKOFF_MULTIPLIER = 2
     INITIAL_BACKOFF = 1  # seconds
+    REVIEW_SAMPLE_LIMIT = 100
 
     async def fetch(
         self,
@@ -302,6 +303,13 @@ class APIFetcher(BaseFetcher):
             unit.item_count = len(page_items)
             unit.cursor_after = next_cursor
             unit.has_more = has_more
+            # Keep a bounded, source-side sample with the claim metadata. The
+            # downloaded file may be cleaned up before a later page triggers a
+            # mapping review, but the review packet still needs all pages that
+            # were already fetched.
+            unit.fetch_metadata = {
+                "sampleRows": page_items[: self.REVIEW_SAMPLE_LIMIT]
+            }
             units.append(unit)
             items.extend(page_items)
             final_cursor = next_cursor

@@ -9,6 +9,8 @@ from src.domain.review.models import (
     PostApprovalRun,
     ReconciliationReviewRecord,
     ReviewPacket,
+    ReviewPacketSourceType,
+    ReviewPacketStatus,
 )
 from src.infrastructure.persistence.mongo_repository import BaseRepository
 
@@ -53,6 +55,35 @@ class ReviewPacketRepository(BaseRepository[ReviewPacket]):
     async def find_latest_by_proposal(self, proposal_config_id: str) -> Optional[ReviewPacket]:
         raw = await self.collection.find_one(
             {"$or": [{"draftMappingId": proposal_config_id}, {"proposalConfigId": proposal_config_id}]},
+            sort=[("createdAt", -1)],
+        )
+        if raw is None:
+            return None
+        return self._from_mongo(raw)
+
+    async def find_latest_pending_by_stage(
+        self,
+        *,
+        partner: str,
+        raw_stage_key: str,
+        file_type: str,
+    ) -> Optional[ReviewPacket]:
+        """Find the one pending scheduler packet for a staged source stream.
+
+        ``rawStageKey`` is stable across Airflow retries, so it is the
+        idempotency boundary for a full paginated fetch.  Looking up by this
+        key also repairs older runs where the proposal id was not persisted
+        consistently under the ``draftMappingId``/``proposalConfigId`` alias.
+        """
+
+        raw = await self.collection.find_one(
+            {
+                "partner": partner,
+                "sourceType": ReviewPacketSourceType.SCHEDULER_JOB.value,
+                "fileTypeDetected": file_type,
+                "rawStageKey": raw_stage_key,
+                "status": ReviewPacketStatus.PENDING.value,
+            },
             sort=[("createdAt", -1)],
         )
         if raw is None:

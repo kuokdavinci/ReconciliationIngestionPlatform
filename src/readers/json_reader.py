@@ -47,11 +47,16 @@ class JSONStreamReader:
     def __enter__(self) -> Self:
         with open(self._file_path, mode="r", encoding=self._encoding) as f:
             data = json.load(f)
-        if not isinstance(data, list):
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            # API pagination persists the response envelope alongside the page
+            # items so the cursor metadata remains available to the fetcher.
+            self._rows = data["items"]
+        elif isinstance(data, list):
+            self._rows = data
+        else:
             raise ValueError(
-                f"JSON root must be an array, got {type(data).__name__}"
+                "JSON root must be an array or an object with an 'items' array"
             )
-        self._rows = data
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:

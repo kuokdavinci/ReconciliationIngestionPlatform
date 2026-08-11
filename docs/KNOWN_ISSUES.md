@@ -8,7 +8,7 @@ This file is the working memory for open issues, environmental constraints, and 
 - The sandbox can fail with `bwrap: loopback: Failed RTM_NEWADDR`.
 - When that happens, the failure is usually caused by the local sandbox/runtime, not by repository code.
 - If a command is blocked by sandbox policy, rerun it with `require_escalated` instead of changing project files to work around the environment.
-- In `frontend-next`, Next.js 16's default Turbopack production build may hang at `Creating an optimized production build...`. Use `npm run build -- --webpack`; this path has been verified successfully.
+- In `frontend-next`, Next.js 16's default Turbopack production build may hang at `Creating an optimized production build...`. The `npm run build` script explicitly uses the verified Webpack path.
 
 ## Project Scope Boundaries
 

@@ -89,9 +89,14 @@ class ReconciliationResultRepository:
             else:
                 conditions.append(ReconciliationResultTable.source_file_id == source_file_id)
         async with AsyncSession(self.engine) as session:
-            stmt = select(ReconciliationResultTable).where(
-                and_(*conditions)
-            ).order_by(ReconciliationResultTable.id.asc())
+            stmt = (
+                select(ReconciliationResultTable)
+                .where(and_(*conditions))
+                .order_by(
+                    ReconciliationResultTable.partner_txn_id.asc(),
+                    ReconciliationResultTable.id.asc(),
+                )
+            )
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [row_to_reconciliation_result(r) for r in rows]
@@ -133,7 +138,16 @@ class ReconciliationResultRepository:
             total_result = await session.execute(count_stmt)
             total = total_result.scalar() or 0
 
-            stmt = select(ReconciliationResultTable).where(and_(*conditions)).order_by(ReconciliationResultTable.id.asc()).offset(offset).limit(limit)
+            stmt = (
+                select(ReconciliationResultTable)
+                .where(and_(*conditions))
+                .order_by(
+                    ReconciliationResultTable.partner_txn_id.asc(),
+                    ReconciliationResultTable.id.asc(),
+                )
+                .offset(offset)
+                .limit(limit)
+            )
             result = await session.execute(stmt)
             rows = result.scalars().all()
             records = [row_to_reconciliation_result(r) for r in rows]
@@ -147,11 +161,18 @@ class ReconciliationResultRepository:
         from sqlalchemy.ext.asyncio import AsyncSession
         from src.infrastructure.persistence.postgres_schema import ReconciliationResultTable
         async with AsyncSession(self.engine) as session:
-            stmt = select(ReconciliationResultTable).where(
-                and_(
-                    ReconciliationResultTable.partner == partner,
-                    ReconciliationResultTable.date == date,
-                    ReconciliationResultTable.reconciliation_status == status.value
+            stmt = (
+                select(ReconciliationResultTable)
+                .where(
+                    and_(
+                        ReconciliationResultTable.partner == partner,
+                        ReconciliationResultTable.date == date,
+                        ReconciliationResultTable.reconciliation_status == status.value,
+                    )
+                )
+                .order_by(
+                    ReconciliationResultTable.partner_txn_id.asc(),
+                    ReconciliationResultTable.id.asc(),
                 )
             )
             result = await session.execute(stmt)
@@ -193,17 +214,27 @@ class ReconciliationResultRepository:
     async def delete_by_partner_and_date(
         self, partner: str, date: str, **kwargs: Any
     ) -> int:
-        del kwargs
-        from sqlalchemy import and_, delete
+        from sqlalchemy import and_, delete, or_
         from src.infrastructure.persistence.postgres_schema import ReconciliationResultTable
+
+        conditions = [
+            ReconciliationResultTable.partner == partner,
+            ReconciliationResultTable.date == date,
+        ]
+        scoped_conditions = []
+        source_file_id = kwargs.get("source_file_id")
+        partner_txn_ids = kwargs.get("partner_txn_ids")
+        if source_file_id:
+            scoped_conditions.append(ReconciliationResultTable.source_file_id == source_file_id)
+        if partner_txn_ids:
+            scoped_conditions.append(ReconciliationResultTable.partner_txn_id.in_(partner_txn_ids))
+        if scoped_conditions:
+            conditions.append(or_(*scoped_conditions))
 
         async with self.engine.begin() as conn:
             result = await conn.execute(
                 delete(ReconciliationResultTable).where(
-                    and_(
-                        ReconciliationResultTable.partner == partner,
-                        ReconciliationResultTable.date == date,
-                    )
+                    and_(*conditions)
                 )
             )
             return int(result.rowcount or 0)

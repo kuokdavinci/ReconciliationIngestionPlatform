@@ -23,10 +23,10 @@ npm install
 npm run dev
 
 # Build for production
-npm run build -- --webpack
+npm run build
 ```
 
-`next build` defaults to Turbopack in the current Next.js version. Use `--webpack` for the verified production-build path in this repository; the default Turbopack build may hang during optimized compilation.
+The repository's `build` script already uses the verified Webpack path (`next build --webpack`).
 
 The dev server runs on `http://localhost:3000` and proxies `/api/*` requests to `http://localhost:8000` (configured in `next.config.ts`).
 
@@ -41,14 +41,14 @@ The dev server runs on `http://localhost:3000` and proxies `/api/*` requests to 
 
 ```bash
 npm run lint        # ESLint
-npx tsc --noEmit    # Type check
+npm run typecheck   # Type check
 npx prettier --check src/  # Format check
-npm run build -- --webpack # Production build used by CI
-npx playwright install chromium # Install the local test browser
+npm run build # Production build used by CI
+npm run playwright:install # Install the local test browser
 npm run test:e2e     # Playwright interaction smoke tests
 ```
 
-The browser smoke tests start the production Next.js server and mock `/api/**` requests, so they run without the backend service. From a clean checkout, build first with `npm run build -- --webpack` before running `npm run test:e2e` locally.
+The browser smoke tests start the production Next.js server and mock `/api/**` requests, so they run without the backend service. From a clean checkout, build first with `npm run build` before running `npm run test:e2e` locally.
 
 ## Project Structure
 

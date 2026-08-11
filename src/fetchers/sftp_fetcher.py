@@ -50,7 +50,7 @@ class SFTPFetcher(BaseFetcher):
 
             # Create local download directory
             download_dir = config.download_dir or "./downloads"
-            local_dir = Path(download_dir)
+            local_dir = self.resolve_local_path(download_dir)
             local_dir.mkdir(parents=True, exist_ok=True)
             loop = asyncio.get_running_loop()
             remote_paths = await loop.run_in_executor(

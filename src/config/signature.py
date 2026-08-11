@@ -118,8 +118,10 @@ def _read_raw_json(path: Path, max_rows: int = 20) -> list[list[str]]:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     rows: list[list[str]] = []
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        data = data["items"]
     if not isinstance(data, list):
-        raise ValueError("JSON root must be an array")
+        raise ValueError("JSON root must be an array or an object with an items array")
     for i, item in enumerate(data):
         if i >= max_rows:
             break
@@ -158,6 +160,28 @@ def compute_signature(file_path: str | Path, sample_size: int = 10) -> Structure
     4. Return StructureSignature with up to sample_size data rows.
     """
     p = Path(file_path)
+    if p.suffix.lower() == ".json":
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        items = data.get("items") if isinstance(data, dict) else data
+        if isinstance(items, list) and items and all(isinstance(item, dict) for item in items):
+            headers: list[str] = []
+            for item in items[: sample_size + 1]:
+                for key in item:
+                    if key not in headers:
+                        headers.append(str(key))
+            sample = [
+                [_normalize_cell(item.get(header)) for header in headers]
+                for item in items[:sample_size]
+            ]
+            return StructureSignature(
+                headers=headers,
+                column_count=len(headers),
+                sample_rows=sample,
+                hash=_compute_hash(headers, len(headers)),
+                header_row_index=1,
+                first_data_row_index=1,
+            )
     if p.suffix.lower() in (".xlsx", ".xlsm"):
         raw_with_indices = _read_raw_xlsx_with_indices(p, max_rows=sample_size + 1)
         if not raw_with_indices:

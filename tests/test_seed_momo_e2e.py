@@ -20,6 +20,7 @@ from scripts.demo.sprint1.seed_momo_e2e import (
     _add_missing_partner_demo,
     _add_phase2,
     _add_phase2_duplicate,
+    _reset_and_seed_failure_case,
     _reset_and_seed_phase1,
     _wave1_keys,
     _wave2_keys,
@@ -90,6 +91,27 @@ async def test_reset_seeds_wave1_only(mock_db: MagicMock, monkeypatch, tmp_path:
     # Partner file on disk contains the 20 wave1 keys
     file_keys = _read_partner_txn_ids(partner_file)
     assert sorted(file_keys) == sorted(WAVE1_KEYS)
+
+
+async def test_failure_case_seeds_rows_and_missing_ingestion_key_xlsx(
+    mock_db: MagicMock, monkeypatch, tmp_path: Path
+):
+    """The failure fixture is readable but lacks both ingestion identity columns."""
+    repository = _setup_internal_repository(monkeypatch)
+    partner_file = tmp_path / "settlement_MOMO_20260605.xlsx"
+
+    inserted = await _reset_and_seed_failure_case(mock_db, str(partner_file))
+
+    assert inserted == 20
+    assert set(_inserted_partner_txn_ids(repository)) == set(WAVE1_KEYS)
+    workbook = openpyxl.load_workbook(partner_file)
+    worksheet = workbook.active
+    identity_values = [
+        (row[1], row[10])
+        for row in worksheet.iter_rows(min_row=8, max_col=11, values_only=True)
+    ]
+    assert len(identity_values) == 20
+    assert all(identity == (None, None) for identity in identity_values)
 
 
 # ── Test 2: phase2 adds wave2 only ──────────────────────────────────────────

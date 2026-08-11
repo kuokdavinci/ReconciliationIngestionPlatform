@@ -22,6 +22,7 @@ import * as api from "@/lib/api/reconciliation";
 import styles from "@/components/reconciliation/reconciliation.module.css";
 import { ReviewRecord, ReconciliationRow } from "@/types/reconciliation";
 
+const RECONCILIATION_PARTNERS = ["MOMO", "VNPAY", "ZALOPAY", "ACMEPAY", "VIETTELPAY"] as const;
 const PARTNER = "MOMO";
 const DATE = new Date().toISOString().slice(0, 10);
 
@@ -535,7 +536,7 @@ export default function ReconciliationPage() {
                 onChange={(e) => setPartner(e.target.value)}
                 className={styles.toolbarControl}
               >
-                {["MOMO", "VNPAY", "ZALOPAY", "ACMEPAY"].map((partner) => (
+                {RECONCILIATION_PARTNERS.map((partner) => (
                   <option key={partner} value={partner}>{partner}</option>
                 ))}
               </select>

@@ -106,13 +106,12 @@ class FileClaimService:
                         return FileClaimResult(reclaimed, True)
             return FileClaimResult(existing, False, "file_duplicate")
 
-        file_name = Path(file_path).name
         scope_meta = await classify_scope(
             self._db,
             partner=partner,
-            file_name=file_name,
             reconciliation_date=reconciliation_date,
         )
+        file_name = Path(file_path).name
         candidate = ReconciliationFile(
             partner=partner,
             file_name=file_name,

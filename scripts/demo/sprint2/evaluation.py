@@ -197,6 +197,10 @@ async def run_sprint2_evaluation() -> dict[str, Any]:
         )
     )
 
+    if checkpoint is None:
+        raise AssertionError("checkpoint must exist after the controlled page 2 failure")
+    if checkpoint.last_completed_unit_key is None:
+        raise AssertionError("page 1 must be completed before resume")
     pending_units = _units_after_checkpoint(units, checkpoint)
     identity["lastCompletedUnitKey"] = checkpoint.last_completed_unit_key
     before = _checkpoint_snapshot(checkpoint)
@@ -229,7 +233,12 @@ async def run_sprint2_evaluation() -> dict[str, Any]:
     )
 
     before = _checkpoint_snapshot(await repo.current_checkpoint())
-    identity["lastCompletedUnitKey"] = (await repo.current_checkpoint()).last_completed_unit_key
+    checkpoint = await repo.current_checkpoint()
+    if checkpoint is None:
+        raise AssertionError("checkpoint must exist before replay evaluation")
+    if checkpoint.last_completed_unit_key is None:
+        raise AssertionError("page 3 must be completed before replay evaluation")
+    identity["lastCompletedUnitKey"] = checkpoint.last_completed_unit_key
     started = time.perf_counter()
     replay_result = await process_source_units(
         repo,

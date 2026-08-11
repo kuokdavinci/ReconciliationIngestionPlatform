@@ -1,6 +1,6 @@
 import { get, post } from "./client";
 import { normalizePacket } from "./review-center-normalizer";
-import type { ReviewPacket } from "@/types/review-center";
+import type { RawStreamPage, ReviewPacket } from "@/types/review-center";
 
 export interface ReviewPacketsResponse {
   packets: ReviewPacket[];
@@ -27,6 +27,10 @@ export async function getReviewPacket(packetId: string) {
   return {
     packet: normalizePacket(response.packet ?? {}),
   };
+}
+
+export async function getReviewPacketRawRecords(packetId: string, offset = 0, limit = 50) {
+  return get<RawStreamPage>(`/review-packets/${packetId}/raw-records`, { offset, limit });
 }
 
 export async function approveActivate(packetId: string, reviewedBy: string, scopeType?: string) {

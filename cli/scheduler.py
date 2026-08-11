@@ -6,6 +6,12 @@ from src.config.settings import settings
 from src.scheduler import PartnerDataScheduler, SchedulerConfig, daily_partner_fetch_job
 
 
+def apscheduler_is_owner() -> bool:
+    """Return whether APScheduler is allowed to own production schedules."""
+
+    return settings.automation_orchestrator == "apscheduler"
+
+
 async def handle_scheduler_mode(
     start_scheduler: bool = False,
     run_job_now: bool = False,
@@ -18,6 +24,17 @@ async def handle_scheduler_mode(
         run_job_now: Whether to manually trigger the job now.
         list_jobs: Whether to list scheduled jobs.
     """
+
+    if not apscheduler_is_owner():
+        if list_jobs or run_job_now:
+            raise RuntimeError(
+                "APScheduler is disabled because Airflow owns automation orchestration."
+            )
+        if start_scheduler:
+            print("APScheduler disabled: Airflow owns automation orchestration.")
+            while True:
+                await asyncio.sleep(3600)
+        return
 
     scheduler_config = SchedulerConfig(
         job_store_type="mongodb",

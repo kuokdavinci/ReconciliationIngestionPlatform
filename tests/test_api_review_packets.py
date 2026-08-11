@@ -1,10 +1,12 @@
 """Tests for review packet approval desk endpoints."""
 
 import asyncio
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import src.api.review_packets as review_packets
 
 from src.api.review_packets import (
     ReviewDecisionPayload,
@@ -16,6 +18,8 @@ from src.api.review_packets import (
     validate_runtime_packet,
     classify_scope_llm_for_packet,
     _extract_scope_keys,
+    _raw_stage_record_count,
+    get_review_packet_raw_records,
     SaveDraftMappingPayload,
 )
 from src.domain.review.models import ReviewPacket
@@ -30,6 +34,38 @@ def _make_request(db: MagicMock, headers: dict | None = None):
     )
 
 
+@pytest.mark.asyncio
+async def test_approve_keep_current_replays_a_staged_stream_with_active_mapping():
+    packet = ReviewPacket(
+        _id="pkt-stream",
+        sourceType="SCHEDULER_JOB",
+        partner="VIETTELPAY",
+        fileName="viettelpay.json",
+        fileTypeDetected="SETTLEMENT",
+        rawStageKey="stage-viettelpay",
+        activeRuntimeConfigId="mapping-approved",
+        validationGates=[{"gateKey": "runtime_validation", "status": "pass"}],
+    )
+    repo = MagicMock()
+    repo.find_one = AsyncMock(return_value=packet)
+    replay = AsyncMock(return_value={"id": "post-approval-stream"})
+
+    with (
+        patch("src.api.review_packets._repo", return_value=repo),
+        patch("src.api.review_packets.update_packet_scope", new=AsyncMock()),
+        patch("src.api.review_packets.reprocess_packet_with_current_mapping", new=replay),
+        patch("src.api.review_packets.mark_packet", new=AsyncMock(return_value={"ok": True})),
+    ):
+        response = await approve_keep_current_packet(
+            _make_request(MagicMock(), headers={"x-actor": "tester"}),
+            "pkt-stream",
+            ReviewDecisionPayload(reviewedBy="tester", scopeType="FULL_SNAPSHOT"),
+        )
+
+    assert replay.await_args.args[1:] == (packet, "tester")
+    assert response["postApproveRun"]["id"] == "post-approval-stream"
+
+
 def test_scope_key_extraction_counts_rows_when_mapping_is_deferred():
     received_count, keys = _extract_scope_keys(
         [("1", "MOMO_TXN_9000"), ("2", "MOMO_TXN_9001")],
@@ -39,6 +75,119 @@ def test_scope_key_extraction_counts_rows_when_mapping_is_deferred():
 
     assert received_count == 2
     assert keys == {"MOMO_TXN_9000", "MOMO_TXN_9001"}
+
+
+def test_json_mapping_generation_uses_header_field_names_not_column_positions():
+    mappings = review_packets._apply_source_reference_strategy(
+        [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 3, "type": "DECIMAL", "required": True},
+            {"path": "currency", "type": "CONSTANT", "constant": "VND"},
+        ],
+        headers=["id", "trace", "amount", "currency"],
+        source_file_name="api_data_page_0001.json",
+    )
+
+    assert mappings == [
+        {"path": "id", "sourceField": "id", "type": "STRING", "required": True},
+        {"path": "amount", "sourceField": "amount", "type": "DECIMAL", "required": True},
+        {"path": "currency", "type": "CONSTANT", "constant": "VND"},
+    ]
+
+
+def test_tabular_mapping_generation_keeps_column_positions():
+    mappings = review_packets._apply_source_reference_strategy(
+        [{"path": "id", "column": 1, "type": "STRING", "required": True}],
+        headers=["id"],
+        source_file_name="settlement.csv",
+    )
+
+    assert mappings[0]["column"] == 1
+    assert "sourceField" not in mappings[0]
+
+
+@pytest.mark.asyncio
+async def test_raw_stage_record_count_sums_all_persisted_api_pages():
+    class Cursor:
+        async def to_list(self, length=None):
+            return [{"itemCount": 2}, {"itemCount": 2}, {"itemCount": 2}]
+
+    collection = MagicMock()
+    collection.find.return_value = Cursor()
+    db = MagicMock()
+    db.__getitem__ = MagicMock(return_value=collection)
+    packet = ReviewPacket(
+        _id="pkt-api-pages",
+        sourceType="SCHEDULER_JOB",
+        partner="VIETTELPAY",
+        fileName="viettelpay.json",
+        fileTypeDetected="SETTLEMENT",
+        rawStageKey="stage-viettelpay",
+    )
+
+    assert await _raw_stage_record_count(db, packet) == 6
+
+
+@pytest.mark.asyncio
+async def test_raw_records_endpoint_returns_stream_scoped_paginated_rows():
+    packet = ReviewPacket(
+        _id="pkt-raw",
+        sourceType="SCHEDULER_JOB",
+        partner="VIETTELPAY",
+        fileName="viettelpay.json",
+        fileTypeDetected="SETTLEMENT",
+        rawStageKey="stage-viettelpay",
+    )
+    review_repo = MagicMock()
+    review_repo.find_one = AsyncMock(return_value=packet)
+    request = _make_request(MagicMock())
+    stream_page = {
+        "packetId": "pkt-raw",
+        "rawStageKey": "stage-viettelpay",
+        "totalRecords": 6,
+        "pageCount": 3,
+        "offset": 2,
+        "limit": 2,
+        "hasMore": True,
+        "rows": [{"sourceUnitKey": "unit-2", "values": {"id": "VTP-003"}}],
+    }
+
+    with (
+        patch("src.api.review_packets._repo", return_value=review_repo),
+        patch(
+            "src.api.review_packets.read_review_stream_page",
+            new=AsyncMock(return_value=stream_page),
+        ) as read_stream,
+    ):
+        response = await get_review_packet_raw_records(
+            request, "pkt-raw", offset=2, limit=2
+        )
+
+    assert response == stream_page
+    read_stream.assert_awaited_once_with(
+        db=request.app.state.db,
+        packet=packet,
+        offset=2,
+        limit=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_raw_records_endpoint_rejects_packet_without_evidence():
+    packet = ReviewPacket(
+        _id="pkt-no-evidence",
+        sourceType="UPLOAD",
+        partner="MOMO",
+        fileName="momo.csv",
+        fileTypeDetected="SETTLEMENT",
+    )
+    review_repo = MagicMock()
+    review_repo.find_one = AsyncMock(return_value=packet)
+    request = _make_request(MagicMock())
+
+    with patch("src.api.review_packets._repo", return_value=review_repo):
+        with pytest.raises(Exception, match="rawStageKey"):
+            await get_review_packet_raw_records(request, "pkt-no-evidence", offset=0, limit=50)
 
 
 def _make_db(
@@ -111,7 +260,7 @@ async def test_scope_classification_falls_back_when_llm_times_out():
 
 
 @pytest.mark.asyncio
-async def test_scope_classification_detects_incremental_duplicate_overlap(tmp_path):
+async def test_scope_classification_detects_replacement_from_key_coverage(tmp_path):
     source_path = tmp_path / "settlement_MOMO_20260806_phase2.xlsx"
     source_path.touch()
     packet = ReviewPacket(
@@ -129,6 +278,18 @@ async def test_scope_classification_detects_incremental_duplicate_overlap(tmp_pa
     review_repo.find_one = AsyncMock(return_value=packet)
     internal_repo = MagicMock()
     internal_repo.count_by_partner_and_date_range = AsyncMock(return_value=30)
+    internal_repo.find_by_partner_and_date_range = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                id="internal-1",
+                partner_txn_id="MOMO_TXN_9000",
+                amount="100000",
+                currency="VND",
+                status=SimpleNamespace(value="SUCCESS"),
+                transaction_time=datetime(2026, 8, 5, 17, 0),
+            )
+        ]
+    )
     partner_repo = MagicMock()
     partner_repo.find_reconciliation_keys_by_date_range = AsyncMock(
         return_value={f"MOMO_TXN_90{i:02d}" for i in range(20)}
@@ -190,15 +351,17 @@ async def test_scope_classification_detects_incremental_duplicate_overlap(tmp_pa
     ):
         result = await classify_scope_llm_for_packet(request, "pkt-overlap")
 
-    assert result["suggestedScope"] == "INCREMENTAL_APPEND"
-    assert result["resolution"] == "guardrail_override_duplicate_overlap"
-    assert result["scopeEvidence"] == {
-        "incomingUniqueBusinessKeyCount": 30,
-        "duplicateBusinessKeyCount": 20,
-        "newBusinessKeyCount": 10,
-        "duplicateRatio": pytest.approx(2 / 3),
-        "available": True,
-    }
+    assert result["suggestedScope"] == "REPLACEMENT"
+    assert result["resolution"] == "rule_based_key_evidence"
+    assert result["internalDbRecordCount"] == 30
+    assert result["internalPreview"][0]["partnerTxnId"] == "MOMO_TXN_9000"
+    assert result["scopeEvidence"]["incomingUniqueBusinessKeyCount"] == 30
+    assert result["scopeEvidence"]["duplicateBusinessKeyCount"] == 20
+    assert result["scopeEvidence"]["newBusinessKeyCount"] == 10
+    assert result["scopeEvidence"]["duplicateRatio"] == pytest.approx(2 / 3)
+    assert result["scopeEvidence"]["historicalCoverage"] == 1.0
+    assert result["scopeEvidence"]["ruleBasedScope"] == "REPLACEMENT"
+    assert result["scopeEvidence"]["available"] is True
 
 
 class _AsyncCursor:
@@ -272,6 +435,46 @@ async def test_list_review_packets_exposes_draft_mapping_alias():
 
     assert data["packets"][0]["reviewItemId"] == "pkt-002"
     assert data["packets"][0]["draftMappingId"] == "cfg-002"
+
+
+@pytest.mark.asyncio
+async def test_list_review_packets_collapses_duplicate_pending_scheduler_packets():
+    review_collection = MagicMock()
+    review_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "pkt-new",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "VIETTELPAY",
+            "fileName": "page-3.json",
+            "fileTypeDetected": "SETTLEMENT",
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "PENDING",
+            "createdAt": "2026-08-10T03:00:00+00:00",
+        },
+        {
+            "_id": "pkt-old",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "VIETTELPAY",
+            "fileName": "page-1.json",
+            "fileTypeDetected": "SETTLEMENT",
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "PENDING",
+            "createdAt": "2026-08-10T02:00:00+00:00",
+        },
+    ]))
+    request = _make_request(_make_db(review_collection=review_collection))
+
+    data = await list_review_packets(request, partner="VIETTELPAY")
+
+    assert [packet["_id"] for packet in data["packets"]] == ["pkt-new"]
 
 
 @pytest.mark.asyncio
@@ -750,3 +953,141 @@ async def test_run_runtime_validation_returns_high_risk_for_failed_validation():
     codes = {item["errorCode"] for item in gate["details"]["traceSamples"][0]["fieldTraces"] if item["errorCode"]}
     assert "INVALID_DATE" in codes
     assert "MAPPING_RULE_MISSING" in codes
+
+
+@pytest.mark.asyncio
+async def test_runtime_validation_reads_all_staged_stream_pages(tmp_path):
+    first = tmp_path / "page-1.json"
+    first.write_text('{"items":[{"id":"TXN001","amount":"1000","transDate":"2024-06-05"}]}')
+    second = tmp_path / "page-2.json"
+    second.write_text('{"items":[{"id":"TXN002","amount":"bad","transDate":"2024-06-05"}]}')
+    pages = [
+        SimpleNamespace(page=1, source_unit_key="unit-1", local_path=str(first)),
+        SimpleNamespace(page=2, source_unit_key="unit-2", local_path=str(second)),
+    ]
+    raw_repo = SimpleNamespace(
+        find_for_replay=AsyncMock(return_value=pages),
+        materialize=AsyncMock(side_effect=lambda page, _destination: page.local_path),
+    )
+    packet = SimpleNamespace(
+        id="pkt-stream-validation",
+        source_file_path=None,
+        raw_stage_key="stage-stream-validation",
+        structure_signature={"firstDataRowIndex": 1},
+        sample_preview=[
+            {"rowIndex": 1, "values": ["TXN001", "1000", "2024-06-05"]},
+        ],
+        validation_gates=[],
+    )
+    config = MappingConfig.model_validate({
+        "_id": "cfg-stream-validation",
+        "partner": "MOMO",
+        "workflowType": "UPC",
+        "fileType": "SETTLEMENT",
+        "sheetName": "Sheet1",
+        "startRow": 1,
+        "configVersion": "MOMO_stream_v1",
+        "fieldMappings": [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
+            {"path": "transDate", "column": 3, "type": "DATE", "required": True},
+            {"path": "currency", "type": "CONSTANT", "constant": "VND", "required": True},
+            {"path": "status", "type": "CONSTANT", "constant": "SUCCESS", "required": True},
+        ],
+        "status": "PENDING_APPROVAL",
+        "configHealth": {},
+    })
+
+    review_collection = MagicMock()
+    review_collection.update_one = AsyncMock()
+    with patch(
+        "src.services.review_raw_stream.RawIngestionPageRepository",
+        return_value=raw_repo,
+    ):
+        gate = await run_runtime_validation(
+            _make_db(review_collection=review_collection), packet, config
+        )
+
+    assert gate["details"]["sampledRows"] == 2
+    assert gate["details"]["successRows"] == 1
+    assert gate["details"]["failedRows"] == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_validation_reads_file_level_packet_source(tmp_path):
+    source = tmp_path / "settlement.csv"
+    source.write_text("TXN001,1000,2024-06-05\nTXN002,2500,2024-06-05\n")
+    packet = SimpleNamespace(
+        id="pkt-file-validation",
+        source_file_path=str(source),
+        raw_stage_key=None,
+        structure_signature={"firstDataRowIndex": 1},
+        sample_preview=[],
+        validation_gates=[],
+    )
+    config = MappingConfig.model_validate({
+        "_id": "cfg-file-validation",
+        "partner": "MOMO",
+        "workflowType": "UPC",
+        "fileType": "SETTLEMENT",
+        "sheetName": "Sheet1",
+        "startRow": 1,
+        "configVersion": "MOMO_file_v1",
+        "fieldMappings": [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
+            {"path": "transDate", "column": 3, "type": "DATE", "required": True},
+            {"path": "currency", "type": "CONSTANT", "constant": "VND", "required": True},
+            {"path": "status", "type": "CONSTANT", "constant": "SUCCESS", "required": True},
+        ],
+        "status": "PENDING_APPROVAL",
+    })
+
+    gate = await run_runtime_validation(
+        _make_db(review_collection=MagicMock(update_one=AsyncMock())), packet, config
+    )
+
+    assert gate["status"] == "pass"
+    assert gate["details"]["sampledRows"] == 2
+    assert gate["details"]["successRows"] == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_validation_preserves_object_rows_for_source_field_mapping(tmp_path):
+    first = tmp_path / "page-1.json"
+    first.write_text('{"items":[{"id":"VTP-001","amount":"1000","status":"SUCCESS"}]}')
+    raw_repo = SimpleNamespace(
+        find_for_replay=AsyncMock(return_value=[SimpleNamespace(page=1, source_unit_key="unit-1", local_path=str(first))]),
+        materialize=AsyncMock(side_effect=lambda page, _destination: page.local_path),
+    )
+    packet = SimpleNamespace(
+        id="pkt-object-mapping",
+        source_file_path=None,
+        raw_stage_key="stage-object-mapping",
+        structure_signature={"firstDataRowIndex": 1},
+        sample_preview=[],
+        validation_gates=[],
+    )
+    config = MappingConfig.model_validate({
+        "_id": "cfg-object-mapping",
+        "partner": "VIETTELPAY",
+        "workflowType": "UPC",
+        "fileType": "SETTLEMENT",
+        "sheetName": "JSON",
+        "startRow": 1,
+        "fieldMappings": [
+            {"path": "id", "sourceField": "id", "type": "STRING", "required": True},
+            {"path": "amount", "sourceField": "amount", "type": "DECIMAL", "required": True},
+            {"path": "status", "sourceField": "status", "type": "MAPPING", "mapping": {"SUCCESS": "SUCCESS"}, "required": True},
+            {"path": "currency", "type": "CONSTANT", "constant": "VND", "required": True},
+        ],
+        "status": "PENDING_APPROVAL",
+    })
+
+    with patch("src.services.review_raw_stream.RawIngestionPageRepository", return_value=raw_repo):
+        gate = await run_runtime_validation(
+            _make_db(review_collection=MagicMock(update_one=AsyncMock())), packet, config
+        )
+
+    assert gate["status"] == "pass"
+    assert gate["details"]["successRows"] == 1

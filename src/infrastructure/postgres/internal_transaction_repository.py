@@ -1,16 +1,12 @@
 """PostgreSQL adapter for internal source-of-truth transactions."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 from src.domain.internal_transaction.models import InternalTransaction
+from src.infrastructure.persistence.time import as_utc_naive
 
 
 def internal_transaction_to_row(doc: InternalTransaction) -> dict:
-    def as_utc_naive(value: datetime) -> datetime:
-        if value.tzinfo is None:
-            return value
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
-
     return {
         "id": doc.id,
         "partner": doc.partner,
@@ -112,24 +108,35 @@ class InternalTransactionRepository:
             return int(result.rowcount or 0)
 
     async def find_by_partner_and_date_range(
-        self, partner: str, start: datetime, end: datetime
+        self,
+        partner: str,
+        start: datetime,
+        end: datetime,
+        limit: int | None = None,
     ) -> list[InternalTransaction]:
         """Find internal transactions for a partner within a transaction time range."""
-        if start.tzinfo is not None:
-            start = start.replace(tzinfo=None)
-        if end.tzinfo is not None:
-            end = end.replace(tzinfo=None)
+        start = as_utc_naive(start)
+        end = as_utc_naive(end)
         from sqlalchemy import select, and_
         from sqlalchemy.ext.asyncio import AsyncSession
         from src.infrastructure.persistence.postgres_schema import InternalTransactionTable
         async with AsyncSession(self.engine) as session:
-            stmt = select(InternalTransactionTable).where(
-                and_(
-                    InternalTransactionTable.partner == partner,
-                    InternalTransactionTable.transaction_time >= start,
-                    InternalTransactionTable.transaction_time <= end
+            stmt = (
+                select(InternalTransactionTable)
+                .where(
+                    and_(
+                        InternalTransactionTable.partner == partner,
+                        InternalTransactionTable.transaction_time >= start,
+                        InternalTransactionTable.transaction_time <= end,
+                    )
+                )
+                .order_by(
+                    InternalTransactionTable.transaction_time.asc(),
+                    InternalTransactionTable.id.asc(),
                 )
             )
+            if limit is not None:
+                stmt = stmt.limit(max(limit, 0))
             result = await session.execute(stmt)
             rows = result.scalars().all()
             return [row_to_internal_transaction(r) for r in rows]
@@ -144,10 +151,8 @@ class InternalTransactionRepository:
         from sqlalchemy.ext.asyncio import AsyncSession
         from src.infrastructure.persistence.postgres_schema import InternalTransactionTable
 
-        if start.tzinfo is not None:
-            start = start.replace(tzinfo=None)
-        if end.tzinfo is not None:
-            end = end.replace(tzinfo=None)
+        start = as_utc_naive(start)
+        end = as_utc_naive(end)
         async with AsyncSession(self.engine) as session:
             result = await session.execute(
                 select(func.count())

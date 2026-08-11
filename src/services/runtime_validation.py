@@ -2,12 +2,15 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from pathlib import Path
 from typing import Any, Optional
 
 from src.infrastructure.review.repository import ReviewPacketRepository
 from src.normalizer.normalizer import TransactionNormalizer
 from src.readers import create_reader
+from src.services.review_raw_stream import (
+    iter_review_stream_records,
+    resolve_review_source_file,
+)
 
 
 def serialize_runtime_value(value: Any) -> Any:
@@ -155,6 +158,11 @@ async def run_runtime_validation(db, packet, config) -> dict:
         }
 
     normalizer = TransactionNormalizer(config.field_mappings)
+    preserves_object_rows = any(
+        getattr(mapping, "sourceField", None)
+        for mapping in config.field_mappings
+        if str(getattr(mapping, "type", "")).upper() != "CONSTANT"
+    )
 
     def _consume_row(row: list, row_number: int) -> None:
         nonlocal sampled_rows, success_rows, failed_rows, failed_examples, trace_samples
@@ -193,16 +201,20 @@ async def run_runtime_validation(db, packet, config) -> dict:
                     serialize_runtime_trace(row_number, field_traces, norm_result.data)
                 )
 
-    if source_file_path:
-        path = Path(source_file_path)
-        if path.exists():
-            with create_reader(source_file_path, config) as reader:
-                for row in reader.iter_rows():
-                    row_number = config.start_row + sampled_rows
-                    _consume_row(row, row_number)
-                    if sampled_rows >= 20:
-                        break
-        else:
+    raw_stage_key = getattr(packet, "raw_stage_key", None)
+    if raw_stage_key:
+        async for stream_row in iter_review_stream_records(db=db, packet=packet):
+            row = stream_row["values"]
+            if isinstance(row, dict) and not preserves_object_rows:
+                row = list(row.values())
+            if not isinstance(row, (dict, list, tuple)):
+                row = [row]
+            row_number = int(stream_row["streamRowIndex"] or sampled_rows + 1)
+            _consume_row(row if isinstance(row, dict) else list(row), row_number)
+    elif source_file_path:
+        try:
+            path = resolve_review_source_file(packet)
+        except (FileNotFoundError, ValueError):
             return {
                 "gateKey": "runtime_validation",
                 "label": "Runtime validation",
@@ -219,6 +231,12 @@ async def run_runtime_validation(db, packet, config) -> dict:
                     "riskLevel": "HIGH",
                 },
             }
+        with create_reader(path, config) as reader:
+            for row in reader.iter_rows():
+                row_number = config.start_row + sampled_rows
+                _consume_row(row, row_number)
+                if sampled_rows >= 20:
+                    break
     else:
         sample_preview = getattr(packet, "sample_preview", None) or []
         for idx, sample in enumerate(sample_preview[:20]):

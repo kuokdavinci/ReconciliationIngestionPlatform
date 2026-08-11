@@ -31,6 +31,15 @@ export interface RuntimeValidationPreviewRow {
   invalidFields?: string[];
 }
 
+export interface InternalReviewPreviewRow {
+  id: string;
+  partnerTxnId: string;
+  amount: string;
+  currency: string;
+  status: string;
+  transactionTime: string;
+}
+
 export interface RuntimeValidationTopIssue {
   type: string;
   message: string;
@@ -83,6 +92,25 @@ export interface RuntimeValidationResult {
   };
 }
 
+export interface RawStreamRow {
+  streamRowIndex: number | null;
+  rowIndex: number;
+  page: number | null;
+  sourceUnitKey: string;
+  values: unknown;
+}
+
+export interface RawStreamPage {
+  packetId: string;
+  rawStageKey: string | null;
+  totalRecords: number;
+  pageCount: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  rows: RawStreamRow[];
+}
+
 export interface ReviewPacket {
   _id: string;
   partner: string;
@@ -115,6 +143,8 @@ export interface ReviewPacket {
   reviewedBy?: string;
   isVirtual?: boolean;
   sourceType?: string;
+  rawStageKey?: string | null;
+  sourceFilePath?: string | null;
   activeRuntimeConfigId?: string | null;
   reconciliationDate?: string;
   scopeType?: string;
@@ -125,6 +155,8 @@ export interface ReviewPacket {
   scopeRecommendation?: ReviewScopeRecommendation;
   runtimeValidation?: RuntimeValidationResult | null;
   samplePreview?: RuntimeValidationPreviewRow[];
+  internalRecordCount?: number;
+  internalPreview?: InternalReviewPreviewRow[];
 }
 
 export interface PostApprovalRun {

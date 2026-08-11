@@ -42,6 +42,7 @@ from src.core.enums import TransactionStatus
 from src.infrastructure.postgres.internal_transaction_repository import (
     InternalTransactionRepository,
 )
+from src.reconciliation.keys import normalize_reconciliation_key
 
 
 PARTNER = "VNPAY_1M_BENCH"
@@ -234,14 +235,12 @@ def is_finalized_internal_status(status: object) -> bool:
 
 def resolve_partner_txn_id(doc: dict) -> str | None:
     pd = doc.get("partnerData") or {}
-    if pd.get("trace"):
-        return str(pd["trace"]).strip()
     extra = pd.get("extra") or {}
-    if extra.get("vspTransId"):
-        return str(extra["vspTransId"]).strip()
-    if pd.get("id"):
-        return str(pd["id"]).strip()
-    return None
+    return normalize_reconciliation_key(
+        pd.get("trace"),
+        extra.get("vspTransId"),
+        pd.get("id"),
+    )
 
 
 def pre_check(doc: dict) -> tuple[bool, str]:

@@ -178,6 +178,41 @@ async def test_retry_policy_adds_backoff_and_bounds_attempts():
 
 
 @pytest.mark.asyncio
+async def test_worker_exception_releases_claim_for_airflow_retry():
+    checkpoint_repo = AsyncMock()
+    checkpoint = AsyncMock()
+    checkpoint.last_completed_unit_key = None
+    checkpoint.attempt_count = 1
+    checkpoint_repo.claim_unit.return_value = (checkpoint, True)
+    ingest_unit = AsyncMock(side_effect=RuntimeError("database connection lost"))
+
+    with pytest.raises(RuntimeError, match="database connection lost"):
+        await process_source_units(
+            checkpoint_repo,
+            stream_identity={
+                "partner": "VIETTELPAY",
+                "fetchConfigId": "config-1",
+                "sourceType": "API",
+                "streamKey": "viettelpay-settlement",
+            },
+            units=[_unit(1)],
+            ingest_unit=ingest_unit,
+            retry_policy=RetryPolicy(),
+        )
+
+    checkpoint_repo.mark_failed.assert_awaited_once_with(
+        checkpoint,
+        unit_key="unit-1",
+        error="database connection lost",
+        error_code="source_runtime_error",
+        retryable=True,
+        next_retry_at=None,
+        max_attempts=3,
+        error_metadata={"exceptionType": "RuntimeError"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_waiting_review_stops_without_marking_source_unit_failed():
     checkpoint_repo = AsyncMock()
     checkpoint = AsyncMock()

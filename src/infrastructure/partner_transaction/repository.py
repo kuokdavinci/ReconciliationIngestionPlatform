@@ -15,6 +15,7 @@ from src.infrastructure.partner_transaction.mappers import (
     document_to_data_container,
     row_to_data_container,
 )
+from src.infrastructure.persistence.time import as_utc_naive
 
 
 _PARTNER_TRANSACTION_COLUMNS = (
@@ -159,10 +160,8 @@ class DataContainerRepository:
             return [row_to_data_container(r) for r in rows]
 
     async def find_by_date_range(self, identify: str, start: datetime, end: datetime) -> list[DataContainer]:
-        if start.tzinfo is not None:
-            start = start.replace(tzinfo=None)
-        if end.tzinfo is not None:
-            end = end.replace(tzinfo=None)
+        start = as_utc_naive(start)
+        end = as_utc_naive(end)
 
         from sqlalchemy import select, and_
         from sqlalchemy.ext.asyncio import AsyncSession
@@ -194,10 +193,8 @@ class DataContainerRepository:
         also ensures that the analysis uses the same key precedence as the
         reconciliation engine: trace, ``vspTransId``, then partner id.
         """
-        if start.tzinfo is not None:
-            start = start.replace(tzinfo=None)
-        if end.tzinfo is not None:
-            end = end.replace(tzinfo=None)
+        start = as_utc_naive(start)
+        end = as_utc_naive(end)
 
         from sqlalchemy import and_, select
         from sqlalchemy.ext.asyncio import AsyncSession
@@ -219,20 +216,18 @@ class DataContainerRepository:
             ).where(and_(*conditions))
             result = await session.execute(stmt)
 
+        from src.reconciliation.keys import normalize_reconciliation_key
+
         keys: set[str] = set()
         for partner_id, partner_trace, metadata in result.all():
-            trace = str(partner_trace or "").strip()
-            vsp_trans_id = ""
-            if isinstance(metadata, dict):
-                vsp_trans_id = str(metadata.get("vspTransId") or "").strip()
-            key = trace or vsp_trans_id or str(partner_id or "").strip()
+            vsp_trans_id = metadata.get("vspTransId") if isinstance(metadata, dict) else None
+            key = normalize_reconciliation_key(partner_trace, vsp_trans_id, partner_id)
             if key:
                 keys.add(key)
         return keys
 
     async def find_by_duplicate_key(self, identify: str, reconciliation_date: datetime, trace: str) -> Optional[DataContainer]:
-        if reconciliation_date.tzinfo is not None:
-            reconciliation_date = reconciliation_date.replace(tzinfo=None)
+        reconciliation_date = as_utc_naive(reconciliation_date)
 
         from sqlalchemy import select, and_
         from sqlalchemy.ext.asyncio import AsyncSession
@@ -261,14 +256,14 @@ class DataContainerRepository:
                 if isinstance(val, dict):
                     for op, limit_val in val.items():
                         if hasattr(limit_val, "tzinfo") and limit_val.tzinfo is not None:
-                            limit_val = limit_val.replace(tzinfo=None)
+                            limit_val = as_utc_naive(limit_val)
                         if op == "$gte":
                             conditions.append(PartnerTransactionTable.reconciliation_date >= limit_val)
                         elif op == "$lte":
                             conditions.append(PartnerTransactionTable.reconciliation_date <= limit_val)
                 else:
                     if hasattr(val, "tzinfo") and val.tzinfo is not None:
-                        val = val.replace(tzinfo=None)
+                        val = as_utc_naive(val)
                     conditions.append(PartnerTransactionTable.reconciliation_date == val)
             elif key in ("partnerData.trace", "partner_trace"):
                 conditions.append(PartnerTransactionTable.partner_trace == val)
@@ -388,5 +383,26 @@ class DataContainerRepository:
                     PartnerTransactionTable.ingestion_key.in_(ingestion_keys),
                 )
                 .values(source_file_id=source_file_id)
+            )
+            return int(result.rowcount or 0)
+
+    async def rebind_source_file(
+        self,
+        source_file_id: UUID | str,
+        target_source_file_id: UUID | str,
+    ) -> int:
+        """Move only rows created by one temporary page claim to the batch file."""
+        from sqlalchemy import update
+        from src.infrastructure.persistence.postgres_schema import PartnerTransactionTable
+
+        if isinstance(source_file_id, str):
+            source_file_id = UUID(source_file_id)
+        if isinstance(target_source_file_id, str):
+            target_source_file_id = UUID(target_source_file_id)
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(PartnerTransactionTable)
+                .where(PartnerTransactionTable.source_file_id == source_file_id)
+                .values(source_file_id=target_source_file_id)
             )
             return int(result.rowcount or 0)

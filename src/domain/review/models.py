@@ -138,6 +138,7 @@ class ReviewPacket(BaseModel):
     target_action_id: Optional[str] = Field(default=None, alias="targetActionId")
     source_file_id: Optional[str] = Field(default=None, alias="sourceFileId")
     source_file_path: Optional[str] = Field(default=None, alias="sourceFilePath")
+    raw_stage_key: Optional[str] = Field(default=None, alias="rawStageKey")
     reconciliation_date: Optional[datetime] = Field(default=None, alias="reconciliationDate")
     scope_type: Optional[str] = Field(default=None, alias="scopeType")
     scope_confidence: Optional[float] = Field(default=None, alias="scopeConfidence")
@@ -147,6 +148,8 @@ class ReviewPacket(BaseModel):
     parse_strategy: dict[str, Any] = Field(default_factory=dict, alias="parseStrategy")
     validation_gates: list[dict[str, Any]] = Field(default_factory=list, alias="validationGates")
     sample_preview: list[dict[str, Any]] = Field(default_factory=list, alias="samplePreview")
+    internal_record_count: int = Field(default=0, alias="internalRecordCount", ge=0)
+    internal_preview: list[dict[str, Any]] = Field(default_factory=list, alias="internalPreview")
     risk_summary: dict[str, Any] = Field(default_factory=dict, alias="riskSummary")
     runtime_decision_hint: Optional[str] = Field(default=None, alias="runtimeDecisionHint")
     status: ReviewPacketStatus = ReviewPacketStatus.PENDING

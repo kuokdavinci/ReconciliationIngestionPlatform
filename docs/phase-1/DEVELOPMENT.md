@@ -1,6 +1,6 @@
 # Development
 
-**Cập nhật:** 2026-06-24
+**Cập nhật:** 2026-08-11
 
 ## Prerequisites
 
@@ -37,7 +37,7 @@ docker compose up -d mongodb postgres sftp mongo-express
 `mongo-express` is a local/dev helper only.
 Current Compose config disables its basic auth layer with `ME_CONFIG_BASICAUTH: "false"`, so keep it on localhost and do not mirror that posture outside development.
 
-PostgreSQL (`postgres:16`) is used for bulk transactional processing (ingestion + reconciliation). Tables are auto-created on application startup via `src/models/postgres.py`.
+PostgreSQL (`postgres:16`) is used for bulk transactional processing (ingestion + reconciliation). Schema changes are applied through Alembic migrations in `alembic/versions/`; `src/models/postgres.py` provides the startup migration entrypoint.
 
 ### PostgreSQL Connection
 
@@ -63,11 +63,11 @@ uv run uvicorn src.api:create_app --factory --host 0.0.0.0 --port 8000
 
 ```bash
 npm --prefix frontend-next install
-npm run dev
-npm --prefix frontend-next run build -- --webpack
+npm --prefix frontend-next run dev
+npm --prefix frontend-next run build
 ```
 
-Use the Webpack flag for production verification. With the current Next.js 16 setup, the default Turbopack build may stop at `Creating an optimized production build...`, while the Webpack path completes successfully.
+The frontend `build` script already selects the verified Webpack path (`next build --webpack`).
 
 ## Useful CLI Commands
 
@@ -168,9 +168,9 @@ Các test modules hiện tại:
 
 | File | Dòng | Mô tả |
 |---|---|---|
-| `tests/test_reconciliation.py` | 758 | Core reconciliation logic |
-| `tests/test_api_review_packets.py` | 559 | Review packet API flows |
-| `tests/test_api_reconciliation.py` | 203 | Reconciliation API endpoints |
+| `tests/test_reconciliation.py` | — | Core reconciliation logic |
+| `tests/test_api_review_packets.py` | — | Review packet API flows |
+| `tests/test_api_reconciliation.py` | — | Reconciliation API endpoints |
 | `tests/test_ingestion_pipeline.py` | – | Ingestion pipeline |
 | `tests/test_ingestion_integration.py` | – | Ingestion integration |
 | `tests/test_config_cache.py` | – | Config cache |
@@ -198,7 +198,7 @@ Script `scripts/parallel_benchmark.py` thực hiện grid search trên ZALOPAY 1
 uv run python scripts/parallel_benchmark.py
 ```
 
-Kết quả hiển thị matrix và đề xuất cấu hình tối ưu (xem [Benchmarks trong README](../README.md#performance-benchmarks)).
+Kết quả hiển thị matrix và đề xuất cấu hình tối ưu (xem [Performance Trace](performance/INGEST_RECON_TRACE.md)).
 
 ### 1M-Row Reconciliation Benchmark
 
@@ -225,7 +225,7 @@ So sánh Baseline ↔ MongoDB Optimized ↔ Hybrid PostgreSQL:
 | Ingestion (100k) | 30.013s | 14.359s | **12.555s** |
 | Reconciliation (100k) | 20.720s | 13.436s | **4.577s** |
 
-Chi tiết: `docs/performance/INGEST_RECON_TRACE.md`
+Chi tiết: [docs/phase-1/performance/INGEST_RECON_TRACE.md](performance/INGEST_RECON_TRACE.md)
 
 ## E2E Testing với Seed Scripts
 

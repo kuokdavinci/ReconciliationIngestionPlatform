@@ -255,6 +255,8 @@ export function normalizePacket(packet: Record<string, unknown>): ReviewPacket {
     reviewedAt: packet.reviewedAt ? String(packet.reviewedAt) : undefined,
     reviewedBy: packet.reviewedBy ? String(packet.reviewedBy) : undefined,
     sourceType: packet.sourceType ? String(packet.sourceType) : undefined,
+    rawStageKey: packet.rawStageKey ? String(packet.rawStageKey) : null,
+    sourceFilePath: packet.sourceFilePath ? String(packet.sourceFilePath) : null,
     activeRuntimeConfigId: packet.activeRuntimeConfigId ? String(packet.activeRuntimeConfigId) : null,
     reconciliationDate: packet.reconciliationDate ? String(packet.reconciliationDate) : undefined,
     scopeType: packet.scopeType ? String(packet.scopeType) : undefined,
@@ -262,6 +264,20 @@ export function normalizePacket(packet: Record<string, unknown>): ReviewPacket {
     scopeReason: Array.isArray(packet.scopeReason) ? packet.scopeReason.map((item) => String(item)) : undefined,
     runtimeDecisionHint: packet.runtimeDecisionHint ? String(packet.runtimeDecisionHint) : undefined,
     samplePreview: normalizePreviewRows(Array.isArray(packet.samplePreview) ? packet.samplePreview : [], []),
+    internalRecordCount: Number(packet.internalRecordCount ?? 0),
+    internalPreview: Array.isArray(packet.internalPreview)
+      ? packet.internalPreview.map((row) => {
+          const value = row as Record<string, unknown>;
+          return {
+            id: String(value.id || ""),
+            partnerTxnId: String(value.partnerTxnId || ""),
+            amount: String(value.amount || ""),
+            currency: String(value.currency || ""),
+            status: String(value.status || ""),
+            transactionTime: String(value.transactionTime || ""),
+          };
+        })
+      : [],
     mappingConstraints: normalizeMappingConstraints(packet),
     scopeRecommendation: normalizeScopeRecommendation(packet),
     runtimeValidation: normalizeRuntimeValidation(packet),

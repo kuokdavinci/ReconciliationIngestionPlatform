@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from fastapi.testclient import TestClient
+from tests.asgi_test_client import TestClient
 
 
 def _create_test_app():

@@ -19,6 +19,7 @@ from src.domain.reconciliation.ports import (
 from src.domain.partner_transaction.models import DataContainer
 from src.domain.reconciliation.models import ReconciliationResult
 from src.logging import get_structured_logger
+from src.services.business_day import utc_business_day_bounds
 
 
 class ReconciliationEngine:
@@ -92,16 +93,21 @@ class ReconciliationEngine:
             return TransactionStatus.REVERSED
         return TransactionStatus.PENDING
 
+    @staticmethod
+    def _business_day_bounds(reconciliation_date: datetime) -> tuple[datetime, datetime]:
+        """Return UTC-aware bounds for the configured business calendar day."""
+        return utc_business_day_bounds(reconciliation_date)
+
     def _resolve_partner_txn_id(self, partner_record: DataContainer) -> Optional[str]:
         """Resolve reconciliation key from partner data container."""
         pd = partner_record.partner_data
-        if pd.trace:
-            return str(pd.trace).strip()
-        if pd.extra and pd.extra.get("vspTransId"):
-            return str(pd.extra.get("vspTransId")).strip()
-        if pd.id:
-            return str(pd.id).strip()
-        return None
+        from src.reconciliation.keys import normalize_reconciliation_key
+
+        return normalize_reconciliation_key(
+            pd.trace,
+            pd.extra.get("vspTransId") if pd.extra else None,
+            pd.id,
+        )
 
     def _is_finalized_internal_status(self, status: TransactionStatus | str) -> bool:
         """Return True when an internal transaction is finalized for reconciliation.
@@ -369,9 +375,11 @@ class ReconciliationEngine:
             f"reconciliation_started for partner={partner} date={reconciliation_date.isoformat()} source_file_id={source_file_id or '-'}"
         )
 
-        # 1. Calculate boundaries of target date
-        start_of_day = reconciliation_date.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_of_day = reconciliation_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        # 1. Calculate boundaries of the target business date. PostgreSQL
+        # stores timestamps as UTC-naive values, while the reconciliation date
+        # is a business calendar date (for example Asia/Ho_Chi_Minh), not a
+        # UTC calendar date.
+        start_of_day, end_of_day = self._business_day_bounds(reconciliation_date)
         date_str = reconciliation_date.strftime("%Y-%m-%d")
 
         t_scope_start = time.perf_counter()
@@ -399,20 +407,22 @@ class ReconciliationEngine:
             
             # Deletions
             delete_sql = ""
-            if source_file_id and scope_type == ReconciliationScopeType.REPLACEMENT:
+            if source_file_id and scope_type in {
+                ReconciliationScopeType.INCREMENTAL_APPEND,
+                ReconciliationScopeType.REPLACEMENT,
+            }:
                 delete_sql = """
                 DELETE FROM reconciliation_result
                 WHERE partner = :partner AND date = :date_str
                   AND (source_file_id = :source_file_id OR partner_txn_id IN (
-                      SELECT COALESCE(NULLIF(partner_trace, ''), NULLIF(partner_metadata->>'vspTransId', ''), partner_id)
+                      SELECT COALESCE(
+                          NULLIF(BTRIM(partner_trace), ''),
+                          NULLIF(BTRIM(partner_metadata->>'vspTransId'), ''),
+                          NULLIF(BTRIM(partner_id), '')
+                      )
                       FROM partner_transaction
                       WHERE identify = :partner AND source_file_id = :source_file_id_uuid
                   ));
-                """
-            elif source_file_id and scope_type == ReconciliationScopeType.INCREMENTAL_APPEND:
-                delete_sql = """
-                DELETE FROM reconciliation_result
-                WHERE partner = :partner AND date = :date_str;
                 """
             elif source_file_id and scope_type != ReconciliationScopeType.FULL_SNAPSHOT:
                 delete_sql = """
@@ -432,11 +442,58 @@ class ReconciliationEngine:
                 reconciliation_status, reconciliation_run_id, source_file_id,
                 scope_type, mapping_version, partner_record_id, internal_record_id, created_at
             )
+            WITH normalized_partner AS (
+                SELECT
+                    p.*,
+                    COALESCE(
+                        NULLIF(BTRIM(p.partner_trace), ''),
+                        NULLIF(BTRIM(p.partner_metadata->>'vspTransId'), ''),
+                        NULLIF(BTRIM(p.partner_id), '')
+                    ) AS reconciliation_key,
+                    CASE
+                        WHEN LOWER(BTRIM(p.partner_status)) IN ('success', 'thành công', 'matched') THEN 'SUCCESS'
+                        WHEN LOWER(BTRIM(p.partner_status)) IN ('fail', 'failed', 'thất bại') THEN 'FAILED'
+                        WHEN LOWER(BTRIM(p.partner_status)) IN ('reversed', 'hoàn tiền') THEN 'REVERSED'
+                        ELSE 'PENDING'
+                    END AS normalized_status
+                FROM partner_transaction p
+                WHERE p.identify = :partner
+                  AND p.reconciliation_date >= :start_of_day
+                  AND p.reconciliation_date <= :end_of_day
+                  AND (
+                      CAST(:source_file_id_uuid AS UUID) IS NULL
+                      OR p.source_file_id = CAST(:source_file_id_uuid AS UUID)
+                  )
+            ),
+            normalized_internal AS (
+                SELECT
+                    i.*,
+                    NULLIF(BTRIM(i.partner_txn_id), '') AS reconciliation_key,
+                    CASE
+                        WHEN LOWER(BTRIM(i.status)) IN ('success', 'thành công', 'matched') THEN 'SUCCESS'
+                        WHEN LOWER(BTRIM(i.status)) IN ('fail', 'failed', 'thất bại') THEN 'FAILED'
+                        WHEN LOWER(BTRIM(i.status)) IN ('reversed', 'hoàn tiền') THEN 'REVERSED'
+                        ELSE 'PENDING'
+                    END AS normalized_status
+                FROM internal_transaction i
+                WHERE i.partner = :partner
+                  AND i.transaction_time >= :start_of_day
+                  AND i.transaction_time <= :end_of_day
+                  AND (
+                      CAST(:source_file_id_uuid AS UUID) IS NULL
+                      OR CAST(:scope_type AS VARCHAR) = 'FULL_SNAPSHOT'
+                      OR NULLIF(BTRIM(i.partner_txn_id), '') IN (
+                          SELECT reconciliation_key
+                          FROM normalized_partner
+                          WHERE source_file_id = CAST(:source_file_id_uuid AS UUID)
+                      )
+                  )
+            )
             SELECT
                 CAST(gen_random_uuid() AS VARCHAR) AS id,
                 :partner AS partner,
                 :date_str AS date,
-                COALESCE(p.partner_trace, p.partner_metadata->>'vspTransId', p.partner_id, i.partner_txn_id) AS partner_txn_id,
+                COALESCE(p.reconciliation_key, i.partner_txn_id, p.partner_id) AS partner_txn_id,
                 i.id AS internal_txn_id,
                 p.partner_amount AS partner_amount,
                 i.amount AS internal_amount,
@@ -445,40 +502,14 @@ class ReconciliationEngine:
                 CASE
                     WHEN p.id IS NOT NULL AND i.id IS NOT NULL THEN
                         CASE
-                            WHEN p.partner_amount = i.amount AND 
-                                 (CASE
-                                    WHEN LOWER(TRIM(p.partner_status)) IN ('success', 'thành công', 'matched') THEN 'SUCCESS'
-                                    WHEN LOWER(TRIM(p.partner_status)) IN ('fail', 'failed', 'thất bại') THEN 'FAILED'
-                                    WHEN LOWER(TRIM(p.partner_status)) IN ('reversed', 'hoàn tiền') THEN 'REVERSED'
-                                    ELSE 'PENDING'
-                                  END) = 
-                                 (CASE
-                                    WHEN LOWER(TRIM(i.status)) IN ('success', 'thành công', 'matched') THEN 'SUCCESS'
-                                    WHEN LOWER(TRIM(i.status)) IN ('fail', 'failed', 'thất bại') THEN 'FAILED'
-                                    WHEN LOWER(TRIM(i.status)) IN ('reversed', 'hoàn tiền') THEN 'REVERSED'
-                                    ELSE 'PENDING'
-                                  END)
-                            THEN
+                            WHEN p.partner_amount = i.amount AND p.normalized_status = i.normalized_status THEN
                                 CASE
-                                    WHEN LOWER(TRIM(p.partner_status)) IN ('success', 'thành công', 'matched') THEN 'MATCHED'
-                                    WHEN LOWER(TRIM(p.partner_status)) IN ('fail', 'failed', 'thất bại') THEN 'MATCHED_FAILED'
-                                    WHEN LOWER(TRIM(p.partner_status)) IN ('reversed', 'hoàn tiền') THEN 'MATCHED_REVERSED'
+                                    WHEN p.normalized_status = 'SUCCESS' THEN 'MATCHED'
+                                    WHEN p.normalized_status = 'FAILED' THEN 'MATCHED_FAILED'
+                                    WHEN p.normalized_status = 'REVERSED' THEN 'MATCHED_REVERSED'
                                     ELSE 'MATCHED'
                                 END
-                            WHEN p.partner_amount != i.amount AND 
-                                 (CASE
-                                    WHEN LOWER(TRIM(p.partner_status)) IN ('success', 'thành công', 'matched') THEN 'SUCCESS'
-                                    WHEN LOWER(TRIM(p.partner_status)) IN ('fail', 'failed', 'thất bại') THEN 'FAILED'
-                                    WHEN LOWER(TRIM(p.partner_status)) IN ('reversed', 'hoàn tiền') THEN 'REVERSED'
-                                    ELSE 'PENDING'
-                                  END) != 
-                                 (CASE
-                                    WHEN LOWER(TRIM(i.status)) IN ('success', 'thành công', 'matched') THEN 'SUCCESS'
-                                    WHEN LOWER(TRIM(i.status)) IN ('fail', 'failed', 'thất bại') THEN 'FAILED'
-                                    WHEN LOWER(TRIM(i.status)) IN ('reversed', 'hoàn tiền') THEN 'REVERSED'
-                                    ELSE 'PENDING'
-                                  END)
-                            THEN 'MULTIPLE_MISMATCH'
+                            WHEN p.partner_amount != i.amount AND p.normalized_status != i.normalized_status THEN 'MULTIPLE_MISMATCH'
                             WHEN p.partner_amount != i.amount THEN 'AMOUNT_MISMATCH'
                             ELSE 'STATUS_MISMATCH'
                         END
@@ -492,38 +523,9 @@ class ReconciliationEngine:
                 CAST(p.id AS VARCHAR) AS partner_record_id,
                 i.id AS internal_record_id,
                 NOW() AS created_at
-            FROM 
-                (SELECT * FROM partner_transaction 
-                 WHERE identify = :partner 
-                   AND reconciliation_date >= :start_of_day 
-                   AND reconciliation_date <= :end_of_day
-                   AND (
-                       CAST(:source_file_id_uuid AS UUID) IS NULL
-                       OR CAST(:scope_type AS VARCHAR) NOT IN ('FULL_SNAPSHOT', 'REPLACEMENT')
-                       OR source_file_id = CAST(:source_file_id_uuid AS UUID)
-                   )
-                ) p
-            FULL OUTER JOIN 
-                (SELECT * FROM internal_transaction 
-                 WHERE partner = :partner 
-                   AND transaction_time >= :start_of_day 
-                   AND transaction_time <= :end_of_day
-                   AND (
-                       CAST(:source_file_id_uuid AS UUID) IS NULL
-                       OR CAST(:scope_type AS VARCHAR) <> 'REPLACEMENT'
-                       OR partner_txn_id IN (
-                           SELECT COALESCE(
-                               NULLIF(partner_trace, ''),
-                               NULLIF(partner_metadata->>'vspTransId', ''),
-                               partner_id
-                           )
-                           FROM partner_transaction
-                           WHERE identify = :partner
-                             AND source_file_id = CAST(:source_file_id_uuid AS UUID)
-                       )
-                   )
-                ) i
-            ON COALESCE(NULLIF(p.partner_trace, ''), NULLIF(p.partner_metadata->>'vspTransId', ''), p.partner_id) = i.partner_txn_id
+            FROM normalized_partner p
+            FULL OUTER JOIN normalized_internal i
+              ON p.reconciliation_key = i.reconciliation_key
             """
 
             params = {
@@ -578,6 +580,7 @@ class ReconciliationEngine:
         }
         if source_file_id and scope_type in {
             ReconciliationScopeType.FULL_SNAPSHOT,
+            ReconciliationScopeType.INCREMENTAL_APPEND,
             ReconciliationScopeType.REPLACEMENT,
         }:
             partner_query["sourceFileId"] = source_file_id
@@ -613,7 +616,10 @@ class ReconciliationEngine:
         result_buffer: list[ReconciliationResult] = []
         matched_internal_keys: set[str] = set()
         replacement_keys = list(scoped_partner_keys)
-        if source_file_id and scope_type == ReconciliationScopeType.REPLACEMENT:
+        if source_file_id and scope_type in {
+            ReconciliationScopeType.INCREMENTAL_APPEND,
+            ReconciliationScopeType.REPLACEMENT,
+        }:
             delete_query = {
                 "partner": partner,
                 "date": date_str,
@@ -621,11 +627,6 @@ class ReconciliationEngine:
                     {"sourceFileId": source_file_id},
                     {"partnerTxnId": {"$in": replacement_keys}},
                 ],
-            }
-        elif source_file_id and scope_type == ReconciliationScopeType.INCREMENTAL_APPEND:
-            delete_query = {
-                "partner": partner,
-                "date": date_str,
             }
         elif source_file_id and scope_type != ReconciliationScopeType.FULL_SNAPSHOT:
             delete_query = {

@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, Index, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import declarative_base
 
@@ -16,6 +16,11 @@ class PartnerTransactionTable(Base):  # type: ignore[misc, valid-type]
             "identify",
             "ingestion_key",
             name="uq_partner_transaction_identify_ingestion_key",
+        ),
+        Index(
+            "ix_partner_transaction_identify_reconciliation_date",
+            "identify",
+            "reconciliation_date",
         ),
     )
 
@@ -45,6 +50,9 @@ class PartnerTransactionTable(Base):  # type: ignore[misc, valid-type]
 
 class InternalTransactionTable(Base):  # type: ignore[misc, valid-type]
     __tablename__ = "internal_transaction"
+    __table_args__ = (
+        Index("ix_internal_transaction_partner_transaction_time", "partner", "transaction_time"),
+    )
 
     id = Column(String(255), primary_key=True)
     partner = Column(String(255), nullable=False, index=True)
@@ -59,6 +67,14 @@ class InternalTransactionTable(Base):  # type: ignore[misc, valid-type]
 
 class ReconciliationResultTable(Base):  # type: ignore[misc, valid-type]
     __tablename__ = "reconciliation_result"
+    __table_args__ = (
+        Index(
+            "ix_reconciliation_result_partner_date_status",
+            "partner",
+            "date",
+            "reconciliation_status",
+        ),
+    )
 
     id = Column(String(255), primary_key=True)
     partner = Column(String(255), nullable=False, index=True)

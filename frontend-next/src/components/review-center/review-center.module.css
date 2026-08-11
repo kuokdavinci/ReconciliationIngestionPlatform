@@ -602,6 +602,30 @@
   margin-bottom: 12px;
 }
 
+.iconButton {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid rgba(240, 185, 11, 0.24);
+  border-radius: 9px;
+  color: var(--brand-primary);
+  background: rgba(240, 185, 11, 0.08);
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.iconButton:hover,
+.iconButton:focus-visible {
+  color: #fff;
+  border-color: rgba(240, 185, 11, 0.58);
+  background: rgba(240, 185, 11, 0.16);
+  outline: none;
+}
+
 .sectionCardCopy {
   margin: 4px 0 0;
   color: var(--text-muted);
@@ -644,6 +668,81 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+.rawStreamPanel {
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(13, 24, 38, 0.72);
+  border: 1px solid rgba(240, 185, 11, 0.24);
+}
+
+.rawStreamMeta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.rawStreamTableWrap {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.rawStreamTable {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+
+.rawStreamTable th,
+.rawStreamTable td {
+  padding: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.rawStreamTable th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #162333;
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.rawStreamCellMeta {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.rawStreamCell {
+  max-width: 320px;
+  color: #fff;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.mappingColumnHighlight {
+  background: rgba(240, 185, 11, 0.2) !important;
+  color: #ffe08a !important;
+  box-shadow: inset 0 0 0 1px rgba(240, 185, 11, 0.18);
+}
+
+.rawStreamPagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .previewGrid {

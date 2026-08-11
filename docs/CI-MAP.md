@@ -89,9 +89,9 @@ uv run pytest tests/test_analysis_insights.py tests/test_analysis_services.py
 ```text
 npm --prefix frontend-next ci
 npm --prefix frontend-next run lint
-npm --prefix frontend-next exec tsc -- --noEmit
-npm --prefix frontend-next run build -- --webpack
-npm --prefix frontend-next exec playwright -- install --with-deps chromium
+npm --prefix frontend-next run typecheck
+npm --prefix frontend-next run build
+npm --prefix frontend-next run playwright:install
 npm --prefix frontend-next run test:e2e
 ```
 
@@ -103,6 +103,8 @@ npm --prefix frontend-next run test:e2e
 | `src/services/`, `src/reconciliation/` | Backend Quality | Reconciliation/review tests and API response contracts |
 | `src/pipeline/` | Ingestion Pipeline | Backend Quality if orchestration/runtime contracts changed |
 | `src/fetchers/`, `src/scheduler/` | Ingestion Pipeline | Backend Quality for automation/job APIs |
+| `src/application/automation/`, `src/infrastructure/workflows/` | Backend Quality plus Airflow contract tests | Automation API, runtime correlation and DAG payload compatibility |
+| `dags/`, `Dockerfile.airflow`, `docker-compose.yml` | `tests/test_airflow_*.py` plus `docker compose config` | Build the Airflow image and import the DAG in that image |
 | `src/models/fetch_config.py`, `src/models/indexes.py` | Both Backend Quality and Ingestion Pipeline | Domain/infrastructure facades and Mongo index tests |
 | `src/domain/` or `src/infrastructure/` | Workflow owning its adapters | Legacy import paths, repository tests and related API tests |
 | `src/analysis/` | Eval | Backend Quality because its general test command also includes analysis tests |

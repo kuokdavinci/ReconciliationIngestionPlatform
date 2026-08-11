@@ -9,6 +9,7 @@ from src.core.enums import ReconciliationStatus, TransactionStatus
 from src.domain.internal_transaction.models import InternalTransaction
 from src.domain.partner_transaction.models import DataContainer, PartnerData
 from src.reconciliation.engine import ReconciliationEngine
+from src.reconciliation.keys import normalize_reconciliation_key
 
 
 @pytest.fixture
@@ -71,6 +72,35 @@ async def test_reconciliation_matched(mock_db):
     assert result.internal_amount == Decimal("150000")
     assert result.partner_status == "Thành công"
     assert result.internal_status == TransactionStatus.SUCCESS
+
+
+def test_reconciliation_uses_business_timezone_day_bounds():
+    start, end = ReconciliationEngine._business_day_bounds(
+        datetime(2026, 8, 10, tzinfo=timezone.utc)
+    )
+
+    assert start == datetime(2026, 8, 9, 17, tzinfo=timezone.utc)
+    assert end == datetime(2026, 8, 10, 16, 59, 59, 999999, tzinfo=timezone.utc)
+
+
+def test_reconciliation_treats_mongo_naive_dates_as_utc_instants():
+    start, end = ReconciliationEngine._business_day_bounds(datetime(2026, 8, 10, 17))
+
+    assert start == datetime(2026, 8, 10, 17, tzinfo=timezone.utc)
+    assert end == datetime(2026, 8, 11, 16, 59, 59, 999999, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("candidates", "expected"),
+    [
+        (("", "  ", "vsp-1", "partner-1"), "vsp-1"),
+        (("  trace-1  ", "vsp-1", "partner-1"), "trace-1"),
+        ((None, "", "partner-1"), "partner-1"),
+        ((" ", None, ""), None),
+    ],
+)
+def test_normalize_reconciliation_key_uses_trimmed_non_empty_fallback(candidates, expected):
+    assert normalize_reconciliation_key(*candidates) == expected
 
 
 @pytest.mark.asyncio
@@ -298,14 +328,19 @@ async def test_reconciliation_incremental_scope_ignores_unrelated_internal_rows(
     assert len(results) == 20
     assert {result.partner_txn_id for result in results} == {f"trace_{index:02d}" for index in range(20)}
     assert all(result.reconciliation_status == ReconciliationStatus.MATCHED for result in results)
-    engine._result_repo.delete_by_partner_and_date.assert_called_once_with(partner, "2024-07-07")
+    delete_call = engine._result_repo.delete_by_partner_and_date.call_args
+    assert delete_call.args == (partner, "2024-07-07")
+    assert delete_call.kwargs["source_file_id"] == source_file_id
+    assert set(delete_call.kwargs["partner_txn_ids"]) == {
+        f"trace_{index:02d}" for index in range(20)
+    }
     assert results[0].source_file_id == source_file_id
     assert results[0].scope_type == "INCREMENTAL_APPEND"
 
 
 @pytest.mark.asyncio
-async def test_reconciliation_incremental_append_uses_cumulative_partner_scope(mock_db):
-    """Incremental append should reconcile the cumulative partner scope already ingested for the day."""
+async def test_reconciliation_incremental_append_uses_current_batch_only(mock_db):
+    """Incremental append should reconcile only the current source batch."""
     engine = ReconciliationEngine(mock_db)
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
@@ -345,17 +380,24 @@ async def test_reconciliation_incremental_append_uses_cumulative_partner_scope(m
     file_collection.find_one = AsyncMock(return_value={"_id": wave2_source_file_id, "scopeType": "INCREMENTAL_APPEND"})
     mock_db.__getitem__ = MagicMock(side_effect=lambda name: file_collection if name == "reconciliation_file" else MagicMock())
 
-    engine._data_repo.find_many = AsyncMock(return_value=partner_records)
+    engine._data_repo.find_many = AsyncMock(return_value=partner_records[20:])
     engine._internal_repo.find_many = AsyncMock(return_value=internal_records)
     engine._result_repo.delete_by_partner_and_date = AsyncMock()
     engine._result_repo.insert_many = AsyncMock()
 
     results = await engine.reconcile(partner, recon_date, source_file_id=wave2_source_file_id)
 
-    assert len(results) == 40
-    assert {result.partner_txn_id for result in results} == {f"trace_{index:02d}" for index in range(40)}
+    assert len(results) == 20
+    assert {result.partner_txn_id for result in results} == {
+        f"trace_{index:02d}" for index in range(20, 40)
+    }
     assert all(result.reconciliation_status == ReconciliationStatus.MATCHED for result in results)
-    engine._result_repo.delete_by_partner_and_date.assert_called_once_with(partner, "2024-07-07")
+    delete_call = engine._result_repo.delete_by_partner_and_date.call_args
+    assert delete_call.args == (partner, "2024-07-07")
+    assert delete_call.kwargs["source_file_id"] == wave2_source_file_id
+    assert set(delete_call.kwargs["partner_txn_ids"]) == {
+        f"trace_{index:02d}" for index in range(20, 40)
+    }
 
 
 @pytest.mark.asyncio

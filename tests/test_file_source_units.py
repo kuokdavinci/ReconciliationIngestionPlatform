@@ -8,7 +8,16 @@ import pytest
 
 from src.fetchers.filedrop_fetcher import FileDropFetcher
 from src.fetchers.sftp_fetcher import SFTPFetcher
+from src.fetchers.base import BaseFetcher
 from src.models.fetch_config import FileDropConfig, SFTPConfig
+
+
+def test_relative_local_paths_are_resolved_from_application_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    assert BaseFetcher.resolve_local_path("./mock_data") == (
+        Path(__file__).resolve().parents[1] / "mock_data"
+    )
 
 
 @pytest.mark.asyncio

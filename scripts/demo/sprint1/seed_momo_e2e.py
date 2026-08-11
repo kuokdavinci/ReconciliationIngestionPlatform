@@ -12,6 +12,9 @@ Modes (selected via CLI):
     missing_partner_demo — insert a single `MOMO_TXN_90_MISSING_PARTNER` internal
                            row and write a wave1 partner xlsx (so a
                            FULL_SNAPSHOT ingestion produces exactly 1 MISSING_PARTNER).
+    fail               — wipe MOMO data, seed an approved mapping, and write a
+                         valid `.xlsx` whose rows lack both identity fields used
+                         to derive `ingestionKey`.
 
 The helpers below (`_reset_and_seed_phase1`, `_add_phase2`,
 `_add_missing_partner_demo`, `_seed_internal`, `_write_partner_file`,
@@ -106,12 +109,14 @@ def _write_partner_file(
     keys: list[str],
     *,
     day: Optional[datetime] = None,
+    include_ingestion_identity: bool = True,
 ) -> Path:
     """Overwrite the partner xlsx at `path` with one row per key.
 
     Layout matches the production MOMO ingestor: 6 blank rows, then a 30-column
     header row, then one data row per key. The reconciliation key (`msTransId`)
-    lives in column 2 (B).
+    lives in column 2 (B). When ``include_ingestion_identity`` is false, both
+    ``msTransId`` and ``msMaHDon`` are blank to exercise ingestion-key failure.
     """
     if day is None:
         day = _today_utc()
@@ -141,10 +146,12 @@ def _write_partner_file(
             amount += Decimal("5000")
         row = [""] * 30
         row[0] = str(index)
-        row[1] = txn_id
+        if include_ingestion_identity:
+            row[1] = txn_id
         row[4] = str(amount)
         row[7] = f"{date_str} 12:00:00"
-        row[10] = txn_id
+        if include_ingestion_identity:
+            row[10] = txn_id
         row[17] = "Thành công"
         ws.append(row)
 
@@ -226,6 +233,38 @@ async def _reset_and_seed_phase1(db, partner_file_path: str | Path) -> int:
     return inserted
 
 
+def _write_missing_ingestion_key_partner_file(
+    path: str | Path,
+    keys: list[str],
+    *,
+    day: Optional[datetime] = None,
+) -> Path:
+    """Write a readable partner file with no usable ingestion identity."""
+    return _write_partner_file(
+        path,
+        keys,
+        day=day,
+        include_ingestion_identity=False,
+    )
+
+
+async def _reset_and_seed_failure_case(db, partner_file_path: str | Path) -> int:
+    """Wipe MOMO, seed wave1 rows, and publish a missing-key partner file."""
+    day = _today_utc()
+    try:
+        await _clear_momo_transaction_rows()
+    except Exception as exc:
+        print(f"Warning wiping Postgres tables: {exc}")
+
+    inserted = await _seed_internal(_wave1_keys(), day=day)
+    _write_missing_ingestion_key_partner_file(
+        partner_file_path,
+        _wave1_keys(),
+        day=day,
+    )
+    return inserted
+
+
 async def _add_phase2(db, partner_file_path: str | Path) -> int:
     """Add 20 wave2 internal rows and OVERWRITE the partner file with wave2 keys.
 
@@ -302,10 +341,15 @@ async def _full_wipe(db) -> None:
         print(f"Warning wiping Postgres tables in _full_wipe: {exc}")
 
 
-async def _ensure_mapping_config(db, status: str = "APPROVED") -> None:
-    """Ensure a valid mapping configuration with given status is present for MOMO."""
+async def _ensure_mapping_config(
+    db,
+    status: str = "APPROVED",
+    partner_file_path: str | Path | None = None,
+) -> None:
+    """Ensure a valid mapping config, optionally pinned to a fixture layout."""
     from src.domain.mapping.models import MappingConfigStatus
     from src.core.enums import FileType
+    from src.config.signature import compute_signature
     collection = db["reconciliation_mapping_config"]
     await collection.delete_many({"partner": PARTNER})
 
@@ -331,6 +375,11 @@ async def _ensure_mapping_config(db, status: str = "APPROVED") -> None:
         "status": status,
         "createdAt": datetime.now(timezone.utc)
     }
+    if partner_file_path is not None:
+        config_doc["structureSignature"] = compute_signature(
+            partner_file_path,
+            sample_size=10,
+        ).to_dict()
     if status == MappingConfigStatus.APPROVED.value:
         config_doc["approvedAt"] = datetime.now(timezone.utc)
         config_doc["approvedBy"] = "admin"
@@ -453,6 +502,18 @@ async def main(mode: str, file_dir: str = "mock_data") -> None:
             print(f"Reset complete for {PARTNER} on {_date_str(day)}")
             print(f"Seeded Phase 1 internal rows: {inserted}")
             print(f"Wrote partner file: {partner_file_path}")
+        elif mode == "fail":
+            await _full_wipe(db)
+            inserted = await _reset_and_seed_failure_case(db, partner_file_path)
+            await _ensure_mapping_config(
+                db,
+                status="APPROVED",
+                partner_file_path=partner_file_path,
+            )
+            await _ensure_fetch_config(db)
+            print(f"Failure fixture prepared for {PARTNER} on {_date_str(day)}")
+            print(f"Seeded internal rows: {inserted}")
+            print(f"Wrote missing-ingestion-key partner file: {partner_file_path}")
         elif mode == "phase2":
             inserted = await _add_phase2(db, partner_file_path)
             await _ensure_fetch_config(db)
@@ -488,7 +549,7 @@ async def main(mode: str, file_dir: str = "mock_data") -> None:
         else:
             raise ValueError(
                 f"Unsupported mode: {mode!r}. "
-                f"Expected one of: reset, phase2, phase2_duplicate, missing_partner_demo, sprint6-setup, sprint6-wave2"
+                f"Expected one of: reset, fail, phase2, phase2_duplicate, missing_partner_demo, sprint6-setup, sprint6-wave2"
             )
     finally:
         client.close()
@@ -500,8 +561,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "mode",
-        choices=["reset", "phase2", "phase2_duplicate", "missing_partner_demo", "sprint6-setup", "sprint6-wave2"],
-        help="reset=clean Phase 1; phase2=add Wave 2; missing_partner_demo=inject MISSING_PARTNER row; sprint6-setup=Sprint 6 setup; sprint6-wave2=Sprint 6 wave 2 activation",
+        choices=["reset", "fail", "phase2", "phase2_duplicate", "missing_partner_demo", "sprint6-setup", "sprint6-wave2"],
+        help="reset=clean Phase 1; fail=missing ingestion-key fixture; phase2=add Wave 2; missing_partner_demo=inject MISSING_PARTNER row; sprint6-setup=Sprint 6 setup; sprint6-wave2=Sprint 6 wave 2 activation",
     )
     parser.add_argument(
         "--file-dir",

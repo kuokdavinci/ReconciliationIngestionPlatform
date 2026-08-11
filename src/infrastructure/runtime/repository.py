@@ -34,3 +34,19 @@ class PartnerRuntimeRunRepository(BaseRepository[PartnerRuntimeRun]):
         if raw is None:
             return None
         return self._from_mongo(raw)
+
+    async def find_recent_by_partner(
+        self, partner: str, limit: int = 5
+    ) -> list[PartnerRuntimeRun]:
+        """Return recent attempts for operator correlation/debugging."""
+        cursor = self.collection.find({"partner": partner})
+        if hasattr(cursor, "sort"):
+            cursor = cursor.sort("createdAt", -1)
+        if hasattr(cursor, "limit"):
+            cursor = cursor.limit(limit)
+        result: list[PartnerRuntimeRun] = []
+        async for raw in cursor:
+            result.append(self._from_mongo(raw))
+            if len(result) >= limit:
+                break
+        return result

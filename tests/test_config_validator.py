@@ -191,7 +191,7 @@ class TestConfigValidatorRequiredFields:
     """Tests for required field validation."""
 
     def test_required_without_column_or_constant(self):
-        """validate() detects required=True with no column or constant."""
+        """validate() detects required=True with no resolvable source."""
         from src.config.validator import ConfigValidator
 
         mappings = [
@@ -224,6 +224,19 @@ class TestConfigValidatorRequiredFields:
 
         mappings = [
             FieldMapping(path="currency", type=FieldMappingType.CONSTANT, required=True, constant="VND"),
+        ]
+        config = _make_config(mappings)
+
+        errors = ConfigValidator.validate(config)
+
+        assert errors == []
+
+    def test_required_with_source_field_is_valid(self):
+        """validate() accepts required=True for JSON/API sourceField mappings."""
+        from src.config.validator import ConfigValidator
+
+        mappings = [
+            FieldMapping(path="amount", sourceField="amount", type=FieldMappingType.DECIMAL, required=True),
         ]
         config = _make_config(mappings)
 

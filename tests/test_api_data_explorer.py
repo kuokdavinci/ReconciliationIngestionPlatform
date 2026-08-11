@@ -2,7 +2,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi.testclient import TestClient
+from tests.asgi_test_client import TestClient
 
 
 def _create_test_app():
@@ -212,8 +212,15 @@ class TestDataStats:
         mock_db.__getitem__.return_value.count_documents = AsyncMock(return_value=500)
         mock_db.__getitem__.return_value.aggregate = MagicMock()
 
-        client = TestClient(app)
-        response = client.get("/api/v1/data/stats", params={"partner": "MOMO"})
+        with patch(
+            "src.api.data_explorer.DataContainerRepository.count_by_partner",
+            AsyncMock(return_value={"MOMO": 500}),
+        ), patch(
+            "src.api.data_explorer.DataContainerRepository.count",
+            AsyncMock(return_value=500),
+        ):
+            client = TestClient(app)
+            response = client.get("/api/v1/data/stats", params={"partner": "MOMO"})
         assert response.status_code == 200
         data = response.json()
         assert data["partner"] == "MOMO"

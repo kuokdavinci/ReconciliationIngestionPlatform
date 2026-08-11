@@ -141,6 +141,22 @@ class BaseFetcher(ABC):
         return path.exists() and path.stat().st_size > 0
 
     @staticmethod
+    def resolve_local_path(path: str | Path) -> Path:
+        """Resolve a local path relative to the application root.
+
+        Scheduler containers use different working directories: APScheduler
+        runs from ``/app`` while Airflow tasks run from ``/opt/airflow/app``.
+        Resolving relative paths from this module's application root keeps
+        FileDrop and SFTP configurations portable across both runtimes.
+        Absolute paths remain unchanged.
+        """
+        path_obj = Path(path)
+        if path_obj.is_absolute():
+            return path_obj
+        application_root = Path(__file__).resolve().parents[2]
+        return application_root / path_obj
+
+    @staticmethod
     def compute_file_hash(file_path: str) -> str:
         """Return a stable SHA-256 fingerprint for a local source file."""
         digest = hashlib.sha256()

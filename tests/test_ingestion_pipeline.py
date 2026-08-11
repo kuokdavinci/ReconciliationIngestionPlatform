@@ -85,6 +85,23 @@ class TestIngestionResult:
         assert result.errors == errors
 
 
+def test_missing_ingestion_key_failure_requires_both_identity_fields():
+    from src.pipeline.ingestion_pipeline import _is_missing_ingestion_key_failure
+    from src.pipeline.run_state import IngestionRunState
+
+    state = IngestionRunState(
+        total_rows=2,
+        success_rows=0,
+        failed_rows=2,
+        errors=[
+            {"row": 8, "field": "id", "reason": "source field value is None"},
+            {"row": 8, "field": "trace", "reason": "source field value is None"},
+        ],
+    )
+
+    assert _is_missing_ingestion_key_failure(state) is True
+
+
 class TestTupleToDict:
     """Tests for _tuple_to_dict conversion."""
 

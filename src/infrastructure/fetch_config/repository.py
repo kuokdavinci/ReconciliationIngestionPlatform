@@ -25,6 +25,12 @@ class FetchConfigRepository:
             return None
         return self._from_mongo(raw)
 
+    async def find_by_id(self, config_id: str) -> Optional[FetchConfig]:
+        raw = await self._collection.find_one({"_id": config_id})
+        if raw is None:
+            return None
+        return self._from_mongo(raw)
+
     async def find_enabled(self) -> list[FetchConfig]:
         cursor = self._collection.find({"enabled": True})
         results = []

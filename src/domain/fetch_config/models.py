@@ -80,6 +80,7 @@ class FetchConfig(BaseModel):
     fetch_method: FetchMethod = Field(alias="fetchMethod")
     enabled: bool = True
     schedule: str = "0 0 * * *"
+    validate_rows: bool = Field(default=False, alias="validateRows")
     local_download_dir: str = Field(default="./downloads", alias="localDownloadDir")
     cleanup_after_ingest: bool = Field(default=True, alias="cleanupAfterIngest")
     archive_dir: Optional[str] = Field(default=None, alias="archiveDir")

@@ -1,10 +1,10 @@
 """Mapping between reconciliation result domain and persistence shapes."""
 
-from datetime import timezone
 from typing import Any
 
 from src.domain.reconciliation.models import ReconciliationResult
 from src.infrastructure.persistence.mongo_values import normalize_document_aliases
+from src.infrastructure.persistence.time import as_utc_naive
 
 
 _RECONCILIATION_RESULT_ALIASES = {
@@ -28,9 +28,7 @@ _RECONCILIATION_RESULT_ALIASES = {
 
 def reconciliation_result_to_row(doc: ReconciliationResult) -> dict[str, Any]:
     """Map a reconciliation result to PostgreSQL column names."""
-    created_at = doc.created_at
-    if created_at.tzinfo is not None:
-        created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
+    created_at = as_utc_naive(doc.created_at)
     return {
         "id": doc.id,
         "partner": doc.partner,

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.asgi_test_client import TestClient
 from fastapi import HTTPException
 
 
@@ -88,6 +88,14 @@ class TestListResults:
         assert response.status_code == 400
         assert "Partner identifier is required" in response.json()["detail"]
 
+    def test_date_bounds_follow_business_timezone(self):
+        from src.api.reconciliation import _date_bounds
+
+        start, end = _date_bounds("2026-08-10")
+
+        assert start == datetime(2026, 8, 9, 17, tzinfo=timezone.utc)
+        assert end == datetime(2026, 8, 10, 16, 59, 59, 999999, tzinfo=timezone.utc)
+
     def test_missing_date_returns_400(self):
         app, _ = _create_test_app()
         client = TestClient(app)
@@ -110,11 +118,15 @@ class TestListResults:
         mock_cursor = _AsyncCursor([])
         mock_collection.find = MagicMock(return_value=mock_cursor)
 
-        client = TestClient(app)
-        response = client.get(
-            "/api/v1/reconciliation/results",
-            params={"partner": "MOMO", "date": "2024-07-07"},
-        )
+        with patch(
+            "src.api.reconciliation.ReconciliationResultRepository.find_page_by_partner_and_date",
+            AsyncMock(return_value=([], 0)),
+        ):
+            client = TestClient(app)
+            response = client.get(
+                "/api/v1/reconciliation/results",
+                params={"partner": "MOMO", "date": "2024-07-07"},
+            )
         assert response.status_code == 200
         data = response.json()
         assert "results" in data
@@ -164,6 +176,41 @@ class TestListResults:
             )
             assert response.status_code == 500
             assert "Failed to list results" in response.json()["detail"]
+
+    def test_legacy_rows_are_visible_when_latest_run_has_no_scoped_results(self):
+        app, _ = _create_test_app()
+        from src.models.reconciliation_result import ReconciliationResult
+        from uuid import uuid4
+
+        legacy_result = ReconciliationResult(
+            id=str(uuid4()),
+            partner="MOMO",
+            partner_txn_id="txn-legacy",
+            reconciliation_status="MATCHED",
+            date="2024-07-07",
+            reconciliation_date=datetime(2024, 7, 7, tzinfo=timezone.utc),
+        )
+        mock_find_page = AsyncMock(side_effect=[([], 0), ([legacy_result], 1)])
+
+        with (
+            patch(
+                "src.api.reconciliation._resolve_latest_run_filters",
+                new=AsyncMock(return_value={"reconciliation_run_id": "run-current"}),
+            ),
+            patch(
+                "src.api.reconciliation.ReconciliationResultRepository.find_page_by_partner_and_date",
+                mock_find_page,
+            ),
+        ):
+            response = TestClient(app).get(
+                "/api/v1/reconciliation/results",
+                params={"partner": "MOMO", "date": "2024-07-07"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert mock_find_page.await_count == 2
+        assert "reconciliation_run_id" not in mock_find_page.await_args_list[1].kwargs
 
 
 class TestGetResult:
@@ -219,6 +266,40 @@ class TestStats:
         client = TestClient(app)
         response = client.get("/api/v1/reconciliation/stats", params={"date": "2024-07-07"})
         assert response.status_code == 400
+
+    def test_legacy_rows_are_included_when_latest_run_has_no_scoped_stats(self):
+        app, _ = _create_test_app()
+        mock_count = AsyncMock(side_effect=[{}, {"MATCHED": 2}])
+        mock_totals = AsyncMock(
+            side_effect=[
+                {"total_partner_amount": None, "total_internal_amount": None},
+                {"total_partner_amount": 200, "total_internal_amount": 200},
+            ]
+        )
+
+        with (
+            patch(
+                "src.api.reconciliation._resolve_latest_run_filters",
+                new=AsyncMock(return_value={"reconciliation_run_id": "run-current"}),
+            ),
+            patch(
+                "src.api.reconciliation.ReconciliationResultRepository.count_by_status",
+                mock_count,
+            ),
+            patch(
+                "src.api.reconciliation.ReconciliationResultRepository.get_total_amounts",
+                mock_totals,
+            ),
+        ):
+            response = TestClient(app).get(
+                "/api/v1/reconciliation/stats",
+                params={"partner": "MOMO", "date": "2024-07-07"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 2
+        assert mock_count.await_count == 2
+        assert "reconciliation_run_id" not in mock_count.await_args_list[1].kwargs
 
 
 class TestRunStatus:

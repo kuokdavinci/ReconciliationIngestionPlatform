@@ -1,6 +1,5 @@
 """Mapping between partner transaction domain and persistence shapes."""
 
-from datetime import datetime
 from typing import Any
 
 from src.domain.partner_transaction.models import (
@@ -9,6 +8,7 @@ from src.domain.partner_transaction.models import (
     PartnerData,
 )
 from src.infrastructure.persistence.mongo_values import normalize_document_aliases
+from src.infrastructure.persistence.time import as_utc_naive
 
 
 _DATA_CONTAINER_ALIASES = {
@@ -39,7 +39,7 @@ def data_container_to_row(doc: DataContainer | FastDataContainer) -> dict[str, A
         "request_id": doc.request_id,
         "identify": doc.identify,
         "workflow_type": doc.workflow_type,
-        "reconciliation_date": _without_timezone(doc.reconciliation_date),
+        "reconciliation_date": as_utc_naive(doc.reconciliation_date),
         "operation_status": doc.operation_status,
         "reconciliation_status": doc.reconciliation_status,
         "connector_data": doc.connector_data,
@@ -51,12 +51,12 @@ def data_container_to_row(doc: DataContainer | FastDataContainer) -> dict[str, A
         "partner_status": pd.status,
         "partner_amount": pd.amount,
         "partner_currency": pd.currency,
-        "partner_trans_date": _without_timezone(pd.trans_date),
+        "partner_trans_date": as_utc_naive(pd.trans_date),
         "partner_metadata": pd.extra or {},
         "created_by": doc.created_by,
-        "created_date": _without_timezone(doc.created_date),
+        "created_date": as_utc_naive(doc.created_date),
         "last_modified_by": doc.last_modified_by,
-        "last_modified_date": _without_timezone(doc.last_modified_date),
+        "last_modified_date": as_utc_naive(doc.last_modified_date),
     }
 
 
@@ -106,9 +106,3 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     if hasattr(row, "__table__"):
         return {column.name: getattr(row, column.name) for column in row.__table__.columns}
     return dict(row)
-
-
-def _without_timezone(value: datetime | None) -> datetime | None:
-    if value is not None and value.tzinfo is not None:
-        return value.replace(tzinfo=None)
-    return value

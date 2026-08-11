@@ -73,7 +73,7 @@ async def test_existing_revision_0001_is_upgraded_to_head():
                 )
             )
 
-        assert revision == "0002"
+        assert revision == "0003"
         assert has_ingestion_key is True
         assert has_unique_constraint is True
     finally:

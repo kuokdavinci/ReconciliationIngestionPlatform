@@ -1,0 +1,6 @@
+{
+  "partner": "VIETTELPAY",
+  "endpoint": "http://viettelpay-mock:8001/viettelpay/settlement",
+  "pages": 3,
+  "fixtureVersion": "sprint-2-v1"
+}

@@ -22,8 +22,22 @@ class ViettelPayMockFixture:
                 "cursorBefore": None,
                 "cursorAfter": "cursor-1",
                 "items": [
-                    {"id": "VTP-001", "amount": "100000", "status": "SUCCESS"},
-                    {"id": "VTP-002", "amount": "200000", "status": "SUCCESS"},
+                    {
+                        "id": "VTP-001",
+                        "trace": "VTP-001",
+                        "amount": "100000",
+                        "currency": "VND",
+                        "status": "SUCCESS",
+                        "transDate": "2026-08-09 12:00:00",
+                    },
+                    {
+                        "id": "VTP-002",
+                        "trace": "VTP-002",
+                        "amount": "200000",
+                        "currency": "VND",
+                        "status": "SUCCESS",
+                        "transDate": "2026-08-09 12:00:00",
+                    },
                 ],
             },
             2: {
@@ -31,8 +45,22 @@ class ViettelPayMockFixture:
                 "cursorBefore": "cursor-1",
                 "cursorAfter": "cursor-2",
                 "items": [
-                    {"id": "VTP-003", "amount": "300000", "status": "SUCCESS"},
-                    {"id": "VTP-004", "amount": "400000", "status": "SUCCESS"},
+                    {
+                        "id": "VTP-003",
+                        "trace": "VTP-003",
+                        "amount": "300000",
+                        "currency": "VND",
+                        "status": "SUCCESS",
+                        "transDate": "2026-08-09 12:00:00",
+                    },
+                    {
+                        "id": "VTP-004",
+                        "trace": "VTP-004",
+                        "amount": "400000",
+                        "currency": "VND",
+                        "status": "SUCCESS",
+                        "transDate": "2026-08-09 12:00:00",
+                    },
                 ],
             },
             3: {
@@ -40,8 +68,22 @@ class ViettelPayMockFixture:
                 "cursorBefore": "cursor-2",
                 "cursorAfter": None,
                 "items": [
-                    {"id": "VTP-005", "amount": "500000", "status": "SUCCESS"},
-                    {"id": "VTP-006", "amount": "600000", "status": "SUCCESS"},
+                    {
+                        "id": "VTP-005",
+                        "trace": "VTP-005",
+                        "amount": "500000",
+                        "currency": "VND",
+                        "status": "SUCCESS",
+                        "transDate": "2026-08-09 12:00:00",
+                    },
+                    {
+                        "id": "VTP-006",
+                        "trace": "VTP-006",
+                        "amount": "600000",
+                        "currency": "VND",
+                        "status": "SUCCESS",
+                        "transDate": "2026-08-09 12:00:00",
+                    },
                 ],
             },
         }
@@ -82,7 +124,11 @@ class ViettelPayMockFixture:
         ]
 
 
-def reset_viettelpay_fixture(output_dir: str | Path) -> Path:
+def reset_viettelpay_fixture(
+    output_dir: str | Path,
+    *,
+    endpoint: str = "mock://viettelpay/settlement",
+) -> Path:
     """Write a clean local fixture directory and return its manifest path."""
 
     target = Path(output_dir)
@@ -104,7 +150,7 @@ def reset_viettelpay_fixture(output_dir: str | Path) -> Path:
         )
     manifest = {
         "partner": "VIETTELPAY",
-        "endpoint": "mock://viettelpay/settlement",
+        "endpoint": endpoint,
         "pages": 3,
         "fixtureVersion": "sprint-2-v1",
     }

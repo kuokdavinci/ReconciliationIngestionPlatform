@@ -1,0 +1,23 @@
+{
+  "page": 1,
+  "cursorBefore": null,
+  "cursorAfter": "cursor-1",
+  "items": [
+    {
+      "id": "VTP-001",
+      "trace": "VTP-001",
+      "amount": "100000",
+      "currency": "VND",
+      "status": "SUCCESS",
+      "transDate": "2026-08-09 12:00:00"
+    },
+    {
+      "id": "VTP-002",
+      "trace": "VTP-002",
+      "amount": "200000",
+      "currency": "VND",
+      "status": "SUCCESS",
+      "transDate": "2026-08-09 12:00:00"
+    }
+  ]
+}

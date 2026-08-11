@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 
 import pytest
 
@@ -8,6 +9,11 @@ from scripts.demo.sprint2.fixture import (
     ViettelPayMockFixture,
     reset_viettelpay_fixture,
 )
+from scripts.demo.sprint2.seed import _mapping_document, _wipe_mongo
+from src.config.validator import ConfigValidator
+from src.domain.mapping.models import MappingConfig
+from src.normalizer.normalizer import TransactionNormalizer
+from src.validators.validator import Validator
 
 
 def test_viettelpay_fixture_exposes_three_cursor_pages_and_controlled_failure():
@@ -17,6 +23,17 @@ def test_viettelpay_fixture_exposes_three_cursor_pages_and_controlled_failure():
     assert first["page"] == 1
     assert first["cursorAfter"] == "cursor-1"
     assert first["items"]
+    assert set(first["items"][0]) == {
+        "id",
+        "trace",
+        "amount",
+        "currency",
+        "status",
+        "transDate",
+    }
+    assert first["items"][0]["trace"] == first["items"][0]["id"]
+    assert first["items"][0]["currency"] == "VND"
+    assert first["items"][0]["transDate"]
 
     with pytest.raises(MockAPIError, match="page 2"):
         fixture.fetch_page(page=2, cursor="cursor-1")
@@ -38,6 +55,58 @@ def test_reset_viettelpay_fixture_writes_reproducible_contract(tmp_path):
         "page-2.json",
         "page-3.json",
     ]
+
+    page = json.loads((tmp_path / "page-1.json").read_text(encoding="utf-8"))
+    assert page["items"][0]["currency"] == "VND"
+    assert page["items"][0]["transDate"] == "2026-08-09 12:00:00"
+
+
+def test_viettelpay_mock_row_passes_seed_mapping_and_row_validation():
+    fixture = ViettelPayMockFixture()
+    row = fixture.fetch_page(page=1, cursor=None)["items"][0]
+    config = MappingConfig.model_validate(_mapping_document(datetime.now(UTC)))
+
+    assert ConfigValidator.validate(config) == []
+    normalized = TransactionNormalizer(config.field_mappings).normalize(row, row_number=1)
+    assert normalized.errors == []
+
+    transaction, build_errors = TransactionNormalizer.build_canonical(
+        normalized.data, [], row_number=1
+    )
+    assert build_errors == []
+    assert transaction is not None
+    assert Validator().validate(transaction, row_number=1, trace=transaction.trace).is_valid
+
+
+def test_viettelpay_demo_mapping_template_is_not_preapproved():
+    document = _mapping_document(datetime.now(UTC))
+
+    assert document["status"] == "PENDING_APPROVAL"
+    assert "approvedAt" not in document
+    assert "approvedBy" not in document
+
+
+@pytest.mark.asyncio
+async def test_reset_wipes_viettelpay_quarantine_records():
+    deletes: list[tuple[str, dict[str, str]]] = []
+
+    class Collection:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def delete_many(self, query: dict[str, str]) -> None:
+            deletes.append((self.name, query))
+
+    class Database:
+        def __getitem__(self, name: str) -> Collection:
+            return Collection(name)
+
+    await _wipe_mongo(Database())
+
+    assert (
+        "ingestion_quarantine_record",
+        {"partner": "VIETTELPAY"},
+    ) in deletes
 
 
 @pytest.mark.asyncio

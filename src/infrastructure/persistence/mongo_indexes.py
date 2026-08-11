@@ -32,6 +32,21 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_file_processing_status_created",
         ),
     ],
+    "raw_ingestion_page": [
+        IndexModel(
+            [("sourceUnitKey", ASCENDING)],
+            unique=True,
+            name="idx_raw_page_source_unit_unique",
+        ),
+        IndexModel(
+            [("stageKey", ASCENDING), ("page", ASCENDING)],
+            name="idx_raw_page_stage_page",
+        ),
+        IndexModel(
+            [("status", ASCENDING), ("expiresAt", ASCENDING)],
+            name="idx_raw_page_status_expiry",
+        ),
+    ],
     "ingestion_quarantine_record": [
         IndexModel(
             [("sourceFileId", ASCENDING), ("rowNumber", ASCENDING)],

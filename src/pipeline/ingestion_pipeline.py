@@ -7,6 +7,7 @@ import time
 from typing import Any, Literal, Optional
 
 from src.application.ingestion.contracts import IngestionResult, ProcessFileCommand
+from src.application.ingestion.error_classification import is_missing_ingestion_key_failure
 from src.config.config_health import (
     ConfigurationApprovalRequiredError,
     record_config_run_health,
@@ -47,6 +48,16 @@ class _ClaimedFile:
     fetch_unit_key: str | None
     run_id: str
     source_file_id: str
+
+
+def _is_missing_ingestion_key_failure(state: IngestionRunState) -> bool:
+    """Compatibility wrapper for callers using the legacy pipeline helper."""
+    return is_missing_ingestion_key_failure(
+        total_rows=state.total_rows,
+        success_rows=state.success_rows,
+        failed_rows=state.failed_rows,
+        errors=state.errors,
+    )
 
 
 class IngestionPipeline:
@@ -551,6 +562,28 @@ class IngestionPipeline:
             if config is None:
                 return self._build_result(file_record, state, outcome="WAITING_REVIEW")
             row_result = await self._run_row_phase(command, config, claimed, state)
+            if _is_missing_ingestion_key_failure(state):
+                error = ValueError(
+                    "Unable to derive ingestion_key: both id and trace are missing from the source rows."
+                )
+                self._emit_stage(
+                    IngestionStage.FINALIZING,
+                    run_id=claimed.run_id,
+                    source_file_id=claimed.source_file_id,
+                    error_code="ingestion_key_error",
+                    state=state,
+                )
+                await self._finalizer.fail(
+                    self._recon_repo,
+                    claimed.file_record,
+                    state,
+                    error,
+                )
+                return self._build_result(
+                    file_record,
+                    state,
+                    outcome="FAILED",
+                )
             await self._finalize_success(
                 command, claimed, state, row_result, started_at
             )

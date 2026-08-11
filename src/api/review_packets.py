@@ -1,9 +1,11 @@
 """Approval desk review packet endpoints."""
 
 import asyncio
+import inspect
 import json
 from datetime import datetime, timezone
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -31,6 +33,7 @@ from src.services.mapping_contract import (
 )
 from src.services.review_packet_actions import (
     approve_packet_mapping_and_reprocess,
+    reprocess_packet_with_current_mapping,
     build_config_loader,
     mark_packet,
     serialize_post_approval_run,
@@ -41,34 +44,23 @@ from src.services.runtime_validation import (
     derive_validation_state,
     run_runtime_validation,
 )
+from src.services.review_evidence import (
+    build_internal_review_evidence,
+    business_day_bounds,
+)
+from src.services.review_raw_stream import read_review_stream_page, resolve_review_source_file
+from src.reconciliation.scope import classify_key_scope
 
 
 router = APIRouter(prefix="/api/v1/review-packets")
 _SCOPE_LLM_TIMEOUT_SECONDS = 8.0
 
 
-def _normalized_filename_tokens(file_name: str) -> str:
-    return str(file_name or "").strip().lower()
-
-
 def _scope_probabilities(
     *,
-    file_name: str,
     internal_count: int,
     received_count: int,
 ) -> tuple[dict[str, float], str, str]:
-    lowered = _normalized_filename_tokens(file_name)
-    replacement_tokens = ("replace", "replacement", "rerun", "retry", "resend", "correct", "correction")
-    incremental_tokens = ("part", "batch", "delta", "append", "supplement", "wave")
-    snapshot_tokens = ("full", "final", "daily", "settlement")
-
-    if any(token in lowered for token in replacement_tokens):
-        return (
-            {"FULL_SNAPSHOT": 0.08, "INCREMENTAL_APPEND": 0.12, "REPLACEMENT": 0.8},
-            "REPLACEMENT",
-            "Filename contains replacement/correction hints, so this file is most likely intended to overwrite existing rows.",
-        )
-
     if received_count <= 0:
         return (
             {"FULL_SNAPSHOT": 0.34, "INCREMENTAL_APPEND": 0.33, "REPLACEMENT": 0.33},
@@ -87,27 +79,13 @@ def _scope_probabilities(
     diff = abs(internal_count - received_count)
     diff_ratio = diff / larger if larger > 0 else 0.0
 
-    if any(token in lowered for token in snapshot_tokens) and diff_ratio <= 0.2:
-        return (
-            {"FULL_SNAPSHOT": 0.86, "INCREMENTAL_APPEND": 0.1, "REPLACEMENT": 0.04},
-            "FULL_SNAPSHOT",
-            "Filename hints at a day snapshot and the row counts are still in the same operating range, so full snapshot remains the best fit.",
-        )
-
-    # Allow small count gaps in large files without downgrading to append.
+    # Counts alone are only a fallback. Key evidence below has precedence.
     full_snapshot_tolerance = max(10, int(larger * 0.05))
     if diff <= full_snapshot_tolerance or diff_ratio <= 0.05:
         return (
             {"FULL_SNAPSHOT": 0.82, "INCREMENTAL_APPEND": 0.14, "REPLACEMENT": 0.04},
             "FULL_SNAPSHOT",
             "Received and internal counts are close enough that a few missing or mismatched rows still fit a full snapshot scenario.",
-        )
-
-    if any(token in lowered for token in incremental_tokens):
-        return (
-            {"FULL_SNAPSHOT": 0.12, "INCREMENTAL_APPEND": 0.82, "REPLACEMENT": 0.06},
-            "INCREMENTAL_APPEND",
-            "Filename indicates a partial batch or delta feed, so append is the most likely scope.",
         )
 
     if received_count < internal_count * 0.8:
@@ -154,10 +132,7 @@ def _apply_scope_guardrails(
     heuristic_reasoning: str,
     internal_count: int,
     received_count: int,
-    file_name: str,
 ) -> tuple[dict[str, float], str, str, str]:
-    lowered = _normalized_filename_tokens(file_name)
-    incremental_tokens = ("part", "batch", "delta", "append", "supplement", "wave")
     larger = max(internal_count, received_count, 1)
     diff = abs(internal_count - received_count)
     diff_ratio = diff / larger
@@ -175,19 +150,6 @@ def _apply_scope_guardrails(
                 "to treat this as a confident append-only batch."
             ).strip(),
             "guardrail_override_small_gap",
-        )
-
-    # Guardrail 2: append should have an explicit signal when same-day counts are already close.
-    if ai_scope == "INCREMENTAL_APPEND" and diff_ratio <= 0.2 and not any(
-        token in lowered for token in incremental_tokens
-    ):
-        return (
-            heuristic_probabilities,
-            heuristic_scope,
-            (
-                f"{ai_reasoning} Guardrail override applied: append is not strongly supported by filename or volume delta."
-            ).strip(),
-            "guardrail_override_weak_append_signal",
         )
 
     return ai_probabilities, ai_scope, ai_reasoning, "llm"
@@ -209,6 +171,36 @@ def _column_index(column: object) -> int | None:
     for character in value:
         index = index * 26 + ord(character) - ord("A") + 1
     return index - 1
+
+
+def _apply_source_reference_strategy(
+    mappings: list[dict],
+    *,
+    headers: list[str],
+    source_file_name: str | None,
+) -> list[dict]:
+    """Use object field names when samples originate from a JSON-like source.
+
+    AI generation is column-oriented because it must also support tabular
+    files. JSON readers yield dictionaries, though, so their canonical mapping
+    must point to the discovered key rather than a numeric column position.
+    The decision is based on the source representation, not on a partner.
+    """
+    suffix = Path(source_file_name or "").suffix.lower()
+    if suffix not in {".json", ".jsonl", ".ndjson"}:
+        return [dict(mapping) for mapping in mappings]
+
+    normalized: list[dict] = []
+    for mapping in mappings:
+        item = dict(mapping)
+        index = _column_index(item.get("column"))
+        if index is not None and index < len(headers):
+            source_field = str(headers[index]).strip()
+            if source_field:
+                item.pop("column", None)
+                item["sourceField"] = source_field
+        normalized.append(item)
+    return normalized
 
 
 def _scope_mapping_columns(
@@ -289,35 +281,34 @@ def _extract_scope_keys(
     return received_count, keys
 
 
-def _apply_duplicate_overlap_guardrail(
-    *,
-    probabilities: dict[str, float],
-    suggested_scope: str,
-    reasoning: str,
-    file_name: str,
-    duplicate_key_count: int,
-    new_key_count: int,
-    incoming_key_count: int,
-) -> tuple[dict[str, float], str, str, str | None]:
-    """Prefer append when one file visibly combines old and new business keys."""
-    if incoming_key_count <= 0 or duplicate_key_count <= 0 or new_key_count <= 0:
-        return probabilities, suggested_scope, reasoning, None
+async def _raw_stage_record_count(db, packet: ReviewPacket) -> int | None:
+    """Count all records retained for a paginated API review packet.
 
-    lowered = _normalized_filename_tokens(file_name)
-    replacement_tokens = ("replace", "replacement", "rerun", "retry", "resend", "correct", "correction")
-    duplicate_ratio = duplicate_key_count / incoming_key_count
-    if duplicate_ratio < 0.5 or any(token in lowered for token in replacement_tokens):
-        return probabilities, suggested_scope, reasoning, None
+    ``sourceFilePath`` points to one materialized page, not to the complete
+    API stream. ``itemCount`` is persisted per raw page and is therefore the
+    correct bounded metadata source for the total received count.
+    """
 
-    return (
-        {"FULL_SNAPSHOT": 0.04, "INCREMENTAL_APPEND": 0.92, "REPLACEMENT": 0.04},
-        "INCREMENTAL_APPEND",
-        (
-            f"The incoming file overlaps {duplicate_key_count} previously ingested business keys "
-            f"and adds {new_key_count} new keys ({duplicate_ratio:.0%} overlap), which is strong "
-            "evidence of an incremental append batch."
-        ),
-        "duplicate_overlap",
+    if not packet.raw_stage_key:
+        return None
+    try:
+        cursor = db["raw_ingestion_page"].find(
+            {
+                "partner": packet.partner,
+                "stageKey": packet.raw_stage_key,
+                "status": {"$in": ["STAGED", "CONSUMED"]},
+            },
+            projection={"itemCount": 1},
+        )
+        documents = await cursor.to_list(length=None)
+    except Exception:
+        return None
+    if not documents:
+        return None
+    return sum(
+        int(document.get("itemCount") or 0)
+        for document in documents
+        if isinstance(document, dict)
     )
 
 
@@ -366,12 +357,6 @@ class SaveDraftMappingPayload(BaseModel):
     field_mappings: list[DraftFieldMappingPayload] = Field(alias="fieldMappings")
 
 
-def _upsert_validation_gate(packet, gate: dict) -> list[dict]:
-    gates = [dict(item) for item in (packet.validation_gates or []) if item.get("gateKey") != gate["gateKey"]]
-    gates.append(gate)
-    return gates
-
-
 def _has_passing_runtime_gate(packet) -> bool:
     for gate in packet.validation_gates or []:
         if gate.get("gateKey") == "runtime_validation":
@@ -402,7 +387,19 @@ async def list_review_packets(
         query["partner"] = partner
     packets = await _repo(request).find_many(query)
     packets.sort(key=lambda item: item.created_at, reverse=True)
-    return {"packets": [_serialize(packet) for packet in packets]}
+    seen_pending_scheduler_keys: set[tuple[str, str, str]] = set()
+    visible_packets = []
+    for packet in packets:
+        if (
+            packet.source_type == ReviewPacketSourceType.SCHEDULER_JOB
+            and packet.status == ReviewPacketStatus.PENDING
+        ):
+            key = (packet.partner, packet.source_type.value, packet.file_type_detected)
+            if key in seen_pending_scheduler_keys:
+                continue
+            seen_pending_scheduler_keys.add(key)
+        visible_packets.append(packet)
+    return {"packets": [_serialize(packet) for packet in visible_packets]}
 
 
 @router.get("/{packet_id}")
@@ -411,6 +408,39 @@ async def get_review_packet(request: Request, packet_id: str):
     if packet is None:
         raise HTTPException(status_code=404, detail="Review packet not found.")
     return {"packet": _serialize(packet)}
+
+
+@router.get("/{packet_id}/raw-records")
+async def get_review_packet_raw_records(
+    request: Request,
+    packet_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """Read complete raw records for the packet's staged stream."""
+
+    packet = await _repo(request).find_one({"_id": packet_id})
+    if packet is None:
+        raise HTTPException(status_code=404, detail="Review packet not found.")
+    if not packet.raw_stage_key and not packet.source_file_path:
+        raise HTTPException(
+            status_code=409,
+            detail="Review packet has neither rawStageKey nor sourceFilePath evidence.",
+        )
+    try:
+        return await read_review_stream_page(
+            db=_get_db(request),
+            packet=packet,
+            offset=offset,
+            limit=limit,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=410,
+            detail=f"Review packet source evidence is no longer available: {exc}",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/{packet_id}/post-approve-run")
@@ -537,6 +567,11 @@ async def generate_ai_mapping_for_packet(request: Request, packet_id: str, force
 
     field_mappings, mapping_warnings = canonicalize_field_mappings(
         serialize_field_mappings(config_dict.get("fieldMappings") or [])
+    )
+    field_mappings = _apply_source_reference_strategy(
+        field_mappings,
+        headers=headers,
+        source_file_name=getattr(packet, "source_file_path", None) or packet.file_name,
     )
 
     file_type_value = getattr(packet, "file_type_detected", None) or FileType.SETTLEMENT.value
@@ -816,8 +851,10 @@ async def approve_keep_current_packet_action(
         raise HTTPException(status_code=400, detail="Runtime validation must pass before approval.")
 
     await update_packet_scope(request, packet_id, packet, payload.scope_type)
-
-    return await mark_packet(
+    post_approve_run = await reprocess_packet_with_current_mapping(
+        request, packet, payload.reviewed_by
+    )
+    response = await mark_packet(
         request,
         packet_id,
         ReviewPacketStatus.APPROVED,
@@ -825,6 +862,9 @@ async def approve_keep_current_packet_action(
         payload.reviewed_by,
         _serialize,
     )
+    if post_approve_run is not None:
+        response["postApproveRun"] = post_approve_run
+    return response
 
 
 @router.post("/{packet_id}/approve-keep-current")
@@ -929,10 +969,9 @@ async def create_review_packet_from_mapping(
 @router.post("/{packet_id}/classify-scope-llm")
 async def classify_scope_llm_for_packet(request: Request, packet_id: str, force: bool = False):
     import re
-    import os
     import json
     import logging
-    from datetime import datetime, time as datetime_time
+    from datetime import datetime
     from src.analysis.config import AnalysisConfig
     from src.analysis.provider import create_provider
     from src.readers import create_reader
@@ -959,31 +998,50 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str, force:
             recon_date = datetime.now(timezone.utc)
             
     # 2. Count internal transactions
-    start_of_day = datetime.combine(recon_date, datetime_time.min)
-    end_of_day = datetime.combine(recon_date, datetime_time.max)
+    start_of_day, end_of_day = business_day_bounds(recon_date)
     
     from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
 
-    internal_count = await InternalTransactionRepository(
-        db
-    ).count_by_partner_and_date_range(
+    internal_repository = InternalTransactionRepository(db)
+    internal_count = await internal_repository.count_by_partner_and_date_range(
         packet.partner,
         start_of_day,
         end_of_day,
     )
+    internal_evidence = await build_internal_review_evidence(
+        db,
+        partner=packet.partner,
+        reconciliation_date=recon_date,
+        record_count=internal_count,
+        repository=internal_repository,
+    )
+    packet.internal_record_count = internal_evidence["recordCount"]
+    packet.internal_preview = internal_evidence["sample"]
+    persist_result = repo.update_one(
+        {"_id": str(packet.id)},
+        {
+            "internalRecordCount": packet.internal_record_count,
+            "internalPreview": packet.internal_preview,
+        },
+    )
+    if inspect.isawaitable(persist_result):
+        await persist_result
     
     # 3. Count received records and collect the incoming business keys.
     received_count = 0
     incoming_keys: set[str] = set()
-    source_file_path = getattr(packet, "source_file_path", None)
-    if source_file_path and os.path.exists(source_file_path):
+    raw_stage_count = await _raw_stage_record_count(db, packet)
+    if raw_stage_count is not None:
+        received_count = raw_stage_count
+    else:
         try:
+            resolved_source_path = resolve_review_source_file(packet)
             mapping_repo = MappingConfigRepository(db)
             config = None
             if packet.draft_mapping_id:
                 config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
             if config is not None:
-                with create_reader(source_file_path, config) as reader:
+                with create_reader(resolved_source_path, config) as reader:
                     received_count, incoming_keys = _extract_scope_keys(
                         reader.iter_rows(),
                         config,
@@ -994,8 +1052,6 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str, force:
         except Exception as exc:
             logger.error(f"Error counting rows in file: {exc}")
             received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
-    else:
-        received_count = len(packet.structure_signature.get("sampleRows", [])) if packet.structure_signature else 0
 
     existing_keys: set[str] = set()
     if incoming_keys:
@@ -1020,28 +1076,40 @@ async def classify_scope_llm_for_packet(request: Request, packet_id: str, force:
     incoming_key_count = len(incoming_keys)
     duplicate_ratio = duplicate_key_count / incoming_key_count if incoming_key_count else 0.0
 
+    prior_file_count = 0
+    try:
+        file_collection = db["reconciliation_file"]
+        file_query: dict[str, Any] = {
+            "partner": packet.partner,
+            "reconciliationDate": {"$gte": start_of_day, "$lte": end_of_day},
+        }
+        count_result = file_collection.count_documents(file_query)
+        prior_file_count = int(await count_result if inspect.isawaitable(count_result) else count_result)
+    except Exception as exc:
+        logger.warning("Could not count prior reconciliation files: %s", exc)
+
+    key_scope = classify_key_scope(
+        incoming_keys=incoming_keys,
+        historical_keys=existing_keys,
+        prior_file_count=prior_file_count,
+    )
+    key_scope_type = key_scope["scopeType"]
+    key_scope_is_deterministic = bool(incoming_keys) and key_scope_type != "UNCONFIRMED"
+
     heuristic_probabilities, heuristic_scope, heuristic_reasoning = _scope_probabilities(
-        file_name=packet.file_name,
         internal_count=internal_count,
         received_count=received_count,
     )
-    (
-        heuristic_probabilities,
-        heuristic_scope,
-        heuristic_reasoning,
-        overlap_resolution,
-    ) = _apply_duplicate_overlap_guardrail(
-        probabilities=heuristic_probabilities,
-        suggested_scope=heuristic_scope,
-        reasoning=heuristic_reasoning,
-        file_name=packet.file_name,
-        duplicate_key_count=duplicate_key_count,
-        new_key_count=new_key_count,
-        incoming_key_count=incoming_key_count,
-    )
+    if key_scope_is_deterministic:
+        heuristic_scope = key_scope_type
+        heuristic_reasoning = key_scope["scopeReason"][0]
+        heuristic_probabilities = {
+            scope: 1.0 if scope == key_scope_type else 0.0
+            for scope in ("FULL_SNAPSHOT", "INCREMENTAL_APPEND", "REPLACEMENT")
+        }
 
     analysis_config = AnalysisConfig()
-    llm_provider = create_provider(analysis_config)
+    llm_provider = create_provider(analysis_config) if not key_scope_is_deterministic else None
     system_prompt = (
         "You are an expert reconciliation analyst. "
         "Classify file scope for review workflow. "
@@ -1058,11 +1126,10 @@ Important guidance:
 - For large files, a small row-count gap does NOT by itself disqualify FULL_SNAPSHOT.
 - Example: 100000 internal rows vs 99997 partner rows can still be FULL_SNAPSHOT when the missing rows are ordinary reconciliation discrepancies.
 - Do not over-weight same-day file count alone.
-- Use filename hints, relative volume difference, and operational plausibility together.
+- Use business-key overlap and historical coverage as the primary evidence. Do not use filename naming conventions to decide scope.
 
 Metadata:
 - Partner: {packet.partner}
-- File Name: {packet.file_name}
 - Received Record Count: {received_count}
 - Internal DB Record Count (same day): {internal_count}
 - Absolute Count Gap: {abs(internal_count - received_count)}
@@ -1086,21 +1153,22 @@ Return JSON:
 }}
 """
 
-    resolution = "rule_based_duplicate_overlap" if overlap_resolution else "rule_based"
+    resolution = "rule_based_key_evidence" if key_scope_is_deterministic else "rule_based"
     probabilities = heuristic_probabilities
     suggested_scope = heuristic_scope
     reasoning = heuristic_reasoning
-    try:
-        response_text = await asyncio.wait_for(
-            llm_provider.generate(prompt=prompt, system_prompt=system_prompt),
-            timeout=min(float(analysis_config.timeout), _SCOPE_LLM_TIMEOUT_SECONDS),
-        )
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Scope classification LLM timed out; returning heuristic result"
-        )
-        response_text = None
-        resolution = "rule_based_timeout"
+    response_text = None
+    if not key_scope_is_deterministic and llm_provider is not None:
+        try:
+            response_text = await asyncio.wait_for(
+                llm_provider.generate(prompt=prompt, system_prompt=system_prompt),
+                timeout=min(float(analysis_config.timeout), _SCOPE_LLM_TIMEOUT_SECONDS),
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Scope classification LLM timed out; returning heuristic result"
+            )
+            resolution = "rule_based_timeout"
     if response_text:
         try:
             clean_text = response_text.strip()
@@ -1126,30 +1194,19 @@ Return JSON:
                 heuristic_reasoning=heuristic_reasoning,
                 internal_count=internal_count,
                 received_count=received_count,
-                file_name=packet.file_name,
             )
-            (
-                probabilities,
-                suggested_scope,
-                reasoning,
-                overlap_resolution,
-            ) = _apply_duplicate_overlap_guardrail(
-                probabilities=probabilities,
-                suggested_scope=suggested_scope,
-                reasoning=reasoning,
-                file_name=packet.file_name,
-                duplicate_key_count=duplicate_key_count,
-                new_key_count=new_key_count,
-                incoming_key_count=incoming_key_count,
-            )
-            if overlap_resolution:
-                resolution = "guardrail_override_duplicate_overlap"
+            if key_scope_is_deterministic:
+                probabilities = heuristic_probabilities
+                suggested_scope = key_scope_type
+                reasoning = key_scope["scopeReason"][0]
+                resolution = "rule_based_key_evidence"
         except Exception as exc:
             logger.warning(f"Scope classification JSON parse failed: {exc}")
         
     return {
         "ok": True,
         "internalDbRecordCount": internal_count,
+        "internalPreview": internal_evidence["sample"],
         "receivedRecordCount": received_count,
         "probabilities": probabilities,
         "suggestedScope": suggested_scope,
@@ -1160,6 +1217,9 @@ Return JSON:
             "duplicateBusinessKeyCount": duplicate_key_count,
             "newBusinessKeyCount": new_key_count,
             "duplicateRatio": duplicate_ratio,
+            "historicalCoverage": key_scope["scopeSignals"].get("historicalCoverage", 0.0),
+            "newRatio": key_scope["scopeSignals"].get("newRatio", 0.0),
+            "ruleBasedScope": key_scope_type,
             "available": bool(incoming_keys),
         },
         "heuristicBaseline": {

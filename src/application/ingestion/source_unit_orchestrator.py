@@ -73,6 +73,14 @@ async def process_source_units(
                 "failed": failed + 1,
                 "stoppedAt": unit_key,
                 "error": "Source unit claim was not acquired",
+                "errorCode": "source_unit_claim_not_acquired",
+                "claim": {
+                    "expectedPreviousUnitKey": previous_unit_key,
+                    "lastCompletedUnitKey": checkpoint.last_completed_unit_key,
+                    "currentUnitKey": checkpoint.current_unit_key,
+                    "status": getattr(checkpoint.status, "value", checkpoint.status),
+                    "attemptCount": checkpoint.attempt_count,
+                },
             }
 
         resolution_metadata = getattr(checkpoint, "resolution_metadata", {})
@@ -102,7 +110,27 @@ async def process_source_units(
             previous_unit_key = unit_key
             continue
 
-        ingestion_result = await ingest_unit(unit)
+        try:
+            ingestion_result = await ingest_unit(unit)
+        except Exception as exc:
+            # A worker exception must not leave the checkpoint in PROCESSING.
+            # Airflow may retry the same runtime immediately, and a live claim
+            # would otherwise make that retry look like a second concurrent
+            # run ("claim was not acquired") until the stale-claim timeout.
+            error = str(exc).strip() or exc.__class__.__name__
+            if len(error) > 500:
+                error = error[:497] + "..."
+            await checkpoint_repo.mark_failed(
+                checkpoint,
+                unit_key=unit_key,
+                error=error,
+                error_code="source_runtime_error",
+                retryable=True,
+                next_retry_at=None,
+                max_attempts=attempt_limit,
+                error_metadata={"exceptionType": exc.__class__.__name__},
+            )
+            raise
         raw_outcome = (
             ingestion_result.get("outcome")
             if isinstance(ingestion_result, Mapping)

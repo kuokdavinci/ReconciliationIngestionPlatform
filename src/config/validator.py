@@ -86,11 +86,12 @@ class ConfigValidator:
                     config_version=version,
                 ))
 
-            # Required field must have column or constant (must be resolvable)
-            if fm.required and not fm.column and not fm.constant:
+            # Required field must have a resolvable source.
+            # JSON/API mappings use sourceField instead of spreadsheet column.
+            if fm.required and not fm.column and not fm.sourceField and not fm.constant:
                 errors.append(ConfigValidationError(
                     field=fm.path,
-                    reason=f"required field '{fm.path}' has no column or constant — cannot be resolved",
+                    reason=f"required field '{fm.path}' has no column, sourceField or constant — cannot be resolved",
                     config_version=version,
                 ))
 

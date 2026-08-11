@@ -40,7 +40,7 @@ class FileDropFetcher(BaseFetcher):
             FetchResult with local file path or error.
         """
         try:
-            directory = config.directory
+            directory = str(self.resolve_local_path(config.directory))
             pattern = config.pattern
 
             # Check if directory exists

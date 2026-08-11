@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException
-from fastapi.testclient import TestClient
+from tests.asgi_test_client import TestClient
 
 from src.analysis.schemas import AnalysisResult
 

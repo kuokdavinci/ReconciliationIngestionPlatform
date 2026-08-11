@@ -1,6 +1,7 @@
 """Application settings loaded from environment variables."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -16,6 +17,13 @@ class Settings(BaseSettings):
     app_name: str = "reconciliation-ingestion"
     strict_mapping_approval_enabled: bool = True
     upload_tmp_dir: str = str(Path.cwd() / "scratch" / "temp_uploads")
+    automation_orchestrator: Literal["apscheduler", "airflow"] = "apscheduler"
+    business_timezone: str = "Asia/Ho_Chi_Minh"
+    airflow_base_url: str = "http://airflow-api-server:8080"
+    airflow_dag_id: str = "reconciliation_ingestion"
+    airflow_username: str | None = None
+    airflow_password: str | None = None
+    airflow_request_timeout_seconds: float = 10.0
 
     # Ingestion Performance Tuning Configurations
     ingest_batch_size: int = 20000

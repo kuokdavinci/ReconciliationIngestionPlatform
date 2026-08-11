@@ -41,11 +41,11 @@ class TestJSONStreamReaderInit:
             JSONStreamReader(txt)
         txt.unlink(missing_ok=True)
 
-    def test_root_must_be_array(self, tmp_path: Path) -> None:
+    def test_root_must_be_array_or_items_envelope(self, tmp_path: Path) -> None:
         path = tmp_path / "obj.json"
         with open(path, "w") as f:
             json.dump({"key": "val"}, f)
-        with pytest.raises(ValueError, match="must be an array"):
+        with pytest.raises(ValueError, match="array or an object"):
             with JSONStreamReader(path):
                 pass
 
@@ -77,6 +77,20 @@ class TestJSONRowIteration:
         with JSONStreamReader(path) as reader:
             rows = list(reader.iter_rows())
         assert rows == [{"id": "A", "val": 1}, {"id": "B", "val": 2}]
+
+    def test_pagination_envelope_iterates_items(self, tmp_path: Path) -> None:
+        path = tmp_path / "page.json"
+        data = {
+            "page": 2,
+            "cursorBefore": "cursor-1",
+            "nextCursor": "cursor-2",
+            "items": [{"id": "VTP-003", "amount": "300000"}],
+        }
+        with open(path, "w") as f:
+            json.dump(data, f)
+        with JSONStreamReader(path) as reader:
+            rows = list(reader.iter_rows())
+        assert rows == [{"id": "VTP-003", "amount": "300000"}]
 
     def test_empty_rows_skipped(self, tmp_path: Path) -> None:
         path = tmp_path / "data.json"

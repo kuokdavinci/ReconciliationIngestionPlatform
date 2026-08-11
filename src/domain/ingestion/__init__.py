@@ -5,8 +5,11 @@ from .checkpoints import (
     CheckpointStatus,
     IngestionCheckpoint,
     IngestionMode,
+    SourceUnitStatus,
+    SourceUnitSummary,
 )
 from .source_units import IngestionOutcome, SourceUnitMetadata
+from .raw_pages import RawIngestionPage, RawPageStatus
 
 from .ports import (
     IngestionFileRepository,
@@ -20,8 +23,12 @@ __all__ = [
     "PartnerTransactionWriter",
     "IngestionOutcome",
     "SourceUnitMetadata",
+    "RawIngestionPage",
+    "RawPageStatus",
     "CheckpointRepository",
     "CheckpointStatus",
     "IngestionCheckpoint",
     "IngestionMode",
+    "SourceUnitStatus",
+    "SourceUnitSummary",
 ]

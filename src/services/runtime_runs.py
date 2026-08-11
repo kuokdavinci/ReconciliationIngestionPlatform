@@ -7,6 +7,7 @@ from src.domain.runtime.models import (
     PartnerRuntimeRun,
     PartnerRuntimeRunStatus,
     PartnerRuntimeTriggerType,
+    RuntimeOrchestrationContext,
 )
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
 
@@ -18,6 +19,13 @@ def serialize_partner_runtime_run(run: PartnerRuntimeRun) -> dict[str, Any]:
         value = data.get(key)
         if isinstance(value, datetime):
             data[key] = value.isoformat()
+    orchestration_context = getattr(run, "orchestration", None)
+    if orchestration_context is not None:
+        orchestration = orchestration_context.model_dump(by_alias=True)
+        logical_date = orchestration.get("logicalDate")
+        if isinstance(logical_date, datetime):
+            orchestration["logicalDate"] = logical_date.isoformat()
+        data["orchestration"] = orchestration
     return data
 
 
@@ -34,6 +42,7 @@ async def create_runtime_run(
     file_name: Optional[str] = None,
     mapping_version: Optional[str] = None,
     validation_state: Optional[str] = None,
+    orchestration: RuntimeOrchestrationContext | dict[str, Any] | None = None,
 ) -> PartnerRuntimeRun:
     repo = PartnerRuntimeRunRepository(db)
     run = PartnerRuntimeRun(
@@ -47,6 +56,7 @@ async def create_runtime_run(
         fileName=file_name,
         mappingVersion=mapping_version,
         validationState=validation_state,
+        orchestration=orchestration,
     )
     await repo.create(run)
     return run
@@ -62,10 +72,13 @@ async def update_runtime_run(
     file_name: Optional[str] = None,
     mapping_version: Optional[str] = None,
     validation_state: Optional[str] = None,
+    orchestration: RuntimeOrchestrationContext | dict[str, Any] | None = None,
     stats: Optional[dict[str, Any]] = None,
     reconciliation_count: Optional[int] = None,
     started_at: Optional[datetime] = None,
     finished_at: Optional[datetime] = None,
+    clear_finished_at: bool = False,
+    attempt_event: Optional[dict[str, Any]] = None,
 ) -> None:
     update: dict[str, Any] = {"updatedAt": datetime.now(timezone.utc)}
     if status is not None:
@@ -80,6 +93,9 @@ async def update_runtime_run(
         update["mappingVersion"] = mapping_version
     if validation_state is not None:
         update["validationState"] = validation_state
+    if orchestration is not None:
+        context = RuntimeOrchestrationContext.model_validate(orchestration)
+        update["orchestration"] = context.model_dump(by_alias=True, mode="json")
     if stats is not None:
         update["stats"] = stats
     if reconciliation_count is not None:
@@ -88,4 +104,11 @@ async def update_runtime_run(
         update["startedAt"] = started_at
     if finished_at is not None:
         update["finishedAt"] = finished_at
-    await PartnerRuntimeRunRepository(db).collection.update_one({"_id": run_id}, {"$set": update})
+    elif clear_finished_at:
+        update["finishedAt"] = None
+    update_operation: dict[str, Any] = {"$set": update}
+    if attempt_event is not None:
+        update_operation["$push"] = {"attemptHistory": attempt_event}
+    await PartnerRuntimeRunRepository(db).collection.update_one(
+        {"_id": run_id}, update_operation
+    )

@@ -1,6 +1,6 @@
 """Tests for Partner Mapping Studio v2 endpoints."""
 
-from fastapi.testclient import TestClient
+from tests.asgi_test_client import TestClient
 from unittest.mock import MagicMock, AsyncMock
 
 def _create_test_app():
@@ -162,4 +162,3 @@ def test_get_version():
     assert response.status_code == 200
     data = response.json()
     assert data["configVersion"] == "v1"
-

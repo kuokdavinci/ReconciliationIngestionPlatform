@@ -70,6 +70,45 @@ class TestReadRawRows:
         p.unlink(missing_ok=True)
         assert rows == [["a", "b"], ["1", "2"]]
 
+    def test_json_pagination_envelope(self) -> None:
+        import json
+        p = _path(".json")
+        data = {
+            "items": [
+                {"id": "VTP-001", "amount": 100},
+                {"id": "VTP-002", "amount": 200},
+            ],
+            "nextCursor": "cursor-1",
+        }
+        with open(p, "w") as f:
+            json.dump(data, f)
+        rows = read_raw_rows(p)
+        p.unlink(missing_ok=True)
+        assert rows == [["VTP-001", "100"], ["VTP-002", "200"]]
+
+    def test_json_pagination_pages_have_stable_structure_rows(self) -> None:
+        import json
+
+        first = _path(".json")
+        second = _path(".json")
+        first.write_text(
+            json.dumps({"items": [{"id": "VTP-001", "amount": 100, "status": "OK"}]}),
+            encoding="utf-8",
+        )
+        second.write_text(
+            json.dumps({"items": [{"id": "VTP-003", "amount": 300, "status": "OK"}]}),
+            encoding="utf-8",
+        )
+
+        first_signature = compute_signature(first)
+        second_signature = compute_signature(second)
+
+        first.unlink(missing_ok=True)
+        second.unlink(missing_ok=True)
+        assert first_signature.headers == ["id", "amount", "status"]
+        assert first_signature.hash == second_signature.hash
+        assert first_signature.sample_rows == [["VTP-001", "100", "OK"]]
+
     def test_unsupported_extension_raises(self) -> None:
         p = _path(".txt")
         p.write_text("a\nb\n", encoding="utf-8")

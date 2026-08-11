@@ -13,6 +13,8 @@ from src.domain.ingestion.checkpoints import (
     CheckpointStatus,
     IngestionCheckpoint,
     IngestionMode,
+    SourceUnitStatus,
+    SourceUnitSummary,
 )
 from src.infrastructure.persistence.mongo_repository import BaseRepository
 
@@ -34,8 +36,180 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
             "mode": mode.value,
         }
 
+    @staticmethod
+    def _unit_timeline_update(
+        checkpoint: IngestionCheckpoint,
+        unit_key: str,
+        *,
+        status: SourceUnitStatus,
+        page: Optional[int] = None,
+        label: Optional[str] = None,
+        cursor_before: Optional[str] = None,
+        cursor_after: Optional[str] = None,
+        attempt_count: Optional[int] = None,
+        last_error: Any = None,
+        error_code: Any = None,
+        retryable: Any = None,
+        next_retry_at: Any = None,
+        started_at: Any = None,
+        completed_at: Any = None,
+        clear_error: bool = False,
+    ) -> list[dict[str, Any]]:
+        entries = list(checkpoint.unit_timeline)
+        index = next((i for i, item in enumerate(entries) if item.unit_key == unit_key), None)
+        current = entries[index] if index is not None else SourceUnitSummary(unitKey=unit_key)
+        updates: dict[str, Any] = {"status": status, "updated_at": datetime.now(UTC)}
+        if page is not None:
+            updates["page"] = page
+        if label is not None:
+            updates["label"] = label
+        if cursor_before is not None:
+            updates["cursor_before"] = cursor_before
+        if cursor_after is not None:
+            updates["cursor_after"] = cursor_after
+        if attempt_count is not None:
+            updates["attempt_count"] = attempt_count
+        if clear_error:
+            updates.update(
+                last_error=None,
+                error_code=None,
+                retryable=None,
+                next_retry_at=None,
+            )
+        else:
+            updates.update(
+                last_error=last_error,
+                error_code=error_code,
+                retryable=retryable,
+                next_retry_at=next_retry_at,
+            )
+        if started_at is not None:
+            updates["started_at"] = started_at
+        updates["completed_at"] = completed_at
+        current = current.model_copy(update=updates)
+        if index is None:
+            entries.append(current)
+        else:
+            entries[index] = current
+        return [entry.model_dump(by_alias=True) for entry in entries]
+
+    @staticmethod
+    def _recovery_event_update(
+        checkpoint: IngestionCheckpoint,
+        *,
+        unit_key: str,
+        status: str,
+        timestamp: Optional[datetime] = None,
+        error_code: Optional[str] = None,
+        message: Optional[str] = None,
+        action: Optional[str] = None,
+        actor: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "eventId": str(uuid4()),
+            "unitKey": unit_key,
+            "status": status,
+            "timestamp": timestamp or datetime.now(UTC),
+        }
+        for key, value in (
+            ("errorCode", error_code),
+            ("message", message),
+            ("action", action),
+            ("actor", actor),
+            ("reason", reason),
+        ):
+            if value is not None:
+                event[key] = value
+        return event
+
     async def find_by_stream(self, *, partner: str, fetch_config_id: str, source_type: str, stream_key: str, mode: IngestionMode = IngestionMode.SCHEDULED) -> Optional[IngestionCheckpoint]:
         return await self.find_one(self._stream_filter(partner=partner, fetch_config_id=fetch_config_id, source_type=source_type, stream_key=stream_key, mode=mode))
+
+    async def find_by_streams(
+        self,
+        identities: list[dict[str, Any]],
+    ) -> list[IngestionCheckpoint]:
+        if not identities:
+            return []
+        filters = [
+            {
+                **self._stream_filter(
+                    partner=identity["partner"],
+                    fetch_config_id=identity["fetchConfigId"],
+                    source_type=identity["sourceType"],
+                    stream_key=identity.get("streamKey", ""),
+                    mode=identity.get("mode", IngestionMode.SCHEDULED),
+                ),
+                **(
+                    {}
+                    if identity.get("streamKey")
+                    else {"streamKey": {"$exists": True}}
+                ),
+            }
+            for identity in identities
+        ]
+        return await self.find_many({"$or": filters})
+
+    async def prepare_manual_retry(
+        self,
+        checkpoint: IngestionCheckpoint,
+        *,
+        operator_id: str,
+        reason: str,
+    ) -> bool:
+        if checkpoint.status != CheckpointStatus.FAILED:
+            return False
+        if not checkpoint.current_unit_key or checkpoint.retryable is not True:
+            return False
+        now = datetime.now(UTC)
+        query = {
+            **self._stream_filter(
+                partner=checkpoint.partner,
+                fetch_config_id=checkpoint.fetch_config_id,
+                source_type=checkpoint.source_type,
+                stream_key=checkpoint.stream_key,
+                mode=checkpoint.mode,
+            ),
+            "currentUnitKey": checkpoint.current_unit_key,
+            "status": CheckpointStatus.FAILED.value,
+            "retryable": True,
+        }
+        update = {
+            "$set": {
+                "nextRetryAt": None,
+                "updatedAt": now,
+                "resolutionMetadata": {
+                    "action": "RETRY",
+                    "reason": reason,
+                    "operatorId": operator_id,
+                    "resolvedAt": now,
+                },
+                "unitTimeline": self._unit_timeline_update(
+                    checkpoint,
+                    checkpoint.current_unit_key,
+                    status=SourceUnitStatus.FAILED,
+                    attempt_count=checkpoint.attempt_count,
+                    last_error=checkpoint.last_error,
+                    error_code=checkpoint.error_code,
+                    retryable=True,
+                    next_retry_at=None,
+                ),
+            },
+            "$push": {
+                "recoveryEvents": self._recovery_event_update(
+                    checkpoint,
+                    unit_key=checkpoint.current_unit_key,
+                    status="RETRY_REQUESTED",
+                    timestamp=now,
+                    action="RETRY",
+                    actor=operator_id,
+                    reason=reason,
+                )
+            },
+        }
+        result = await self.collection.update_one(query, update)
+        return result.modified_count == 1
 
     async def create_or_get(self, checkpoint: IngestionCheckpoint) -> tuple[IngestionCheckpoint, bool]:
         identity = self._stream_filter(partner=checkpoint.partner, fetch_config_id=checkpoint.fetch_config_id, source_type=checkpoint.source_type, stream_key=checkpoint.stream_key, mode=checkpoint.mode)
@@ -70,6 +244,13 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
             raise ValueError("claim_timeout_seconds must be non-negative")
         if max_attempts is not None and max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
+        current_unit = next(
+            (item for item in checkpoint.unit_timeline if item.unit_key == unit_key),
+            None,
+        )
+        # Attempts are bounded per source unit, not across the whole stream.
+        # A successful page must not consume the retry budget of the next page.
+        next_attempt_count = (current_unit.attempt_count + 1) if current_unit else 1
         query = {
             **identity,
             "lastCompletedUnitKey": expected_previous_unit_key,
@@ -108,8 +289,28 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
                 "configVersion": config_version,
                 "sourceEndpoint": source_endpoint,
                 "streamMetadata": stream_metadata or {},
+                "unitTimeline": self._unit_timeline_update(
+                    checkpoint,
+                    unit_key,
+                    status=SourceUnitStatus.PROCESSING,
+                    page=(stream_metadata or {}).get("page"),
+                    label=(stream_metadata or {}).get("label"),
+                    cursor_before=cursor_before,
+                    attempt_count=next_attempt_count,
+                    started_at=now,
+                    completed_at=None,
+                    clear_error=True,
+                ),
+                "attemptCount": next_attempt_count,
             },
-            "$inc": {"attemptCount": 1},
+            "$push": {
+                "recoveryEvents": self._recovery_event_update(
+                    checkpoint,
+                    unit_key=unit_key,
+                    status=SourceUnitStatus.PROCESSING.value,
+                    timestamp=now,
+                )
+            },
         }
         raw = await self.collection.find_one_and_update(query, update, return_document=ReturnDocument.AFTER)
         if raw is not None:
@@ -127,16 +328,27 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
                 "currentUnitKey": existing.current_unit_key,
                 "status": CheckpointStatus.PROCESSING.value,
             }
+            stale_update = {
+                "status": CheckpointStatus.BLOCKED.value,
+                "retryable": False,
+                "blockedAt": now,
+                "blockedReason": "Maximum source-unit attempts exhausted.",
+                "updatedAt": now,
+            }
+            if existing.current_unit_key:
+                stale_update["unitTimeline"] = self._unit_timeline_update(
+                    existing,
+                    existing.current_unit_key,
+                    status=SourceUnitStatus.BLOCKED,
+                    last_error="Maximum source-unit attempts exhausted.",
+                    error_code=existing.error_code,
+                    retryable=False,
+                    next_retry_at=None,
+                )
             await self.collection.update_one(
                 stale_query,
                 {
-                    "$set": {
-                        "status": CheckpointStatus.BLOCKED.value,
-                        "retryable": False,
-                        "blockedAt": now,
-                        "blockedReason": "Maximum source-unit attempts exhausted.",
-                        "updatedAt": now,
-                    }
+                    "$set": stale_update
                 },
             )
         return existing, False
@@ -147,7 +359,43 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
         blocked = not retryable or (max_attempts is not None and checkpoint.attempt_count >= max_attempts)
         now = datetime.now(UTC)
         query = {**self._stream_filter(partner=checkpoint.partner, fetch_config_id=checkpoint.fetch_config_id, source_type=checkpoint.source_type, stream_key=checkpoint.stream_key, mode=checkpoint.mode), "currentUnitKey": unit_key, "status": CheckpointStatus.PROCESSING.value, "claimId": checkpoint.claim_id}
-        result = await self.collection.update_one(query, {"$set": {"status": CheckpointStatus.BLOCKED.value if blocked else CheckpointStatus.FAILED.value, "lastError": error, "errorCode": error_code, "retryable": retryable, "nextRetryAt": None if blocked else next_retry_at, "blockedAt": now if blocked else None, "blockedReason": error if blocked else None, "lastErrorMetadata": error_metadata or {}, "updatedAt": now}})
+        transition_status = SourceUnitStatus.BLOCKED if blocked else SourceUnitStatus.FAILED
+        result = await self.collection.update_one(
+            query,
+            {
+                "$set": {
+                    "status": CheckpointStatus.BLOCKED.value if blocked else CheckpointStatus.FAILED.value,
+                    "lastError": error,
+                    "errorCode": error_code,
+                    "retryable": retryable,
+                    "nextRetryAt": None if blocked else next_retry_at,
+                    "blockedAt": now if blocked else None,
+                    "blockedReason": error if blocked else None,
+                    "lastErrorMetadata": error_metadata or {},
+                    "updatedAt": now,
+                    "unitTimeline": self._unit_timeline_update(
+                        checkpoint,
+                        unit_key,
+                        status=transition_status,
+                        attempt_count=checkpoint.attempt_count,
+                        last_error=error,
+                        error_code=error_code,
+                        retryable=retryable,
+                        next_retry_at=None if blocked else next_retry_at,
+                    ),
+                },
+                "$push": {
+                    "recoveryEvents": self._recovery_event_update(
+                        checkpoint,
+                        unit_key=unit_key,
+                        status=transition_status.value,
+                        timestamp=now,
+                        error_code=error_code,
+                        message=error,
+                    )
+                },
+            },
+        )
         return result.modified_count == 1
 
     async def release_for_review(
@@ -186,7 +434,27 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
                     "blockedReason": None,
                     "startedAt": None,
                     "updatedAt": now,
-                }
+                    "unitTimeline": self._unit_timeline_update(
+                        checkpoint,
+                        unit_key,
+                        status=SourceUnitStatus.WAITING_REVIEW,
+                        attempt_count=checkpoint.attempt_count,
+                        last_error=reason,
+                        error_code="configuration_approval_required",
+                        retryable=None,
+                        next_retry_at=None,
+                    ),
+                },
+                "$push": {
+                    "recoveryEvents": self._recovery_event_update(
+                        checkpoint,
+                        unit_key=unit_key,
+                        status=SourceUnitStatus.WAITING_REVIEW.value,
+                        timestamp=now,
+                        error_code="configuration_approval_required",
+                        message=reason,
+                    )
+                },
             },
         )
         return result.modified_count == 1
@@ -196,13 +464,91 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
             raise ValueError("action must be RETRY or SKIP")
         query = {**self._stream_filter(partner=checkpoint.partner, fetch_config_id=checkpoint.fetch_config_id, source_type=checkpoint.source_type, stream_key=checkpoint.stream_key, mode=checkpoint.mode), "currentUnitKey": unit_key, "status": CheckpointStatus.BLOCKED.value}
         now = datetime.now(UTC)
-        result = await self.collection.update_one(query, {"$set": {"status": CheckpointStatus.DISCOVERED.value, "retryable": True, "nextRetryAt": None, "blockedAt": None, "blockedReason": None, "resolutionMetadata": {"action": action, "reason": reason, "operatorId": operator_id, "resolvedAt": now}, "updatedAt": now}})
+        result = await self.collection.update_one(
+            query,
+            {
+                "$set": {
+                    "status": CheckpointStatus.DISCOVERED.value,
+                    "retryable": True,
+                    "nextRetryAt": None,
+                    "blockedAt": None,
+                    "blockedReason": None,
+                    "resolutionMetadata": {
+                        "action": action,
+                        "reason": reason,
+                        "operatorId": operator_id,
+                        "resolvedAt": now,
+                    },
+                    "updatedAt": now,
+                    "unitTimeline": self._unit_timeline_update(
+                        checkpoint,
+                        unit_key,
+                        status=SourceUnitStatus.PENDING,
+                        last_error=None,
+                        error_code=None,
+                        retryable=True,
+                        next_retry_at=None,
+                    ),
+                },
+                "$push": {
+                    "recoveryEvents": self._recovery_event_update(
+                        checkpoint,
+                        unit_key=unit_key,
+                        status="RESOLVED",
+                        timestamp=now,
+                        action=action,
+                        actor=operator_id,
+                        reason=reason,
+                    )
+                },
+            },
+        )
         return result.modified_count == 1
 
     async def mark_completed(self, checkpoint: IngestionCheckpoint, *, unit_key: str, cursor_after: Optional[str] = None, high_water_mark: Optional[dict[str, Any]] = None) -> bool:
         query = {**self._stream_filter(partner=checkpoint.partner, fetch_config_id=checkpoint.fetch_config_id, source_type=checkpoint.source_type, stream_key=checkpoint.stream_key, mode=checkpoint.mode), "currentUnitKey": unit_key, "status": CheckpointStatus.PROCESSING.value, "claimId": checkpoint.claim_id}
         now = datetime.now(UTC)
-        result = await self.collection.update_one(query, {"$set": {"status": CheckpointStatus.COMPLETED.value, "lastCompletedUnitKey": unit_key, "cursorAfter": cursor_after, "highWaterMark": high_water_mark, "lastError": None, "errorCode": None, "retryable": None, "nextRetryAt": None, "blockedAt": None, "blockedReason": None, "resolutionMetadata": {}, "completedAt": now, "updatedAt": now, "lastErrorMetadata": {}}})
+        skipped = (checkpoint.resolution_metadata or {}).get("action") == "SKIP"
+        completion_status = SourceUnitStatus.SKIPPED if skipped else SourceUnitStatus.COMPLETED
+        result = await self.collection.update_one(
+            query,
+            {
+                "$set": {
+                    "status": CheckpointStatus.COMPLETED.value,
+                    "lastCompletedUnitKey": unit_key,
+                    "cursorAfter": cursor_after,
+                    "highWaterMark": high_water_mark,
+                    "streamEnded": (high_water_mark or {}).get("hasMore") is False,
+                    "lastError": None,
+                    "errorCode": None,
+                    "retryable": None,
+                    "nextRetryAt": None,
+                    "blockedAt": None,
+                    "blockedReason": None,
+                    "resolutionMetadata": {},
+                    "completedAt": now,
+                    "updatedAt": now,
+                    "lastErrorMetadata": {},
+                    "unitTimeline": self._unit_timeline_update(
+                        checkpoint,
+                        unit_key,
+                        status=completion_status,
+                        attempt_count=checkpoint.attempt_count,
+                        cursor_after=cursor_after,
+                        clear_error=True,
+                        completed_at=now,
+                    ),
+                },
+                "$push": {
+                    "recoveryEvents": self._recovery_event_update(
+                        checkpoint,
+                        unit_key=unit_key,
+                        status=completion_status.value,
+                        timestamp=now,
+                    )
+                },
+            },
+        )
         return result.modified_count == 1
 
     async def advance(self, checkpoint: IngestionCheckpoint, *, unit_key: str) -> bool:

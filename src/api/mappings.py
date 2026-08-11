@@ -422,7 +422,6 @@ async def _create_mapping_proposal_from_source_file(
     scope_meta = await classify_scope(
         _get_db(request),
         partner=partner,
-        file_name=source_file_path.name,
         reconciliation_date=None,
     )
     validation_gates = [

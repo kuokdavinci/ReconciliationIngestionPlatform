@@ -54,6 +54,7 @@ async def test_fetch_pagination_persists_each_page_and_source_identity(tmp_path)
     assert len(result.units) == 3
     assert len({unit["sourceUnitKey"] for unit in result.units}) == 3
     assert len({unit["localPath"] for unit in result.units}) == 3
+    assert result.units[0]["fetchMetadata"]["sampleRows"] == [{"id": 1}]
     assert result.metadata["pagination"]["items"] == [
         {"id": 1},
         {"id": 2},

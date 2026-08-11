@@ -17,6 +17,18 @@ const gateStatusSeverity: Record<string, "low" | "medium" | "high" | "critical">
   fail: "critical",
 };
 
+function formatBusinessDate(value?: string) {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value.slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(parsed);
+}
+
 export function ReviewSummaryDrawer({ packet, onOpenReview }: Props) {
   if (!packet) {
     return (
@@ -77,7 +89,7 @@ export function ReviewSummaryDrawer({ packet, onOpenReview }: Props) {
           <div className={styles.metaRow}>
             <strong className={styles.metaLabel}>Reconciliation date:</strong>
             <span className={styles.metaValue}>
-              {packet.reconciliationDate ? packet.reconciliationDate.slice(0, 10) : "-"}
+              {formatBusinessDate(packet.reconciliationDate)}
             </span>
           </div>
         </div>

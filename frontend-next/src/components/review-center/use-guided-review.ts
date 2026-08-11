@@ -185,10 +185,11 @@ export function useGuidedReview({
     }
   }, [localPacket, selectedScope]);
 
-  const handleMappingChange = useCallback((sourceColumn: number, newPath: string) => {
+  const handleMappingChange = useCallback((sourceReference: number | string, newPath: string) => {
     setFieldMappings((prev) =>
       prev.map((mapping) => {
-        if (Number(mapping.column) === sourceColumn) {
+        const mappingReference = mapping.sourceField || mapping.column;
+        if (String(mappingReference) === String(sourceReference)) {
           return {
             ...mapping,
             path: newPath,
@@ -339,13 +340,19 @@ export function useGuidedReview({
 
   const sourceBackedMappings = useMemo(() => {
     return fieldMappings.filter(
-      (m) => m.type !== "CONSTANT" && !(m.mapping && (m.column === null || m.column === undefined || m.column === ""))
+      (m) => {
+        const hasSource = Boolean(m.sourceField) || (m.column !== null && m.column !== undefined && m.column !== "");
+        return m.type !== "CONSTANT" && (!m.mapping || hasSource);
+      }
     );
   }, [fieldMappings]);
 
   const constantMappings = useMemo(() => {
     return fieldMappings.filter(
-      (m) => m.type === "CONSTANT" || (m.mapping && (m.column === null || m.column === undefined || m.column === ""))
+      (m) => {
+        const hasSource = Boolean(m.sourceField) || (m.column !== null && m.column !== undefined && m.column !== "");
+        return m.type === "CONSTANT" || (Boolean(m.mapping) && !hasSource);
+      }
     );
   }, [fieldMappings]);
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ReviewPacket } from "@/types/review-center";
@@ -14,6 +15,14 @@ export interface ScopeClassificationInfo {
   reasoning?: string;
   probabilities?: Record<string, number>;
   internalDbRecordCount?: number;
+  internalPreview?: Array<{
+    id: string;
+    partnerTxnId: string;
+    amount: string;
+    currency: string;
+    status: string;
+    transactionTime: string;
+  }>;
   receivedRecordCount?: number;
 }
 
@@ -42,12 +51,17 @@ export function GuidedReviewScopeStep({
   onCancel,
   onRetry,
 }: Props) {
+  const [partnerExpanded, setPartnerExpanded] = useState(false);
+  const [internalExpanded, setInternalExpanded] = useState(false);
   if (!localPacket) return null;
 
   const scopeConfidence = Math.round((scopeClassification?.probabilities?.[selectedScope] ?? 0) * 100);
   const scopeBorderColor = scopeConfidence >= 85 ? "#10b981" : scopeConfidence >= 60 ? "#f59e0b" : "#ef4444";
   const scopeBgColor = scopeConfidence >= 85 ? "rgba(16, 185, 129, 0.1)" : scopeConfidence >= 60 ? "rgba(245, 158, 11, 0.1)" : "rgba(239, 68, 68, 0.1)";
   const scopeLabelColor = scopeConfidence >= 85 ? "#10b981" : scopeConfidence >= 60 ? "#f59e0b" : "#ef4444";
+  const partnerPreview = (localPacket.samplePreview ?? []).slice(0, 5);
+  const internalPreview = (scopeClassification?.internalPreview ?? []).slice(0, 5);
+  const partnerColumns = Array.from(new Set(partnerPreview.flatMap((row) => Object.keys(row.values))));
 
   return (
     <div className={styles.modalSection}>
@@ -85,6 +99,117 @@ export function GuidedReviewScopeStep({
               <p className={styles.introText} style={{ marginTop: 4 }}>Records read from the uploaded file</p>
             </div>
           </div>
+
+          {partnerPreview.length > 0 && (
+            <section className={styles.sectionCard} style={{ marginTop: 16 }}>
+              <div className={styles.sectionCardHeading}>
+                <div>
+                  <h5 className={styles.sectionCardTitle}>Partner file evidence</h5>
+                  <p className={styles.sectionCardCopy}>
+                    {partnerPreview.length} sample rows are attached to this packet. Expand to preview the partner data.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label={partnerExpanded ? "Hide partner file evidence" : "Show partner file evidence"}
+                  aria-expanded={partnerExpanded}
+                  onClick={() => setPartnerExpanded((expanded) => !expanded)}
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    {partnerExpanded ? (
+                      <>
+                        <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                        <circle cx="12" cy="12" r="2.5" />
+                      </>
+                    ) : (
+                      <>
+                        <path d="M3 3l18 18" />
+                        <path d="M10.6 5.2A10.4 10.4 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3.1 3.8" />
+                        <path d="M6.2 6.3C3.9 8 2.5 12 2.5 12s3.5 7 9.5 7a9.8 9.8 0 0 0 3.4-.6" />
+                      </>
+                    )}
+                  </svg>
+                </button>
+              </div>
+              {partnerExpanded && (
+                <div style={{ overflowX: "auto" }}>
+                  <table className={styles.fieldTable}>
+                    <thead>
+                      <tr>
+                        <th>Row</th>
+                        {partnerColumns.map((column) => <th key={column}>{column}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {partnerPreview.map((row) => (
+                        <tr key={row.id}>
+                          <td>{row.id}</td>
+                          {partnerColumns.map((column) => (
+                            <td key={column}>{row.values[column] == null || row.values[column] === "" ? "-" : String(row.values[column])}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          )}
+
+          {internalPreview.length > 0 && (
+            <section className={styles.sectionCard} style={{ marginTop: 16 }}>
+              <div className={styles.sectionCardHeading}>
+                <div>
+                  <h5 className={styles.sectionCardTitle}>Internal DB evidence</h5>
+                  <p className={styles.sectionCardCopy}>
+                    {internalPreview.length} sample rows from {scopeClassification.internalDbRecordCount ?? 0} internal transactions for the business date. Expand to preview the internal data.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label={internalExpanded ? "Hide internal DB evidence" : "Show internal DB evidence"}
+                  aria-expanded={internalExpanded}
+                  onClick={() => setInternalExpanded((expanded) => !expanded)}
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    {internalExpanded ? (
+                      <>
+                        <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                        <circle cx="12" cy="12" r="2.5" />
+                      </>
+                    ) : (
+                      <>
+                        <path d="M3 3l18 18" />
+                        <path d="M10.6 5.2A10.4 10.4 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3.1 3.8" />
+                        <path d="M6.2 6.3C3.9 8 2.5 12 2.5 12s3.5 7 9.5 7a9.8 9.8 0 0 0 3.4-.6" />
+                      </>
+                    )}
+                  </svg>
+                </button>
+              </div>
+              {internalExpanded && (
+                <div style={{ overflowX: "auto" }}>
+                  <table className={styles.fieldTable}>
+                    <thead>
+                      <tr><th>Partner transaction</th><th>Amount</th><th>Status</th><th>Transaction time</th></tr>
+                    </thead>
+                    <tbody>
+                      {internalPreview.map((row) => (
+                        <tr key={row.id || row.partnerTxnId}>
+                          <td>{row.partnerTxnId || "-"}</td>
+                          <td>{row.amount} {row.currency}</td>
+                          <td>{row.status || "-"}</td>
+                          <td>{row.transactionTime || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          )}
 
           <div className={styles.scopeCard} style={{ borderColor: scopeBorderColor, backgroundColor: scopeBgColor }}>
             <div className={styles.scopeHeader}>

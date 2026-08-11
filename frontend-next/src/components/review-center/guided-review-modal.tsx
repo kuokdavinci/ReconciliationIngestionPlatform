@@ -112,6 +112,8 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
 
       {step === 2 && (
         <GuidedReviewMappingStep
+          packet={localPacket}
+          packetId={localPacket._id}
           aiMapping={aiMapping}
           aiMappingLoading={aiMappingLoading}
           aiMappingError={aiMappingError}

@@ -1,21 +1,25 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ScheduleJob } from "@/types/schedules";
+import { ScheduleRecoverySummary } from "./schedule-recovery-summary";
 import styles from "./schedules.module.css";
 
 interface Props {
   jobs: ScheduleJob[];
   onRunJob: (partner: string) => void;
+  onRetryRecovery?: (partner: string) => void;
+  onViewRecovery?: (job: ScheduleJob) => void;
   runningPartners?: Record<string, boolean>;
+  retryingRecoveryPartners?: Record<string, boolean>;
+  emptyMessage?: string;
 }
 
-export function ScheduleTable({ jobs, onRunJob, runningPartners = {} }: Props) {
+export function ScheduleTable({ jobs, onRunJob, onRetryRecovery, onViewRecovery, runningPartners = {}, retryingRecoveryPartners = {}, emptyMessage }: Props) {
   if (jobs.length === 0) {
     return (
       <div style={{ padding: 24, textAlign: "center", color: "var(--text-muted)" }}>
-        No enabled automation jobs found.
+        {emptyMessage || "No enabled automation jobs found."}
       </div>
     );
   }
@@ -39,34 +43,46 @@ export function ScheduleTable({ jobs, onRunJob, runningPartners = {} }: Props) {
               <code style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{job.schedule}</code>
             </td>
             <td className={styles.cell}>{job.destination}</td>
-            <td className={styles.cell}>
-              <div className={styles.statusCell}>
-                <div className={styles.statusBadges}>
-                {job.enabled ? <Badge severity="low">Enabled</Badge> : <Badge severity="critical">Disabled</Badge>}
-                <Badge severity={job.status === "HEALTHY" ? "low" : "medium"}>{job.status}</Badge>
-                {job.duplicateOutcome && (
-                  <Badge severity="neutral">
-                    {job.duplicateOutcome === "FILE_DUPLICATE" ? "Safe duplicate" : job.duplicateOutcome === "FETCH_UNIT_REPLAY" ? "Fetch replay" : "No new file"}
-                  </Badge>
-                )}
-                {job.hasPendingFile && <Badge severity="medium">Pending file</Badge>}
-                </div>
-                <div className={styles.statusText}>{job.duplicateMessage || job.statusMessage}</div>
-                {job.duplicateOutcome && (
-                  <div className={styles.statusText}>
-                    {job.duplicateOutcome === "NO_NEW_FILE"
-                      ? "No file was available; ingestion and reconciliation were skipped."
-                      : "Ingestion and reconciliation were skipped safely for this schedule run."}
-                  </div>
-                )}
-              </div>
+            <td className={`${styles.cell} ${styles.statusCell}`}>
+              <ScheduleRecoverySummary job={job} />
             </td>
             <td className={styles.cell}>
-              <div className={styles.actionRow}>
-                <Badge severity="neutral">{job.pendingReviewPackets ?? 0} pending</Badge>
-                <Button variant="secondary" onClick={() => onRunJob(job.partner)} disabled={Boolean(runningPartners[job.partner])}>
+              <div className={styles.actionCell}>
+                <span className={styles.pendingMeta}>{job.pendingReviewPackets ?? 0} pending</span>
+                <div className={styles.actionRow}>
+                {onRetryRecovery && job.recovery?.retryable === true && (
+                  <Button
+                    variant="primary"
+                    onClick={() => onRetryRecovery(job.partner)}
+                    disabled={Boolean(retryingRecoveryPartners[job.partner]) || (
+                      Boolean(job.activeRuntimeRun)
+                      && job.status !== "RETRYING"
+                      && job.latestRuntimeRun?.orchestration?.taskState !== "up_for_retry"
+                    )}
+                  >
+                    {retryingRecoveryPartners[job.partner]
+                      ? "Retrying…"
+                      : job.status === "RETRYING" || job.latestRuntimeRun?.orchestration?.taskState === "up_for_retry"
+                        ? "Manual retry"
+                        : "Retry"}
+                  </Button>
+                )}
+                {onViewRecovery && job.recovery && job.recovery.status !== "IDLE" && (
+                  <Button variant="tertiary" onClick={() => onViewRecovery(job)}>
+                    View recovery
+                  </Button>
+                )}
+                <Button
+                  variant="secondary"
+                  onClick={() => onRunJob(job.partner)}
+                  disabled={Boolean(runningPartners[job.partner])
+                    || Boolean(job.activeRuntimeRun)
+                    || job.recovery?.status === "WAITING_REVIEW"
+                    || (job.recovery?.status === "FAILED" && job.recovery.retryable === true)}
+                >
                   {runningPartners[job.partner] ? "Running..." : "Run Now"}
                 </Button>
+                </div>
               </div>
             </td>
           </tr>

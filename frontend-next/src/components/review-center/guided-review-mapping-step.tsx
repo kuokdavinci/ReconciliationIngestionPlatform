@@ -2,6 +2,8 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import type { ReviewPacket } from "@/types/review-center";
+import { GuidedReviewRawStreamPanel } from "./guided-review-raw-stream-panel";
 import styles from "./review-center.module.css";
 
 export interface FieldMappingItem {
@@ -21,6 +23,8 @@ export interface AiMappingData {
 }
 
 interface Props {
+  packet: ReviewPacket;
+  packetId: string;
   aiMapping: AiMappingData | null;
   aiMappingLoading: boolean;
   aiMappingError: string;
@@ -29,12 +33,14 @@ interface Props {
   constantMappings: FieldMappingItem[];
   fieldMappings: FieldMappingItem[];
   isSavingMapping: boolean;
-  onMappingChange: (sourceColumn: number, newPath: string) => void;
+  onMappingChange: (sourceReference: number | string, newPath: string) => void;
   onSaveMapping: () => void;
   onBack: () => void;
 }
 
 export function GuidedReviewMappingStep({
+  packet,
+  packetId,
   aiMapping,
   aiMappingLoading,
   aiMappingError,
@@ -47,12 +53,32 @@ export function GuidedReviewMappingStep({
   onSaveMapping,
   onBack,
 }: Props) {
+  const highlightedColumns = Array.from(new Set(
+    sourceBackedMappings.flatMap((mapping) => {
+      const columns: string[] = [];
+      if (mapping.sourceField) columns.push(mapping.sourceField);
+      const sourceColumn = Number(mapping.column);
+      if (Number.isInteger(sourceColumn) && sourceColumn > 0) {
+        columns.push(`Column ${sourceColumn}`);
+        if (sigHeaders[sourceColumn - 1]) columns.push(sigHeaders[sourceColumn - 1]);
+      }
+      return columns;
+    }),
+  ));
+
   return (
     <div className={styles.modalSection}>
       <div>
         <h4 className={styles.modalTitle}>Draft Mapping Review</h4>
         <p className={styles.introText}>Review the AI proposal and adjust the partner field mapping before runtime validation.</p>
       </div>
+
+      <GuidedReviewRawStreamPanel
+        key={packetId}
+        packet={packet}
+        packetId={packetId}
+        highlightedColumns={highlightedColumns}
+      />
 
       {aiMappingLoading && (
         <div className={styles.loadingBlock}>
@@ -132,8 +158,9 @@ export function GuidedReviewMappingStep({
               <tbody>
                 {sourceBackedMappings.map((m: FieldMappingItem, idx: number) => {
                   const sourceCol = Number(m.column);
+                  const sourceReference = m.sourceField || (sourceCol > 0 ? sourceCol : `source-${idx}`);
                   const headerLabel = sourceCol > 0 && sigHeaders[sourceCol - 1] ? sigHeaders[sourceCol - 1] : (m.sourceField || `Column ${sourceCol}`);
-                  const populateVia = m.type === "CONSTANT" ? "Constant" : sourceCol > 0 ? `Source column ${sourceCol}` : "Source column";
+                  const populateVia = m.type === "CONSTANT" ? "Constant" : m.sourceField ? `Source field ${m.sourceField}` : sourceCol > 0 ? `Source column ${sourceCol}` : "Source";
 
                   return (
                     <tr key={idx}>
@@ -143,7 +170,7 @@ export function GuidedReviewMappingStep({
                         <select
                           aria-label="Canonical field mapping"
                           value={m.path || ""}
-                          onChange={(e) => onMappingChange(sourceCol, e.target.value)}
+                          onChange={(e) => onMappingChange(sourceReference, e.target.value)}
                           style={{
                             width: "100%",
                             background: "rgba(0,0,0,0.3)",

@@ -24,6 +24,10 @@ jobs:
   frontend:
     name: Frontend lint, build and interactions
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: true
+      NEXT_TELEMETRY_DISABLED: "1"
     defaults:
       run:
         working-directory: frontend-next
@@ -46,13 +50,13 @@ jobs:
         run: npm run lint
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
       - name: Build production bundle
-        run: npm run build -- --webpack
+        run: npm run build
 
       - name: Install Chromium for Playwright
-        run: npx playwright install --with-deps chromium
+        run: npm run playwright:install
 
       - name: Run frontend interaction tests
         run: npm run test:e2e

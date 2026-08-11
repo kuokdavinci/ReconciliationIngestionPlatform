@@ -26,6 +26,8 @@ Milestone mới: hoàn thiện độ tin cậy của fetch/ingestion pipeline. P
 - [MOMO E2E Test Guide](phase-2/momo-e2e-test-guide.md)
 - [Sprint 2 — Incremental Processing & Recovery](phase-2/sprint-2-incremental-recovery.md)
 - [Sprint 2 — Evaluation Execution Run](phase-2/sprint-2-eval-run.md)
+- [Sprint 2.5 — Airflow Pilot & Migration Runbook](phase-2/sprint-2.5-airflow-migration.md)
+- [Sprint 2 / 2.5 — Recovery Hardening Progress](phase-2/sprint-2.6-recovery-hardening.md)
 - [Pagination, Replay & Failure/Resume Example](phase-2/ingestion-pagination-example.md)
 - [Sprint 3 — Data Quality & Quarantine](phase-2/sprint-3-data-quality.md)
 - [Sprint 4 — Observability](phase-2/sprint-4-observability.md)
@@ -33,4 +35,8 @@ Milestone mới: hoàn thiện độ tin cậy của fetch/ingestion pipeline. P
 
 ## Scope boundary
 
-Các tài liệu Phase 2 chỉ đề xuất thay đổi ở fetchers, scheduler, ingestion pipeline, validation, persistence, models và runtime observability. `src/reconciliation/`, `frontend-next/` và `src/analysis/` không thuộc milestone này.
+Phase 2 tập trung vào fetchers, scheduler/orchestration, ingestion pipeline,
+validation, persistence và runtime observability. Sprint 2/2.5 cũng ghi nhận
+các integration contract cần thiết với reconciliation và frontend review/recovery;
+đây không phải là một rewrite của `src/reconciliation/`, `frontend-next/` hay
+`src/analysis/`.

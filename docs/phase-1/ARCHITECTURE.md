@@ -1,6 +1,6 @@
 # Architecture
 
-**Cập nhật lần cuối:** 2026-06-23
+**Cập nhật lần cuối:** 2026-08-11
 
 ## Tổng quan
 
@@ -16,8 +16,12 @@ Nền tảng tiếp nhận file đối tác, chuẩn hóa thành các bản giao
   - Active Next.js + TypeScript dashboard that communicates with FastAPI through `/api`
 - `frontend/`
   - Legacy Vite dashboard retained as reference only
-- `src/scheduler/scheduler.py:PartnerDataScheduler`
-  - APScheduler-based daemon cho partner fetch automation
+- `src/scheduler/jobs.py`
+  - APScheduler job implementation cho partner fetch automation
+- `src/application/automation/`
+  - Shared orchestration contracts dùng bởi API, APScheduler và Airflow
+- `dags/reconciliation_ingestion.py`
+  - Airflow control-plane DAG cho stream selection và execution
 
 ## Backend Subsystems
 
@@ -144,16 +148,13 @@ API hiện đang đăng ký các router groups sau (xem `src/api/__init__.py`):
 
 ## Data Stores
 
-MongoDB and PostgreSQL are dual persistence stores. MongoDB handles configs, review packets, audit events, and flexible document storage. PostgreSQL (via `asyncpg` + SQLAlchemy) handles bulk transactional data — ingestion uses `COPY` for high-speed writes, and reconciliation uses SQL joins for in-database matching. Indexes được apply tại startup bởi `src/models/indexes.py` (MongoDB) và `src/models/postgres.py:init_postgres_db` (PostgreSQL).
+MongoDB and PostgreSQL are dual persistence stores. MongoDB handles configs, review packets, audit events, and flexible document storage. PostgreSQL (via `asyncpg` + SQLAlchemy) handles bulk transactional data — ingestion uses `COPY` for high-speed writes, and reconciliation uses SQL joins for in-database matching. MongoDB indexes được apply bởi `src/models/indexes.py`; PostgreSQL schema/indexes được quản lý bằng Alembic trong `alembic/versions/` và kiểm tra qua `src/models/postgres.py`.
 
-### Collections
+### MongoDB documents
 
 | Collection | Purpose | Key models |
 |---|---|---|
 | `reconciliation_file` | File metadata, processing status, scope type | `ReconciliationFile` |
-| `data_container` | Partner canonical records (ingested rows) | `DataContainer` |
-| `internal_transaction` | Internal/backend transaction records | `InternalTransaction` |
-| `reconciliation_result` | Reconciliation match/mismatch results | `ReconciliationResult` |
 | `reconciliation_mapping_config` | Field mapping configs (approved + pending) | `MappingConfig` |
 | `review_packet` | Review packets for approval workflows | `ReviewPacket` |
 | `copilot_action` | Copilot action tracking | `CopilotAction` |
@@ -163,7 +164,18 @@ MongoDB and PostgreSQL are dual persistence stores. MongoDB handles configs, rev
 | `partner_runtime_run` | Unified runtime visibility (scheduler/manual/post-approval) | `PartnerRuntimeRun` |
 | `reconciliation_review_record` | Review notes and resolution state per record | `ReconciliationReviewRecord` |
 
-Index definitions chi tiết xem tại `src/models/indexes.py`.
+MongoDB index definitions chi tiết xem tại `src/models/indexes.py`.
+
+### PostgreSQL tables
+
+| Table | Purpose | Main adapter |
+|---|---|---|
+| `partner_transaction` | Canonical partner transactions | `DataContainerRepository` |
+| `internal_transaction` | Internal source-of-truth transactions | `InternalTransactionRepository` |
+| `reconciliation_result` | Reconciliation match/mismatch results | `ReconciliationResultRepository` |
+
+PostgreSQL indexes and schema revisions are defined in `alembic/versions/` and
+mirrored by `src/infrastructure/persistence/postgres_schema.py`.
 
 ## Frontend Shape
 
@@ -197,4 +209,4 @@ The old `frontend/` directory is legacy/reference only.
 
 ---
 
-*Architecture analysis: 2026-06-16*
+*Architecture analysis: 2026-08-11*

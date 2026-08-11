@@ -17,3 +17,17 @@
 - Last completed unit: `page:3`
 - Cursor after: `None`
 - Duplicate ingestion keys: `0`
+
+## Operator recovery UI demo
+
+Playwright chạy độc lập với backend bằng deterministic API mock:
+
+1. `/schedules` hiển thị ViettelPay `Recovery: FAILED`, `page:1` đã checkpoint,
+   `page:2` lỗi `fetch_timeout`, `page:3` ở trạng thái `PENDING`.
+2. Operator mở `View recovery`, kiểm tra timeline và bấm `Retry now`.
+3. UI nhận trạng thái `PROCESSING`, sau đó refresh bounded chuyển sang
+   `COMPLETED`, checkpoint cuối `page:3` và `Duplicate count: 0`.
+4. `Escape` đóng side panel; replay được biểu diễn là `REPLAYED`, không phải
+   failure.
+
+Scenario: `frontend-next/e2e/dashboard-interactions.spec.ts` — `1 passed`.

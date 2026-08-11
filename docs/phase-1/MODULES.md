@@ -87,7 +87,7 @@ Matching và classification logic cho partner vs internal records.
 
 **Files:**
 - `engine.py` — `ReconciliationEngine` với streaming, batch scope resolution, và buffered writes
-- `scope.py` — Scope classification helpers qua filename hints và same-day file count
+- `scope.py` — Business-key scope classification helpers và same-day evidence
 
 ### `src/api`
 

@@ -22,6 +22,7 @@ flowchart LR
     S[Partner file / API / SFTP]
     F[src/fetchers]
     J[src/scheduler]
+    AF[Airflow DAG/control plane]
     P[src/pipeline]
     A[src/application]
     D[src/domain]
@@ -33,6 +34,7 @@ flowchart LR
     UI[Next.js dashboard]
 
     S --> F --> J --> P
+    AF --> A
     P --> A
     P --> I
     A --> D
@@ -55,7 +57,7 @@ flowchart LR
 | Infrastructure | MongoDB/PostgreSQL repositories and composition roots | `src/infrastructure/` |
 | Ingestion pipeline | File claims, row processing, metrics and lifecycle state | `src/pipeline/` |
 | Fetchers | Filedrop, SFTP and API retrieval | `src/fetchers/` |
-| Scheduler | Partner jobs, source units and runtime execution | `src/scheduler/` |
+| Scheduler/orchestration | Partner jobs, source units and runtime execution | `src/scheduler/`, `src/application/automation/`, `dags/` |
 | Reconciliation | Scope classification, matching and result persistence | `src/reconciliation/` |
 | Dashboard | Review, mapping, schedules and operational views | `frontend-next/src/` |
 
@@ -100,7 +102,7 @@ Review packets coordinate scope analysis, mapping review, runtime validation and
 
 ### 4. Scheduled automation
 
-APScheduler loads enabled fetch configurations, selects the correct fetcher, starts ingestion and exposes job state through `/api/v1/automation`.
+The default Compose stack uses Airflow as the application orchestrator. APScheduler remains available behind the explicit `apscheduler` profile as a rollback/diagnostic path. Both schedulers reuse the same application entrypoint, checkpoint and runtime contracts; only one owner may run a given stream at a time. Job state remains available through `/api/v1/automation`.
 
 ## Reliability contracts
 
@@ -119,8 +121,10 @@ APScheduler loads enabled fetch configurations, selects the correct fetcher, sta
 |---|---|
 | Foundation and deterministic reconciliation | Implemented |
 | Sprint 1 — idempotency | Implemented and benchmarked |
-| Sprint 2 — incremental processing and recovery | Active development on `phase2/sprint-2` |
-| Sprint 3 — data quality and quarantine | Planned/partially documented |
+| Sprint 2 — incremental processing and recovery | Implemented with ongoing hardening and regression verification |
+| Sprint 2.5 — Airflow pilot | Local pilot implemented; scheduled cutover remains controlled by `AIRFLOW_GLOBAL_SCHEDULE` |
+| Sprint 2.6 — recovery hardening | Implemented in the current branch; live deployment evidence remains environment-dependent |
+| Sprint 3 — data quality and quarantine | Documented and partially implemented; outside this branch's primary scope |
 | Sprint 4 — observability | Runtime visibility exists; further hardening is ongoing |
 
 See [docs/INDEX.md](docs/INDEX.md) for the milestone documents and [docs/CI-MAP.md](docs/CI-MAP.md) for CI scope and blast-radius guidance.
@@ -148,6 +152,21 @@ Backend API: <http://localhost:8000><br>
 OpenAPI docs: <http://localhost:8000/docs><br>
 Mongo Express: <http://localhost:8082>
 
+### Airflow pilot
+
+```bash
+docker compose build airflow-api-server
+docker compose up -d postgres mongodb sftp airflow-api-server airflow-scheduler airflow-dag-processor api
+```
+
+Airflow UI/API: <http://localhost:8080>. The demo `.env.example` routes the API through Airflow and keeps the DAG manual-only. Set `APP_AUTOMATION_ORCHESTRATOR=apscheduler` only for an explicit rollback. See the [Sprint 2.5 runbook](docs/phase-2/sprint-2.5-airflow-migration.md) for cutover and rollback.
+
+`Dockerfile.airflow` remains separate from the application image because the
+official Airflow image owns the Airflow dependency constraints and process
+topology. `requirements-airflow.txt` is an Airflow image overlay; the complete
+application runtime remains in `requirements.txt` so FastAPI/Uvicorn/APScheduler
+dependencies are not mixed into the Airflow control plane.
+
 ### Dashboard
 
 ```bash
@@ -162,7 +181,7 @@ The dashboard proxies `/api/*` requests to the backend at `http://localhost:8000
 For production builds, use the verified Webpack path:
 
 ```bash
-npm --prefix frontend-next run build -- --webpack
+npm --prefix frontend-next run build
 ```
 
 ## Common commands
@@ -177,10 +196,11 @@ npm --prefix frontend-next run build -- --webpack
 | `make test` | Run the broad local test target |
 | `make ci` | Run tests excluding real LLM E2E and phase-specific E2E |
 | `make momo-e2e-reset` | Reset MOMO demo data |
+| `make momo-e2e-fail` | Prepare a valid XLSX missing `id`/`trace` to exercise ingestion-key failure |
 | `make momo-e2e-phase2` | Prepare the MOMO duplicate/replay demo |
 | `make momo-e2e-run` | Trigger the MOMO automation job |
 | `make momo-e2e-rebuild` | Rebuild API and scheduler containers |
-| `codegraph index` | Rebuild the repository dependency index |
+| `codegraph index` | Rebuild the repository dependency index when structural files change |
 
 ## Testing and quality checks
 
@@ -202,8 +222,8 @@ uv run pytest tests/ \
 
 ```bash
 npm --prefix frontend-next run lint
-npm --prefix frontend-next exec tsc -- --noEmit
-npm --prefix frontend-next run build -- --webpack
+npm --prefix frontend-next run typecheck
+npm --prefix frontend-next run build
 npm --prefix frontend-next run test:e2e
 ```
 
@@ -229,9 +249,15 @@ Copy `.env.example` to `.env`. Important settings include:
 | `SFTP_HOST`, `SFTP_PORT`, `SFTP_USER`, `SFTP_PASS` | SFTP source configuration |
 | `APP_INGEST_*` | Ingestion batch size and write behavior |
 | `APP_RECON_*` | Reconciliation batch size and write behavior |
+| `APP_AUTOMATION_ORCHESTRATOR`, `APP_AIRFLOW_*`, `AIRFLOW_*` | Scheduler ownership and Airflow pilot |
 | `AI_*` | Analysis provider, model, timeout and fallback settings |
 
-The authoritative configuration model is `src/config/settings.py`; example values are in [.env.example](.env.example).
+The authoritative configuration model is `src/config/settings.py`; example values are in [.env.example](.env.example). PostgreSQL schema changes are applied through Alembic migrations in `alembic/versions/`.
+
+PostgreSQL event timestamps are persisted as UTC-naive values. Reconciliation
+dates remain business-calendar dates in `APP_BUSINESS_TIMEZONE`; reconciliation
+business keys use `partner_trace`, `partner_metadata.vspTransId`, then
+`partner_id`, ignoring null/blank/whitespace-only values.
 
 ## Repository layout
 

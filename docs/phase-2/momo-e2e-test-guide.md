@@ -66,6 +66,30 @@ Use this to inspect the job after each run if needed:
 make momo-e2e-job
 ```
 
+### File-ingestion failure demo
+
+Prepare a valid internal baseline with an approved MOMO mapping and a readable
+partner `.xlsx` file whose rows omit both source identity columns:
+
+```bash
+make momo-e2e-fail
+```
+
+The command also pins the approved mapping to this fixture's structure, so the
+config-health gate does not pause the demo for mapping review.
+
+After changing backend code, rebuild the API and scheduler containers once:
+
+```bash
+make momo-e2e-rebuild
+```
+
+Then click `Run Now` in the UI, or run `make momo-e2e-run`. The Schedules view
+should show runtime `FAILED`, a `BLOCKED` recovery checkpoint, and the precise
+`ingestion_key_error` and `BLOCKED` recovery. Replace the file with one that
+contains both `msTransId` and `msMaHDon`, then use `Resolve for retry` with an
+operator reason before running the job again.
+
 ### Missing-partner demo
 
 1. Prepare the baseline and anomaly:
@@ -156,6 +180,15 @@ Rules:
 Expected result:
 
 * after each run, reconciliation reflects the currently seeded and intended dataset, not unrelated future rows
+* the result view is batch-only: Phase 2 shows Wave 2 rows only, while Phase 1 results remain stored separately
+
+### Scope classification rule
+
+Scope is inferred from business keys, not from the filename. A file containing
+only new keys is `INCREMENTAL_APPEND`. A file containing the historical key set
+and additional new keys is `REPLACEMENT`, because it supersedes the previous
+delivery. If overlap evidence is incomplete or contradictory, the packet stays
+`UNCONFIRMED` and requires operator selection.
 
 ### Mode C: Intentional Missing Partner
 

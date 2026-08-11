@@ -189,7 +189,7 @@ MongoDB indexes are defined centrally in `src/models/indexes.py` and applied on 
 
 ## PostgreSQL Database
 
-The platform supports PostgreSQL for transactional data storage alongside MongoDB. The PostgreSQL instance is defined in `docker-compose.yml` and initialized via `src/models/postgres.py`.
+The platform supports PostgreSQL for transactional data storage alongside MongoDB. The PostgreSQL instance is defined in `docker-compose.yml`; schema changes are managed by Alembic in `alembic/versions/` and applied through `src/models/postgres.py`.
 
 ### Tables
 
@@ -208,6 +208,18 @@ In-database reconciliation uses SQL joins (`INSERT ... SELECT ... LEFT JOIN` wit
 ### PostgreSQL Env Vars
 
 - `APP_POSTGRES_URL` — Connection string (default: `postgresql+asyncpg://postgres:postgres@localhost:5432/reconciliation`)
+
+### Persistence and reconciliation conventions
+
+- Aware event timestamps are converted to UTC and persisted as naive
+  PostgreSQL datetimes through `src/infrastructure/persistence/time.py`.
+- `reconciliation_date` is a business-calendar date resolved with
+  `APP_BUSINESS_TIMEZONE`; it is not treated as an event timestamp.
+- Reconciliation key precedence is `partner_trace`,
+  `partner_metadata.vspTransId`, then `partner_id`. Null, empty and
+  whitespace-only candidates are ignored consistently in Python and SQL.
+- PostgreSQL schema and composite query indexes are managed by Alembic. The
+  current query-index revision is `0003_reconciliation_query_indexes.py`.
 
 ## Notes on Drift
 

@@ -27,7 +27,9 @@ test("operator can navigate across the dashboard routes", async ({ page }) => {
   ];
 
   for (const route of routes) {
-    await page.getByRole("link", { name: route.label, exact: true }).click();
+    // The sidebar icon is part of the accessible name, so match the visible
+    // navigation label without requiring the icon text to be absent.
+    await page.getByRole("link", { name: route.label }).click();
     await expect(page).toHaveURL(new RegExp(`${route.path}$`));
     await expect(page.getByRole("heading", { name: route.title, exact: true })).toBeVisible();
   }
@@ -194,12 +196,11 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
 
   await page.goto("/schedules");
   const row = page.getByRole("row", { name: /VIETTELPAY/ });
-  await expect(row).toContainText("Recovery: FAILED");
+  await expect(row).toContainText("Failed");
   const actions = row.locator("td").last();
-  await expect(actions.getByRole("button", { name: "View recovery", exact: true })).toBeVisible();
-  await expect(actions.getByRole("button", { name: "Run Now", exact: true })).toBeVisible();
-  await expect(actions.getByRole("button", { name: "Run Now", exact: true })).toHaveCSS("white-space", "nowrap");
-  await expect(row).toContainText("Progress");
+  await expect(actions.getByRole("button", { name: /Retry/ })).toBeVisible();
+  await expect(actions.getByRole("button", { name: /Retry/ })).toHaveCSS("white-space", "nowrap");
+  await expect(row).toContainText("fetch_timeout_partner_settlement_window_page_2");
   await expect(row).not.toContainText("Checkpoint");
   await expect(row).not.toContainText("Attempt");
   const recoveryFilter = page.getByLabel("Recovery status");
@@ -210,9 +211,10 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
   await expect(page.getByText("No partner matches this recovery status.")).toBeVisible();
   await recoveryFilter.selectOption("BLOCKED");
   const blockedRow = page.getByRole("row", { name: /MOMO/ });
-  await expect(blockedRow).toContainText("Recovery: BLOCKED");
-  await expect(blockedRow.getByRole("button", { name: "Run Now", exact: true })).toBeVisible();
-  await blockedRow.getByRole("button", { name: "View recovery", exact: true }).click();
+  await expect(blockedRow).toContainText("Blocked");
+  await expect(blockedRow.getByRole("button", { name: /Retry/ })).toBeVisible();
+  await blockedRow.getByRole("button", { name: /More options for MOMO/ }).click();
+  await blockedRow.getByRole("menuitem", { name: /View runtime details/ }).click();
   const blockedDialog = page.getByRole("dialog");
   await blockedDialog.locator("#recovery-resolution-reason").fill("Validated terminal schema issue; skip this unit.");
   await blockedDialog.getByRole("button", { name: "Skip unit", exact: true }).click();
@@ -220,7 +222,8 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
   await page.keyboard.press("Escape");
   await expect(blockedDialog).toBeHidden();
   await recoveryFilter.selectOption("ALL");
-  await row.getByRole("button", { name: "View recovery", exact: true }).click();
+  await actions.getByRole("button", { name: /More options for VIETTELPAY/ }).click();
+  await actions.getByRole("menuitem", { name: /View runtime details/ }).click();
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -230,7 +233,7 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
   await dialog.getByRole("button", { name: "Retry now", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Recovery retry queued" })).toBeVisible();
 
-  await expect(row).toContainText("Recovery: COMPLETED", { timeout: 8_000 });
+  await expect(row).toContainText("Ready", { timeout: 8_000 });
   await expect(dialog).toContainText("page:3", { timeout: 8_000 });
   await expect(dialog.locator("dt", { hasText: "Fetched units" }).locator("..").locator("dd")).toHaveText("3 of 3");
 
@@ -291,10 +294,10 @@ test("operator polling stops when a run enters waiting review", async ({ page })
 
   await page.goto("/schedules");
   const row = page.getByRole("row", { name: /VIETTELPAY/ });
-  const runButton = row.getByRole("button", { name: "Run Now", exact: true });
+  const runButton = row.getByRole("button", { name: /Run/ });
   await runButton.click();
-  await expect(runButton).toHaveText("Run Now", { timeout: 5_000 });
-  await expect(row).toContainText("Recovery: Waiting review");
+  await expect(runButton).toContainText("Run", { timeout: 5_000 });
+  await expect(row).toContainText("Waiting Review");
   const callsAfterTerminal = runListCalls;
   await page.waitForTimeout(1_500);
   expect(runListCalls).toBe(callsAfterTerminal);
@@ -375,8 +378,9 @@ test("operator can start a VNPAY backfill and see its approval progress", async 
   await page.goto("/schedules");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const row = page.getByRole("row", { name: /VNPAY/ });
-  await expect(row.getByRole("button", { name: "Backfill", exact: true })).toBeVisible();
-  await row.getByRole("button", { name: "Backfill", exact: true }).click();
+  await row.getByRole("button", { name: /More options for VNPAY/ }).click();
+  await expect(row.getByRole("menuitem", { name: /Backfill date range/ })).toBeVisible();
+  await row.getByRole("menuitem", { name: /Backfill date range/ }).click();
 
   const formDialog = page.getByRole("dialog");
   await expect(formDialog).toContainText("Backfill VNPAY");

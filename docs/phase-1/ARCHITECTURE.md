@@ -17,9 +17,9 @@ Nền tảng tiếp nhận file đối tác, chuẩn hóa thành các bản giao
 - `frontend/`
   - Legacy Vite dashboard retained as reference only
 - `src/scheduler/jobs.py`
-  - APScheduler job implementation cho partner fetch automation
+  - Application ingestion runner được Airflow DAG gọi (tên package giữ legacy)
 - `src/application/automation/`
-  - Shared orchestration contracts dùng bởi API, APScheduler và Airflow
+  - Shared orchestration contracts dùng bởi API và Airflow
 - `dags/reconciliation_ingestion.py`
   - Airflow control-plane DAG cho stream selection và execution
 

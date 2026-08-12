@@ -301,6 +301,7 @@ def _build_source_unit_ingestor(
     batch_size: int,
     structured_logger: Optional[StructuredLogger],
     reconciliation_run_id: str | None = None,
+    mapping_config_version: str | None = None,
 ) -> tuple[Any, dict[str, int]]:
     stats = {
         "totalRows": 0,
@@ -344,6 +345,7 @@ def _build_source_unit_ingestor(
             batch_size=batch_size,
             structured_logger=structured_logger,
             fetch_unit_metadata=unit_metadata,
+            config_version=mapping_config_version,
             enable_config_health_check=(not config_health_checked or not is_paginated_api),
             validate_rows=config.validate_rows,
         )
@@ -512,6 +514,7 @@ async def run_fetch_config_once(
     mode: IngestionMode = IngestionMode.SCHEDULED,
     runtime_run_id: str | None = None,
     orchestration: dict[str, Any] | None = None,
+    mapping_config_version: str | None = None,
     raise_on_unexpected: bool = False,
 ) -> dict[str, Any]:
     """Run one source stream sequentially from its checkpoint boundary."""
@@ -608,6 +611,7 @@ async def run_fetch_config_once(
         batch_size=batch_size,
         structured_logger=structured_logger,
         reconciliation_run_id=str(run.id),
+        mapping_config_version=mapping_config_version,
     )
     retry_policy = RetryPolicy()
     raw_page_repo = RawIngestionPageRepository(db)
@@ -1173,6 +1177,7 @@ async def _run_ingestion(
     batch_size: int | None = None,
     structured_logger: Optional[StructuredLogger] = None,
     fetch_unit_metadata: Optional[dict[str, Any]] = None,
+    config_version: Optional[str] = None,
     enable_config_health_check: bool = True,
     validate_rows: bool = False,
 ) -> Any:
@@ -1205,6 +1210,7 @@ async def _run_ingestion(
             workflow_type="UPC",
             file_type=FileType.SETTLEMENT,
             reconciliation_date=reconciliation_date,
+            config_version=config_version,
             fetch_unit_metadata=fetch_unit_metadata,
             enable_config_health_check=enable_config_health_check,
         )

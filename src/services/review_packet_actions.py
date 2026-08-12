@@ -34,6 +34,9 @@ from src.domain.review.models import (
 )
 from src.infrastructure.review.repository import ReviewPacketRepository
 from src.infrastructure.ingestion.composition import build_ingestion_pipeline
+from src.infrastructure.fetch_config.repository import FetchConfigRepository
+from src.infrastructure.backfill.repository import BackfillRunRepository
+from src.infrastructure.workflows.airflow import AirflowWorkflowGateway
 from src.application.reconciliation.service import ReconciliationCommand
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
 from src.services.audit import record_audit_event
@@ -42,6 +45,8 @@ from src.services.business_day import business_date
 from src.services.review_raw_stream import resolve_review_source_file
 from src.api.background_tasks import track_background_task
 from src.domain.runtime.models import PartnerRuntimeRunStatus, PartnerRuntimeTriggerType
+from src.config.settings import settings
+from src.services.backfill_runs import BackfillRunService, serialize_backfill_run
 
 
 def _get_db(request: Request):
@@ -286,6 +291,33 @@ async def approve_packet_mapping_and_reprocess(request: Request, packet, reviewe
     config.approved_at = now
     config.approved_by = reviewed_by
     config.config_health = health
+
+    if getattr(packet, "backfill_run_id", None):
+        gateway = getattr(request.app.state, "workflow_gateway", None)
+        if gateway is None:
+            if settings.automation_orchestrator != "airflow":
+                raise HTTPException(
+                    status_code=503,
+                    detail="Backfill approval requires the Airflow orchestrator.",
+                )
+            gateway = AirflowWorkflowGateway(
+                base_url=settings.airflow_base_url,
+                dag_id=settings.airflow_dag_id,
+                username=settings.airflow_username,
+                password=settings.airflow_password,
+                timeout_seconds=settings.airflow_request_timeout_seconds,
+            )
+        service = BackfillRunService(
+            fetch_repo=FetchConfigRepository(db),
+            backfill_repo=BackfillRunRepository(db),
+            workflow_gateway=gateway,
+            approved_mapping_version_finder=lambda _partner: asyncio.sleep(0, result=config.config_version),
+        )
+        backfill_run = await service.resume_after_approval(
+            backfill_run_id=str(packet.backfill_run_id),
+            mapping_version=str(config.config_version or ""),
+        )
+        return {"backfillRun": serialize_backfill_run(backfill_run)}
 
     return await _queue_post_approval_reprocess(request, packet, config)
 

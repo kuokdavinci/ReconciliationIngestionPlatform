@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class PartnerRuntimeTriggerType(str, Enum):
     SCHEDULER = "SCHEDULER"
+    BACKFILL = "BACKFILL"
     MANUAL_RECONCILIATION = "MANUAL_RECONCILIATION"
     POST_APPROVAL_REPROCESS = "POST_APPROVAL_REPROCESS"
 

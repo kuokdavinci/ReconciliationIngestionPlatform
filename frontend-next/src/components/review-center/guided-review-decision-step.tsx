@@ -3,6 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { PostApprovalRun } from "@/types/review-center";
+import type { BackfillRun } from "@/types/schedules";
 import styles from "./review-center.module.css";
 
 export interface ValidationStateSummary {
@@ -16,6 +17,8 @@ export interface ValidationStateSummary {
 
 interface Props {
   postApprovalRun: PostApprovalRun | null;
+  backfillRun: BackfillRun | null;
+  backfillError?: string | null;
   isApproved: boolean;
   validationState: ValidationStateSummary | null;
   isSubmitting: boolean;
@@ -27,6 +30,8 @@ interface Props {
 
 export function GuidedReviewDecisionStep({
   postApprovalRun,
+  backfillRun,
+  backfillError,
   isApproved,
   validationState,
   isSubmitting,
@@ -59,6 +64,11 @@ export function GuidedReviewDecisionStep({
       description: "Publishing updated results and insight views.",
     },
   ] as const;
+  const backfillSeverity = backfillRun?.status === "COMPLETED"
+    ? "low" as const
+    : backfillRun?.status === "FAILED"
+      ? "critical" as const
+      : "medium" as const;
 
   return (
     <div className={styles.modalSection}>
@@ -89,7 +99,67 @@ export function GuidedReviewDecisionStep({
         </>
       )}
 
-      {(postApprovalRun || isApproved) && (
+      {backfillRun && (
+        <div className={styles.approveProgress}>
+          <div className={styles.recommendPanel}>
+            <div className={styles.sectionCardHeading}>
+              <div>
+                <span className={styles.metricEyebrow}>Ordered backfill</span>
+                <h5 className={styles.sectionCardTitle}>{backfillRun.partner} · daily runtime detail</h5>
+                <p className={styles.sectionCardCopy}>
+                  Airflow is processing each business date sequentially. The next day starts only after the previous day completes.
+                </p>
+              </div>
+              <Badge severity={backfillSeverity}>{backfillRun.status}</Badge>
+            </div>
+            <div className={styles.metricGrid}>
+              <div className={styles.metricCard}>
+                <div className={styles.metricLabel}>Completed days</div>
+                <div className={styles.metricValue}>{backfillRun.completedDays}/{backfillRun.totalDays}</div>
+                <div className={styles.metricHint}>{backfillRun.fromDate} → {backfillRun.toDate}</div>
+              </div>
+              <div className={styles.metricCard}>
+                <div className={styles.metricLabel}>Current date</div>
+                <div className={styles.metricValue} style={{ fontSize: 18 }}>{backfillRun.currentDate || "-"}</div>
+                <div className={styles.metricHint}>business date in progress</div>
+              </div>
+            </div>
+          </div>
+
+          {backfillError && <div className={styles.validationFailed}>{backfillError}</div>}
+          <div className={styles.progressCard}>
+            <div className={styles.sectionCardHeading}>
+              <div>
+                <h5 className={styles.sectionCardTitle}>Daily execution</h5>
+                <p className={styles.sectionCardCopy}>Runtime, status, and message for every date in this backfill.</p>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {backfillRun.days.map((day) => {
+                const severity = day.status === "COMPLETED" ? "low" as const : day.status === "FAILED" ? "critical" as const : day.status === "RUNNING" || day.status === "WAITING_CONFIG" ? "medium" as const : "neutral" as const;
+                return (
+                  <div key={day.businessDate} className={styles.evidenceRow}>
+                    <div>
+                      <strong>{day.businessDate}</strong>
+                      <div className={styles.footerNote}>{day.message || (day.status === "PENDING" ? "Waiting for previous date" : "Processing")}</div>
+                      {day.runtimeRunId && <code className={styles.freshnessVersionCode}>{day.runtimeRunId}</code>}
+                    </div>
+                    <Badge severity={severity}>{day.status}</Badge>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className={styles.actionRow} style={{ justifyContent: "center", marginTop: 12 }}>
+            <Button variant="secondary" onClick={onClose}>
+              {backfillRun.status === "COMPLETED" || backfillRun.status === "FAILED" ? "Close" : "Close and keep processing"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {!backfillRun && (postApprovalRun || isApproved) && (
         <div className={styles.approveProgress}>
           {postApprovalRun?.stats && Object.keys(postApprovalRun.stats).length > 0 && (
             <div className={`${styles.sectionCard} ${styles.pipelineMetricsHero}`}>

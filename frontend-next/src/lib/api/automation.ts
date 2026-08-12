@@ -7,6 +7,7 @@ import {
   type RecoveryUnitStatus,
   type RecoverySummary,
   type RecoveryUnitSummary,
+  type BackfillRun,
   type RuntimeRunSummary,
   type ScheduleJob,
 } from "@/types/schedules";
@@ -153,6 +154,17 @@ export async function getJob(partner: string) {
 
 export async function runJob(partner: string) {
   return post<RunJobResponse>(`/automation/jobs/${partner}/run`);
+}
+
+export async function startBackfill(
+  partner: string,
+  payload: { fromDate: string; toDate: string; fetchConfigId?: string },
+) {
+  return post<BackfillRun>(`/automation/jobs/${partner}/backfill`, payload);
+}
+
+export async function getBackfillRun(backfillRunId: string) {
+  return get<BackfillRun>(`/automation/backfill-runs/${backfillRunId}`);
 }
 
 export async function retryRecovery(partner: string) {

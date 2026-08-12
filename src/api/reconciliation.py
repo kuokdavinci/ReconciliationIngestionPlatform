@@ -721,6 +721,7 @@ async def reconciliation_insights(
                 focus=focus,
                 collection=repo,
                 llm_provider=llm_provider,
+                extra_query={},
             )
             return [r.model_dump() for r in results]
 

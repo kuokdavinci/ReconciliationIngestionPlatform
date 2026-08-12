@@ -117,31 +117,6 @@ services:
       - ./sftp_data:/app/sftp_data
       - ./mock_data:/app/mock_data
 
-  scheduler:
-    profiles: ["apscheduler"]
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: reconciliation-scheduler
-    command: python run.py --start-scheduler
-    restart: unless-stopped
-    depends_on:
-      mongodb:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      - APP_MONGODB_URL=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/reconciliation?authSource=admin
-      - APP_POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/reconciliation
-      - APP_AUTOMATION_ORCHESTRATOR=apscheduler
-      - SFTP_HOST=sftp
-    volumes:
-      - ./downloads:/app/downloads
-      - ./sftp_data:/app/sftp_data
-      - ./mock_data:/app/mock_data
-
   airflow-db-bootstrap:
     image: postgres:16
     depends_on:

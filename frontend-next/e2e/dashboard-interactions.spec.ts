@@ -1,12 +1,14 @@
 import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
-  // Keep browser tests deterministic and independent from the backend service.
-  await page.route("**/api/**", async (route) => {
+  // Mapping Studio loads its list before rendering the wizard. Keep that
+  // unrelated endpoint deterministic; schedule tests provide their own
+  // automation fixtures below.
+  await page.route("**/api/v1/mappings**", async (route) => {
     await route.fulfill({
       status: 404,
       contentType: "application/json",
-      body: JSON.stringify({ detail: "API is not part of the FE interaction smoke test" }),
+      body: JSON.stringify({ detail: "Mapping API is not part of this smoke test" }),
     });
   });
 });
@@ -120,7 +122,7 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
     lastError: "Schema could not be parsed after maximum attempts.",
   };
 
-  await page.route("**/api/v1/automation/jobs", async (route) => {
+  await page.route("**/api/v1/automation/jobs**", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const recovery = !retryQueued
       ? failedRecovery
@@ -156,7 +158,7 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
     });
   });
 
-  await page.route("**/api/v1/automation/jobs/VIETTELPAY/recovery/retry", async (route) => {
+  await page.route("**/api/v1/automation/jobs/VIETTELPAY/recovery/retry**", async (route) => {
     retryQueued = true;
     await route.fulfill({
       status: 200,
@@ -173,7 +175,7 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
     });
   });
 
-  await page.route("**/api/v1/automation/jobs/MOMO/recovery/resolve", async (route) => {
+  await page.route("**/api/v1/automation/jobs/MOMO/recovery/resolve**", async (route) => {
     blockedResolved = true;
     await route.fulfill({
       status: 200,
@@ -240,7 +242,7 @@ test("operator polling stops when a run enters waiting review", async ({ page })
   let runQueued = false;
   let runListCalls = 0;
 
-  await page.route("**/api/v1/automation/jobs", async (route) => {
+  await page.route("**/api/v1/automation/jobs**", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     runListCalls += 1;
     const waitingReview = runQueued && runListCalls >= 3;
@@ -278,7 +280,7 @@ test("operator polling stops when a run enters waiting review", async ({ page })
     });
   });
 
-  await page.route("**/api/v1/automation/jobs/VIETTELPAY/run", async (route) => {
+  await page.route("**/api/v1/automation/jobs/VIETTELPAY/run**", async (route) => {
     runQueued = true;
     await route.fulfill({
       status: 200,
@@ -296,4 +298,96 @@ test("operator polling stops when a run enters waiting review", async ({ page })
   const callsAfterTerminal = runListCalls;
   await page.waitForTimeout(1_500);
   expect(runListCalls).toBe(callsAfterTerminal);
+});
+
+test("operator can start a VNPAY backfill and see its approval progress", async ({ page }) => {
+  await page.route("**/api/v1/automation/jobs**", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        jobs: [{
+          partner: "VNPAY",
+          fetchMethod: "FILEDROP",
+          schedule: "none",
+          destination: "VNPAY_SETTLEMENT",
+          enabled: true,
+          status: "HEALTHY",
+          pendingReviewPackets: 1,
+          latestRuntimeRun: null,
+          recovery: null,
+        }],
+      }),
+    });
+  });
+
+  await page.route("**/api/v1/automation/jobs/VNPAY/backfill**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        _id: "backfill-vnpay-1",
+        partner: "VNPAY",
+        fetchConfigId: "vnpay-fetch-config",
+        mode: "BACKFILL",
+        status: "WAITING_CONFIG",
+        fromDate: "2026-08-07",
+        toDate: "2026-08-11",
+        currentDate: "2026-08-07",
+        completedDays: 0,
+        totalDays: 3,
+        approvalRequired: true,
+        approvalContext: { reviewPacketId: "packet-vnpay-1" },
+        days: [
+          { businessDate: "2026-08-07", status: "PENDING" },
+          { businessDate: "2026-08-10", status: "PENDING" },
+          { businessDate: "2026-08-11", status: "PENDING" },
+        ],
+      }),
+    });
+  });
+
+  await page.route("**/api/v1/automation/backfill-runs/backfill-vnpay-1**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        _id: "backfill-vnpay-1",
+        partner: "VNPAY",
+        status: "WAITING_CONFIG",
+        fromDate: "2026-08-07",
+        toDate: "2026-08-11",
+        completedDays: 0,
+        totalDays: 3,
+        approvalRequired: true,
+        approvalContext: { reviewPacketId: "packet-vnpay-1" },
+        days: [
+          { businessDate: "2026-08-07", status: "PENDING" },
+          { businessDate: "2026-08-10", status: "PENDING" },
+          { businessDate: "2026-08-11", status: "PENDING" },
+        ],
+      }),
+    });
+  });
+
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.goto("/schedules");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const row = page.getByRole("row", { name: /VNPAY/ });
+  await expect(row.getByRole("button", { name: "Backfill", exact: true })).toBeVisible();
+  await row.getByRole("button", { name: "Backfill", exact: true }).click();
+
+  const formDialog = page.getByRole("dialog");
+  await expect(formDialog).toContainText("Backfill VNPAY");
+  await formDialog.getByLabel("From date").fill("2026-08-12");
+  await formDialog.getByLabel("To date").fill("2026-08-11");
+  await expect(formDialog.getByRole("alert")).toContainText("on or before");
+  await formDialog.getByLabel("From date").fill("2026-08-07");
+  await formDialog.getByRole("button", { name: "Start Backfill", exact: true }).click();
+
+  const progressDialog = page.getByRole("dialog");
+  await expect(progressDialog).toContainText("0/3 days");
+  await expect(progressDialog).toContainText("Mapping approval required");
+  await expect(progressDialog.getByRole("button", { name: "Open Guided Review", exact: true })).toBeVisible();
 });

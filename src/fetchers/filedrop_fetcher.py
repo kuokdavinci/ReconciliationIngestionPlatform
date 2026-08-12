@@ -41,7 +41,7 @@ class FileDropFetcher(BaseFetcher):
         """
         try:
             directory = str(self.resolve_local_path(config.directory))
-            pattern = config.pattern
+            pattern = self.interpolate_date(config.pattern, reconciliation_date)
 
             # Check if directory exists
             if not os.path.isdir(directory):

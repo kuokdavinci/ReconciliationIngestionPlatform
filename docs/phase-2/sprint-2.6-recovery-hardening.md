@@ -230,7 +230,8 @@ reconciliation file.
 - TestClient workaround regression: API suites `68 passed` after switching
   synchronous endpoint tests to the `httpx2` ASGI transport facade.
 - Static quality: targeted Ruff pass.
-- Live Docker verification (2026-08-10, after restart): Airflow API, scheduler,
+- Live Docker verification (2026-08-10, after restart): Airflow API, Airflow
+  scheduler,
   DAG processor, MongoDB and PostgreSQL are healthy/running; API OpenAPI returns
   HTTP 200; API ownership is `airflow`; `AIRFLOW_GLOBAL_SCHEDULE=none`; and no
   legacy `reconciliation-scheduler` container is running. DAG import errors are
@@ -319,19 +320,30 @@ reconciliation file.
 
 ### Scheduler ownership and local startup
 
+### Ordered FileDrop backfill operator path
+
+The current branch also exposes a VNPAY FileDrop backfill from Schedules. The
+operator selects an inclusive date range; the API persists one `backfill_run`
+parent and submits one Airflow DAG run in `mode=BACKFILL`. Airflow processes
+business dates in ascending order, records per-day progress, and never shares
+the scheduled checkpoint. If mapping approval is required, Guided Review
+resumes the same parent after approval instead of creating a second
+post-approval run. Reproduce the local fixture with
+`make vnpay-backfill-reset`.
+
 The default Compose stack uses Airflow as the application orchestrator and
 keeps the Airflow DAG manual-only unless `AIRFLOW_GLOBAL_SCHEDULE` is set.
-The legacy APScheduler service is behind the `apscheduler` profile and is
-forced to use the APScheduler owner when that profile is deliberately enabled.
+The manual-pilot deployment has no legacy scheduler service. Airflow is the
+only workflow owner and the DAG remains manual-only until a separate schedule
+cutover decision.
 
 ```bash
 docker compose up -d postgres mongodb sftp airflow-api-server airflow-scheduler airflow-dag-processor api
-docker compose --profile apscheduler up -d scheduler  # rollback/diagnostic only
 ```
 
-Do not run both owners for the same production stream. Rollback requires
-pausing the DAG, setting `APP_AUTOMATION_ORCHESTRATOR=apscheduler`, and
-restarting the API before enabling the profile.
+Do not introduce a second scheduler owner for the same stream. Rollback requires
+pausing the DAG and deploying the previous application artifact; it does not
+re-enable a removed APScheduler service.
 
 ### Live acceptance evidence to collect
 
@@ -341,10 +353,11 @@ docker compose exec airflow-api-server airflow dags list-import-errors
 docker compose logs --tail 120 airflow-scheduler airflow-dag-processor
 ```
 
-Then execute one manual ViettelPay run with the page-2 failure fixture and
-record: `runtimeRunId`, Airflow `dagRunId`, Recovery event timeline, Retry now
-result, review packet count, raw-stage `itemCount` total, and PostgreSQL
-internal-transaction count for the same Asia/Ho_Chi_Minh business date.
+Then execute one manual ViettelPay run with the page-2 failure fixture and one
+VNPAY ordered backfill. Record: `runtimeRunId`, parent `backfillRunId`, Airflow
+`dagRunId`, Recovery event timeline, ordered day statuses, review packet count,
+raw-stage `itemCount` total, and PostgreSQL internal-transaction count for the
+same Asia/Ho_Chi_Minh business date.
 
 ## Verification commands
 

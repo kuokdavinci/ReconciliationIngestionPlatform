@@ -144,7 +144,7 @@ class BaseFetcher(ABC):
     def resolve_local_path(path: str | Path) -> Path:
         """Resolve a local path relative to the application root.
 
-        Scheduler containers use different working directories: APScheduler
+        API and Airflow containers use different working directories: the API
         runs from ``/app`` while Airflow tasks run from ``/opt/airflow/app``.
         Resolving relative paths from this module's application root keeps
         FileDrop and SFTP configurations portable across both runtimes.

@@ -9,6 +9,8 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { ScheduleTable } from "@/components/schedules/schedule-table";
 import { RecentPacketsGrid } from "@/components/schedules/recent-packets-grid";
 import { RecoveryDetailsPanel } from "@/components/schedules/recovery-details-panel";
+import { BackfillDialog } from "@/components/schedules/backfill-dialog";
+import { BackfillProgressPanel } from "@/components/schedules/backfill-progress-panel";
 import { isActiveRuntimeStatus } from "@/components/schedules/recovery-status";
 import { useToast } from "@/components/ui/toast";
 import * as api from "@/lib/api/automation";
@@ -57,9 +59,12 @@ function SchedulesContent() {
   const [jobs, setJobs] = useState<ScheduleJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [runningPartners, setRunningPartners] = useState<Record<string, boolean>>({});
-  const [selectedRecoveryPartner, setSelectedRecoveryPartner] = useState<string | null>(null);
+  const [selectedRecoveryPartner, setSelectedRecoveryPartner] = useState<string | null>(() => searchParams.get("runtimePartner"));
   const [retryingRecoveryPartner, setRetryingRecoveryPartner] = useState<string | null>(null);
   const [resolvingRecovery, setResolvingRecovery] = useState(false);
+  const [backfillPartner, setBackfillPartner] = useState<string | null>(null);
+  const [backfillRunId, setBackfillRunId] = useState<string | null>(() => searchParams.get("backfillRunId"));
+  const [startingBackfill, setStartingBackfill] = useState(false);
   const runtimePollRef = useRef<number | null>(null);
   const { showToast } = useToast();
 
@@ -226,6 +231,22 @@ function SchedulesContent() {
     }
   };
 
+  const handleStartBackfill = async (fromDate: string, toDate: string) => {
+    if (!backfillPartner || startingBackfill) return;
+    setStartingBackfill(true);
+    try {
+      const response = await api.startBackfill(backfillPartner, { fromDate, toDate });
+      setBackfillRunId(response._id);
+      setBackfillPartner(null);
+      showToast(`Backfill queued for ${backfillPartner}`, "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to start backfill.";
+      showToast(message, "error");
+    } finally {
+      setStartingBackfill(false);
+    }
+  };
+
   const handleResolveRecovery = async (action: "RETRY" | "SKIP", reason: string) => {
     const partner = selectedRecoveryPartner;
     if (!partner || !reason || resolvingRecovery) return;
@@ -342,6 +363,7 @@ function SchedulesContent() {
             <ScheduleTable
               jobs={filteredJobs}
               onRunJob={handleRunJob}
+              onBackfill={(partner) => setBackfillPartner(partner)}
               onRetryRecovery={(partner) => { void handleRetryRecovery(partner); }}
               onViewRecovery={(job) => setSelectedRecoveryPartner(job.partner)}
               runningPartners={runningPartners}
@@ -377,6 +399,18 @@ function SchedulesContent() {
         retrying={retryingRecoveryPartner === selectedRecoveryPartner}
         onResolve={(action, reason) => { void handleResolveRecovery(action, reason); }}
         resolving={resolvingRecovery}
+      />
+
+      <BackfillDialog
+        partner={backfillPartner}
+        open={Boolean(backfillPartner)}
+        submitting={startingBackfill}
+        onClose={() => { if (!startingBackfill) setBackfillPartner(null); }}
+        onSubmit={handleStartBackfill}
+      />
+      <BackfillProgressPanel
+        runId={backfillRunId}
+        onClose={() => setBackfillRunId(null)}
       />
     </div>
   );

@@ -31,3 +31,26 @@ Playwright chạy độc lập với backend bằng deterministic API mock:
    failure.
 
 Scenario: `frontend-next/e2e/dashboard-interactions.spec.ts` — `1 passed`.
+
+## VNPAY FileDrop ordered backfill coverage
+
+The operator path is now covered separately from the historical ViettelPay API
+evaluation:
+
+1. `make vnpay-backfill-reset` clears prior VNPAY partner/result rows, then
+   creates deterministic business-date files, matching PostgreSQL internal
+   rows, an enabled FileDrop config, a draft mapping, and a pending review
+   packet with bounded internal evidence.
+2. Schedules starts one parent backfill and displays each business date in the
+   progress panel.
+3. The parent remains `WAITING_CONFIG` until Guided Review approves the draft
+   mapping. Approval resumes the same Airflow backfill run rather than queuing
+   an unrelated post-approval replay.
+4. Backend tests verify date expansion, ordered execution, first-failure stop,
+   scheduled-checkpoint isolation, and parent resumption after approval.
+5. The live Docker acceptance path should finish `COMPLETED` for every business
+   day and produce three `MATCHED` results per seeded day.
+
+This is deterministic code/UI evidence. It does not replace the live Docker
+acceptance run against MongoDB, PostgreSQL, Airflow, and the mounted
+`mock_data/` directory.

@@ -69,6 +69,8 @@ def _create_test_app():
     runtime_run_collection = _create_mock_coll()
     recon_file_collection = _create_mock_coll()
     checkpoint_collection = _create_mock_coll()
+    backfill_collection = _create_mock_coll()
+    mapping_collection = _create_mock_coll()
 
     def _get_collection(name):
         if name == "fetch_config":
@@ -81,16 +83,29 @@ def _create_test_app():
             return recon_file_collection
         if name == "ingestion_checkpoint":
             return checkpoint_collection
+        if name == "backfill_run":
+            return backfill_collection
+        if name == "reconciliation_mapping_config":
+            return mapping_collection
         return _create_mock_coll()
 
     mock_db.__getitem__ = MagicMock(side_effect=_get_collection)
     app.state.db = mock_db
     app.state.mongo_client = MagicMock()
-    return app, fetch_collection, packet_collection, runtime_run_collection, recon_file_collection, checkpoint_collection
+    return (
+        app,
+        fetch_collection,
+        packet_collection,
+        runtime_run_collection,
+        recon_file_collection,
+        checkpoint_collection,
+        backfill_collection,
+        mapping_collection,
+    )
 
 
 def test_list_automation_jobs_filters_to_scheduler_packets():
-    app, fetch_collection, packet_collection, _, _, _ = _create_test_app()
+    app, fetch_collection, packet_collection, _, _, _, _, _ = _create_test_app()
     fetch_collection.find = MagicMock(return_value=_AsyncCursor([
         {
             "_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -179,7 +194,7 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
 
 
 def test_duplicate_run_takes_precedence_over_pending_file_status():
-    app, fetch_collection, _, runtime_run_collection, recon_file_collection, _ = _create_test_app()
+    app, fetch_collection, _, runtime_run_collection, recon_file_collection, _, _, _ = _create_test_app()
     fetch_collection.find = MagicMock(return_value=_AsyncCursor([
         {
             "_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -228,7 +243,7 @@ def test_duplicate_run_takes_precedence_over_pending_file_status():
 
 
 def test_list_automation_jobs_exposes_safe_recovery_read_model():
-    app, fetch_collection, packet_collection, runtime_run_collection, recon_file_collection, checkpoint_collection = _create_test_app()
+    app, fetch_collection, packet_collection, runtime_run_collection, recon_file_collection, checkpoint_collection, _, _ = _create_test_app()
     config_id = "123e4567-e89b-12d3-a456-426614174000"
     fetch_collection.find = MagicMock(return_value=_AsyncCursor([
         {
@@ -317,7 +332,7 @@ async def test_retry_automation_job_resumes_failed_checkpoint_with_actor():
         PartnerRuntimeTriggerType,
     )
 
-    app, fetch_collection, _, _, _, checkpoint_collection = _create_test_app()
+    app, fetch_collection, _, _, _, checkpoint_collection, _, _ = _create_test_app()
     config_id = "123e4567-e89b-12d3-a456-426614174000"
     fetch_collection.find_one = AsyncMock(return_value={
         "_id": config_id,
@@ -364,7 +379,7 @@ async def test_retry_automation_job_resumes_failed_checkpoint_with_actor():
     with (
         patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
         patch("src.api.automation.asyncio.create_task", side_effect=_discard_background_task),
-        patch.object(settings, "automation_orchestrator", "apscheduler"),
+        patch.object(settings, "automation_orchestrator", "local"),
     ):
         payload = await retry_automation_job(request, "ZALOPAY")
 
@@ -382,7 +397,7 @@ async def test_retry_automation_job_rejects_blocked_checkpoint():
 
     from src.api.automation import retry_automation_job
 
-    app, fetch_collection, _, _, _, checkpoint_collection = _create_test_app()
+    app, fetch_collection, _, _, _, checkpoint_collection, _, _ = _create_test_app()
     config_id = "123e4567-e89b-12d3-a456-426614174000"
     fetch_collection.find_one = AsyncMock(return_value={
         "_id": config_id,
@@ -416,7 +431,7 @@ async def test_retry_automation_job_rejects_live_processing_claim():
 
     from src.api.automation import retry_automation_job
 
-    app, fetch_collection, _, _, _, checkpoint_collection = _create_test_app()
+    app, fetch_collection, _, _, _, checkpoint_collection, _, _ = _create_test_app()
     config_id = "123e4567-e89b-12d3-a456-426614174000"
     fetch_collection.find_one = AsyncMock(return_value={
         "_id": config_id,
@@ -450,7 +465,7 @@ async def test_run_automation_job_rejects_live_processing_claim():
 
     from src.api.automation import run_automation_job_now
 
-    app, fetch_collection, _, _, _, checkpoint_collection = _create_test_app()
+    app, fetch_collection, _, _, _, checkpoint_collection, _, _ = _create_test_app()
     config_id = "123e4567-e89b-12d3-a456-426614174000"
     fetch_collection.find_one = AsyncMock(return_value={
         "_id": config_id,
@@ -482,7 +497,7 @@ async def test_run_automation_job_rejects_live_processing_claim():
 async def test_resolve_automation_recovery_requires_reason_and_records_audit_event():
     from src.api.automation import resolve_automation_recovery
 
-    app, fetch_collection, _, _, _, checkpoint_collection = _create_test_app()
+    app, fetch_collection, _, _, _, checkpoint_collection, _, _ = _create_test_app()
     config_id = "123e4567-e89b-12d3-a456-426614174000"
     fetch_collection.find_one = AsyncMock(return_value={
         "_id": config_id,
@@ -526,7 +541,7 @@ def test_list_jobs_marks_airflow_up_for_retry_as_active_runtime():
         RuntimeOrchestrationContext,
     )
 
-    app, fetch_collection, _, _, _, _ = _create_test_app()
+    app, fetch_collection, _, _, _, _, _, _ = _create_test_app()
     fetch_collection.find = MagicMock(return_value=_AsyncCursor([{
         "_id": "123e4567-e89b-12d3-a456-426614174000",
         "partner": "VIETTELPAY",
@@ -566,3 +581,82 @@ def test_list_jobs_marks_airflow_up_for_retry_as_active_runtime():
     job = response.json()["jobs"][0]
     assert job["status"] == "RETRYING"
     assert job["activeRuntimeRun"]["orchestration"]["taskState"] == "up_for_retry"
+
+
+def test_start_backfill_route_rejects_missing_or_disabled_configs():
+    app, fetch_collection, _, _, _, _, _, _ = _create_test_app()
+    fetch_collection.find_one = AsyncMock(return_value=None)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/automation/jobs/VNPAY/backfill",
+        headers={"X-Actor": "ops-user"},
+        json={"fromDate": "2026-08-07", "toDate": "2026-08-11"},
+    )
+    assert response.status_code == 404
+
+    fetch_collection.find_one = AsyncMock(return_value={
+        "_id": "123e4567-e89b-12d3-a456-426614174001",
+        "partner": "VNPAY",
+        "fetchMethod": "FILEDROP",
+        "enabled": False,
+        "filedrop": {"directory": "./mock_data/vnpay", "pattern": "*.xlsx"},
+        "updatedAt": "2026-08-12T01:02:03+00:00",
+    })
+    response = client.post(
+        "/api/v1/automation/jobs/VNPAY/backfill",
+        headers={"X-Actor": "ops-user"},
+        json={"fromDate": "2026-08-07", "toDate": "2026-08-11"},
+    )
+    assert response.status_code == 400
+    assert "disabled" in response.json()["detail"].lower()
+
+
+def test_start_backfill_route_validates_date_range():
+    app, fetch_collection, _, _, _, _, _, _ = _create_test_app()
+    fetch_collection.find_one = AsyncMock(return_value={
+        "_id": "123e4567-e89b-12d3-a456-426614174001",
+        "partner": "VNPAY",
+        "fetchMethod": "FILEDROP",
+        "enabled": True,
+        "filedrop": {"directory": "./mock_data/vnpay", "pattern": "*.xlsx"},
+        "updatedAt": "2026-08-12T01:02:03+00:00",
+    })
+
+    response = TestClient(app).post(
+        "/api/v1/automation/jobs/VNPAY/backfill",
+        headers={"X-Actor": "ops-user"},
+        json={"fromDate": "2026-08-12", "toDate": "2026-08-11"},
+    )
+
+    assert response.status_code == 400
+    assert "fromDate" in response.json()["detail"]
+
+
+def test_get_backfill_run_status_returns_serialized_parent():
+    from src.domain.backfill.models import BackfillDayRecord, BackfillRun, BackfillRunStatus
+
+    app, _, _, _, _, _, backfill_collection, _ = _create_test_app()
+    run = BackfillRun(
+        _id="backfill-1",
+        partner="VNPAY",
+        fetchConfigId="cfg-1",
+        mode=IngestionMode.BACKFILL,
+        status=BackfillRunStatus.WAITING_CONFIG,
+        fromDate=datetime(2026, 8, 7, tzinfo=UTC).date(),
+        toDate=datetime(2026, 8, 11, tzinfo=UTC).date(),
+        currentDate=datetime(2026, 8, 7, tzinfo=UTC).date(),
+        completedDays=0,
+        totalDays=3,
+        approvalRequired=True,
+        days=[BackfillDayRecord(businessDate=datetime(2026, 8, 7, tzinfo=UTC).date())],
+    )
+    backfill_collection.find_one = AsyncMock(return_value=run.model_dump(by_alias=True, mode="json"))
+
+    response = TestClient(app).get("/api/v1/automation/backfill-runs/backfill-1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["_id"] == "backfill-1"
+    assert payload["status"] == "WAITING_CONFIG"
+    assert payload["days"][0]["businessDate"] == "2026-08-07"

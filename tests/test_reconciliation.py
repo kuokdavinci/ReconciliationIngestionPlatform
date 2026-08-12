@@ -74,6 +74,43 @@ async def test_reconciliation_matched(mock_db):
     assert result.internal_status == TransactionStatus.SUCCESS
 
 
+@pytest.mark.asyncio
+async def test_reconciliation_result_date_uses_business_date_at_utc_boundary(mock_db):
+    """Persist the local business date when the input is a UTC boundary instant."""
+    engine = ReconciliationEngine(mock_db)
+    recon_date = datetime(2026, 8, 11, 17, tzinfo=timezone.utc)
+    partner = "MOMO"
+    partner_record = DataContainer(
+        identify=partner,
+        workflowType="UPC",
+        reconciliationDate=recon_date,
+        sourceFileId="00000000-0000-0000-0000-000000000001",
+        partnerData=PartnerData(
+            _id="txn_boundary",
+            trace="trace_boundary",
+            status="Thành công",
+            amount=Decimal("150000"),
+            currency="VND",
+        ),
+    )
+    internal_record = InternalTransaction(
+        _id="int_boundary",
+        partner=partner,
+        partnerTxnId="trace_boundary",
+        amount=Decimal("150000"),
+        status=TransactionStatus.SUCCESS,
+        transactionTime=recon_date,
+    )
+    engine._data_repo.find_many = AsyncMock(return_value=[partner_record])
+    engine._internal_repo.find_many = AsyncMock(return_value=[internal_record])
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock(return_value=1)
+
+    results = await engine.reconcile(partner, recon_date)
+
+    assert results[0].date == "2026-08-12"
+
+
 def test_reconciliation_uses_business_timezone_day_bounds():
     start, end = ReconciliationEngine._business_day_bounds(
         datetime(2026, 8, 10, tzinfo=timezone.utc)

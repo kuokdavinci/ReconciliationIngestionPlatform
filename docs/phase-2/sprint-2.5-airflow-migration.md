@@ -68,6 +68,11 @@ fetchers also resolve relative paths from the application root, so task cwd
 changes cannot redirect the lookup to `/opt/airflow/mock_data` or another
 unmounted directory. The same contract applies to FileDrop/SFTP streams using
 `./sftp_data` and the default SFTP download directory `./downloads`.
+Compose runs `airflow-volume-permissions` before `airflow-init` so the
+non-root Airflow worker (UID 50000, group 0) can write those bind mounts. If a
+host ACL or an externally managed volume overrides the permissions, verify
+that `downloads/` and `sftp_data/` are group-writable before starting the
+Airflow services.
 FileDrop/SFTP source units are still processed sequentially at file boundary;
 mapping review is evaluated per file, not as one API-style paginated stream
 packet.
@@ -109,6 +114,14 @@ Airflow fail trước đó.
 Airflow task log hiện ghi structured `stream_execution_started`,
 `stream_execution_result` và `stream_execution_succeeded/exception`, gồm
 `runtimeRunId`, `dagRunId`, task try, outcome, error code, checkpoint và counters.
+Các log source-unit bổ sung `partner`, `fetchConfigId`, `streamKey`,
+`sourceUnitKey`, page/cursor và error code. Vì vậy có thể lọc một stream bằng
+`runtimeRunId` hoặc nhanh hơn bằng `partner`:
+
+```bash
+docker logs reconciliation-airflow-scheduler 2>&1 \
+  | rg 'partner=VIETTELPAY|runtimeRunId=<runtime-id>'
+```
 
 ### Deterministic ViettelPay manual-retry demo
 

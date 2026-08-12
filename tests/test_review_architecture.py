@@ -11,6 +11,7 @@ import pytest
 from src.config.config_health import _collect_review_sample_rows, _create_mapping_proposal
 from src.config.signature import StructureSignature
 from src.core.enums import FileType
+from src.services.review_packet_actions import _rebind_replacement_transactions
 
 from src.domain.review.models import (
     CopilotAction,
@@ -59,6 +60,36 @@ class _Database:
 
     def __getitem__(self, name):
         return self._collections[name]
+
+
+@pytest.mark.asyncio
+async def test_replacement_rebinds_duplicate_ingestion_keys_to_new_source_file():
+    repository = MagicMock()
+    repository.rebind_source_file_by_ingestion_keys = AsyncMock(return_value=30)
+    packet = SimpleNamespace(scope_type="REPLACEMENT")
+    config = SimpleNamespace(partner="MOMO")
+    ingestion_result = SimpleNamespace(
+        ingestion_keys=["MOMO_TXN_9000", "MOMO_TXN_9000", "MOMO_TXN_9100"],
+    )
+
+    with patch(
+        "src.services.review_packet_actions.DataContainerRepository",
+        return_value=repository,
+    ):
+        rebound = await _rebind_replacement_transactions(
+            db=MagicMock(),
+            packet=packet,
+            config=config,
+            ingestion_result=ingestion_result,
+            source_file_id="replacement-file",
+        )
+
+    assert rebound == 30
+    repository.rebind_source_file_by_ingestion_keys.assert_awaited_once_with(
+        "MOMO",
+        ["MOMO_TXN_9000", "MOMO_TXN_9100"],
+        "replacement-file",
+    )
 from src.models.copilot_action import (
     CopilotAction as LegacyCopilotAction,
     CopilotActionRepository as LegacyCopilotActionRepository,

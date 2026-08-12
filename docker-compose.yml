@@ -156,10 +156,25 @@ services:
     command: ["bash", "/bootstrap-airflow-db.sh"]
     restart: "no"
 
+  airflow-volume-permissions:
+    <<: *airflow-common
+    user: "0:0"
+    command:
+      - bash
+      - -c
+      - |
+        chmod -R g+rwX /opt/airflow/app/downloads /opt/airflow/app/sftp_data
+    volumes:
+      - ./downloads:/opt/airflow/app/downloads
+      - ./sftp_data:/opt/airflow/app/sftp_data
+    restart: "no"
+
   airflow-init:
     <<: *airflow-common
     depends_on:
       airflow-db-bootstrap:
+        condition: service_completed_successfully
+      airflow-volume-permissions:
         condition: service_completed_successfully
     command:
       - bash

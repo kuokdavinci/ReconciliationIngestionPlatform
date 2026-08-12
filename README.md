@@ -161,6 +161,10 @@ docker compose up -d postgres mongodb sftp airflow-api-server airflow-scheduler 
 
 Airflow UI/API: <http://localhost:8080>. The demo `.env.example` routes the API through Airflow and keeps the DAG manual-only. Set `APP_AUTOMATION_ORCHESTRATOR=apscheduler` only for an explicit rollback. See the [Sprint 2.5 runbook](docs/phase-2/sprint-2.5-airflow-migration.md) for cutover and rollback.
 
+Compose starts a one-shot `airflow-volume-permissions` service before Airflow
+initialization. It grants the Airflow worker group write access to the bind
+mounted `downloads/` and `sftp_data/` directories used by API/SFTP ingestion.
+
 `Dockerfile.airflow` remains separate from the application image because the
 official Airflow image owns the Airflow dependency constraints and process
 topology. `requirements-airflow.txt` is an Airflow image overlay; the complete

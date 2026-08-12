@@ -40,6 +40,23 @@ SUCCESS_OUTCOMES = {
 
 logger = logging.getLogger("reconciliation.airflow")
 
+
+def _stream_log_context(command: ExecuteStreamCommand, task_instance, dag_run) -> str:
+    """Return stable identifiers that make one mapped stream searchable."""
+
+    values = {
+        "partner": command.partner,
+        "runtimeRunId": command.runtime_run_id or "-",
+        "fetchConfigId": command.fetch_config_id,
+        "reconciliationDate": command.reconciliation_date,
+        "mode": command.mode,
+        "dagRunId": dag_run.run_id,
+        "taskId": task_instance.task_id,
+        "mapIndex": task_instance.map_index,
+        "tryNumber": task_instance.try_number,
+    }
+    return " ".join(f"{key}={value}" for key, value in values.items())
+
 # Keep task-level retry policy operator-configurable. The UI's manual retry
 # clears the task instance in the same DAG run; native Airflow retry remains a
 # bounded fallback when the operator does nothing.
@@ -221,14 +238,10 @@ def reconciliation_ingestion():
             tryNumber=task_instance.try_number,
             logicalDate=dag_run.logical_date,
         )
+        stream_context = _stream_log_context(command, task_instance, dag_run)
         logger.info(
-            "stream_execution_started partner=%s runtimeRunId=%s dagRunId=%s taskId=%s mapIndex=%s tryNumber=%s",
-            command.partner,
-            command.runtime_run_id,
-            dag_run.run_id,
-            task_instance.task_id,
-            task_instance.map_index,
-            task_instance.try_number,
+            "stream_execution_started %s",
+            stream_context,
         )
         try:
             result = asyncio.run(
@@ -236,12 +249,8 @@ def reconciliation_ingestion():
             )
         except Exception as exc:
             logger.exception(
-                "stream_execution_exception partner=%s runtimeRunId=%s dagRunId=%s taskId=%s tryNumber=%s",
-                command.partner,
-                command.runtime_run_id,
-                dag_run.run_id,
-                task_instance.task_id,
-                task_instance.try_number,
+                "stream_execution_exception %s",
+                stream_context,
             )
             if not isinstance(exc, ValueError) and task_instance.try_number <= AIRFLOW_TASK_RETRIES:
                 asyncio.run(
@@ -266,8 +275,9 @@ def reconciliation_ingestion():
                 raise AirflowFailException(str(exc)) from exc
             raise
         logger.info(
-            "stream_execution_result payload=%s",
+            "stream_execution_result payload=%s %s",
             json.dumps(result, ensure_ascii=True, sort_keys=True, default=str),
+            stream_context,
         )
         if result["outcome"] not in SUCCESS_OUTCOMES:
             error_code = result.get("errorCode") or "stream_execution_failed"
@@ -275,7 +285,7 @@ def reconciliation_ingestion():
             checkpoint = result.get("checkpoint") or {}
             counters = result.get("counters") or {}
             failure_message = (
-                "Stream execution stopped: "
+                f"Stream execution stopped: {stream_context} "
                 f"outcome={result.get('outcome')} errorCode={error_code} "
                 f"message={message} checkpoint={checkpoint} counters={counters}"
             )
@@ -296,9 +306,8 @@ def reconciliation_ingestion():
                 raise RuntimeError(failure_message)
             raise AirflowFailException(failure_message)
         logger.info(
-            "stream_execution_succeeded partner=%s runtimeRunId=%s outcome=%s checkpoint=%s counters=%s",
-            command.partner,
-            command.runtime_run_id,
+            "stream_execution_succeeded %s outcome=%s checkpoint=%s counters=%s",
+            stream_context,
             result.get("outcome"),
             result.get("checkpoint"),
             result.get("counters"),

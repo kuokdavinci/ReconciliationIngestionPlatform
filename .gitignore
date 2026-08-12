@@ -38,6 +38,8 @@ sftp_data/
 downloads/
 tmp_downloads/
 scratch/
+mock_data/
+
 
 # Generated reports
 report.md

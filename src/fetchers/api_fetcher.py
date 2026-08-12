@@ -63,8 +63,15 @@ class APIFetcher(BaseFetcher):
 
             # Create local download directory
             download_dir = config.download_dir or "./downloads"
-            local_dir = Path(download_dir)
-            local_dir.mkdir(parents=True, exist_ok=True)
+            local_dir = self.resolve_local_path(download_dir)
+            try:
+                local_dir.mkdir(parents=True, exist_ok=True)
+            except PermissionError as exc:
+                return FetchResult(
+                    success=False,
+                    error=f"API download path is not writable: {local_dir}: {exc}",
+                    metadata={"errorCode": "fetch_storage_permission_denied"},
+                )
 
             if config.pagination:
                 return await self._fetch_paginated(
@@ -99,10 +106,26 @@ class APIFetcher(BaseFetcher):
             if "json" in content_type:
                 # Convert JSON to Excel (simplified - just save as JSON for now)
                 local_path = local_path.with_suffix(".json")
-                local_path.write_bytes(response.content)
+                try:
+                    local_path.write_bytes(response.content)
+                except PermissionError as exc:
+                    return FetchResult(
+                        success=False,
+                        local_path=str(local_path),
+                        error=f"API download path is not writable: {local_path.parent}: {exc}",
+                        metadata={"errorCode": "fetch_storage_permission_denied"},
+                    )
             else:
                 # Save as-is (likely Excel or CSV)
-                local_path.write_bytes(response.content)
+                try:
+                    local_path.write_bytes(response.content)
+                except PermissionError as exc:
+                    return FetchResult(
+                        success=False,
+                        local_path=str(local_path),
+                        error=f"API download path is not writable: {local_path.parent}: {exc}",
+                        metadata={"errorCode": "fetch_storage_permission_denied"},
+                    )
 
             # Validate downloaded file
             if not self.validate_file(str(local_path)):
@@ -244,7 +267,23 @@ class APIFetcher(BaseFetcher):
                 )
 
             content_type = response.headers.get("content-type", "")
-            local_path.write_bytes(response.content)
+            try:
+                local_path.write_bytes(response.content)
+            except PermissionError as exc:
+                unit.status = "FAILED"
+                unit.error = f"API download path is not writable: {local_path.parent}"
+                unit.error_code = "fetch_storage_permission_denied"
+                units.append(unit)
+                return FetchResult(
+                    success=False,
+                    local_path=str(local_path),
+                    error=f"{unit.error}: {exc}",
+                    metadata={
+                        "errorCode": unit.error_code,
+                        "pagination": {"units": units},
+                    },
+                    units=units,
+                )
             unit.content_hash = hashlib.sha256(response.content).hexdigest()
             unit.status_code = response.status_code
             unit.content_type = content_type

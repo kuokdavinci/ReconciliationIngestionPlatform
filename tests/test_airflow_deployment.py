@@ -75,6 +75,9 @@ def test_airflow_dag_uses_public_sdk_and_global_schedule() -> None:
     assert ".expand(" in dag_source
     assert "ExecuteStreamOutcome.WAITING_REVIEW" in dag_source
     assert "stream_execution_result payload=" in dag_source
+    assert "fetchConfigId" in dag_source
+    assert "source_unit_fetched" in (ROOT / "src/scheduler/jobs.py").read_text()
+    assert "sourceUnitKey=" in (ROOT / "src/scheduler/jobs.py").read_text()
     assert "checkpoint={checkpoint}" in dag_source
     assert "counters={counters}" in dag_source
     assert "stream_execution_exception" in dag_source

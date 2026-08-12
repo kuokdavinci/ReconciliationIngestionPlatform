@@ -69,24 +69,20 @@ npm --prefix frontend-next run build
 
 The frontend `build` script already selects the verified Webpack path (`next build --webpack`).
 
-## Useful CLI Commands
+## Manual automation through Airflow
 
-List scheduler jobs:
+The legacy scheduler CLI was removed. The manual pilot queues runs through the
+Airflow-backed API:
 
 ```bash
-uv run python run.py --list-jobs
+curl -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run \
+  -H 'X-Actor: operator'
 ```
 
-Start scheduler:
+Inspect runtime state with:
 
 ```bash
-uv run python run.py --start-scheduler
-```
-
-Trigger scheduler job now:
-
-```bash
-uv run python run.py --run-job-now
+curl http://localhost:8000/api/v1/automation/jobs
 ```
 
 Run ingestion from a local file:
@@ -125,7 +121,7 @@ Dự án có `Makefile` với nhiều target tiện ích:
 | `make momo-e2e-phase2-full` | Legacy Phase 2: ghi file Wave 2 gồm 20 rows mới |
 | `make momo-e2e-run` | Trigger MOMO automation job qua API |
 | `make momo-e2e-job` | Kiểm tra trạng thái MOMO job |
-| `make momo-e2e-rebuild` | Rebuild api + scheduler containers |
+| `make momo-e2e-rebuild` | Rebuild api + Airflow containers |
 | `make momo-e2e-missing-partner-demo` | Inject MISSING_PARTNER row để test engine |
 | `make momo-sprint6-setup` | Full cleanup + Sprint 6 dataset |
 | `make momo-sprint6-wave2` | Activate Sprint 6 Wave 2 file |
@@ -183,7 +179,7 @@ Các test modules hiện tại:
 | `tests/test_api_automation*.py` | – | Automation endpoints |
 | `tests/test_api_mapping*.py` | – | Mapping API |
 | `tests/test_analysis_*.py` | – | Analysis modules (guardrails, scenarios, providers, etc.) |
-| `tests/test_analysis_e2e.py`, `tests/test_phase8.py` | – | LLM E2E tests (--ignore trong make test) |
+| `tests/test_analysis_e2e.py` | – | Real LLM E2E test (--ignore trong make test) |
 | `tests/test_seed_momo_e2e.py` | – | MOMO E2E seed helpers regression tests |
 | `tests/test_e2e_20_records.py` | – | Full-stack E2E: 20 records MOMO + ZALOPAY (ingestion → reconciliation → verify) |
 | `tests/test_e2e_100k_records.py` | – | Large volume E2E: 100k records MOMO + ZALOPAY (ingestion → reconciliation → verify) |

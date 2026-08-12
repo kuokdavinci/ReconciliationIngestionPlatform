@@ -73,6 +73,33 @@ async def test_execute_stream_loads_config_and_normalizes_no_data_result() -> No
 
 
 @pytest.mark.asyncio
+async def test_execute_stream_rejects_a_backfill_parent_without_a_day() -> None:
+    config = _fetch_config()
+    repository = MagicMock()
+    repository.find_by_id = AsyncMock(return_value=config)
+    runner = AsyncMock()
+
+    with pytest.raises(ValueError, match="reconciliation_date is required"):
+        await execute_stream(
+            ExecuteStreamCommand(
+                fetchConfigId=str(config.id),
+                partner=config.partner,
+                configVersion=str(config.updated_at),
+                mode="BACKFILL",
+                backfillRunId="backfill-1",
+                fromDate=date(2026, 8, 9),
+                toDate=date(2026, 8, 9),
+            ),
+            db=MagicMock(),
+            config_loader=MagicMock(),
+            fetch_config_repository=repository,
+            runner=runner,
+        )
+
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_execute_stream_rejects_stale_config_version() -> None:
     config = _fetch_config()
     repository = MagicMock()

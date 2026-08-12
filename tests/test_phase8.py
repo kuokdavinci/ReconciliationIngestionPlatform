@@ -6,7 +6,7 @@ Tests cover:
 - SFTPFetcher (mocked)
 - APIFetcher (mocked)
 - FileDropFetcher (mocked filesystem)
-- Scheduler setup and job execution
+- FileDrop fetch setup and execution
 """
 
 import os
@@ -30,8 +30,6 @@ from src.models.fetch_config import (
     FileDropConfig,
     FetchConfigRepository,
 )
-from src.scheduler.config import SchedulerConfig
-from src.scheduler.scheduler import PartnerDataScheduler
 
 
 # ============================================================================
@@ -529,159 +527,6 @@ class TestFileDropFetcher:
         """Test file readiness check for missing file."""
         fetcher = FileDropFetcher()
         assert fetcher._is_file_ready("/nonexistent/file.xlsx") is False
-
-
-# ============================================================================
-# Scheduler Config Tests
-# ============================================================================
-
-
-class TestSchedulerConfig:
-    """Tests for SchedulerConfig."""
-
-    def test_default_values(self):
-        """Test default scheduler config values."""
-        config = SchedulerConfig()
-        assert config.job_store_type == "mongodb"
-        assert config.mongodb_url is None
-        assert config.db_name == "reconciliation"
-        assert config.default_schedule == "0 0 * * *"
-        assert config.max_instances == 1
-        assert config.misfire_grace_time == 300
-        assert config.coalesce is True
-
-    def test_custom_values(self):
-        """Test custom scheduler config values."""
-        config = SchedulerConfig(
-            job_store_type="memory",
-            db_name="test_db",
-            default_schedule="0 12 * * *",
-            max_instances=3,
-        )
-        assert config.job_store_type == "memory"
-        assert config.db_name == "test_db"
-        assert config.default_schedule == "0 12 * * *"
-        assert config.max_instances == 3
-
-
-# ============================================================================
-# Scheduler Tests
-# ============================================================================
-
-
-class TestPartnerDataScheduler:
-    """Tests for PartnerDataScheduler."""
-
-    @pytest.mark.asyncio
-    async def test_start_stop(self):
-        """Test scheduler start and stop lifecycle."""
-        config = SchedulerConfig(job_store_type="memory")
-        scheduler = PartnerDataScheduler(config=config)
-
-        scheduler.start()
-        assert scheduler.is_running is True
-
-        scheduler.stop(wait=False)
-        assert scheduler.is_running is False
-
-    @pytest.mark.asyncio
-    async def test_add_job(self):
-        """Test adding a daily job."""
-        config = SchedulerConfig(job_store_type="memory")
-        scheduler = PartnerDataScheduler(config=config)
-        scheduler.start()
-
-        async def mock_job():
-            pass
-
-        scheduler.add_daily_job(mock_job, job_id="test_job")
-        jobs = scheduler.list_jobs()
-        assert len(jobs) == 1
-        assert jobs[0]["id"] == "test_job"
-
-        scheduler.stop(wait=False)
-
-    @pytest.mark.asyncio
-    async def test_remove_job(self):
-        """Test removing a job."""
-        config = SchedulerConfig(job_store_type="memory")
-        scheduler = PartnerDataScheduler(config=config)
-        scheduler.start()
-
-        async def mock_job():
-            pass
-
-        scheduler.add_daily_job(mock_job, job_id="test_job")
-        scheduler.remove_job("test_job")
-        jobs = scheduler.list_jobs()
-        assert len(jobs) == 0
-
-        scheduler.stop(wait=False)
-
-    @pytest.mark.asyncio
-    async def test_list_jobs_empty(self):
-        """Test listing jobs when none exist."""
-        config = SchedulerConfig(job_store_type="memory")
-        scheduler = PartnerDataScheduler(config=config)
-        scheduler.start()
-
-        jobs = scheduler.list_jobs()
-        assert len(jobs) == 0
-
-        scheduler.stop(wait=False)
-
-    @pytest.mark.asyncio
-    async def test_run_job_now_not_started(self):
-        """Test run_job_now raises error when scheduler not started."""
-        config = SchedulerConfig(job_store_type="memory")
-        scheduler = PartnerDataScheduler(config=config)
-
-        with pytest.raises(RuntimeError, match="Scheduler not started"):
-            scheduler.run_job_now("test_job")
-
-    @pytest.mark.asyncio
-    async def test_run_job_now_not_found(self):
-        """Test run_job_now raises error when job not found."""
-        config = SchedulerConfig(job_store_type="memory")
-        scheduler = PartnerDataScheduler(config=config)
-        scheduler.start()
-
-        with pytest.raises(ValueError, match="Job not found"):
-            scheduler.run_job_now("nonexistent_job")
-
-        scheduler.stop(wait=False)
-
-    @pytest.mark.asyncio
-    async def test_double_start_warning(self, caplog):
-        """Test starting already-running scheduler logs warning."""
-        import logging
-
-        # Set caplog to capture all levels
-        caplog.set_level(logging.DEBUG)
-
-        # Get the scheduler logger and ensure it has handlers
-        scheduler_logger = logging.getLogger("reconciliation.scheduler")
-        if not scheduler_logger.handlers:
-            handler = logging.StreamHandler()
-            handler.setLevel(logging.DEBUG)
-            scheduler_logger.addHandler(handler)
-        scheduler_logger.setLevel(logging.DEBUG)
-
-        config = SchedulerConfig(job_store_type="memory")
-        scheduler = PartnerDataScheduler(config=config)
-        scheduler.start()
-        scheduler.start()  # Should log warning
-
-        # Check that warning was logged
-        warning_messages = [r.message.lower() for r in caplog.records if r.levelno == logging.WARNING]
-        has_warning = any("already running" in msg for msg in warning_messages)
-
-        # If not in caplog, check the logger's last log
-        if not has_warning:
-            # The warning was definitely logged - check via a different method
-            assert scheduler.is_running  # Scheduler should still be running
-
-        scheduler.stop(wait=False)
 
 
 # ============================================================================

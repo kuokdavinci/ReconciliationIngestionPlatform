@@ -78,7 +78,7 @@ async def test_run_automation_job_now():
     with (
         patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
         patch("src.api.automation.asyncio.create_task", side_effect=_discard_background_task),
-        patch.object(settings, "automation_orchestrator", "apscheduler"),
+        patch.object(settings, "automation_orchestrator", "local"),
     ):
         request = SimpleNamespace(
             app=SimpleNamespace(state=SimpleNamespace(db=app.state.db)),
@@ -227,7 +227,7 @@ async def test_run_now_allows_new_file_after_mapping_review_was_approved():
     with (
         patch("src.api.automation._find_recovery_checkpoint", new=AsyncMock(return_value=checkpoint)),
         patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
-        patch.object(settings, "automation_orchestrator", "apscheduler"),
+        patch.object(settings, "automation_orchestrator", "local"),
         patch("src.api.automation.asyncio.create_task") as create_task,
     ):
         create_task.side_effect = lambda coro: (coro.close(), MagicMock())[1]

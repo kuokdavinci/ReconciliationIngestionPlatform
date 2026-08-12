@@ -2,7 +2,7 @@
   position: sticky;
   top: 0;
   height: 100vh;
-  padding: 24px 16px;
+  padding: 16px 12px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%),
     var(--bg-sidebar, #0b0e11);
@@ -14,38 +14,39 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 8px 20px;
+  gap: 10px;
+  padding: 4px 4px 14px;
   border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-  margin-bottom: 20px;
+  margin-bottom: 14px;
   flex-shrink: 0;
 }
 
 .brandMark {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border-radius: 6px;
   background: var(--brand-gradient, linear-gradient(135deg, #f6cf3c 0%, #f0b90b 52%, #b78500 100%));
   color: #12161a;
-  box-shadow: 0 0 15px rgba(240, 185, 11, 0.25);
+  box-shadow: 0 0 12px rgba(240, 185, 11, 0.2);
   flex-shrink: 0;
 }
 
 .brandName {
   display: block;
-  font-size: 19px;
+  font-size: 16px;
   font-weight: 800;
   letter-spacing: -0.02em;
   color: #f8f5ef;
+  line-height: 1.1;
 }
 
 .brandSubtitle {
   display: block;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #d8c6a6;
   margin-top: 1px;
@@ -53,22 +54,23 @@
 
 .nav {
   display: grid;
-  gap: 4px;
+  gap: 3px;
   flex-shrink: 0;
 }
 
 .navItem {
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-height: 44px;
-  padding: 10px 16px;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 6px;
   color: rgba(236, 234, 227, 0.68);
   text-decoration: none;
-  font-size: 14px;
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  font-size: 13px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
 }
 
 .navItem:hover {
@@ -77,19 +79,19 @@
 }
 
 .navItemActive {
-  background: rgba(255, 247, 235, 0.1);
+  background: rgba(255, 247, 235, 0.09);
   color: #fff5e9;
-  border-color: rgba(255, 219, 182, 0.16);
+  border-color: rgba(255, 219, 182, 0.14);
   font-weight: 600;
 }
 
 .footer {
-  padding: 12px 8px 0;
+  padding: 10px 6px 0;
   margin-top: auto;
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .statusDot {
@@ -97,11 +99,11 @@
   height: 6px;
   border-radius: 50%;
   background: var(--status-matched, #0ecb81);
-  box-shadow: 0 0 12px var(--status-matched, #0ecb81);
+  box-shadow: 0 0 10px var(--status-matched, #0ecb81);
 }
 
 .statusText {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   color: rgba(236, 234, 227, 0.64);

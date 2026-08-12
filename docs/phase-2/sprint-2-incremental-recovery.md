@@ -51,7 +51,10 @@ Khoảng trống hiện tại:
 ### Ngoài phạm vi
 
 - Không sửa thuật toán hoặc schema matching trong `src/reconciliation/`.
-- Không sửa frontend hoặc thêm màn hình Sprint 2.
+- Không thay đổi các màn hình reconciliation/matching ngoài phạm vi vận hành.
+  Sprint 2.5 adds the compact Schedules action grid and the ordered backfill
+  progress panel as the operator surface for the already-defined backfill
+  contract.
 - Không sửa AI, insights, copilot hoặc prompt/provider.
 - Không đổi business meaning của transaction.
 - Không dùng checkpoint để thay thế `fileHash`, `fetchUnitKey` hoặc `ingestion_key`.
@@ -330,6 +333,33 @@ Mỗi scenario phải ghi `expected`, `actual`, `passed`, duration, checkpoint b
 
 ## 9. Error and observability contract
 
+## 9A. Ordered FileDrop backfill implementation
+
+The current implementation adds a durable parent backfill run for operator-
+initiated FileDrop replay:
+
+- `POST /api/v1/automation/jobs/{partner}/backfill` validates an inclusive
+  range, removes weekend dates, persists one parent `backfill_run`, and submits
+  one Airflow DAG run with `mode=BACKFILL`.
+- The parent stores one day record per business date. Airflow claims and
+  executes those records in ascending order and stops at the first failure or
+  mapping-review gate. A backfill never reads or advances the scheduled
+  checkpoint.
+- A missing approved mapping creates `WAITING_CONFIG` and links the pending
+  Guided Review packet. Approving that packet resumes the same parent run;
+  normal post-approval replay remains unchanged for non-backfill packets.
+- `GET /api/v1/automation/backfill-runs/{id}` is the UI source of truth for
+  aggregate and per-day progress. The Schedules page polls it and exposes the
+  review link when approval is required.
+- The deterministic VNPAY fixture is reset with
+  `make vnpay-backfill-reset`; it creates date-templated files and a
+  pending draft mapping without changing production-like source data.
+
+Automated evidence is covered by `tests/test_backfill_runs.py`,
+`tests/test_airflow_backfill.py`, `tests/test_vnpay_filedrop_backfill_demo.py`,
+and the Schedules Playwright scenario. A live Docker/Airflow run remains an
+environment-level acceptance step, not a claim made by these unit tests.
+
 Các error/outcome tối thiểu:
 
 - `source_unit_claim_conflict`
@@ -362,7 +392,8 @@ Runtime/log metadata phải có `partner`, `stream_key`, `source_unit_key`, `cur
 
 - [ ] API pagination/cursor và checkpoint chạy được qua toàn bộ scenario S2-00 đến S2-07.
 - [ ] FileDrop/SFTP recovery đạt S2-08 đến S2-09 hoặc được ghi rõ là deferred với lý do.
-- [ ] Backfill isolation đạt S2-10.
+- [x] Backfill isolation đạt S2-10 ở contract và regression tests; live Docker
+  acceptance vẫn cần chạy trước production cutover.
 - [ ] Concurrent claim/config version/data invariant đạt S2-11 đến S2-13.
 - [ ] Retryable/terminal classification, bounded backoff, `BLOCKED` và
   operator resolve/skip đạt S2-14 đến S2-17.

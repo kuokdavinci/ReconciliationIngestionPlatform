@@ -20,7 +20,14 @@ Phạm vi đầu tiên đã được triển khai với Airflow `3.3.0`, `LocalE
 - Runtime record lưu `dagId`, `dagRunId`, `taskId`, mapped-task index, try number và logical date.
 - Airflow dùng metadata database `airflow` riêng trong cùng PostgreSQL instance; không trộn metadata table vào application database.
 - Pool `ingestion_streams=1`, `max_active_runs=1` và mapped stream task tuần tự giữ nguyên boundary checkpoint của Sprint 2.
-- Compose mặc định dùng Airflow làm application orchestrator; APScheduler nằm sau profile `apscheduler` và chỉ là rollback/diagnostic switch. APScheduler chưa được decommission.
+- Operator backfill dùng cùng DAG với `mode=BACKFILL`: một parent run lưu
+  từng business date, Airflow xử lý tuần tự, và Guided Review approval resume
+  parent đó qua `backfillRunId` thay vì tạo post-approval run thứ hai.
+- Schedules UI có action grid compact, dialog chọn range, và progress panel
+  polling parent run; VNPAY FileDrop là fixture reproducible cho flow này.
+- Compose dùng Airflow làm application orchestrator duy nhất. Manual pilot giữ
+  `AIRFLOW_GLOBAL_SCHEDULE=none`; APScheduler control plane đã được decommission
+  sau khi VNPAY backfill đạt 3/3 ngày `COMPLETED`.
 
 Các file vận hành chính: `Dockerfile.airflow`, `requirements-airflow.txt`, `docker-compose.yml`, `dags/reconciliation_ingestion.py` và `docker/bootstrap-airflow-db.sh`.
 
@@ -33,7 +40,10 @@ Pilot manual-only đã chạy qua API ứng dụng với mock API ba trang:
 - Replay (`616e2e4a-55b4-4397-900f-8aab1e0923f6`) trả `streamAlreadyCompleted=true`, xử lý 0 unit mới và giữ nguyên 6 dòng, 0 duplicate.
 - API server, scheduler và DAG processor được restart; health trở lại `healthy` và run sau restart (`c6389099-f195-4d32-8517-6de4ca0da575`) hoàn tất qua Airflow.
 
-Trạng thái local sau pilot: API dùng `APP_AUTOMATION_ORCHESTRATOR=airflow`, DAG được unpause nhưng `AIRFLOW_GLOBAL_SCHEDULE=none`, và container APScheduler cũ đã dừng. Vì vậy nút Run Now/retry trên UI đi qua Airflow nhưng không có cron tự động cho các partner khác.
+Trạng thái local sau pilot: API dùng `APP_AUTOMATION_ORCHESTRATOR=airflow`,
+`AIRFLOW_GLOBAL_SCHEDULE=none`, và không còn service/container APScheduler.
+Nút Run Now/retry/backfill trên UI đi qua Airflow; cron tự động chưa được bật
+cho các partner khác trong manual pilot.
 
 ### Local startup
 
@@ -44,37 +54,44 @@ docker compose up -d postgres mongodb sftp airflow-api-server airflow-scheduler 
 docker compose ps
 ```
 
-Airflow UI/API ở `http://localhost:8080`. DAG được pause khi tạo để tránh ownership kép. Với demo manual, API đã cấu hình đi qua Airflow; nếu `.env` cũ vẫn dùng APScheduler, chuyển API sang Airflow bằng:
+Airflow UI/API ở `http://localhost:8080`. DAG được pause khi tạo để tránh ownership kép. Với demo manual, API đã cấu hình đi qua Airflow:
 
 ```dotenv
 APP_AUTOMATION_ORCHESTRATOR=airflow
 AIRFLOW_GLOBAL_SCHEDULE=none
 ```
 
-`none` giữ DAG ở chế độ manual-only trong pilot, vì vậy unpause DAG không tự chạy tất cả fetch config đang enabled. Chỉ đổi lại cron production sau khi pilot đạt acceptance criteria và APScheduler đã dừng.
+`none` giữ DAG ở chế độ manual-only trong pilot, vì vậy unpause DAG không tự chạy tất cả fetch config đang enabled. Chỉ đổi lại cron production sau khi có acceptance decision riêng.
 
 ### FileDrop/SFTP path contract in Airflow
 
 Airflow task execution uses `/opt/airflow/app` as its working directory. This
-matches the scheduler-container mounts in `docker-compose.yml`:
+matches the Airflow task mounts in `docker-compose.yml`:
 
 - `./mock_data` → `/opt/airflow/app/mock_data`
 - `./sftp_data` → `/opt/airflow/app/sftp_data`
 - `./downloads` → `/opt/airflow/app/downloads`
 
 Therefore the existing MOMO demo config (`filedrop.directory=./mock_data`) is
-valid for both APScheduler (`/app`) and Airflow (`/opt/airflow/app`). The
+valid for the API (`/app`) and Airflow (`/opt/airflow/app`). The
 fetchers also resolve relative paths from the application root, so task cwd
 changes cannot redirect the lookup to `/opt/airflow/mock_data` or another
 unmounted directory. The same contract applies to FileDrop/SFTP streams using
 `./sftp_data` and the default SFTP download directory `./downloads`.
+Compose runs `airflow-volume-permissions` before `airflow-init` so the
+non-root Airflow worker (UID 50000, group 0) can write those bind mounts. If a
+host ACL or an externally managed volume overrides the permissions, verify
+that `downloads/` and `sftp_data/` are group-writable before starting the
+Airflow services.
 FileDrop/SFTP source units are still processed sequentially at file boundary;
 mapping review is evaluated per file, not as one API-style paginated stream
 packet.
 
 `AIRFLOW_JWT_SECRET` phải có ít nhất 64 ký tự ngẫu nhiên và giống nhau trên API server, scheduler và DAG processor. Không dùng giá trị local-development mặc định khi triển khai production.
 
-Rollback chỉ cần pause DAG, trả flag về `apscheduler`, rồi restart API. Không reset checkpoint hoặc runtime data.
+Rollback pilot là pause DAG và rollback application deployment về artifact trước
+cutover nếu cần; không có đường bật lại APScheduler và không reset checkpoint
+hoặc runtime data.
 
 ### Submission and outcome contract
 
@@ -109,6 +126,14 @@ Airflow fail trước đó.
 Airflow task log hiện ghi structured `stream_execution_started`,
 `stream_execution_result` và `stream_execution_succeeded/exception`, gồm
 `runtimeRunId`, `dagRunId`, task try, outcome, error code, checkpoint và counters.
+Các log source-unit bổ sung `partner`, `fetchConfigId`, `streamKey`,
+`sourceUnitKey`, page/cursor và error code. Vì vậy có thể lọc một stream bằng
+`runtimeRunId` hoặc nhanh hơn bằng `partner`:
+
+```bash
+docker logs reconciliation-airflow-scheduler 2>&1 \
+  | rg 'partner=VIETTELPAY|runtimeRunId=<runtime-id>'
+```
 
 ### Deterministic ViettelPay manual-retry demo
 
@@ -163,7 +188,7 @@ Repository hiện có các boundary phù hợp cho migration:
 
 ### Decision
 
-Airflow sẽ thay APScheduler ở lớp trigger/orchestration bên ngoài. Business logic ingestion vẫn thuộc application/domain/infrastructure của repository.
+Airflow là lớp trigger/orchestration bên ngoài duy nhất. Business logic ingestion vẫn thuộc application/domain/infrastructure của repository.
 
 ```text
 Airflow DAG
@@ -211,7 +236,8 @@ Lý do:
 - Giữ nguyên checkpoint boundary và failure/resume semantics của Sprint 2.
 - Với API lớn, prefetch chỉ dừng ở bước lưu raw page bền vững; không prefetch vào PostgreSQL hay tạo transaction trước khi mapping được duyệt.
 - Không biến Airflow metadata thành source-unit ledger thứ hai.
-- Có thể rollback về APScheduler mà không đổi dữ liệu hoặc checkpoint.
+- Có thể pause DAG và rollback application artifact mà không đổi dữ liệu hoặc
+  checkpoint.
 
 Các tham số tối thiểu của DAG/task:
 
@@ -230,14 +256,17 @@ Các tham số tối thiểu của DAG/task:
 
 ### Scheduling ownership
 
-Trong thời gian dual-run, chỉ APScheduler được phép trigger production stream. Airflow chỉ chạy manual hoặc shadow stream trên fixture/partner pilot. Sau cutover, Airflow là scheduler duy nhất; APScheduler bị disable để tránh double ingestion.
+Trong manual pilot, Airflow là owner duy nhất cho các stream được operator kích
+hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigger tự
+động và không có dual-run với scheduler khác.
 
 ## Migration tasks
 
 ### Task 0 — Chốt ADR và inventory
 
 - Ghi nhận Airflow là control-plane scheduler, không phải fetcher hay checkpoint store.
-- Lập mapping từ APScheduler job/config/runtime status sang DAG/task/run metadata.
+- Mapping lịch sử từ scheduler job/config/runtime status sang DAG/task/run
+  metadata đã được hoàn tất trong pilot.
 - Chốt Airflow major version, executor, deployment target, timezone và ownership vận hành.
 
 **Verify:** ADR được review; không còn hai thành phần cùng sở hữu production schedule.
@@ -275,20 +304,22 @@ Trong thời gian dual-run, chỉ APScheduler được phép trigger production 
 
 **Verify:** Airflow task retry không advance checkpoint sai, không tạo duplicate ingestion key và không chạy vượt blocked boundary.
 
-### Task 5 — Dual-run và cutover theo partner (pending)
+### Task 5 — Dual-run và cutover theo partner (superseded)
 
 - Chạy Airflow pilot ở manual/shadow mode.
 - So sánh runtime status, checkpoint, row counts, duplicate count, latency và error classification giữa scheduler cũ và pilot.
-- Disable APScheduler cho từng partner sau khi pilot đạt acceptance criteria.
-- Giữ rollback switch để chuyển partner về APScheduler mà không reset checkpoint.
+- Không triển khai dual-run trong manual pilot; Airflow được xác minh trên
+  fixture/ViettelPay/VNPAY và giữ manual-only để giới hạn blast radius.
 
 **Verify:** mỗi partner có một scheduler owner duy nhất; cutover/revert không làm mất checkpoint hoặc tạo double run.
 
-### Task 6 — Decommission APScheduler (deferred until cutover evidence)
+### Task 6 — Decommission APScheduler (completed for manual pilot)
 
-- Xóa registration/startup path và Mongo `apscheduler_jobs` dependency sau khi toàn bộ partner đã cutover.
-- Cập nhật Docker Compose, CLI, README, operational dashboard và runbook.
-- Giữ migration note cho các job history cũ nếu cần audit.
+- Đã xóa registration/startup path, Compose service/profile, implementation,
+  dependency và Mongo `apscheduler_jobs` control-plane dependency.
+- Đã cập nhật Docker Compose, CLI, README, test suite và runbook.
+- Runtime history cũ vẫn giữ nguyên trong Mongo để audit; không migrate sang
+  Airflow metadata.
 
 **Verify:** production stack không còn process APScheduler; Airflow là nguồn schedule duy nhất; manual run và operator recovery vẫn hoạt động.
 
@@ -299,33 +330,35 @@ Trong thời gian dual-run, chỉ APScheduler được phép trigger production 
 - Kiểm tra restart Airflow, restart worker, metadata DB outage, application DB outage và partner timeout.
 - Đối chiếu invariant: không duplicate ingestion key, checkpoint contiguous, blocked unit không tự skip, backfill không advance scheduled checkpoint.
 
-**Exit criterion:** tất cả acceptance criteria pass và có rollback evidence trước khi xóa APScheduler.
+**Exit criterion:** manual pilot có evidence về manual run, retry, restart và
+  ordered backfill; daily cron production là follow-up riêng.
 
 ## Cutover and rollback
 
 ### Cutover
 
 ```text
-APScheduler active
-  -> Airflow pilot manual/shadow
+Airflow manual pilot
   -> compare checkpoint/runtime/data evidence
-  -> Airflow owns one partner
-  -> repeat per partner
-  -> Airflow owns all production schedules
+  -> Airflow remains the only workflow owner
+  -> enable production cron only after a separate acceptance decision
 ```
 
-Trong cutover, không reset checkpoint và không chạy đồng thời cùng một stream từ hai scheduler. Nếu cần re-run, dùng cùng stream identity và dựa vào replay-safe claim.
+Trong pilot, không reset checkpoint và không chạy đồng thời cùng một stream từ
+hai workflow owner. Nếu cần re-run, dùng cùng stream identity và dựa vào
+replay-safe claim.
 
 ### Rollback
 
 - Disable Airflow DAG cho partner bị lỗi.
-- Enable APScheduler job cho đúng partner và stream identity.
+- Deploy lại application artifact trước cutover và giữ DAG ở trạng thái paused.
 - Không sửa hoặc lùi checkpoint bằng tay trừ khi có operator action/audit theo recovery contract.
 - Kiểm tra task failure sau persistence: replay phải trả duplicate/replay outcome an toàn.
 
 ## Acceptance criteria
 
-- [ ] Airflow có thể trigger scheduled run, manual run và backfill run.
+- [x] Airflow có thể trigger scheduled/manual run và ordered backfill run; VNPAY
+  fixture/UI approval flow có regression coverage.
 - [x] API pagination stage toàn bộ raw page ngoài transaction store, sau đó ingestion/replay vẫn xử lý từng page theo thứ tự và checkpoint không advance vượt persistence boundary.
 - [ ] FileDrop/SFTP xử lý từng fingerprint theo thứ tự và giữ source đủ lâu cho recovery.
 - [ ] Airflow retry và application retry có bounded policy, không retry vô hạn.
@@ -335,7 +368,7 @@ Trong cutover, không reset checkpoint và không chạy đồng thời cùng m�
 - [x] Không duplicate ingestion key sau retry, restart và replay của ViettelPay pilot.
 - [ ] Scheduled checkpoint không bị thay đổi bởi backfill.
 - [ ] Có rollback per partner và không cần reset dữ liệu để rollback.
-- [ ] APScheduler chỉ được gỡ sau khi final verification pass.
+- [x] APScheduler đã được gỡ khỏi manual-pilot deployment sau final verification.
 
 ## Risks and mitigations
 

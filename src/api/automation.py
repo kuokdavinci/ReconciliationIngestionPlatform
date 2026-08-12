@@ -3,11 +3,12 @@
 import asyncio
 import inspect
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
 from src.application.automation import ExecuteStreamCommand, execute_stream
@@ -22,6 +23,7 @@ from src.application.ingestion.recovery_view import build_recovery_view
 from src.config.settings import settings
 from src.domain.fetch_config.models import FetchMethod
 from src.domain.ingestion.checkpoints import IngestionMode
+from src.infrastructure.backfill.repository import BackfillRunRepository
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from src.domain.runtime.models import (
@@ -32,6 +34,11 @@ from src.domain.runtime.models import (
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
 from src.infrastructure.review.repository import ReviewPacketRepository
 from src.scheduler.jobs import _source_stream_key
+from src.services.backfill_runs import (
+    BackfillRunError,
+    BackfillRunService,
+    serialize_backfill_run,
+)
 from src.services.runtime_runs import (
     create_runtime_run,
     serialize_partner_runtime_run,
@@ -59,6 +66,19 @@ _AIRFLOW_RETRYING_TASK_STATES = {
     "up_for_retry",
 }
 _AIRFLOW_MANUAL_RETRY_STATES = {"failed", "upstream_failed", "up_for_retry"}
+
+
+class _LazyWorkflowGateway:
+    """Resolve the workflow adapter only when a run is actually submitted."""
+
+    def __init__(self, factory):
+        self._factory = factory
+        self._gateway: WorkflowGateway | None = None
+
+    async def trigger(self, command: ExecuteStreamCommand) -> WorkflowSubmission:
+        if self._gateway is None:
+            self._gateway = self._factory()
+        return await self._gateway.trigger(command)
 
 
 def _stream_key_for_config(config) -> str | None:
@@ -213,6 +233,61 @@ def _workflow_gateway(request: Request, db) -> WorkflowGateway:
     return LocalWorkflowGateway(
         runner=run_local,
         track_task=lambda task: _track_background_task(request, task),
+    )
+
+
+async def _approved_backfill_mapping_version(db, partner: str) -> str | None:
+    raw = await db["reconciliation_mapping_config"].find_one(
+        {
+            "partner": partner,
+            "workflowType": "UPC",
+            "fileType": "SETTLEMENT",
+            "status": "APPROVED",
+        },
+        projection={"configVersion": 1},
+        sort=[("createdAt", -1)],
+    )
+    value = (raw or {}).get("configVersion")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+async def _attach_pending_backfill_review_packet(
+    db,
+    partner: str,
+    backfill_run_id: str,
+) -> str | None:
+    packet = await db["review_packet"].find_one(
+        {
+            "partner": partner,
+            "status": "PENDING",
+            "sourceType": "SCHEDULER_JOB",
+        },
+        projection={"_id": 1},
+        sort=[("createdAt", -1)],
+    )
+    if packet is None:
+        return None
+    packet_id = str(packet["_id"])
+    await db["review_packet"].update_one(
+        {"_id": packet_id},
+        {"$set": {"backfillRunId": backfill_run_id}},
+    )
+    return packet_id
+
+
+def _backfill_service(request: Request, db) -> BackfillRunService:
+    return BackfillRunService(
+        fetch_repo=FetchConfigRepository(db),
+        backfill_repo=BackfillRunRepository(db),
+        workflow_gateway=_LazyWorkflowGateway(lambda: _workflow_gateway(request, db)),
+        approved_mapping_version_finder=lambda partner: _approved_backfill_mapping_version(db, partner),
+        pending_review_packet_finder=lambda partner, run_id: _attach_pending_backfill_review_packet(
+            db,
+            partner,
+            run_id,
+        ),
     )
 
 
@@ -392,6 +467,12 @@ async def _mark_submission_failed(db, run, error_code: str) -> None:
         stats={"errorCode": error_code, "retryable": False},
         finished_at=datetime.now(timezone.utc),
     )
+
+
+class BackfillStartPayload(BaseModel):
+    from_date: date = Field(alias="fromDate")
+    to_date: date = Field(alias="toDate")
+    fetch_config_id: str | None = Field(default=None, alias="fetchConfigId")
 
 
 @router.get("/jobs")
@@ -665,6 +746,35 @@ async def run_automation_job_now(request: Request, partner: str):
         "run": serialize_partner_runtime_run(run),
         "workflow": submission.model_dump(by_alias=True, mode="json"),
     }
+
+
+@router.post("/jobs/{partner}/backfill")
+async def start_backfill(request: Request, partner: str, payload: BackfillStartPayload):
+    actor = require_actor(request, payload_field_name="actor")
+    db = _get_db(request)
+    service = _backfill_service(request, db)
+    try:
+        run = await service.start(
+            partner=partner,
+            actor=actor,
+            from_date=payload.from_date,
+            to_date=payload.to_date,
+            fetch_config_id=payload.fetch_config_id,
+        )
+    except BackfillRunError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return serialize_backfill_run(run)
+
+
+@router.get("/backfill-runs/{backfill_run_id}")
+async def get_backfill_run(request: Request, backfill_run_id: str):
+    db = _get_db(request)
+    service = _backfill_service(request, db)
+    try:
+        run = await service.get(backfill_run_id)
+    except BackfillRunError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return serialize_backfill_run(run)
 
 
 @router.post("/jobs/{partner}/recovery/retry")

@@ -23,7 +23,7 @@ def test_compose_uses_minimal_airflow_local_executor_topology() -> None:
     assert services["airflow-api-server"]["command"] == "api-server"
     assert services["airflow-scheduler"]["command"] == "scheduler"
     assert services["airflow-dag-processor"]["command"] == "dag-processor"
-    assert services["scheduler"]["profiles"] == ["apscheduler"]
+    assert "scheduler" not in services
     environment = compose["x-airflow-common"]["environment"]
     assert environment["AIRFLOW__CORE__EXECUTOR"] == "LocalExecutor"
     assert environment["AIRFLOW__CORE__PARALLELISM"] == 2
@@ -75,6 +75,9 @@ def test_airflow_dag_uses_public_sdk_and_global_schedule() -> None:
     assert ".expand(" in dag_source
     assert "ExecuteStreamOutcome.WAITING_REVIEW" in dag_source
     assert "stream_execution_result payload=" in dag_source
+    assert "fetchConfigId" in dag_source
+    assert "source_unit_fetched" in (ROOT / "src/scheduler/jobs.py").read_text()
+    assert "sourceUnitKey=" in (ROOT / "src/scheduler/jobs.py").read_text()
     assert "checkpoint={checkpoint}" in dag_source
     assert "counters={counters}" in dag_source
     assert "stream_execution_exception" in dag_source
@@ -91,7 +94,7 @@ def test_airflow_dag_uses_public_sdk_and_global_schedule() -> None:
     assert 'os.getenv("AIRFLOW_TASK_RETRY_DELAY_SECONDS", "300")' in dag_source
 
 
-def test_airflow_execution_import_does_not_require_apscheduler() -> None:
+def test_airflow_runner_does_not_require_legacy_scheduler_dependency() -> None:
     script = """
 import builtins
 

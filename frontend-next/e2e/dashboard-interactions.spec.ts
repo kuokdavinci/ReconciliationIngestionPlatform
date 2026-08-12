@@ -1,12 +1,14 @@
 import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
-  // Keep browser tests deterministic and independent from the backend service.
-  await page.route("**/api/**", async (route) => {
+  // Mapping Studio loads its list before rendering the wizard. Keep that
+  // unrelated endpoint deterministic; schedule tests provide their own
+  // automation fixtures below.
+  await page.route("**/api/v1/mappings**", async (route) => {
     await route.fulfill({
       status: 404,
       contentType: "application/json",
-      body: JSON.stringify({ detail: "API is not part of the FE interaction smoke test" }),
+      body: JSON.stringify({ detail: "Mapping API is not part of this smoke test" }),
     });
   });
 });
@@ -25,7 +27,9 @@ test("operator can navigate across the dashboard routes", async ({ page }) => {
   ];
 
   for (const route of routes) {
-    await page.getByRole("link", { name: route.label, exact: true }).click();
+    // The sidebar icon is part of the accessible name, so match the visible
+    // navigation label without requiring the icon text to be absent.
+    await page.getByRole("link", { name: route.label }).click();
     await expect(page).toHaveURL(new RegExp(`${route.path}$`));
     await expect(page.getByRole("heading", { name: route.title, exact: true })).toBeVisible();
   }
@@ -120,7 +124,7 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
     lastError: "Schema could not be parsed after maximum attempts.",
   };
 
-  await page.route("**/api/v1/automation/jobs", async (route) => {
+  await page.route("**/api/v1/automation/jobs**", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const recovery = !retryQueued
       ? failedRecovery
@@ -156,7 +160,7 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
     });
   });
 
-  await page.route("**/api/v1/automation/jobs/VIETTELPAY/recovery/retry", async (route) => {
+  await page.route("**/api/v1/automation/jobs/VIETTELPAY/recovery/retry**", async (route) => {
     retryQueued = true;
     await route.fulfill({
       status: 200,
@@ -173,7 +177,7 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
     });
   });
 
-  await page.route("**/api/v1/automation/jobs/MOMO/recovery/resolve", async (route) => {
+  await page.route("**/api/v1/automation/jobs/MOMO/recovery/resolve**", async (route) => {
     blockedResolved = true;
     await route.fulfill({
       status: 200,
@@ -192,12 +196,11 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
 
   await page.goto("/schedules");
   const row = page.getByRole("row", { name: /VIETTELPAY/ });
-  await expect(row).toContainText("Recovery: FAILED");
+  await expect(row).toContainText("Failed");
   const actions = row.locator("td").last();
-  await expect(actions.getByRole("button", { name: "View recovery", exact: true })).toBeVisible();
-  await expect(actions.getByRole("button", { name: "Run Now", exact: true })).toBeVisible();
-  await expect(actions.getByRole("button", { name: "Run Now", exact: true })).toHaveCSS("white-space", "nowrap");
-  await expect(row).toContainText("Progress");
+  await expect(actions.getByRole("button", { name: /Retry/ })).toBeVisible();
+  await expect(actions.getByRole("button", { name: /Retry/ })).toHaveCSS("white-space", "nowrap");
+  await expect(row).toContainText("fetch_timeout_partner_settlement_window_page_2");
   await expect(row).not.toContainText("Checkpoint");
   await expect(row).not.toContainText("Attempt");
   const recoveryFilter = page.getByLabel("Recovery status");
@@ -208,9 +211,10 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
   await expect(page.getByText("No partner matches this recovery status.")).toBeVisible();
   await recoveryFilter.selectOption("BLOCKED");
   const blockedRow = page.getByRole("row", { name: /MOMO/ });
-  await expect(blockedRow).toContainText("Recovery: BLOCKED");
-  await expect(blockedRow.getByRole("button", { name: "Run Now", exact: true })).toBeVisible();
-  await blockedRow.getByRole("button", { name: "View recovery", exact: true }).click();
+  await expect(blockedRow).toContainText("Blocked");
+  await expect(blockedRow.getByRole("button", { name: /Retry/ })).toBeVisible();
+  await blockedRow.getByRole("button", { name: /More options for MOMO/ }).click();
+  await blockedRow.getByRole("menuitem", { name: /View runtime details/ }).click();
   const blockedDialog = page.getByRole("dialog");
   await blockedDialog.locator("#recovery-resolution-reason").fill("Validated terminal schema issue; skip this unit.");
   await blockedDialog.getByRole("button", { name: "Skip unit", exact: true }).click();
@@ -218,7 +222,8 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
   await page.keyboard.press("Escape");
   await expect(blockedDialog).toBeHidden();
   await recoveryFilter.selectOption("ALL");
-  await row.getByRole("button", { name: "View recovery", exact: true }).click();
+  await actions.getByRole("button", { name: /More options for VIETTELPAY/ }).click();
+  await actions.getByRole("menuitem", { name: /View runtime details/ }).click();
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -228,7 +233,7 @@ test("operator can recover a failed ViettelPay page from the schedules view", as
   await dialog.getByRole("button", { name: "Retry now", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Recovery retry queued" })).toBeVisible();
 
-  await expect(row).toContainText("Recovery: COMPLETED", { timeout: 8_000 });
+  await expect(row).toContainText("Ready", { timeout: 8_000 });
   await expect(dialog).toContainText("page:3", { timeout: 8_000 });
   await expect(dialog.locator("dt", { hasText: "Fetched units" }).locator("..").locator("dd")).toHaveText("3 of 3");
 
@@ -240,7 +245,7 @@ test("operator polling stops when a run enters waiting review", async ({ page })
   let runQueued = false;
   let runListCalls = 0;
 
-  await page.route("**/api/v1/automation/jobs", async (route) => {
+  await page.route("**/api/v1/automation/jobs**", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     runListCalls += 1;
     const waitingReview = runQueued && runListCalls >= 3;
@@ -278,7 +283,7 @@ test("operator polling stops when a run enters waiting review", async ({ page })
     });
   });
 
-  await page.route("**/api/v1/automation/jobs/VIETTELPAY/run", async (route) => {
+  await page.route("**/api/v1/automation/jobs/VIETTELPAY/run**", async (route) => {
     runQueued = true;
     await route.fulfill({
       status: 200,
@@ -289,11 +294,104 @@ test("operator polling stops when a run enters waiting review", async ({ page })
 
   await page.goto("/schedules");
   const row = page.getByRole("row", { name: /VIETTELPAY/ });
-  const runButton = row.getByRole("button", { name: "Run Now", exact: true });
+  const runButton = row.getByRole("button", { name: /Run/ });
   await runButton.click();
-  await expect(runButton).toHaveText("Run Now", { timeout: 5_000 });
-  await expect(row).toContainText("Recovery: Waiting review");
+  await expect(runButton).toContainText("Run", { timeout: 5_000 });
+  await expect(row).toContainText("Waiting Review");
   const callsAfterTerminal = runListCalls;
   await page.waitForTimeout(1_500);
   expect(runListCalls).toBe(callsAfterTerminal);
+});
+
+test("operator can start a VNPAY backfill and see its approval progress", async ({ page }) => {
+  await page.route("**/api/v1/automation/jobs**", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        jobs: [{
+          partner: "VNPAY",
+          fetchMethod: "FILEDROP",
+          schedule: "none",
+          destination: "VNPAY_SETTLEMENT",
+          enabled: true,
+          status: "HEALTHY",
+          pendingReviewPackets: 1,
+          latestRuntimeRun: null,
+          recovery: null,
+        }],
+      }),
+    });
+  });
+
+  await page.route("**/api/v1/automation/jobs/VNPAY/backfill**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        _id: "backfill-vnpay-1",
+        partner: "VNPAY",
+        fetchConfigId: "vnpay-fetch-config",
+        mode: "BACKFILL",
+        status: "WAITING_CONFIG",
+        fromDate: "2026-08-07",
+        toDate: "2026-08-11",
+        currentDate: "2026-08-07",
+        completedDays: 0,
+        totalDays: 3,
+        approvalRequired: true,
+        approvalContext: { reviewPacketId: "packet-vnpay-1" },
+        days: [
+          { businessDate: "2026-08-07", status: "PENDING" },
+          { businessDate: "2026-08-10", status: "PENDING" },
+          { businessDate: "2026-08-11", status: "PENDING" },
+        ],
+      }),
+    });
+  });
+
+  await page.route("**/api/v1/automation/backfill-runs/backfill-vnpay-1**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        _id: "backfill-vnpay-1",
+        partner: "VNPAY",
+        status: "WAITING_CONFIG",
+        fromDate: "2026-08-07",
+        toDate: "2026-08-11",
+        completedDays: 0,
+        totalDays: 3,
+        approvalRequired: true,
+        approvalContext: { reviewPacketId: "packet-vnpay-1" },
+        days: [
+          { businessDate: "2026-08-07", status: "PENDING" },
+          { businessDate: "2026-08-10", status: "PENDING" },
+          { businessDate: "2026-08-11", status: "PENDING" },
+        ],
+      }),
+    });
+  });
+
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.goto("/schedules");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const row = page.getByRole("row", { name: /VNPAY/ });
+  await row.getByRole("button", { name: /More options for VNPAY/ }).click();
+  await expect(row.getByRole("menuitem", { name: /Backfill date range/ })).toBeVisible();
+  await row.getByRole("menuitem", { name: /Backfill date range/ }).click();
+
+  const formDialog = page.getByRole("dialog");
+  await expect(formDialog).toContainText("Backfill VNPAY");
+  await formDialog.getByLabel("From date").fill("2026-08-12");
+  await formDialog.getByLabel("To date").fill("2026-08-11");
+  await expect(formDialog.getByRole("alert")).toContainText("on or before");
+  await formDialog.getByLabel("From date").fill("2026-08-07");
+  await formDialog.getByRole("button", { name: "Start Backfill", exact: true }).click();
+
+  const progressDialog = page.getByRole("dialog");
+  await expect(progressDialog).toContainText("0/3 days");
+  await expect(progressDialog).toContainText("Mapping approval required");
+  await expect(progressDialog.getByRole("button", { name: "Open Guided Review", exact: true })).toBeVisible();
 });

@@ -5,10 +5,10 @@ import { usePathname } from "next/navigation";
 import styles from "./app-sidebar.module.css";
 
 const navItems = [
-  { href: "/review-center", label: "Review Center" },
-  { href: "/reconciliation", label: "Reconciliation" },
-  { href: "/schedules", label: "Schedules" },
-  { href: "/audit-log", label: "Audit Log" },
+  { href: "/review-center", label: "Review Center", icon: "fact_check" },
+  { href: "/reconciliation", label: "Reconciliation", icon: "compare_arrows" },
+  { href: "/schedules", label: "Schedules", icon: "schedule" },
+  { href: "/audit-log", label: "Audit Log", icon: "receipt_long" },
 ];
 
 export function AppSidebar() {
@@ -18,7 +18,7 @@ export function AppSidebar() {
     <aside className={styles.sidebar}>
       <div className={styles.brand}>
         <div className={styles.brandMark}>
-          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>sync</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>sync</span>
         </div>
         <div>
           <strong className={styles.brandName}>Adapter</strong>
@@ -33,7 +33,10 @@ export function AppSidebar() {
             href={item.href}
             className={`${styles.navItem} ${pathname === item.href ? styles.navItemActive : ""}`}
           >
-            {item.label}
+            <span className="material-symbols-outlined" style={{ fontSize: 18, opacity: pathname === item.href ? 1 : 0.7 }}>
+              {item.icon}
+            </span>
+            <span>{item.label}</span>
           </Link>
         ))}
       </nav>

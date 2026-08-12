@@ -2,14 +2,15 @@
 	momo-e2e-run momo-e2e-job momo-e2e-rebuild momo-e2e-fail \
 	momo-e2e-phase2-file momo-e2e-help momo-e2e-reset momo-e2e-phase2 momo-e2e-phase2-full \
 	momo-e2e-missing-partner-demo momo-sprint6-setup momo-sprint6-wave2 \
-	zalopay-e2e-reset viettelpay-sprint2-reset viettelpay-sprint2-phase2 viettelpay-sprint2-eval
+	zalopay-e2e-reset viettelpay-sprint2-reset viettelpay-sprint2-phase2 viettelpay-sprint2-eval \
+	vnpay-backfill-reset
 
 # ── Test ──────────────────────────────────────────────────────────
 test:
-	uv run pytest tests/ --ignore=tests/test_analysis_e2e.py --ignore=tests/test_phase8.py -v
+	uv run pytest tests/ --ignore=tests/test_analysis_e2e.py -v
 
 test-quick:
-	uv run pytest tests/ --ignore=tests/test_analysis_e2e.py --ignore=tests/test_phase8.py -x --tb=short
+	uv run pytest tests/ --ignore=tests/test_analysis_e2e.py -x --tb=short
 
 test-analysis:
 	uv run pytest tests/test_analysis_*.py --ignore=tests/test_analysis_e2e.py -v
@@ -31,7 +32,7 @@ eval-all:
 
 # ── CI — runs everything except real LLM E2E tests ──────────────
 ci:
-	uv run pytest tests/ --ignore=tests/test_analysis_e2e.py --ignore=tests/test_phase8.py -v --tb=short
+	uv run pytest tests/ --ignore=tests/test_analysis_e2e.py -v --tb=short
 
 # ── MOMO E2E shortcuts ────────────────────────────────────────────
 momo-e2e-reset:
@@ -78,6 +79,9 @@ viettelpay-sprint2-phase2:
 
 viettelpay-sprint2-eval:
 	PYTHONPATH=. uv run python -m scripts.demo.sprint2.run
+
+vnpay-backfill-reset:
+	docker compose exec -T api env PYTHONPATH=/app VNPAY_BACKFILL_FROM="$${VNPAY_BACKFILL_FROM:-}" VNPAY_BACKFILL_TO="$${VNPAY_BACKFILL_TO:-}" python -m scripts.demo.sprint2.seed_vnpay_filedrop_backfill reset
 
 # ── ZALOPAY E2E shortcuts ─────────────────────────────────────────
 zalopay-e2e-reset:

@@ -27,6 +27,12 @@ def resolve_reconciliation_date(
     configured_date = conf.get("reconciliationDate")
     if configured_date is not None:
         return date.fromisoformat(str(configured_date))
+    # Manual backfill DAG runs do not have Airflow's data interval.  The
+    # backfill command already carries its deterministic lower boundary, so
+    # use it instead of treating a missing interval as a scheduler failure.
+    backfill_from = conf.get("fromDate")
+    if str(conf.get("mode", "")).upper() == "BACKFILL" and backfill_from is not None:
+        return date.fromisoformat(str(backfill_from))
     if interval_end is None:
         raise ValueError("Scheduled DAG run requires data_interval_end")
     return business_date(interval_end)

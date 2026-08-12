@@ -78,7 +78,7 @@ make momo-e2e-fail
 The command also pins the approved mapping to this fixture's structure, so the
 config-health gate does not pause the demo for mapping review.
 
-After changing backend code, rebuild the API and scheduler containers once:
+After changing backend code, rebuild the API and Airflow containers once:
 
 ```bash
 make momo-e2e-rebuild
@@ -399,7 +399,7 @@ make momo-e2e-missing-partner-demo  # inject MOMO_TXN_90_MISSING_PARTNER for eng
 make momo-e2e-run                 # trigger MOMO automation run
 make momo-e2e-job                 # inspect MOMO automation job
 make momo-e2e-phase2-file         # write Wave 2 partner file (9100-9119) only
-make momo-e2e-rebuild             # rebuild api + scheduler containers
+make momo-e2e-rebuild             # rebuild api + Airflow containers
 ```
 
 ### Trigger automation run

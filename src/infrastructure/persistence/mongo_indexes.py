@@ -110,6 +110,16 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_partner_runtime_run_source_file_created",
         ),
     ],
+    "backfill_run": [
+        IndexModel(
+            [("partner", ASCENDING), ("fetchConfigId", ASCENDING), ("createdAt", DESCENDING)],
+            name="idx_backfill_run_partner_config_created",
+        ),
+        IndexModel(
+            [("status", ASCENDING), ("updatedAt", DESCENDING)],
+            name="idx_backfill_run_status_updated",
+        ),
+    ],
     "reconciliation_run": [
         IndexModel(
             [("partner", ASCENDING), ("date", ASCENDING), ("createdAt", ASCENDING)],

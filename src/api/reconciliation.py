@@ -415,28 +415,13 @@ async def list_results(
 
     try:
         repo = _get_repo(request)
-        scope_filters = await _resolve_latest_run_filters(
-            getattr(request.app.state, "db", None), partner, date
-        )
         page, total = await repo.find_page_by_partner_and_date(
             partner,
             date,
             status=ReconciliationStatus(status) if status else None,
-            **scope_filters,
             limit=limit,
             offset=offset,
         )
-        # Results written before runtime IDs were propagated have no
-        # reconciliation_run_id. Keep those legacy rows visible while new
-        # runs remain strictly scoped to their own runtime ID.
-        if total == 0 and scope_filters.get("reconciliation_run_id"):
-            page, total = await repo.find_page_by_partner_and_date(
-                partner,
-                date,
-                status=ReconciliationStatus(status) if status else None,
-                limit=limit,
-                offset=offset,
-            )
         return {
             "results": [_serialize(r) for r in page],
             "total": total,
@@ -479,18 +464,10 @@ async def reconciliation_stats(
 
     try:
         repo = _get_repo(request)
-        scope_filters = await _resolve_latest_run_filters(
-            getattr(request.app.state, "db", None), partner, date
-        )
         by_status, totals = await asyncio.gather(
-            repo.count_by_status(partner, date, **scope_filters),
-            repo.get_total_amounts(partner, date, **scope_filters),
+            repo.count_by_status(partner, date),
+            repo.get_total_amounts(partner, date),
         )
-        if not by_status and scope_filters.get("reconciliation_run_id"):
-            by_status, totals = await asyncio.gather(
-                repo.count_by_status(partner, date),
-                repo.get_total_amounts(partner, date),
-            )
         total = sum(by_status.values())
         return {
             "partner": partner,
@@ -726,7 +703,6 @@ async def reconciliation_insights(
                 date=date,
                 collection=repo,
                 llm_provider=llm_provider,
-                extra_query=await _resolve_latest_run_filters(db, partner, date),
             )
             result["generated_at"] = datetime.now().isoformat()
             return result
@@ -745,7 +721,7 @@ async def reconciliation_insights(
                 focus=focus,
                 collection=repo,
                 llm_provider=llm_provider,
-                extra_query=await _resolve_latest_run_filters(db, partner, date),
+                extra_query={},
             )
             return [r.model_dump() for r in results]
 

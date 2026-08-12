@@ -20,9 +20,10 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onRefresh: () => void;
+  onApproved?: (result: { partner: string; backfillRunId?: string | null }) => void;
 }
 
-export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
+export function GuidedReviewModal({ packet, open, onClose, onRefresh, onApproved }: Props) {
   const { showToast } = useToast();
   const [traceDetailSampleIndex, setTraceDetailSampleIndex] = useState<number | null>(null);
 
@@ -56,6 +57,8 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
 
     isSubmitting,
     postApprovalRun,
+    backfillRun,
+    backfillError,
 
     handleClose,
     handleContinueFromScope,
@@ -145,6 +148,8 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
           sigHeaders={sigHeaders}
           summary={summary}
           topIssues={topIssues}
+          internalRecordCount={scopeClassification?.internalDbRecordCount ?? localPacket.internalRecordCount ?? 0}
+          internalPreview={scopeClassification?.internalPreview ?? localPacket.internalPreview ?? []}
           traceDetailSampleIndex={traceDetailSampleIndex}
           isValidatingRuntime={isValidatingRuntime}
           onValidateRuntime={async () => {
@@ -164,13 +169,21 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
       {step === 4 && (
         <GuidedReviewDecisionStep
           postApprovalRun={postApprovalRun}
+          backfillRun={backfillRun}
+          backfillError={backfillError}
           isApproved={isApproved}
           validationState={validationState}
           isSubmitting={isSubmitting}
           onApproveActivate={async () => {
             try {
-              await handleApproveActivate();
-              showToast("Approved and activated. Reprocessing has started.", "success");
+              const result = await handleApproveActivate();
+              showToast(result?.backfillRunId ? "Mapping approved. Ordered backfill has started." : "Approved and activated. Reprocessing has started.", "success");
+              if (result && !result.backfillRunId) {
+                onApproved?.({
+                  partner: result.partner,
+                  backfillRunId: result.backfillRunId,
+                });
+              }
             } catch (err: any) {
               showToast(err.message || "Failed to approve review packet.", "error");
             }

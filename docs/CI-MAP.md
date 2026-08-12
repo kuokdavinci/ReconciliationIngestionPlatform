@@ -8,7 +8,10 @@ Tài liệu này mô tả cách thay đổi trong repository đi qua các workfl
 flowchart LR
     PR[Pull request to main] --> B[Backend Quality]
     PR --> I[Ingestion Pipeline]
-    PUSH[Push to main or feature/*] --> E[Eval]
+    PUSH[Push or merge to main] --> B
+    PUSH --> I
+    PUSH --> E
+    PUSH --> F
     PR --> E
 
     B --> B1[PostgreSQL 16 + Alembic]
@@ -36,10 +39,10 @@ The backend, ingestion and analysis workflows use Python 3.11, `uv sync --all-ex
 
 | Workflow | Trigger | Main validation | Test scope | Main source areas |
 |---|---|---|---|---|
-| [Backend Quality](../.github/workflows/backend-quality.yml) | PR to `main`, manual | Alembic, Ruff, Mypy | All backend tests except E2E, ingestion integration/pipeline, MOMO E2E and Sprint 1 benchmark | `src/api/`, `src/config/`, `src/services/`, reconciliation and backend models |
-| [Ingestion Pipeline](../.github/workflows/ingestion-pipeline.yml) | PR to `main`, manual | Alembic, ingestion Ruff | Index, ingestion integration/pipeline, MOMO E2E and Sprint 1 benchmark | `src/fetchers/`, `src/pipeline/`, `src/scheduler/`, ingestion services/models |
+| [Backend Quality](../.github/workflows/backend-quality.yml) | Push/merge to `main`, PR to `main`, manual | Alembic, Ruff, Mypy | All backend tests except real LLM E2E, ingestion integration/pipeline, MOMO E2E and Sprint 1 benchmark | `src/`, `dags/`, `scripts/`, `cli/` |
+| [Ingestion Pipeline](../.github/workflows/ingestion-pipeline.yml) | Push/merge to `main`, PR to `main`, manual | Alembic, ingestion Ruff | Index, ingestion integration/pipeline, MOMO E2E and Sprint 1 benchmark | `src/fetchers/`, `src/pipeline/`, `src/scheduler/`, ingestion services/models |
 | [Eval — AI Analysis Quality](../.github/workflows/eval.yml) | Push to `main`/`feature/*`, PR to `main`, manual | Analysis behavior without a real LLM | Guardrails, providers, scenarios, insights, services, schemas, metrics, grouping, alerter and reporter | `src/analysis/`, related analysis APIs/services/schemas |
-| [Frontend CI](../.github/workflows/frontend-ci.yml) | Push/PR to `main`, manual | ESLint, TypeScript, Next.js webpack build, Playwright | Dashboard route navigation and Mapping Studio interaction smoke tests | `frontend-next/` |
+| [Frontend CI](../.github/workflows/frontend-ci.yml) | Push/merge to `main`, PR to `main` (frontend paths), manual | ESLint, TypeScript, Next.js webpack build, Playwright | Dashboard route navigation and Mapping Studio interaction smoke tests | `frontend-next/` |
 
 ## Exact command map
 
@@ -47,14 +50,10 @@ The backend, ingestion and analysis workflows use Python 3.11, `uv sync --all-ex
 
 ```text
 uv run alembic upgrade head
-uv run ruff check src/api src/config src/models/audit_event.py
-  src/models/indexes.py src/models/partner_runtime_run.py
-  src/models/reconciliation_result.py src/reconciliation/engine.py
-  src/services scripts/demo/scenarios/seed_vnpay_audit_flow.py
+uv run ruff check src dags scripts cli
 uv run mypy src/ --show-error-codes
 uv run pytest tests/ \
   --ignore=tests/test_analysis_e2e.py \
-  --ignore=tests/test_phase8.py \
   --ignore=tests/test_ingestion_integration.py \
   --ignore=tests/test_ingestion_pipeline.py \
   --ignore=tests/test_seed_momo_e2e.py \

@@ -76,13 +76,20 @@
 }
 
 .tableWrap {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
+  container-type: inline-size;
 }
 
 .table {
   width: 100%;
+  min-width: 820px;
+  max-width: 100%;
   border-collapse: collapse;
-  min-width: 1040px;
+  table-layout: fixed;
 }
 
 .headCell {
@@ -95,15 +102,309 @@
 }
 
 .cell {
+  min-width: 0;
   padding: 10px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   font-size: 12.5px;
-  vertical-align: top;
+  vertical-align: middle;
+}
+
+.partnerCellContent {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.partnerHeaderRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.partnerName {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-primary, #f8f5ef);
+}
+
+.partnerSubRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-muted, rgba(236, 234, 227, 0.64));
+}
+
+.methodLabel {
+  color: var(--text-muted, rgba(236, 234, 227, 0.64));
+  font-size: 11px;
+}
+
+.subDot {
+  color: rgba(255, 255, 255, 0.25);
+  font-size: 10px;
+}
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+  transition: all 0.2s ease;
+}
+
+.dotEnabled {
+  background: var(--status-matched, #0ecb81);
+  box-shadow: 0 0 8px rgba(14, 203, 129, 0.65);
+}
+
+.dotDisabled {
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow: none;
+}
+
+.pendingBadge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(240, 185, 11, 0.12);
+  color: var(--brand-primary, #f0b90b);
+  border: 1px solid rgba(240, 185, 11, 0.22);
+}
+
+.scheduleCode {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 11.5px;
+  color: var(--text-primary, #f8f5ef);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.destinationPath {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 11.5px;
+  color: var(--text-muted, rgba(236, 234, 227, 0.75));
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .statusCell {
-  min-width: 250px;
-  max-width: 360px;
+  min-width: 0;
+  max-width: none;
+}
+
+.clickableStatusCell {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.clickableStatusCell:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Status Presentation */
+.scheduleSummaryCompact {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.35;
+}
+
+.statusPrimaryRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.statusIndicatorDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.statusDotFailed {
+  background: var(--status-unmatched, #b44343);
+  box-shadow: 0 0 8px rgba(180, 67, 67, 0.65);
+}
+
+.statusDotRunning {
+  background: var(--brand-primary, #f0b90b);
+  box-shadow: 0 0 8px rgba(240, 185, 11, 0.65);
+  animation: pulseDot 1.5s infinite ease-in-out;
+}
+
+.statusDotWarning {
+  background: #e6a23c;
+  box-shadow: 0 0 6px rgba(230, 162, 60, 0.5);
+}
+
+.statusDotReady {
+  background: var(--status-matched, #0ecb81);
+  box-shadow: 0 0 6px rgba(14, 203, 129, 0.5);
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.85); }
+}
+
+.statusPrimaryLabel {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.statusTextFailed {
+  color: var(--status-unmatched, #b44343);
+}
+
+.statusTextRunning {
+  color: var(--brand-primary, #f0b90b);
+}
+
+.statusTextWarning {
+  color: #e6a23c;
+}
+
+.statusTextReady {
+  color: var(--text-primary, #f8f5ef);
+}
+
+.statusSecondaryLine {
+  font-size: 11px;
+  color: var(--text-muted, rgba(236, 234, 227, 0.64));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.actionCell {
+  min-width: 0;
+  width: 100%;
+}
+
+/* Action Group with Single Primary Action + Overflow Menu (⋯) */
+.scheduleActionsGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+
+.primaryActionButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  border-radius: 6px;
+  transition: all 0.18s ease;
+}
+
+.primaryActionButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.overflowMenuContainer {
+  position: relative;
+  display: inline-block;
+}
+
+.overflowMenuButton {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted, rgba(236, 234, 227, 0.7));
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.overflowMenuButton:hover,
+.overflowMenuButtonActive {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary, #f8f5ef);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.dropdownMenu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  z-index: 50;
+  min-width: 170px;
+  padding: 4px;
+  background: var(--bg-surface, #181d22);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 8px;
+  box-shadow: 0 12px 36px -8px rgba(0, 0, 0, 0.85);
+  animation: dropdownIn 0.15s ease-out;
+}
+
+.dropdownMenuUp {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: 4px;
+  box-shadow: 0 -12px 36px -8px rgba(0, 0, 0, 0.85);
+  animation: dropupIn 0.15s ease-out;
+}
+
+@keyframes dropdownIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dropupIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.dropdownMenuItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary, #f8f5ef);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.dropdownMenuItem:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.dropdownMenuItem:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cell code {
+  overflow-wrap: anywhere;
 }
 
 .scheduleSummary {
@@ -185,6 +486,25 @@
   border-left: 1px solid var(--border, rgba(255, 255, 255, 0.08));
   box-shadow: -24px 0 60px -36px rgba(0, 0, 0, 0.82);
   animation: recoveryPanelIn 0.22s ease-out;
+}
+
+@media (max-width: 960px) {
+  .table, .table tbody, .table tr, .table td { display: block; width: auto; }
+  .table thead { display: none; }
+  .table tr { padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .table td { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 10px; padding: 7px 12px; border-bottom: 0; }
+  .table td::before { content: attr(data-label); color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+  .statusCell { min-width: 0; max-width: none; }
+  .actionCell { min-width: 0; max-width: none; }
+}
+
+@container (max-width: 900px) {
+  .table, .table tbody, .table tr, .table td { display: block; width: auto; }
+  .table thead { display: none; }
+  .table tr { padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .table td { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 10px; padding: 7px 12px; border-bottom: 0; }
+  .table td::before { content: attr(data-label); color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+  .statusCell, .actionCell { min-width: 0; max-width: none; }
 }
 
 .recoveryPanelHeader {

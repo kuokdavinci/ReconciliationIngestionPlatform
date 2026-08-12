@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, Suspense } from "react";
+import { useRouter } from "next/navigation";
 import { useSearchParams } from "next/navigation";
 import { Topbar } from "@/components/layout/topbar";
 import { PageSection } from "@/components/ui/page-section";
@@ -13,6 +14,7 @@ import styles from "@/components/review-center/review-center.module.css";
 
 function ReviewCenterContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const requestedId = searchParams.get("packet");
   const [guidedOpen, setGuidedOpen] = useState(false);
   const { showToast } = useToast();
@@ -76,6 +78,17 @@ function ReviewCenterContent() {
         open={guidedOpen}
         onClose={() => setGuidedOpen(false)}
         onRefresh={handleRefresh}
+        onApproved={({ partner, backfillRunId }) => {
+          setGuidedOpen(false);
+          const params = new URLSearchParams();
+          params.set("partner", partner);
+          if (backfillRunId) {
+            params.set("backfillRunId", backfillRunId);
+          } else {
+            params.set("runtimePartner", partner);
+          }
+          router.push(`/schedules?${params.toString()}`);
+        }}
       />
     </div>
   );

@@ -177,7 +177,7 @@ class TestListResults:
             assert response.status_code == 500
             assert "Failed to list results" in response.json()["detail"]
 
-    def test_legacy_rows_are_visible_when_latest_run_has_no_scoped_results(self):
+    def test_results_include_all_partner_rows_for_business_date(self):
         app, _ = _create_test_app()
         from src.models.reconciliation_result import ReconciliationResult
         from uuid import uuid4
@@ -190,12 +190,12 @@ class TestListResults:
             date="2024-07-07",
             reconciliation_date=datetime(2024, 7, 7, tzinfo=timezone.utc),
         )
-        mock_find_page = AsyncMock(side_effect=[([], 0), ([legacy_result], 1)])
+        mock_find_page = AsyncMock(return_value=([legacy_result], 1))
 
         with (
             patch(
                 "src.api.reconciliation._resolve_latest_run_filters",
-                new=AsyncMock(return_value={"reconciliation_run_id": "run-current"}),
+                new=AsyncMock(return_value={"source_file_id": "latest-file"}),
             ),
             patch(
                 "src.api.reconciliation.ReconciliationResultRepository.find_page_by_partner_and_date",
@@ -209,8 +209,9 @@ class TestListResults:
 
         assert response.status_code == 200
         assert response.json()["total"] == 1
-        assert mock_find_page.await_count == 2
-        assert "reconciliation_run_id" not in mock_find_page.await_args_list[1].kwargs
+        assert mock_find_page.await_count == 1
+        assert "source_file_id" not in mock_find_page.await_args.kwargs
+        assert "reconciliation_run_id" not in mock_find_page.await_args.kwargs
 
 
 class TestGetResult:
@@ -267,14 +268,11 @@ class TestStats:
         response = client.get("/api/v1/reconciliation/stats", params={"date": "2024-07-07"})
         assert response.status_code == 400
 
-    def test_legacy_rows_are_included_when_latest_run_has_no_scoped_stats(self):
+    def test_stats_include_all_partner_rows_for_business_date(self):
         app, _ = _create_test_app()
-        mock_count = AsyncMock(side_effect=[{}, {"MATCHED": 2}])
+        mock_count = AsyncMock(return_value={"MATCHED": 2})
         mock_totals = AsyncMock(
-            side_effect=[
-                {"total_partner_amount": None, "total_internal_amount": None},
-                {"total_partner_amount": 200, "total_internal_amount": 200},
-            ]
+            return_value={"total_partner_amount": 200, "total_internal_amount": 200}
         )
 
         with (
@@ -298,8 +296,10 @@ class TestStats:
 
         assert response.status_code == 200
         assert response.json()["total"] == 2
-        assert mock_count.await_count == 2
-        assert "reconciliation_run_id" not in mock_count.await_args_list[1].kwargs
+        assert mock_count.await_count == 1
+        assert mock_totals.await_count == 1
+        assert "source_file_id" not in mock_count.await_args.kwargs
+        assert "reconciliation_run_id" not in mock_count.await_args.kwargs
 
 
 class TestRunStatus:

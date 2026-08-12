@@ -102,7 +102,10 @@ Review packets coordinate scope analysis, mapping review, runtime validation and
 
 ### 4. Scheduled automation
 
-The default Compose stack uses Airflow as the application orchestrator. APScheduler remains available behind the explicit `apscheduler` profile as a rollback/diagnostic path. Both schedulers reuse the same application entrypoint, checkpoint and runtime contracts; only one owner may run a given stream at a time. Job state remains available through `/api/v1/automation`.
+The default Compose stack uses Airflow as the only application orchestrator.
+The manual pilot keeps `AIRFLOW_GLOBAL_SCHEDULE=none`, so Run Now, Guided Review
+approval, retry and backfill are operator-driven. Job state remains available
+through `/api/v1/automation`.
 
 ## Reliability contracts
 
@@ -159,12 +162,16 @@ docker compose build airflow-api-server
 docker compose up -d postgres mongodb sftp airflow-api-server airflow-scheduler airflow-dag-processor api
 ```
 
-Airflow UI/API: <http://localhost:8080>. The demo `.env.example` routes the API through Airflow and keeps the DAG manual-only. Set `APP_AUTOMATION_ORCHESTRATOR=apscheduler` only for an explicit rollback. See the [Sprint 2.5 runbook](docs/phase-2/sprint-2.5-airflow-migration.md) for cutover and rollback.
+Airflow UI/API: <http://localhost:8080>. The demo `.env.example` routes the API through Airflow and keeps the DAG manual-only. The former APScheduler control plane has been removed; pause the DAG and roll back the application deployment if the pilot must be stopped. See the [Sprint 2.5 runbook](docs/phase-2/sprint-2.5-airflow-migration.md) for the pilot procedure.
+
+Compose starts a one-shot `airflow-volume-permissions` service before Airflow
+initialization. It grants the Airflow worker group write access to the bind
+mounted `downloads/` and `sftp_data/` directories used by API/SFTP ingestion.
 
 `Dockerfile.airflow` remains separate from the application image because the
 official Airflow image owns the Airflow dependency constraints and process
 topology. `requirements-airflow.txt` is an Airflow image overlay; the complete
-application runtime remains in `requirements.txt` so FastAPI/Uvicorn/APScheduler
+application runtime remains in `requirements.txt` so FastAPI/Uvicorn
 dependencies are not mixed into the Airflow control plane.
 
 ### Dashboard
@@ -178,6 +185,13 @@ Dashboard: <http://localhost:3000>
 
 The dashboard proxies `/api/*` requests to the backend at `http://localhost:8000`.
 
+The Schedules page exposes a compact action grid for each configured partner.
+For FileDrop backfills, an operator selects an inclusive date range, then
+follows one durable parent run in the Backfill progress panel. Dates are
+processed in ascending business-day order through Airflow. If the run reaches
+`WAITING_CONFIG`, Guided Review approves the mapping and resumes that same
+parent run; it does not create a second post-approval ingestion run.
+
 For production builds, use the verified Webpack path:
 
 ```bash
@@ -189,9 +203,7 @@ npm --prefix frontend-next run build
 | Command | Purpose |
 |---|---|
 | `uv run python run.py --serve --port 8000` | Start the FastAPI server |
-| `uv run python run.py --start-scheduler` | Start APScheduler |
-| `uv run python run.py --list-jobs` | List configured jobs |
-| `uv run python run.py --run-job-now` | Trigger a scheduled job manually |
+| `curl -X POST http://localhost:8000/api/v1/automation/jobs/{partner}/run -H 'X-Actor: operator'` | Queue a manual Airflow run |
 | `uv run python run.py --reconcile YYYY-MM-DD --partner MOMO` | Run reconciliation |
 | `make test` | Run the broad local test target |
 | `make ci` | Run tests excluding real LLM E2E and phase-specific E2E |
@@ -199,8 +211,20 @@ npm --prefix frontend-next run build
 | `make momo-e2e-fail` | Prepare a valid XLSX missing `id`/`trace` to exercise ingestion-key failure |
 | `make momo-e2e-phase2` | Prepare the MOMO duplicate/replay demo |
 | `make momo-e2e-run` | Trigger the MOMO automation job |
-| `make momo-e2e-rebuild` | Rebuild API and scheduler containers |
+| `make momo-e2e-rebuild` | Rebuild API and Airflow containers |
+| `make vnpay-backfill-reset` | Reset the VNPAY FileDrop backfill fixture; use `VNPAY_BACKFILL_FROM`/`VNPAY_BACKFILL_TO` to set the range |
 | `codegraph index` | Rebuild the repository dependency index when structural files change |
+
+The VNPAY demo is intentionally local-only. After changing the fixture, rebuild
+the API image once with `docker compose build api`, then run
+`make vnpay-backfill-reset`. The target recreates `api` from that existing image
+but does not build containers.
+
+The reset creates date-templated `.xlsx` files under `mock_data/`, matching
+internal source-of-truth rows in PostgreSQL, an enabled FileDrop fetch config,
+a draft mapping, and a pending Guided Review packet. The fixture keeps
+scheduled checkpoints isolated by using `mode=BACKFILL` and clears prior VNPAY
+partner/result rows so repeated demos remain deterministic.
 
 ## Testing and quality checks
 
@@ -211,7 +235,6 @@ uv run ruff check src/ tests/
 uv run mypy src/ --show-error-codes
 uv run pytest tests/ \
   --ignore=tests/test_analysis_e2e.py \
-  --ignore=tests/test_phase8.py \
   --ignore=tests/test_ingestion_integration.py \
   --ignore=tests/test_ingestion_pipeline.py \
   --ignore=tests/test_seed_momo_e2e.py \
@@ -249,7 +272,7 @@ Copy `.env.example` to `.env`. Important settings include:
 | `SFTP_HOST`, `SFTP_PORT`, `SFTP_USER`, `SFTP_PASS` | SFTP source configuration |
 | `APP_INGEST_*` | Ingestion batch size and write behavior |
 | `APP_RECON_*` | Reconciliation batch size and write behavior |
-| `APP_AUTOMATION_ORCHESTRATOR`, `APP_AIRFLOW_*`, `AIRFLOW_*` | Scheduler ownership and Airflow pilot |
+| `APP_AUTOMATION_ORCHESTRATOR`, `APP_AIRFLOW_*`, `AIRFLOW_*` | Airflow ownership and pilot settings |
 | `AI_*` | Analysis provider, model, timeout and fallback settings |
 
 The authoritative configuration model is `src/config/settings.py`; example values are in [.env.example](.env.example). PostgreSQL schema changes are applied through Alembic migrations in `alembic/versions/`.
@@ -270,7 +293,7 @@ src/                 Backend application
   pipeline/          Ingestion pipeline stages
   fetchers/          FileDrop, SFTP and API fetchers
   reconciliation/    Matching and scope logic
-  scheduler/         Scheduled and manual job execution
+  scheduler/         Ingestion runner used by Airflow (legacy package name)
   analysis/          Insights and AI-provider integration
 frontend-next/       Active Next.js dashboard
 tests/               Unit, architecture, integration and E2E tests

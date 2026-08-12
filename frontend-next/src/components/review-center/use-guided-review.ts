@@ -7,6 +7,8 @@ import styles from "./review-center.module.css";
 import { usePostApprovalPolling } from "./use-post-approval-polling";
 import type { FieldMappingItem, AiMappingData } from "./guided-review-mapping-step";
 import type { ScopeClassificationInfo } from "./guided-review-scope-step";
+import { getBackfillRun } from "@/lib/api/automation";
+import type { BackfillRun } from "@/types/schedules";
 
 function isGenericColumnLabel(value: unknown) {
   return /^column\s+\d+$/i.test(String(value || "").trim());
@@ -39,6 +41,9 @@ export function useGuidedReview({
   const [step, setStep] = useState(packet && String(packet.status).toUpperCase() === "APPROVED" ? 4 : 1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [localPacket, setLocalPacket] = useState<ReviewPacket | null>(packet);
+  const [backfillRun, setBackfillRun] = useState<BackfillRun | null>(null);
+  const [backfillRunId, setBackfillRunId] = useState<string | null>(null);
+  const [backfillError, setBackfillError] = useState<string | null>(null);
 
   const [selectedScope, setSelectedScope] = useState(packet?.scopeRecommendation?.scopeType ?? packet?.scopeType ?? "FULL_SNAPSHOT");
   const [isSavingScope, setIsSavingScope] = useState(false);
@@ -69,6 +74,9 @@ export function useGuidedReview({
 
   const handleClose = useCallback(() => {
     stopPolling();
+    setBackfillRun(null);
+    setBackfillRunId(null);
+    setBackfillError(null);
     setStep(1);
     setScopeClassification(null);
     setAiMapping(null);
@@ -76,6 +84,30 @@ export function useGuidedReview({
     setPostApprovalRun(null);
     onClose();
   }, [stopPolling, setPostApprovalRun, onClose]);
+
+  useEffect(() => {
+    if (!backfillRunId) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const next = await getBackfillRun(backfillRunId);
+        if (!cancelled) {
+          setBackfillRun(next);
+          setBackfillError(null);
+        }
+      } catch (reason) {
+        if (!cancelled) {
+          setBackfillError(reason instanceof Error ? reason.message : "Failed to load backfill progress.");
+        }
+      }
+    };
+    void load();
+    const interval = window.setInterval(() => { void load(); }, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [backfillRunId]);
 
   // Sync state when packet identity or status changes
   const packetId = packet?._id;
@@ -269,14 +301,30 @@ export function useGuidedReview({
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      setPostApprovalRun(optimisticRun);
-      const response = (await api.approveActivate(localPacket._id, getCurrentActor(), selectedScope)) as { postApproveRun?: PostApprovalRun };
+      const response = (await api.approveActivate(localPacket._id, getCurrentActor(), selectedScope)) as {
+        postApproveRun?: PostApprovalRun;
+        backfillRun?: BackfillRun;
+      };
       if (response.postApproveRun) {
         setPostApprovalRun(response.postApproveRun);
+      } else if (!response.backfillRun) {
+        setPostApprovalRun(optimisticRun);
       }
-      startPolling(localPacket._id);
-      onRefresh();
-      return true;
+      if (response.postApproveRun) {
+        startPolling(localPacket._id);
+      }
+      if (response.backfillRun) {
+        setBackfillRun(response.backfillRun);
+        setBackfillRunId(response.backfillRun._id);
+        setBackfillError(null);
+      } else {
+        onRefresh();
+      }
+      return {
+        partner: localPacket.partner,
+        backfillRunId: response.backfillRun?._id ?? null,
+        hasPostApprovalRun: Boolean(response.postApproveRun),
+      };
     } catch (err: unknown) {
       throw err;
     } finally {
@@ -412,6 +460,8 @@ export function useGuidedReview({
     isSubmitting,
     postApprovalRun,
     setPostApprovalRun,
+    backfillRun,
+    backfillError,
 
     handleClose,
     handleContinueFromScope,

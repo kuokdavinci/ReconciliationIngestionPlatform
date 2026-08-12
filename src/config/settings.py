@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     app_name: str = "reconciliation-ingestion"
     strict_mapping_approval_enabled: bool = True
     upload_tmp_dir: str = str(Path.cwd() / "scratch" / "temp_uploads")
-    automation_orchestrator: Literal["apscheduler", "airflow"] = "apscheduler"
+    automation_orchestrator: Literal["airflow"] = "airflow"
     business_timezone: str = "Asia/Ho_Chi_Minh"
     airflow_base_url: str = "http://airflow-api-server:8080"
     airflow_dag_id: str = "reconciliation_ingestion"

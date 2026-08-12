@@ -38,11 +38,28 @@ def test_airflow_schedule_can_be_disabled_for_manual_only_pilot() -> None:
     assert resolve_schedule("0 0 * * *") == "0 0 * * *"
 
 
+def test_airflow_is_the_default_application_orchestrator() -> None:
+    from src.config.settings import Settings
+
+    assert Settings(_env_file=None).automation_orchestrator == "airflow"
+
+
 def test_manual_run_uses_reconciliation_date_without_data_interval() -> None:
     assert resolve_reconciliation_date(
         {"reconciliationDate": "2026-08-09"},
         None,
     ) == date(2026, 8, 9)
+
+
+def test_manual_backfill_uses_from_date_without_data_interval() -> None:
+    assert resolve_reconciliation_date(
+        {
+            "mode": "BACKFILL",
+            "fromDate": "2026-08-10",
+            "toDate": "2026-08-12",
+        },
+        None,
+    ) == date(2026, 8, 10)
 
 
 @pytest.mark.asyncio
@@ -80,6 +97,9 @@ async def test_manual_selection_preserves_runtime_and_backfill_scope() -> None:
         "mode": "BACKFILL",
         "runtimeRunId": "runtime-1",
         "correlationId": "runtime:runtime-1",
+        "backfillRunId": "backfill-1",
+        "fromDate": "2026-08-01",
+        "toDate": "2026-08-31",
     }
 
     commands = await select_stream_commands(
@@ -91,17 +111,3 @@ async def test_manual_selection_preserves_runtime_and_backfill_scope() -> None:
 
     assert commands == [command]
     repository.find_enabled.assert_not_called()
-
-
-def test_scheduler_owner_switch_is_explicit() -> None:
-    from cli.scheduler import apscheduler_is_owner
-    from src.config.settings import settings
-
-    original = settings.automation_orchestrator
-    try:
-        settings.automation_orchestrator = "airflow"
-        assert apscheduler_is_owner() is False
-        settings.automation_orchestrator = "apscheduler"
-        assert apscheduler_is_owner() is True
-    finally:
-        settings.automation_orchestrator = original

@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.domain.ingestion.checkpoints import IngestionMode
 
@@ -37,11 +37,29 @@ class ExecuteStreamCommand(BaseModel):
     fetch_config_id: str = Field(alias="fetchConfigId", min_length=1)
     partner: str = Field(min_length=1)
     config_version: str = Field(alias="configVersion", min_length=1)
-    reconciliation_date: date = Field(alias="reconciliationDate")
+    mapping_version: str | None = Field(default=None, alias="mappingVersion")
+    reconciliation_date: date | None = Field(default=None, alias="reconciliationDate")
+    backfill_run_id: str | None = Field(default=None, alias="backfillRunId")
+    from_date: date | None = Field(default=None, alias="fromDate")
+    to_date: date | None = Field(default=None, alias="toDate")
     mode: IngestionMode = IngestionMode.SCHEDULED
     runtime_run_id: str | None = Field(default=None, alias="runtimeRunId")
     correlation_id: str | None = Field(default=None, alias="correlationId")
     orchestration: OrchestrationContext | None = None
+
+    @model_validator(mode="after")
+    def validate_mode_payload(self):
+        if self.mode == IngestionMode.BACKFILL:
+            if not self.backfill_run_id:
+                raise ValueError("backfillRunId is required for BACKFILL mode")
+            if self.from_date is None or self.to_date is None:
+                raise ValueError("fromDate and toDate are required for BACKFILL mode")
+            if self.from_date > self.to_date:
+                raise ValueError("fromDate must be on or before toDate")
+            return self
+        if self.reconciliation_date is None:
+            raise ValueError("reconciliationDate is required for SCHEDULED mode")
+        return self
 
 
 class ExecuteStreamResult(BaseModel):

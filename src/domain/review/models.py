@@ -139,6 +139,7 @@ class ReviewPacket(BaseModel):
     source_file_id: Optional[str] = Field(default=None, alias="sourceFileId")
     source_file_path: Optional[str] = Field(default=None, alias="sourceFilePath")
     raw_stage_key: Optional[str] = Field(default=None, alias="rawStageKey")
+    backfill_run_id: Optional[str] = Field(default=None, alias="backfillRunId")
     reconciliation_date: Optional[datetime] = Field(default=None, alias="reconciliationDate")
     scope_type: Optional[str] = Field(default=None, alias="scopeType")
     scope_confidence: Optional[float] = Field(default=None, alias="scopeConfidence")

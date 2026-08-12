@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -169,6 +170,30 @@ async def test_network_failure_returns_a_failed_source_unit_with_retry_code(tmp_
     assert result.success is False
     assert result.units[-1]["status"] == "FAILED"
     assert result.units[-1]["errorCode"] == "fetch_network_error"
+
+
+@pytest.mark.asyncio
+async def test_storage_permission_failure_is_terminal_and_preserves_source_unit(tmp_path):
+    config = _config(tmp_path)
+    response = _response({"data": {"items": [{"id": 1}], "nextCursor": None}})
+
+    with (
+        patch("httpx.AsyncClient") as mock_client,
+        patch.object(
+            Path,
+            "write_bytes",
+            side_effect=PermissionError(13, "Permission denied"),
+        ),
+    ):
+        mock_client.return_value.__aenter__.return_value.get.return_value = response
+        result = await APIFetcher().fetch(
+            config, datetime(2024, 7, 7), fetch_metadata={"singleUnit": True}
+        )
+
+    assert result.success is False
+    assert result.metadata["errorCode"] == "fetch_storage_permission_denied"
+    assert result.units[-1]["errorCode"] == "fetch_storage_permission_denied"
+    assert result.units[-1]["status"] == "FAILED"
 
 
 @pytest.mark.asyncio

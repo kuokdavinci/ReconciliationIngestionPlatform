@@ -19,7 +19,7 @@ from src.domain.reconciliation.ports import (
 from src.domain.partner_transaction.models import DataContainer
 from src.domain.reconciliation.models import ReconciliationResult
 from src.logging import get_structured_logger
-from src.services.business_day import utc_business_day_bounds
+from src.services.business_day import business_date, utc_business_day_bounds
 
 
 class ReconciliationEngine:
@@ -380,7 +380,7 @@ class ReconciliationEngine:
         # is a business calendar date (for example Asia/Ho_Chi_Minh), not a
         # UTC calendar date.
         start_of_day, end_of_day = self._business_day_bounds(reconciliation_date)
-        date_str = reconciliation_date.strftime("%Y-%m-%d")
+        date_str = business_date(reconciliation_date).isoformat()
 
         t_scope_start = time.perf_counter()
         scope_type = ReconciliationScopeType.FULL_SNAPSHOT

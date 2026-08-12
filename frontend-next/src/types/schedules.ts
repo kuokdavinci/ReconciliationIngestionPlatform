@@ -141,3 +141,36 @@ export interface RecentPacket {
   reviewedAt?: string;
   reviewedBy?: string;
 }
+
+export type BackfillRunStatus = "WAITING_CONFIG" | "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+export type BackfillDayStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "WAITING_CONFIG";
+
+export interface BackfillDay {
+  businessDate: string;
+  status: BackfillDayStatus;
+  runtimeRunId?: string | null;
+  message?: string | null;
+  updatedAt?: string;
+}
+
+export interface BackfillRun {
+  _id: string;
+  partner: string;
+  fetchConfigId: string;
+  mode: "BACKFILL";
+  status: BackfillRunStatus;
+  fromDate: string;
+  toDate: string;
+  currentDate?: string | null;
+  completedDays: number;
+  totalDays: number;
+  configVersion?: string | null;
+  mappingVersion?: string | null;
+  approvalRequired: boolean;
+  approvalContext?: {
+    reviewPacketId?: string | null;
+    reason?: string | null;
+  } | null;
+  orchestration?: RuntimeRunSummary["orchestration"];
+  days: BackfillDay[];
+}

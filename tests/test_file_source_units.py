@@ -97,6 +97,24 @@ async def test_filedrop_source_unit_identity_changes_with_config_version(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_filedrop_date_template_scans_only_requested_backfill_day(tmp_path):
+    (tmp_path / "settlement_VNPAY_20260809.xlsx").write_text("day 1")
+    (tmp_path / "settlement_VNPAY_20260810.xlsx").write_text("day 2")
+    config = FileDropConfig(
+        directory=str(tmp_path),
+        pattern="settlement_VNPAY_{date:%Y%m%d}.xlsx",
+    )
+    fetcher = FileDropFetcher()
+
+    with patch.object(fetcher, "_is_file_ready", return_value=True):
+        result = await fetcher.fetch(config, datetime(2026, 8, 10))
+
+    assert [unit["localPath"] for unit in result.units] == [
+        str(tmp_path / "settlement_VNPAY_20260810.xlsx")
+    ]
+
+
+@pytest.mark.asyncio
 async def test_sftp_wildcard_downloads_sorted_remote_files_sequentially_with_units(
     tmp_path,
     monkeypatch,

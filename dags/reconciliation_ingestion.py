@@ -13,6 +13,7 @@ from airflow.sdk.exceptions import AirflowFailException
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.application.automation import ExecuteStreamCommand, OrchestrationContext, execute_stream
+from src.application.automation.backfill_runner import execute_ordered_backfill
 from src.application.automation.airflow_runtime import (
     resolve_reconciliation_date,
     resolve_schedule,
@@ -24,9 +25,15 @@ from src.config.loader import ConfigLoader
 from src.config.settings import settings
 from src.config.validator import ConfigValidator
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
+from src.infrastructure.backfill.repository import BackfillRunRepository
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.services.runtime_runs import update_runtime_run
-from src.domain.runtime.models import PartnerRuntimeRunStatus
+from src.domain.runtime.models import (
+    PartnerRuntimeRunStatus,
+    PartnerRuntimeTriggerType,
+    RuntimeOrchestrationContext,
+)
+from src.services.runtime_runs import create_runtime_run
 
 SUCCESS_OUTCOMES = {
     ExecuteStreamOutcome.COMPLETED,
@@ -39,6 +46,27 @@ SUCCESS_OUTCOMES = {
 }
 
 logger = logging.getLogger("reconciliation.airflow")
+
+
+def _stream_log_context(command: ExecuteStreamCommand, task_instance, dag_run) -> str:
+    """Return stable identifiers that make one mapped stream searchable."""
+
+    values = {
+        "partner": command.partner,
+        "runtimeRunId": command.runtime_run_id or "-",
+        "fetchConfigId": command.fetch_config_id,
+        "mappingVersion": command.mapping_version or "-",
+        "reconciliationDate": command.reconciliation_date,
+        "mode": command.mode,
+        "backfillRunId": command.backfill_run_id or "-",
+        "fromDate": command.from_date or "-",
+        "toDate": command.to_date or "-",
+        "dagRunId": dag_run.run_id,
+        "taskId": task_instance.task_id,
+        "mapIndex": task_instance.map_index,
+        "tryNumber": task_instance.try_number,
+    }
+    return " ".join(f"{key}={value}" for key, value in values.items())
 
 # Keep task-level retry policy operator-configurable. The UI's manual retry
 # clears the task instance in the same DAG run; native Airflow retry remains a
@@ -84,6 +112,80 @@ async def _execute_stream(payload: dict) -> dict:
             config_loader=config_loader,
         )
         return result.model_dump(by_alias=True, mode="json")
+    finally:
+        client.close()
+
+
+async def _execute_backfill(command: ExecuteStreamCommand, task_instance, dag_run) -> dict:
+    client: AsyncIOMotorClient[dict[str, Any]] = AsyncIOMotorClient(settings.mongodb_url)
+    try:
+        db = client[settings.db_name]
+        config_loader = ConfigLoader(
+            MappingConfigRepository(db),
+            ConfigCache(),
+            ConfigValidator(),
+        )
+        backfill_repo = BackfillRunRepository(db)
+
+        async def execute_day(day_command: ExecuteStreamCommand) -> dict:
+            runtime_orchestration = None
+            if day_command.orchestration is not None:
+                runtime_orchestration = RuntimeOrchestrationContext.model_validate(
+                    {
+                        **day_command.orchestration.model_dump(by_alias=True),
+                        "correlationId": day_command.correlation_id,
+                    }
+                )
+            day_runtime = await create_runtime_run(
+                db,
+                partner=day_command.partner,
+                date=day_command.reconciliation_date.isoformat(),
+                trigger_type=PartnerRuntimeTriggerType.BACKFILL,
+                triggered_by="airflow:backfill",
+                status=PartnerRuntimeRunStatus.QUEUED,
+                message="Backfill day queued for sequential execution.",
+                orchestration=runtime_orchestration,
+            )
+            child_command = day_command.model_copy(
+                update={"runtime_run_id": str(day_runtime.id)}
+            )
+            result = await execute_stream(
+                child_command,
+                db=db,
+                config_loader=config_loader,
+            )
+            payload = result.model_dump(by_alias=True, mode="json")
+            if payload.get("outcome") == ExecuteStreamOutcome.WAITING_REVIEW:
+                packet = await db["review_packet"].find_one(
+                    {
+                        "partner": child_command.partner,
+                        "status": "PENDING",
+                    },
+                    projection={"_id": 1},
+                    sort=[("createdAt", -1)],
+                )
+                if packet is not None and command.backfill_run_id:
+                    packet_id = str(packet["_id"])
+                    await db["review_packet"].update_one(
+                        {"_id": packet_id},
+                        {"$set": {"backfillRunId": command.backfill_run_id}},
+                    )
+                    await backfill_repo.update_status(
+                        command.backfill_run_id,
+                        approvalContext={
+                            "workflowType": "UPC",
+                            "fileType": "SETTLEMENT",
+                            "reviewPacketId": packet_id,
+                            "reason": "Mapping approval is required before ordered backfill can continue.",
+                        },
+                    )
+            return payload
+
+        return await execute_ordered_backfill(
+            command,
+            backfill_repo=backfill_repo,
+            execute_day=execute_day,
+        )
     finally:
         client.close()
 
@@ -154,6 +256,25 @@ async def _mark_runtime_failed(
         client.close()
 
 
+async def _mark_backfill_failed(payload: dict, message: str) -> None:
+    """Close a parent backfill when Airflow fails before mapped tasks exist."""
+
+    backfill_run_id = payload.get("backfillRunId")
+    if not backfill_run_id:
+        return
+    client: AsyncIOMotorClient[dict[str, Any]] = AsyncIOMotorClient(settings.mongodb_url)
+    try:
+        repository = BackfillRunRepository(client[settings.db_name])
+        await repository.update_status(
+            str(backfill_run_id),
+            status="FAILED",
+            approvalRequired=False,
+            currentDate=payload.get("fromDate"),
+        )
+    finally:
+        client.close()
+
+
 @dag(
     dag_id="reconciliation_ingestion",
     schedule=resolve_schedule(os.getenv("AIRFLOW_GLOBAL_SCHEDULE", "0 0 * * *")),
@@ -178,6 +299,7 @@ def reconciliation_ingestion():
             )
         except Exception as exc:
             message = f"Airflow stream selection failed: {str(exc)[:400]}"
+            asyncio.run(_mark_backfill_failed(conf, message))
             asyncio.run(
                 _mark_runtime_failed(
                     conf,
@@ -221,27 +343,22 @@ def reconciliation_ingestion():
             tryNumber=task_instance.try_number,
             logicalDate=dag_run.logical_date,
         )
+        stream_context = _stream_log_context(command, task_instance, dag_run)
         logger.info(
-            "stream_execution_started partner=%s runtimeRunId=%s dagRunId=%s taskId=%s mapIndex=%s tryNumber=%s",
-            command.partner,
-            command.runtime_run_id,
-            dag_run.run_id,
-            task_instance.task_id,
-            task_instance.map_index,
-            task_instance.try_number,
+            "stream_execution_started %s",
+            stream_context,
         )
         try:
-            result = asyncio.run(
-                _execute_stream(command.model_dump(by_alias=True, mode="json", exclude_none=True))
-            )
+            if command.mode.value == "BACKFILL":
+                result = asyncio.run(_execute_backfill(command, task_instance, dag_run))
+            else:
+                result = asyncio.run(
+                    _execute_stream(command.model_dump(by_alias=True, mode="json", exclude_none=True))
+                )
         except Exception as exc:
             logger.exception(
-                "stream_execution_exception partner=%s runtimeRunId=%s dagRunId=%s taskId=%s tryNumber=%s",
-                command.partner,
-                command.runtime_run_id,
-                dag_run.run_id,
-                task_instance.task_id,
-                task_instance.try_number,
+                "stream_execution_exception %s",
+                stream_context,
             )
             if not isinstance(exc, ValueError) and task_instance.try_number <= AIRFLOW_TASK_RETRIES:
                 asyncio.run(
@@ -266,8 +383,9 @@ def reconciliation_ingestion():
                 raise AirflowFailException(str(exc)) from exc
             raise
         logger.info(
-            "stream_execution_result payload=%s",
+            "stream_execution_result payload=%s %s",
             json.dumps(result, ensure_ascii=True, sort_keys=True, default=str),
+            stream_context,
         )
         if result["outcome"] not in SUCCESS_OUTCOMES:
             error_code = result.get("errorCode") or "stream_execution_failed"
@@ -275,7 +393,7 @@ def reconciliation_ingestion():
             checkpoint = result.get("checkpoint") or {}
             counters = result.get("counters") or {}
             failure_message = (
-                "Stream execution stopped: "
+                f"Stream execution stopped: {stream_context} "
                 f"outcome={result.get('outcome')} errorCode={error_code} "
                 f"message={message} checkpoint={checkpoint} counters={counters}"
             )
@@ -296,9 +414,8 @@ def reconciliation_ingestion():
                 raise RuntimeError(failure_message)
             raise AirflowFailException(failure_message)
         logger.info(
-            "stream_execution_succeeded partner=%s runtimeRunId=%s outcome=%s checkpoint=%s counters=%s",
-            command.partner,
-            command.runtime_run_id,
+            "stream_execution_succeeded %s outcome=%s checkpoint=%s counters=%s",
+            stream_context,
             result.get("outcome"),
             result.get("checkpoint"),
             result.get("counters"),

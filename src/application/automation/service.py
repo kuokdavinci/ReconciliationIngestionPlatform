@@ -63,8 +63,12 @@ async def execute_stream(
 
         runner = run_fetch_config_once
 
+    reconciliation_day = command.reconciliation_date
+    if reconciliation_day is None:
+        raise ValueError("reconciliation_date is required for stream execution")
+
     reconciliation_date = datetime.combine(
-        command.reconciliation_date,
+        reconciliation_day,
         time.min,
         tzinfo=BUSINESS_TIMEZONE,
     )
@@ -78,6 +82,7 @@ async def execute_stream(
         mode=command.mode,
         runtime_run_id=command.runtime_run_id,
         orchestration=_orchestration_payload(command),
+        mapping_config_version=command.mapping_version,
         raise_on_unexpected=True,
     )
     result = _normalize_result(raw_result)

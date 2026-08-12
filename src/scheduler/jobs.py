@@ -301,6 +301,7 @@ def _build_source_unit_ingestor(
     batch_size: int,
     structured_logger: Optional[StructuredLogger],
     reconciliation_run_id: str | None = None,
+    mapping_config_version: str | None = None,
 ) -> tuple[Any, dict[str, int]]:
     stats = {
         "totalRows": 0,
@@ -344,6 +345,7 @@ def _build_source_unit_ingestor(
             batch_size=batch_size,
             structured_logger=structured_logger,
             fetch_unit_metadata=unit_metadata,
+            config_version=mapping_config_version,
             enable_config_health_check=(not config_health_checked or not is_paginated_api),
             validate_rows=config.validate_rows,
         )
@@ -512,6 +514,7 @@ async def run_fetch_config_once(
     mode: IngestionMode = IngestionMode.SCHEDULED,
     runtime_run_id: str | None = None,
     orchestration: dict[str, Any] | None = None,
+    mapping_config_version: str | None = None,
     raise_on_unexpected: bool = False,
 ) -> dict[str, Any]:
     """Run one source stream sequentially from its checkpoint boundary."""
@@ -608,6 +611,7 @@ async def run_fetch_config_once(
         batch_size=batch_size,
         structured_logger=structured_logger,
         reconciliation_run_id=str(run.id),
+        mapping_config_version=mapping_config_version,
     )
     retry_policy = RetryPolicy()
     raw_page_repo = RawIngestionPageRepository(db)
@@ -651,6 +655,20 @@ async def run_fetch_config_once(
                 if not fetch_result.success:
                     if fetch_result.units:
                         failed_unit = SourceUnitMetadata.from_payload(fetch_result.units[-1])
+                        logger.warning(
+                            "source_unit_fetch_failed partner=%s runtimeRunId=%s "
+                            "streamKey=%s sourceUnitKey=%s page=%s cursorBefore=%s "
+                            "statusCode=%s errorCode=%s error=%s",
+                            identity["partner"],
+                            runtime_run_id or "-",
+                            identity["streamKey"],
+                            failed_unit.source_unit_key or "-",
+                            failed_unit.page or "-",
+                            failed_unit.cursor_before or "-",
+                            failed_unit.status_code or "-",
+                            failed_unit.error_code or "-",
+                            fetch_result.error or failed_unit.error or "-",
+                        )
 
                         async def fetch_failure(_: dict[str, Any]) -> dict[str, Any]:
                             error_code = failed_unit.error_code or (
@@ -710,12 +728,21 @@ async def run_fetch_config_once(
                             db=db, run=run, partner=config.partner, result=failed_result, stats=stats
                         )
                     fetch_error = fetch_result.error or "API source unit fetch failed"
-                    fetch_error_code = (
+                    fetch_error_code = fetch_result.metadata.get("errorCode") or (
                         "fetch_http_4xx"
                         if "status 4" in fetch_error
                         else "fetch_http_5xx"
                         if "status 5" in fetch_error
                         else "fetch_network_error"
+                    )
+                    logger.error(
+                        "source_stream_fetch_failed partner=%s runtimeRunId=%s "
+                        "streamKey=%s errorCode=%s error=%s",
+                        identity["partner"],
+                        runtime_run_id or "-",
+                        identity["streamKey"],
+                        fetch_error_code,
+                        fetch_error,
                     )
                     return await _finish_source_stream_run(
                         db=db,
@@ -735,6 +762,20 @@ async def run_fetch_config_once(
                     )
 
                 unit = SourceUnitMetadata.from_payload(fetch_result.units[0])
+                logger.info(
+                    "source_unit_fetched partner=%s runtimeRunId=%s streamKey=%s "
+                    "sourceUnitKey=%s page=%s cursorBefore=%s cursorAfter=%s "
+                    "itemCount=%s hasMore=%s",
+                    identity["partner"],
+                    runtime_run_id or "-",
+                    identity["streamKey"],
+                    unit.source_unit_key or "-",
+                    unit.page or "-",
+                    unit.cursor_before or "-",
+                    unit.cursor_after or "-",
+                    unit.item_count,
+                    fetch_result.metadata["pagination"].get("has_more"),
+                )
                 unit.has_more = fetch_result.metadata["pagination"].get("has_more")
                 unit.high_water_mark = _unit_high_water_mark(unit)
                 unit.fetch_metadata = {
@@ -1136,6 +1177,7 @@ async def _run_ingestion(
     batch_size: int | None = None,
     structured_logger: Optional[StructuredLogger] = None,
     fetch_unit_metadata: Optional[dict[str, Any]] = None,
+    config_version: Optional[str] = None,
     enable_config_health_check: bool = True,
     validate_rows: bool = False,
 ) -> Any:
@@ -1168,6 +1210,7 @@ async def _run_ingestion(
             workflow_type="UPC",
             file_type=FileType.SETTLEMENT,
             reconciliation_date=reconciliation_date,
+            config_version=config_version,
             fetch_unit_metadata=fetch_unit_metadata,
             enable_config_health_check=enable_config_health_check,
         )

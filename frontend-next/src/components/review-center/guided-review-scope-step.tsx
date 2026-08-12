@@ -60,7 +60,8 @@ export function GuidedReviewScopeStep({
   const scopeBgColor = scopeConfidence >= 85 ? "rgba(16, 185, 129, 0.1)" : scopeConfidence >= 60 ? "rgba(245, 158, 11, 0.1)" : "rgba(239, 68, 68, 0.1)";
   const scopeLabelColor = scopeConfidence >= 85 ? "#10b981" : scopeConfidence >= 60 ? "#f59e0b" : "#ef4444";
   const partnerPreview = (localPacket.samplePreview ?? []).slice(0, 5);
-  const internalPreview = (scopeClassification?.internalPreview ?? []).slice(0, 5);
+  const internalPreview = (scopeClassification?.internalPreview ?? localPacket.internalPreview ?? []).slice(0, 5);
+  const internalRecordCount = scopeClassification?.internalDbRecordCount ?? localPacket.internalRecordCount ?? 0;
   const partnerColumns = Array.from(new Set(partnerPreview.flatMap((row) => Object.keys(row.values))));
 
   return (
@@ -90,7 +91,7 @@ export function GuidedReviewScopeStep({
           <div className={styles.metricGrid}>
             <div className={styles.metricCard}>
               <div className={styles.metricLabel}>Internal DB Records</div>
-              <div className={styles.metricValue}>{scopeClassification.internalDbRecordCount}</div>
+              <div className={styles.metricValue}>{internalRecordCount}</div>
               <p className={styles.introText} style={{ marginTop: 4 }}>Transactions stored in system for same day</p>
             </div>
             <div className={styles.metricCard}>
@@ -157,13 +158,13 @@ export function GuidedReviewScopeStep({
             </section>
           )}
 
-          {internalPreview.length > 0 && (
+          {internalPreview.length > 0 ? (
             <section className={styles.sectionCard} style={{ marginTop: 16 }}>
               <div className={styles.sectionCardHeading}>
                 <div>
                   <h5 className={styles.sectionCardTitle}>Internal DB evidence</h5>
                   <p className={styles.sectionCardCopy}>
-                    {internalPreview.length} sample rows from {scopeClassification.internalDbRecordCount ?? 0} internal transactions for the business date. Expand to preview the internal data.
+                    {internalPreview.length} sample rows from {internalRecordCount} internal transactions for the business date. Expand to preview the internal data.
                   </p>
                 </div>
                 <button
@@ -208,6 +209,13 @@ export function GuidedReviewScopeStep({
                   </table>
                 </div>
               )}
+            </section>
+          ) : (
+            <section className={styles.sectionCard} style={{ marginTop: 16 }}>
+              <h5 className={styles.sectionCardTitle}>Internal DB evidence unavailable</h5>
+              <p className={styles.sectionCardCopy}>
+                No internal transactions were found for this business date. Mapping validation can still run, but reconciliation may produce missing-internal results.
+              </p>
             </section>
           )}
 

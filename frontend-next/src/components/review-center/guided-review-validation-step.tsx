@@ -9,6 +9,7 @@ import type {
   RuntimeValidationTopIssue,
   RuntimeTraceSample,
   RuntimeFieldTrace,
+  InternalReviewPreviewRow,
 } from "@/types/review-center";
 import { RuntimeValidationState } from "@/lib/review-runtime";
 import type { FieldMappingItem } from "./guided-review-mapping-step";
@@ -36,6 +37,8 @@ interface Props {
   sigHeaders: string[];
   summary?: ValidationSummaryStats;
   topIssues: RuntimeValidationTopIssue[];
+  internalRecordCount: number;
+  internalPreview: InternalReviewPreviewRow[];
   traceDetailSampleIndex: number | null;
   isValidatingRuntime: boolean;
   onValidateRuntime: () => void;
@@ -53,6 +56,8 @@ export function GuidedReviewValidationStep({
   sigHeaders,
   summary,
   topIssues,
+  internalRecordCount,
+  internalPreview,
   traceDetailSampleIndex,
   isValidatingRuntime,
   onValidateRuntime,
@@ -66,8 +71,8 @@ export function GuidedReviewValidationStep({
     <div className={styles.modalSection}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <h4 className={styles.modalTitle}>Runtime Validation</h4>
-          <p className={styles.introText}>Inspect the latest validation gate outcome before making a decision.</p>
+          <h4 className={styles.modalTitle}>Partner Mapping Validation</h4>
+          <p className={styles.introText}>This gate validates partner-file normalization. Internal records are shown separately and are evaluated during reconciliation.</p>
         </div>
         <Button variant="primary" disabled={isValidatingRuntime} onClick={onValidateRuntime}>
           {isValidatingRuntime ? "Validating..." : validationState.hasValidation ? "Re-run runtime validation" : "Run runtime validation"}
@@ -151,6 +156,43 @@ export function GuidedReviewValidationStep({
           </div>
         </div>
       )}
+
+      <section className={styles.sectionCard}>
+        <div className={styles.sectionCardHeading}>
+          <div>
+            <h5 className={styles.sectionCardTitle}>Internal reconciliation evidence</h5>
+            <p className={styles.sectionCardCopy}>
+              {internalRecordCount > 0
+                ? `${internalPreview.length} sample rows from ${internalRecordCount} internal transactions for this business date.`
+                : "No internal transactions are available for this business date."}
+            </p>
+          </div>
+          <Badge severity={internalRecordCount > 0 ? "low" : "medium"}>
+            {internalRecordCount > 0 ? `${internalRecordCount} records` : "Unavailable"}
+          </Badge>
+        </div>
+        {internalPreview.length > 0 ? (
+          <div style={{ overflowX: "auto" }}>
+            <table className={styles.fieldTable}>
+              <thead>
+                <tr><th>Partner transaction</th><th>Amount</th><th>Status</th><th>Transaction time</th></tr>
+              </thead>
+              <tbody>
+                {internalPreview.slice(0, 5).map((row) => (
+                  <tr key={row.id || row.partnerTxnId}>
+                    <td>{row.partnerTxnId || "-"}</td>
+                    <td>{row.amount || "-"} {row.currency || ""}</td>
+                    <td>{row.status || "-"}</td>
+                    <td>{row.transactionTime || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className={styles.introText}>Mapping validation may pass, but the final reconciliation result can contain missing-internal records.</p>
+        )}
+      </section>
 
       <section className={styles.sectionCard}>
         <h5 className={styles.sectionCardTitle}>Field mapping result</h5>

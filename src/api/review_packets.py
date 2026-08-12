@@ -824,7 +824,10 @@ async def approve_activate_packet_action(
         _serialize,
     )
     if post_approve_run is not None:
-        response["postApproveRun"] = post_approve_run
+        if "backfillRun" in post_approve_run:
+            response["backfillRun"] = post_approve_run["backfillRun"]
+        else:
+            response["postApproveRun"] = post_approve_run
     return response
 
 

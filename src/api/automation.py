@@ -68,6 +68,19 @@ _AIRFLOW_RETRYING_TASK_STATES = {
 _AIRFLOW_MANUAL_RETRY_STATES = {"failed", "upstream_failed", "up_for_retry"}
 
 
+class _LazyWorkflowGateway:
+    """Resolve the workflow adapter only when a run is actually submitted."""
+
+    def __init__(self, factory):
+        self._factory = factory
+        self._gateway: WorkflowGateway | None = None
+
+    async def trigger(self, command: ExecuteStreamCommand) -> WorkflowSubmission:
+        if self._gateway is None:
+            self._gateway = self._factory()
+        return await self._gateway.trigger(command)
+
+
 def _stream_key_for_config(config) -> str | None:
     try:
         return _source_stream_key(config)
@@ -268,7 +281,7 @@ def _backfill_service(request: Request, db) -> BackfillRunService:
     return BackfillRunService(
         fetch_repo=FetchConfigRepository(db),
         backfill_repo=BackfillRunRepository(db),
-        workflow_gateway=_workflow_gateway(request, db),
+        workflow_gateway=_LazyWorkflowGateway(lambda: _workflow_gateway(request, db)),
         approved_mapping_version_finder=lambda partner: _approved_backfill_mapping_version(db, partner),
         pending_review_packet_finder=lambda partner, run_id: _attach_pending_backfill_review_packet(
             db,

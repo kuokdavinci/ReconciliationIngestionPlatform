@@ -15,7 +15,7 @@ from src.application.automation.stream_runner import run_source_stream
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from src.domain.runtime.models import PartnerRuntimeRunStatus
-from src.services.runtime_runs import update_runtime_run
+from src.application.runtime.service import update_runtime_run
 
 BUSINESS_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 StreamRunner = Callable[..., Awaitable[dict[str, Any]]]

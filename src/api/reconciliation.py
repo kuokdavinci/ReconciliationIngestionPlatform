@@ -22,9 +22,9 @@ from src.core.enums import ReconciliationStatus
 from src.application.reconciliation.service import ReconciliationCommand
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
 from src.reconciliation.engine import ReconciliationEngine  # noqa: F401 - legacy patch seam
-from src.services.audit import record_audit_event
+from src.application.audit.service import record_audit_event
 from src.api.background_tasks import track_background_task
-from src.services.runtime_runs import (
+from src.application.runtime.service import (
     create_runtime_run,
     serialize_partner_runtime_run,
     update_runtime_run,

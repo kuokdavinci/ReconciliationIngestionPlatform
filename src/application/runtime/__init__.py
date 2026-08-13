@@ -1,4 +1,4 @@
-"""Compatibility facade for runtime application services."""
+"""Runtime visibility application services."""
 
 from src.application.runtime.service import (
     create_runtime_run,

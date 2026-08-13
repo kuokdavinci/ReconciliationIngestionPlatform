@@ -5,7 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from src.domain.runtime.models import PartnerRuntimeRunStatus
-from src.services.runtime_runs import update_runtime_run
+from src.application.runtime.service import update_runtime_run
 
 
 

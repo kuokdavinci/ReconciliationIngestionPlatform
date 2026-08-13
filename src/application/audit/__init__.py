@@ -1,4 +1,4 @@
-"""Compatibility facade for audit application services."""
+"""Application services for append-only audit logging."""
 
 from src.application.audit.service import record_audit_event
 

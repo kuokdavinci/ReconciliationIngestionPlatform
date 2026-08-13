@@ -6,7 +6,7 @@ from typing import Any
 from src.infrastructure.postgres.internal_transaction_repository import (
     InternalTransactionRepository,
 )
-from src.services.business_day import business_day_bounds
+from src.core.business_day import business_day_bounds
 
 
 def _serialize_internal_row(row: Any) -> dict[str, Any]:

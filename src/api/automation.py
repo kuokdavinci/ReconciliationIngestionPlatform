@@ -34,18 +34,22 @@ from src.domain.runtime.models import (
 )
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
 from src.infrastructure.review.repository import ReviewPacketRepository
-from src.services.backfill_runs import (
+from src.application.automation.backfill_service import (
+    BackfillRunConflictError,
     BackfillRunError,
+    BackfillRunNotFoundError,
     BackfillRunService,
+    BackfillRunUnavailableError,
+    BackfillRunValidationError,
     serialize_backfill_run,
 )
-from src.services.runtime_runs import (
+from src.application.runtime.service import (
     create_runtime_run,
     serialize_partner_runtime_run,
     update_runtime_run,
 )
-from src.services.retry_policy import RetryPolicy
-from src.services.audit import record_audit_event
+from src.domain.ingestion.retry_policy import RetryPolicy
+from src.application.audit.service import record_audit_event
 from src.services.review_packet_actions import build_config_loader_from_db
 from src.api.background_tasks import track_background_task
 from src.infrastructure.workflows.airflow import AirflowWorkflowGateway
@@ -66,6 +70,19 @@ _AIRFLOW_RETRYING_TASK_STATES = {
     "up_for_retry",
 }
 _AIRFLOW_MANUAL_RETRY_STATES = {"failed", "upstream_failed", "up_for_retry"}
+_BACKFILL_ERROR_STATUS: dict[type[BackfillRunError], int] = {
+    BackfillRunValidationError: 400,
+    BackfillRunNotFoundError: 404,
+    BackfillRunConflictError: 409,
+    BackfillRunUnavailableError: 503,
+}
+
+
+def _backfill_error_status(error: BackfillRunError) -> int:
+    for error_type, status_code in _BACKFILL_ERROR_STATUS.items():
+        if isinstance(error, error_type):
+            return status_code
+    return 400
 
 
 class _LazyWorkflowGateway:
@@ -261,7 +278,7 @@ async def _attach_pending_backfill_review_packet(
     from datetime import date, datetime, time
     from zoneinfo import ZoneInfo
 
-    from src.services.business_day import business_day_bounds
+    from src.core.business_day import business_day_bounds
 
     backfill_run = await db["backfill_run"].find_one(
         {"_id": backfill_run_id},
@@ -812,7 +829,7 @@ async def start_backfill(request: Request, partner: str, payload: BackfillStartP
             fetch_config_id=payload.fetch_config_id,
         )
     except BackfillRunError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        raise HTTPException(status_code=_backfill_error_status(exc), detail=str(exc)) from exc
     return serialize_backfill_run(run)
 
 
@@ -823,7 +840,7 @@ async def get_backfill_run(request: Request, backfill_run_id: str):
     try:
         run = await service.get(backfill_run_id)
     except BackfillRunError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        raise HTTPException(status_code=_backfill_error_status(exc), detail=str(exc)) from exc
     return serialize_backfill_run(run)
 
 

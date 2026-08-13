@@ -31,8 +31,8 @@ from src.domain.review.models import (
 )
 from src.infrastructure.review.repository import ReviewPacketRepository
 from src.reconciliation.scope import classify_scope
-from src.services.audit import record_audit_event
-from src.services.mapping_contract import (
+from src.application.audit.service import record_audit_event
+from src.domain.mapping.contract import (
     canonicalize_field_mappings,
     serialize_field_mappings,
     validate_mapping_contract,

@@ -42,8 +42,8 @@ from src.infrastructure.ingestion.raw_page_repository import RawIngestionPageRep
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
 from src.logging import StructuredLogger
-from src.services.retry_policy import RetryPolicy
-from src.services.runtime_runs import create_runtime_run, update_runtime_run
+from src.application.runtime.service import create_runtime_run, update_runtime_run
+from src.domain.ingestion.retry_policy import RetryPolicy
 
 logger = logging.getLogger("reconciliation.automation.stream_runner")
 

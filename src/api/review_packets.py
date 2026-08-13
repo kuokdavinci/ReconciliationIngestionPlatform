@@ -26,7 +26,7 @@ from src.domain.review.models import (
     ReviewPacketStatus,
 )
 from src.infrastructure.review.repository import ReviewPacketRepository
-from src.services.mapping_contract import (
+from src.domain.mapping.contract import (
     canonicalize_field_mappings,
     serialize_field_mappings,
     validate_mapping_contract,

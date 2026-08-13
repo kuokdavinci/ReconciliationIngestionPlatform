@@ -11,7 +11,7 @@ from src.application.automation.stream_identity import units_after_checkpoint
 from src.application.ingestion.source_unit_orchestrator import process_source_units
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from scripts.demo.sprint2.fixture import ViettelPayMockFixture
-from src.services.retry_policy import RetryPolicy
+from src.domain.ingestion.retry_policy import RetryPolicy
 
 
 class _MemoryCheckpointCollection:

@@ -82,7 +82,7 @@ def _config(*, enabled: bool = True) -> FetchConfig:
 
 @pytest.mark.asyncio
 async def test_start_backfill_rejects_invalid_or_empty_business_date_ranges():
-    from src.services.backfill_runs import BackfillRunValidationError, BackfillRunService
+    from src.application.automation.backfill_service import BackfillRunValidationError, BackfillRunService
 
     service = BackfillRunService(
         fetch_repo=_FakeFetchRepo(_config()),
@@ -111,7 +111,7 @@ async def test_start_backfill_rejects_invalid_or_empty_business_date_ranges():
 @pytest.mark.asyncio
 async def test_start_backfill_creates_waiting_config_parent_with_ordered_days():
     from src.domain.backfill.models import BackfillRunStatus
-    from src.services.backfill_runs import BackfillRunService
+    from src.application.automation.backfill_service import BackfillRunService
 
     gateway = SimpleNamespace(trigger=AsyncMock())
     service = BackfillRunService(
@@ -145,7 +145,7 @@ async def test_start_backfill_creates_waiting_config_parent_with_ordered_days():
 
 @pytest.mark.asyncio
 async def test_start_backfill_reuses_same_active_parent_and_rejects_other_range():
-    from src.services.backfill_runs import BackfillRunConflictError, BackfillRunService
+    from src.application.automation.backfill_service import BackfillRunConflictError, BackfillRunService
 
     repo = _FakeBackfillRepo()
     service = BackfillRunService(
@@ -182,7 +182,7 @@ async def test_start_backfill_reuses_same_active_parent_and_rejects_other_range(
 @pytest.mark.asyncio
 async def test_start_backfill_submits_identifier_only_airflow_command_when_mapping_is_approved():
     from src.domain.backfill.models import BackfillRunStatus
-    from src.services.backfill_runs import BackfillRunService
+    from src.application.automation.backfill_service import BackfillRunService
 
     gateway = SimpleNamespace(
         trigger=AsyncMock(
@@ -227,7 +227,7 @@ async def test_start_backfill_submits_identifier_only_airflow_command_when_mappi
 @pytest.mark.asyncio
 async def test_resume_after_mapping_approval_reuses_parent_and_submits_one_backfill_command():
     from src.domain.backfill.models import BackfillRunStatus
-    from src.services.backfill_runs import BackfillRunService
+    from src.application.automation.backfill_service import BackfillRunService
 
     gateway = SimpleNamespace(
         trigger=AsyncMock(
@@ -281,7 +281,7 @@ def test_serialize_backfill_run_exposes_status_and_day_progress():
         BackfillRunStatus,
     )
     from src.domain.runtime.models import RuntimeOrchestrationContext
-    from src.services.backfill_runs import serialize_backfill_run
+    from src.application.automation.backfill_service import serialize_backfill_run
 
     run = BackfillRun(
         _id="backfill-1",

@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ReviewPacket } from "@/types/review-center";
 import styles from "./review-center.module.css";
+import { resolveInternalReviewEvidence } from "./internal-review-evidence";
 
 export interface ScopeClassificationInfo {
   recommendedScope?: string;
@@ -60,8 +61,9 @@ export function GuidedReviewScopeStep({
   const scopeBgColor = scopeConfidence >= 85 ? "rgba(16, 185, 129, 0.1)" : scopeConfidence >= 60 ? "rgba(245, 158, 11, 0.1)" : "rgba(239, 68, 68, 0.1)";
   const scopeLabelColor = scopeConfidence >= 85 ? "#10b981" : scopeConfidence >= 60 ? "#f59e0b" : "#ef4444";
   const partnerPreview = (localPacket.samplePreview ?? []).slice(0, 5);
-  const internalPreview = (scopeClassification?.internalPreview ?? localPacket.internalPreview ?? []).slice(0, 5);
-  const internalRecordCount = scopeClassification?.internalDbRecordCount ?? localPacket.internalRecordCount ?? 0;
+  const internalEvidence = resolveInternalReviewEvidence(localPacket, scopeClassification);
+  const internalPreview = internalEvidence.preview.slice(0, 5);
+  const internalRecordCount = internalEvidence.recordCount;
   const partnerColumns = Array.from(new Set(partnerPreview.flatMap((row) => Object.keys(row.values))));
 
   return (

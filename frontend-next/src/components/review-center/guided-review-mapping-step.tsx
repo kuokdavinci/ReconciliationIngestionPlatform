@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ReviewPacket } from "@/types/review-center";
@@ -53,6 +54,19 @@ export function GuidedReviewMappingStep({
   onSaveMapping,
   onBack,
 }: Props) {
+  const [rawColumnState, setRawColumnState] = useState({ packetId, count: 0 });
+  const handleColumnsDetected = useCallback(
+    (count: number) => setRawColumnState({ packetId, count }),
+    [packetId],
+  );
+  const rawColumnCount = rawColumnState.packetId === packetId ? rawColumnState.count : 0;
+
+  const inferredMappingColumnCount = new Set(
+    fieldMappings
+      .map((mapping) => Number(mapping.column))
+      .filter((column) => Number.isInteger(column) && column > 0),
+  ).size;
+  const availablePartnerColumnCount = sigHeaders.length || rawColumnCount || inferredMappingColumnCount;
   const highlightedColumns = Array.from(new Set(
     sourceBackedMappings.flatMap((mapping) => {
       const columns: string[] = [];
@@ -78,6 +92,7 @@ export function GuidedReviewMappingStep({
         packet={packet}
         packetId={packetId}
         highlightedColumns={highlightedColumns}
+        onColumnsDetected={handleColumnsDetected}
       />
 
       {aiMappingLoading && (
@@ -102,7 +117,7 @@ export function GuidedReviewMappingStep({
           <div className={styles.metricGrid}>
             <div className={styles.metricCard}>
               <div className={styles.metricLabel}>Partner Columns Available</div>
-              <div className={styles.metricValue}>{sigHeaders.length}</div>
+              <div className={styles.metricValue}>{availablePartnerColumnCount}</div>
               <p className={styles.introText} style={{ marginTop: 4 }}>Columns detected in the incoming partner file</p>
             </div>
             <div className={styles.metricCard}>

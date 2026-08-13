@@ -317,8 +317,6 @@ export function useGuidedReview({
         setBackfillRun(response.backfillRun);
         setBackfillRunId(response.backfillRun._id);
         setBackfillError(null);
-      } else {
-        onRefresh();
       }
       return {
         partner: localPacket.partner,
@@ -330,7 +328,7 @@ export function useGuidedReview({
     } finally {
       setIsSubmitting(false);
     }
-  }, [localPacket, selectedScope, startPolling, onRefresh, setPostApprovalRun]);
+  }, [localPacket, selectedScope, startPolling, setPostApprovalRun]);
 
   const handleReject = useCallback(async () => {
     if (!localPacket) return;

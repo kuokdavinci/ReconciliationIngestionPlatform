@@ -2,6 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useState } from "react";
 import { getValidationSuggestion } from "@/lib/review-runtime-validation";
 import type {
   ReviewPacket,
@@ -65,6 +66,8 @@ export function GuidedReviewValidationStep({
   onContinue,
   onSetTraceDetailSampleIndex,
 }: Props) {
+  const [traceExpanded, setTraceExpanded] = useState(false);
+
   if (!localPacket) return null;
 
   return (
@@ -233,7 +236,25 @@ export function GuidedReviewValidationStep({
 
       {localPacket.runtimeValidation?.traceSamples && localPacket.runtimeValidation.traceSamples.length > 0 && (
         <section className={styles.sectionCard}>
-          <h5 className={styles.sectionCardTitle}>Runtime Trace Review</h5>
+          <div className={styles.sectionCardHeading}>
+            <div>
+              <h5 className={styles.sectionCardTitle}>Runtime Trace Review</h5>
+              <p className={styles.sectionCardCopy}>
+                {localPacket.runtimeValidation.traceSamples.length} sampled rows are available. Expand to inspect field-level normalization details.
+              </p>
+            </div>
+            <button
+              type="button"
+              className={styles.iconButton}
+              aria-label={traceExpanded ? "Hide runtime trace samples" : "Show runtime trace samples"}
+              aria-expanded={traceExpanded}
+              onClick={() => setTraceExpanded((expanded) => !expanded)}
+            >
+              {traceExpanded ? "Hide" : "Show"}
+            </button>
+          </div>
+          {traceExpanded && (
+            <>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}>
             <span style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)" }}>Sample Trace Gallery</span>
             <span className={`${styles.freshnessBadge} ${styles.freshnessNeutral}`}>
@@ -294,6 +315,8 @@ export function GuidedReviewValidationStep({
               );
             })}
           </div>
+            </>
+          )}
         </section>
       )}
 

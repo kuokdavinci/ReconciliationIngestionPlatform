@@ -330,30 +330,32 @@ class TestRunStatus:
 
 class TestRunReconciliation:
     @pytest.mark.asyncio
-    async def test_background_reconciliation_uses_api_engine_injection_seam(self):
-        from src.api.reconciliation import _run_reconciliation_in_background
+    async def test_manual_reconciliation_application_service_uses_injected_engine(self):
+        from src.application.reconciliation.manual_runs import ManualReconciliationService
+        from src.application.reconciliation.queries import ReconciliationRunContext
 
-        db = MagicMock()
-        db["partner_runtime_run"].find_one = AsyncMock(return_value={"_id": "run-1"})
-        runner = MagicMock()
-        runner.reconcile = AsyncMock(return_value=["result"])
+        runner = SimpleNamespace(execute=AsyncMock(return_value=["result"]))
+        runtime_service = SimpleNamespace(update=AsyncMock())
+        audit_service = SimpleNamespace(record=AsyncMock())
+        service = ManualReconciliationService(
+            runtime_service=runtime_service,
+            reconciliation_service=runner,
+            audit_service=audit_service,
+            context_query=MagicMock(),
+        )
 
-        with (
-            patch("src.api.reconciliation.ReconciliationEngine", return_value=runner) as engine_factory,
-            patch("src.api.reconciliation.update_runtime_run", new=AsyncMock()),
-            patch("src.api.reconciliation.record_audit_event", new=AsyncMock()),
-        ):
-            await _run_reconciliation_in_background(
-                db,
-                "run-1",
-                "MOMO",
-                "2024-07-07",
+        await service.execute(
+            "run-1",
+            ReconciliationRunContext(
+                partner="MOMO",
+                date="2024-07-07",
                 source_file_id="file-1",
                 mapping_version="v1",
-            )
+            ),
+        )
 
-        engine_factory.assert_called_once()
-        runner.reconcile.assert_awaited_once()
+        runner.execute.assert_awaited_once()
+        audit_service.record.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_run_reconciliation_returns_count(self):
@@ -364,8 +366,17 @@ class TestRunReconciliation:
             headers={"X-Actor": "admin"},
         )
         with (
-            patch("src.api.reconciliation._resolve_latest_run_context", new=AsyncMock(return_value={"source_file_id": "file-001"})),
-            patch("src.api.reconciliation._count_partner_rows_for_source_file", new=AsyncMock(return_value=20)),
+            patch(
+                "src.api.reconciliation.ReconciliationContextQuery.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        partner="MOMO",
+                        date="2024-07-07",
+                        source_file_id="file-001",
+                        mapping_version=None,
+                    )
+                ),
+            ),
             patch("src.api.reconciliation.ReconciliationEngine.reconcile", new=AsyncMock(return_value=[1, 2, 3])),
         ):
             response = await run_reconciliation_now(
@@ -451,10 +462,21 @@ class TestRunReconciliation:
             },
         )
         with (
-            patch("src.api.reconciliation._resolve_latest_run_context", new=AsyncMock(return_value={"source_file_id": "file-001", "mapping_version": "v2"})),
-            patch("src.api.reconciliation._count_partner_rows_for_source_file", new=AsyncMock(return_value=20)),
-            patch("src.api.reconciliation.update_runtime_run", new=AsyncMock()) as mock_update_runtime_run,
-            patch("src.api.reconciliation.PartnerRuntimeRunRepository.find_one", new=AsyncMock(return_value=queued_run)),
+            patch(
+                "src.api.reconciliation.ReconciliationContextQuery.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        partner="MOMO",
+                        date="2024-07-07",
+                        source_file_id="file-001",
+                        mapping_version="v2",
+                    )
+                ),
+            ),
+            patch(
+                "src.api.reconciliation.create_runtime_run",
+                new=AsyncMock(return_value=queued_run),
+            ),
             patch("src.api.reconciliation.asyncio.create_task", side_effect=_discard_background_task),
         ):
             response = await run_reconciliation_now(
@@ -465,4 +487,3 @@ class TestRunReconciliation:
         assert response["ok"] is True
         assert response["run"]["sourceFileId"] == "file-001"
         assert response["run"]["mappingVersion"] == "v2"
-        mock_update_runtime_run.assert_awaited()

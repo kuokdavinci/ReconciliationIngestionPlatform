@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -8,20 +9,25 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
+from src.application.reconciliation.manual_runs import (
+    ManualReconciliationService,
+    QueueManualReconciliationCommand,
+)
+from src.application.reconciliation.queries import (
+    ReconciliationContextQuery,
+    ReconciliationContextUnavailableError,
+)
 from src.domain.runtime.models import (
     PartnerRuntimeRunStatus,
-    PartnerRuntimeTriggerType,
 )
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
-from src.core.error_formatting import summarize_runtime_error
 from src.domain.reconciliation.models import ReconciliationResult
 from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 from src.infrastructure.review.repository import ReconciliationReviewRecordRepository
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
 from src.core.enums import ReconciliationStatus
-from src.application.reconciliation.service import ReconciliationCommand
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
-from src.reconciliation.engine import ReconciliationEngine  # noqa: F401 - legacy patch seam
+from src.reconciliation.engine import ReconciliationEngine
 from src.application.audit.service import record_audit_event
 from src.api.background_tasks import track_background_task
 from src.application.runtime.service import (
@@ -155,77 +161,46 @@ async def _resolve_latest_run_filters(db, partner: str, date: str) -> dict[str, 
 
 
 async def _resolve_latest_run_context(db, partner: str, date: str) -> dict[str, str]:
-    context: dict[str, str] = {}
-    start_of_day, end_of_day = _date_bounds(date)
-    latest_post_approval_run = await db["post_approval_run"].find_one(
-        {
-            "partner": partner,
-            "date": date,
-            "$or": [
-                {"outputFileId": {"$nin": [None, ""]}},
-                {"sourceFileId": {"$nin": [None, ""]}},
-            ],
-        },
-        sort=[("updatedAt", -1), ("createdAt", -1)],
-    )
-
-    latest_scoped_run = await db["partner_runtime_run"].find_one(
-        {
-            "partner": partner,
-            "date": date,
-            "sourceFileId": {"$nin": [None, ""]},
-        },
-        sort=[("createdAt", -1)],
-    )
-
-    latest_file = await db["reconciliation_file"].find_one(
-        {"partner": partner, "reconciliationDate": {"$gte": start_of_day, "$lte": end_of_day}},
-        sort=[("createdAt", -1)],
-    )
-
-    candidates = []
-    if latest_post_approval_run is not None:
-        ts = latest_post_approval_run.get("updatedAt") or latest_post_approval_run.get("createdAt")
-        candidates.append((ts, "post_approval_run", latest_post_approval_run))
-
-    if latest_scoped_run is not None:
-        ts = latest_scoped_run.get("updatedAt") or latest_scoped_run.get("createdAt")
-        candidates.append((ts, "partner_runtime_run", latest_scoped_run))
-
-    if latest_file is not None:
-        ts = latest_file.get("createdAt")
-        candidates.append((ts, "reconciliation_file", latest_file))
-
-    if not candidates:
-        return context
-
-    # Sort candidates by timestamp (newest first)
-    # Since they are MongoDB UTC datetimes, we can compare them directly.
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    newest_type = candidates[0][1]
-    newest_doc = candidates[0][2]
-
-    if newest_type == "post_approval_run":
-        output_file_id = newest_doc.get("outputFileId")
-        source_file_id = newest_doc.get("sourceFileId")
-        if output_file_id:
-            context["source_file_id"] = str(output_file_id)
-        elif source_file_id:
-            context["source_file_id"] = str(source_file_id)
-    elif newest_type == "partner_runtime_run":
-        if newest_doc.get("sourceFileId"):
-            context["source_file_id"] = str(newest_doc["sourceFileId"])
-        if newest_doc.get("mappingVersion"):
-            context["mapping_version"] = str(newest_doc["mappingVersion"])
-    elif newest_type == "reconciliation_file":
-        if newest_doc.get("_id"):
-            context["source_file_id"] = str(newest_doc["_id"])
-
-    return context
+    return await _manual_reconciliation_context_query(db).latest_context(partner, date)
 
 
 async def _count_partner_rows_for_source_file(db, source_file_id: str) -> int:
     return await DataContainerRepository(db).count_by_source_file(source_file_id)
+
+
+def _manual_reconciliation_context_query(db) -> ReconciliationContextQuery:
+    async def row_counter(source_file_id: str) -> int:
+        return await _count_partner_rows_for_source_file(db, source_file_id)
+
+    return ReconciliationContextQuery(db, row_counter=row_counter)
+
+
+def _manual_reconciliation_service(
+    db,
+    context_query: ReconciliationContextQuery,
+) -> ManualReconciliationService:
+    async def create_runtime(**kwargs):
+        return await create_runtime_run(db, **kwargs)
+
+    async def update_runtime(run_id: str, **kwargs):
+        return await update_runtime_run(db, run_id, **kwargs)
+
+    async def record_audit(**kwargs):
+        return await record_audit_event(db, **kwargs)
+
+    return ManualReconciliationService(
+        runtime_service=SimpleNamespace(
+            create=create_runtime,
+            update=update_runtime,
+        ),
+        reconciliation_service_factory=lambda: build_reconciliation_service(
+                db,
+                fast_mode=True,
+                engine_factory=ReconciliationEngine,
+        ),
+        audit_service=SimpleNamespace(record=record_audit),
+        context_query=context_query,
+    )
 
 
 async def _resolve_display_run(db, partner: str, date: str):
@@ -488,159 +463,47 @@ async def reconciliation_stats(
         raise HTTPException(status_code=500, detail=f"Failed to fetch stats: {str(exc)}")
 
 
-async def _run_reconciliation_in_background(
-    db,
-    run_id: str,
-    partner: str,
-    date: str,
-    source_file_id: str | None = None,
-    mapping_version: str | None = None,
-) -> None:
-    started_at = datetime.now(timezone.utc)
-    await update_runtime_run(
-        db,
-        run_id,
-        status=PartnerRuntimeRunStatus.RECONCILING,
-        message="Reconciling records for the selected partner/date.",
-        started_at=started_at,
-        source_file_id=source_file_id,
-        mapping_version=mapping_version,
-    )
-    try:
-        recon_date = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        results = await build_reconciliation_service(
-            db,
-            fast_mode=True,
-            # Keep the API-level engine seam injectable for manual-run tests.
-            engine_factory=ReconciliationEngine,
-        ).execute(
-            ReconciliationCommand(
-                partner=partner,
-                reconciliation_date=recon_date,
-                source_file_id=source_file_id,
-                reconciliation_run_id=run_id,
-                mapping_version=mapping_version,
-            )
-        )
-        finished_at = datetime.now(timezone.utc)
-        await update_runtime_run(
-            db,
-            run_id,
-            status=PartnerRuntimeRunStatus.COMPLETED,
-            message="Reconciliation completed successfully.",
-            validation_state="NOT_RUN",
-            stats={"resultCount": len(results)},
-            reconciliation_count=len(results),
-            finished_at=finished_at,
-        )
-        run_doc = await db["partner_runtime_run"].find_one({"_id": run_id})
-        await record_audit_event(
-            db,
-            entity_type="RECONCILIATION_RUN",
-            entity_id=run_id,
-            action="COMPLETED",
-            metadata={
-                "partner": partner,
-                "date": date,
-                "status": PartnerRuntimeRunStatus.COMPLETED.value,
-                "reference": run_id,
-                "sourceFileId": run_doc.get("sourceFileId") if run_doc else None,
-                "mappingVersion": run_doc.get("mappingVersion") if run_doc else None,
-                "reconciliationCount": len(results),
-            },
-        )
-    except Exception as exc:
-        finished_at = datetime.now(timezone.utc)
-        await update_runtime_run(
-            db,
-            run_id,
-            status=PartnerRuntimeRunStatus.FAILED,
-            message=f"Reconciliation failed: {summarize_runtime_error(exc)}",
-            finished_at=finished_at,
-        )
-        run_doc = await db["partner_runtime_run"].find_one({"_id": run_id})
-        await record_audit_event(
-            db,
-            entity_type="RECONCILIATION_RUN",
-            entity_id=run_id,
-            action="FAILED",
-            metadata={
-                "partner": partner,
-                "date": date,
-                "status": PartnerRuntimeRunStatus.FAILED.value,
-                "reference": run_id,
-                "sourceFileId": run_doc.get("sourceFileId") if run_doc else None,
-                "mappingVersion": run_doc.get("mappingVersion") if run_doc else None,
-                "error": summarize_runtime_error(exc),
-            },
-        )
+
 
 
 @router.post("/run")
 async def run_reconciliation_now(request: Request, payload: RunReconciliationPayload):
-    try:
-        partner = _validate_partner(payload.partner)
-        date = _validate_date(payload.date)
-        triggered_by = require_actor(
-            request,
-            payload_actor=payload.triggered_by,
-            payload_field_name="triggeredBy",
-        )
-    except HTTPException:
-        raise
+    partner = _validate_partner(payload.partner)
+    date = _validate_date(payload.date)
+    triggered_by = require_actor(
+        request,
+        payload_actor=payload.triggered_by,
+        payload_field_name="triggeredBy",
+    )
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database connection not available.")
 
+    context_query = _manual_reconciliation_context_query(db)
     try:
-        db = getattr(request.app.state, "db", None)
-        if db is None:
-            raise HTTPException(status_code=503, detail="Database connection not available.")
-        latest_context = await _resolve_latest_run_context(db, partner, date)
-        source_file_id = latest_context.get("source_file_id")
-        if not source_file_id:
-            raise HTTPException(
-                status_code=409,
-                detail="No partner file context is available for this date. Run ingestion first or finish the review flow before reconciling.",
-            )
-        partner_row_count = await _count_partner_rows_for_source_file(db, source_file_id)
-        if partner_row_count <= 0:
-            raise HTTPException(
-                status_code=409,
-                detail="The latest partner file has not been ingested yet. Complete approval/ingestion before running reconciliation.",
-            )
-        run = await create_runtime_run(
-            db,
-            partner=partner,
-            date=date,
-            trigger_type=PartnerRuntimeTriggerType.MANUAL_RECONCILIATION,
-            triggered_by=triggered_by,
-            status=PartnerRuntimeRunStatus.QUEUED,
-            message="Reconciliation is queued.",
-            validation_state="NOT_RUN",
+        context = await context_query.resolve(partner, date)
+    except ReconciliationContextUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    service = _manual_reconciliation_service(db, context_query)
+    try:
+        run = await service.queue(
+            QueueManualReconciliationCommand(
+                partner=partner,
+                date=date,
+                triggered_by=triggered_by,
+            ),
+            context=context,
         )
-        if latest_context.get("source_file_id"):
-            await update_runtime_run(
-                db,
-                str(run.id),
-                source_file_id=source_file_id,
-                mapping_version=latest_context.get("mapping_version"),
-            )
-        task = asyncio.create_task(
-            _run_reconciliation_in_background(
-                db,
-                str(run.id),
-                partner,
-                date,
-                source_file_id=source_file_id,
-                mapping_version=latest_context.get("mapping_version"),
-            )
-        )
-        _track_background_task(request, task)
-        queued_run = await PartnerRuntimeRunRepository(db).find_one({"_id": str(run.id)})
-        return {"ok": True, "run": serialize_partner_runtime_run(queued_run or run)}
-    except HTTPException:
-        raise
+    except ReconciliationContextUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error(f"Error running reconciliation: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to run reconciliation: {str(exc)}")
+        logger.error("Error running reconciliation: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to run reconciliation: {exc}") from exc
+
+    task = asyncio.create_task(service.execute(str(run.id), context))
+    _track_background_task(request, task)
+    return {"ok": True, "run": serialize_partner_runtime_run(run)}
 
 
 @router.get("/run-status")

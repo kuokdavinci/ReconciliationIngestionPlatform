@@ -1,12 +1,10 @@
-"""Bounded source evidence attached to approval-desk review packets."""
+"""Bounded source evidence attached to review packets."""
 
 from datetime import datetime
 from typing import Any
 
-from src.infrastructure.postgres.internal_transaction_repository import (
-    InternalTransactionRepository,
-)
 from src.core.business_day import business_day_bounds
+from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
 
 
 def _serialize_internal_row(row: Any) -> dict[str, Any]:
@@ -38,7 +36,6 @@ async def build_internal_review_evidence(
     safe_count = max(int(record_count or 0), 0)
     if reconciliation_date is None or safe_count == 0:
         return {"recordCount": safe_count, "sample": []}
-
     start, end = business_day_bounds(reconciliation_date)
     try:
         reader = repository or InternalTransactionRepository(db)
@@ -49,9 +46,6 @@ async def build_internal_review_evidence(
             limit=max(sample_limit, 0),
         )
     except Exception:
-        # Review packet creation must not block ingestion when the read model is
-        # temporarily unavailable; the count remains useful if classification
-        # already obtained it.
         rows = []
     return {
         "recordCount": safe_count,

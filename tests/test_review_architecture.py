@@ -11,7 +11,7 @@ import pytest
 from src.config.config_health import _collect_review_sample_rows, _create_mapping_proposal
 from src.config.signature import StructureSignature
 from src.core.enums import FileType
-from src.services.review_packet_actions import _rebind_replacement_transactions
+from src.application.review.actions import _rebind_replacement_transactions
 
 from src.domain.review.models import (
     CopilotAction,
@@ -73,7 +73,7 @@ async def test_replacement_rebinds_duplicate_ingestion_keys_to_new_source_file()
     )
 
     with patch(
-        "src.services.review_packet_actions.DataContainerRepository",
+        "src.application.review.actions.DataContainerRepository",
         return_value=repository,
     ):
         rebound = await _rebind_replacement_transactions(

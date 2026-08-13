@@ -50,7 +50,7 @@ from src.application.runtime.service import (
 )
 from src.domain.ingestion.retry_policy import RetryPolicy
 from src.application.audit.service import record_audit_event
-from src.services.review_packet_actions import build_config_loader_from_db
+from src.infrastructure.mapping.composition import build_config_loader
 from src.api.background_tasks import track_background_task
 from src.infrastructure.workflows.airflow import AirflowWorkflowGateway
 from src.infrastructure.workflows.local import LocalWorkflowGateway
@@ -223,7 +223,7 @@ async def _run_fetch_job_in_background(db, command: ExecuteStreamCommand) -> Non
     await execute_stream(
         command,
         db=db,
-        config_loader=build_config_loader_from_db(db),
+        config_loader=build_config_loader(db),
         batch_size=100,
         structured_logger=None,
     )

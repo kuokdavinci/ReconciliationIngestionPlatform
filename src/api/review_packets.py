@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
+from src.api.background_tasks import track_background_task
 from src.config.ai_generator import generate_config_from_samples
 from src.core.enums import FileType
 from src.domain.mapping.models import MappingConfig, MappingConfigStatus
@@ -31,29 +32,56 @@ from src.domain.mapping.contract import (
     serialize_field_mappings,
     validate_mapping_contract,
 )
-from src.services.review_packet_actions import (
+from src.application.review.actions import (
     approve_packet_mapping_and_reprocess,
     reprocess_packet_with_current_mapping,
-    build_config_loader,
     mark_packet,
     serialize_post_approval_run,
     update_packet_scope,
 )
-from src.services.ai_mapping_context import resolve_ai_generation_context
-from src.services.runtime_validation import (
+from src.infrastructure.mapping.composition import build_config_loader
+from src.application.review.ai_mapping_context import resolve_ai_generation_context
+from src.application.review.runtime_validation import (
     derive_validation_state,
     run_runtime_validation,
 )
-from src.services.review_evidence import (
+from src.application.review.evidence import (
     build_internal_review_evidence,
     business_day_bounds,
 )
-from src.services.review_raw_stream import read_review_stream_page, resolve_review_source_file
+from src.application.review.raw_stream import read_review_stream_page, resolve_review_source_file
+from src.application.review.errors import (
+    ReviewConflictError,
+    ReviewError,
+    ReviewNotFoundError,
+    ReviewUnavailableError,
+    ReviewValidationError,
+)
 from src.reconciliation.scope import classify_key_scope
 
 
 router = APIRouter(prefix="/api/v1/review-packets")
 _SCOPE_LLM_TIMEOUT_SECONDS = 8.0
+_REVIEW_ERROR_STATUS: dict[type[ReviewError], int] = {
+    ReviewNotFoundError: 404,
+    ReviewConflictError: 409,
+    ReviewValidationError: 400,
+    ReviewUnavailableError: 503,
+}
+
+
+def _review_error_status(error: ReviewError) -> int:
+    for error_type, status_code in _REVIEW_ERROR_STATUS.items():
+        if isinstance(error, error_type):
+            return status_code
+    return 400
+
+
+async def _run_review_operation(awaitable):
+    try:
+        return await awaitable
+    except ReviewError as exc:
+        raise HTTPException(status_code=_review_error_status(exc), detail=str(exc)) from exc
 
 
 def _scope_probabilities(
@@ -324,7 +352,12 @@ def _repo(request: Request) -> ReviewPacketRepository:
 
 
 def _config_loader(request: Request):
-    return build_config_loader(request)
+    return build_config_loader(_get_db(request))
+
+
+def _schedule_background(request: Request, awaitable) -> None:
+    task = asyncio.create_task(awaitable)
+    track_background_task(request.app, task)
 
 
 def _serialize(packet) -> dict:
@@ -809,20 +842,27 @@ async def approve_activate_packet_action(
     if not _has_passing_runtime_gate(packet):
         raise HTTPException(status_code=400, detail="Runtime validation must pass before approval.")
 
-    await update_packet_scope(request, packet_id, packet, payload.scope_type)
+    db = _get_db(request)
+    await _run_review_operation(update_packet_scope(db, packet_id, packet, payload.scope_type))
 
-    post_approve_run = await approve_packet_mapping_and_reprocess(
-        request,
-        packet,
-        payload.reviewed_by,
+    post_approve_run = await _run_review_operation(
+        approve_packet_mapping_and_reprocess(
+            db,
+            packet,
+            payload.reviewed_by,
+            schedule_background=lambda awaitable: _schedule_background(request, awaitable),
+            workflow_gateway=getattr(request.app.state, "workflow_gateway", None),
+        )
     )
-    response = await mark_packet(
-        request,
-        packet_id,
-        ReviewPacketStatus.APPROVED,
-        ReviewDecisionMode.APPROVE_ACTIVATE_NEXT_RUNTIME,
-        payload.reviewed_by,
-        _serialize,
+    response = await _run_review_operation(
+        mark_packet(
+            db,
+            packet_id,
+            ReviewPacketStatus.APPROVED,
+            ReviewDecisionMode.APPROVE_ACTIVATE_NEXT_RUNTIME,
+            payload.reviewed_by,
+            _serialize,
+        )
     )
     if post_approve_run is not None:
         if "backfillRun" in post_approve_run:
@@ -854,17 +894,25 @@ async def approve_keep_current_packet_action(
     if not _has_passing_runtime_gate(packet):
         raise HTTPException(status_code=400, detail="Runtime validation must pass before approval.")
 
-    await update_packet_scope(request, packet_id, packet, payload.scope_type)
-    post_approve_run = await reprocess_packet_with_current_mapping(
-        request, packet, payload.reviewed_by
+    db = _get_db(request)
+    await _run_review_operation(update_packet_scope(db, packet_id, packet, payload.scope_type))
+    post_approve_run = await _run_review_operation(
+        reprocess_packet_with_current_mapping(
+            db,
+            packet,
+            payload.reviewed_by,
+            schedule_background=lambda awaitable: _schedule_background(request, awaitable),
+        )
     )
-    response = await mark_packet(
-        request,
-        packet_id,
-        ReviewPacketStatus.APPROVED,
-        ReviewDecisionMode.APPROVE_KEEP_CURRENT_FOR_FILE,
-        payload.reviewed_by,
-        _serialize,
+    response = await _run_review_operation(
+        mark_packet(
+            db,
+            packet_id,
+            ReviewPacketStatus.APPROVED,
+            ReviewDecisionMode.APPROVE_KEEP_CURRENT_FOR_FILE,
+            payload.reviewed_by,
+            _serialize,
+        )
     )
     if post_approve_run is not None:
         response["postApproveRun"] = post_approve_run
@@ -886,13 +934,16 @@ async def reject_packet_action(
     payload: ReviewDecisionPayload,
 ):
     payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
-    return await mark_packet(
-        request,
-        packet_id,
-        ReviewPacketStatus.REJECTED,
-        ReviewDecisionMode.REJECT,
-        payload.reviewed_by,
-        _serialize,
+    db = _get_db(request)
+    return await _run_review_operation(
+        mark_packet(
+            db,
+            packet_id,
+            ReviewPacketStatus.REJECTED,
+            ReviewDecisionMode.REJECT,
+            payload.reviewed_by,
+            _serialize,
+        )
     )
 
 
@@ -1240,11 +1291,12 @@ class ScopeUpdatePayload(BaseModel):
 
 @router.post("/{packet_id}/scope")
 async def update_packet_scope_endpoint(request: Request, packet_id: str, payload: ScopeUpdatePayload):
-    from src.services.review_packet_actions import update_packet_scope
     repo = _repo(request)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
         raise HTTPException(status_code=404, detail="Review packet not found.")
         
-    await update_packet_scope(request, packet_id, packet, payload.scope_type)
+    await _run_review_operation(
+        update_packet_scope(_get_db(request), packet_id, packet, payload.scope_type)
+    )
     return {"ok": True, "scopeType": payload.scope_type}

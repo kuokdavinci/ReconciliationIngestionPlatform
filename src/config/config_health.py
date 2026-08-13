@@ -25,7 +25,7 @@ from src.domain.review.models import (
 )
 from src.infrastructure.review.repository import ReviewPacketRepository
 from src.reconciliation.scope import classify_scope
-from src.services.review_evidence import build_internal_review_evidence
+from src.application.review.evidence import build_internal_review_evidence
 
 logger = logging.getLogger(__name__)
 

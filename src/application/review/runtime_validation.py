@@ -7,7 +7,7 @@ from typing import Any, Optional
 from src.infrastructure.review.repository import ReviewPacketRepository
 from src.normalizer.normalizer import TransactionNormalizer
 from src.readers import create_reader
-from src.services.review_raw_stream import (
+from src.application.review.raw_stream import (
     iter_review_stream_records,
     resolve_review_source_file,
 )

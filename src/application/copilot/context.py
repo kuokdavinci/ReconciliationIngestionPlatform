@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from typing import Any, Optional
 
-from fastapi import HTTPException
-
 from src.domain.mapping.models import MappingConfigStatus
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
@@ -15,6 +13,7 @@ from src.domain.review.models import ReviewPacketStatus
 from src.infrastructure.review.repository import ReviewPacketRepository
 from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
+from src.application.review.errors import ReviewNotFoundError, ReviewValidationError
 
 
 def _enum_value(value: Any) -> str:
@@ -37,7 +36,7 @@ def _date_range(date: str) -> dict[str, datetime]:
     try:
         parsed = datetime.strptime(date, "%Y-%m-%d").date()
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Expected YYYY-MM-DD.")
+        raise ReviewValidationError("Invalid date format. Expected YYYY-MM-DD.")
     return {
         "$gte": datetime.combine(parsed, time.min, tzinfo=timezone.utc),
         "$lte": datetime.combine(parsed, time.max, tzinfo=timezone.utc),
@@ -100,7 +99,7 @@ class CopilotContextService:
         screen: Optional[str] = None,
     ) -> CopilotResolution:
         if not partner or not partner.strip():
-            raise HTTPException(status_code=400, detail="Partner is required.")
+            raise ReviewValidationError("Partner is required.")
         partner = partner.strip()
 
         if not screen or screen not in {"intake", "review", "reconciliation", "automation"}:
@@ -114,7 +113,7 @@ class CopilotContextService:
 
         files = await self.file_repo.find_many(file_query)
         if file_id and not files:
-            raise HTTPException(status_code=404, detail="File context not found.")
+            raise ReviewNotFoundError("File context not found.")
 
         mappings = await self.mapping_repo.find_many({"partner": partner})
         packets = await self.packet_repo.find_many({"partner": partner})

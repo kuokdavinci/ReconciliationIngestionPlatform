@@ -1,5 +1,0 @@
-"""Compatibility facade for audit application services."""
-
-from src.application.audit.service import record_audit_event
-
-__all__ = ["record_audit_event"]

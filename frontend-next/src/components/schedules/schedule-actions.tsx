@@ -14,6 +14,7 @@ interface Props {
   onBackfill: () => void;
   onRetry?: () => void;
   onViewRecovery?: () => void;
+  onOpenReview?: () => void;
 }
 
 export function ScheduleActions({
@@ -25,6 +26,7 @@ export function ScheduleActions({
   onBackfill,
   onRetry,
   onViewRecovery,
+  onOpenReview,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -57,6 +59,7 @@ export function ScheduleActions({
     || job.recovery?.status === "FAILED"
     || job.recovery?.status === "BLOCKED";
   const isRetryable = Boolean(onRetry && (job.recovery?.retryable === true || isFailedOrBlocked));
+  const backfillActive = Boolean(job.activeBackfill);
 
   // Determine Primary Action
   // 1. If retryable / failed: Primary action is Retry
@@ -65,6 +68,7 @@ export function ScheduleActions({
   const showRetryAsPrimary = isRetryable && Boolean(onRetry);
 
   const runDisabled = running || runtimeActive || job.recovery?.status === "WAITING_REVIEW";
+  const runBlockedByBackfill = backfillActive && !runDisabled;
   const retryDisabled = retrying || (
     Boolean(job.activeRuntimeRun)
     && job.status !== "RETRYING"
@@ -98,10 +102,11 @@ export function ScheduleActions({
       ) : (
         <Button
           variant="primary"
-          className={styles.primaryActionButton}
+          className={`${styles.primaryActionButton} ${runBlockedByBackfill ? styles.blockedActionButton : ""}`}
           onClick={onRun}
           disabled={runDisabled}
-          title="Run schedule now"
+          aria-disabled={runBlockedByBackfill || undefined}
+          title={backfillActive ? "Backfill is active; continue from Backfill" : "Run schedule now"}
         >
           <span className="material-symbols-outlined" style={{ fontSize: 14 }}>play_arrow</span>
           <span>Run</span>
@@ -131,6 +136,8 @@ export function ScheduleActions({
                 className={styles.dropdownMenuItem}
                 onClick={() => { setMenuOpen(false); onRun(); }}
                 disabled={runDisabled}
+                aria-disabled={runBlockedByBackfill || undefined}
+                title={backfillActive ? "Backfill is active; continue from Backfill" : undefined}
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 15 }}>play_arrow</span>
                 <span>Run schedule now</span>
@@ -147,6 +154,18 @@ export function ScheduleActions({
                 <span>Retry failed recovery</span>
               </button>
             ) : null}
+
+            {onOpenReview && (
+              <button
+                type="button"
+                role="menuitem"
+                className={styles.dropdownMenuItem}
+                onClick={() => { setMenuOpen(false); onOpenReview(); }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>rate_review</span>
+                <span>Open pending review</span>
+              </button>
+            )}
 
             <button
               type="button"

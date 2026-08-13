@@ -54,7 +54,7 @@
   margin: 0;
   font-size: 18px;
   font-weight: 800;
-  color: var(--text-primary, #f1f3f5);
+  color: #fff;
 }
 
 .close {

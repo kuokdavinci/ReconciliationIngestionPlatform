@@ -49,6 +49,88 @@ test("operator can open Mapping Studio and switch mapping views", async ({ page 
   await expect(page.locator('textarea[placeholder="Schema JSON..."]')).toBeVisible();
 });
 
+test("operator can keep the validation trace preview compact until requested", async ({ page }) => {
+  const packet = {
+    _id: "packet-preview-1",
+    partner: "VNPAY",
+    fileName: "settlement_VNPAY_20260810.xlsx",
+    fileTypeDetected: "SETTLEMENT",
+    status: "PENDING",
+    createdAt: "2026-08-10T00:00:00Z",
+    sourceType: "SCHEDULER_JOB",
+    reconciliationDate: "2026-08-10T00:00:00Z",
+    recommendedAction: { actionType: "APPROVE_REQUIRED_BEFORE_RUNTIME", reason: "Draft mapping requires review." },
+    riskSummary: { severity: "low" },
+    parseStrategy: { sheetName: "Sheet1", startRow: 2, fieldMappingCount: 1 },
+    structureSignature: { headers: ["id"], firstDataRowIndex: 2 },
+    validationGates: [{
+      gateKey: "runtime_validation",
+      status: "pass",
+      label: "Runtime validation",
+      details: {
+        sampledRows: 1,
+        successRows: 1,
+        failedRows: 0,
+        traceSamples: [{ row: 1, normalizedData: { id: "VNPAY-001" }, fieldTraces: [{ path: "id", sourceField: "id", sourceValue: "VNPAY-001", outputValue: "VNPAY-001", status: "ok" }] }],
+      },
+    }],
+    samplePreview: [{ id: "row-1", values: { id: "VNPAY-001" } }],
+    internalRecordCount: 1,
+    internalPreview: [{ id: "internal-1", partnerTxnId: "TRACE-001", amount: "100", currency: "VND", status: "SUCCESS", transactionTime: "2026-08-10T12:00:00+07:00" }],
+  };
+
+  await page.route("**/api/v1/review-packets**", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ packets: [packet] }) });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route("**/api/v1/review-packets/packet-preview-1", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ packet }) });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route("**/api/v1/review-packets/packet-preview-1/classify-scope-llm", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        suggestedScope: "FULL_SNAPSHOT",
+        probabilities: { FULL_SNAPSHOT: 1, INCREMENTAL_APPEND: 0, REPLACEMENT: 0 },
+        reasoning: "Deterministic fixture scope.",
+        internalDbRecordCount: 1,
+        internalPreview: packet.internalPreview,
+        receivedRecordCount: 1,
+      }),
+    });
+  });
+  await page.route("**/api/v1/review-packets/packet-preview-1/scope", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+  });
+  await page.route("**/api/v1/review-packets/packet-preview-1/generate-ai-mapping", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ mapping: { fieldMappings: [{ path: "id", column: 1, type: "STRING", required: true }], configHealth: { reasoning: "Fixture mapping." } } }),
+    });
+  });
+
+  await page.goto("/review-center");
+  await page.getByRole("button", { name: "Open Review", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("button", { name: "Continue", exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(dialog.getByRole("heading", { name: "Partner Mapping Validation", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Show runtime trace samples", exact: true })).toBeVisible();
+  await expect(dialog.getByText("Sample Row 1", { exact: true })).toBeHidden();
+
+  await dialog.getByRole("button", { name: "Show runtime trace samples", exact: true }).click();
+  await expect(dialog.getByText("Sample Row 1", { exact: true })).toBeVisible();
+});
+
 test("operator can recover a failed ViettelPay page from the schedules view", async ({ page }) => {
   let retryQueued = false;
   let postRetryListCalls = 0;
@@ -265,19 +347,19 @@ test("operator polling stops when a run enters waiting review", async ({ page })
           latestRuntimeRun: runQueued
             ? { id: "run-waiting-review", status: waitingReview ? "WAITING_REVIEW" : "PROCESSING" }
             : null,
-          recovery: waitingReview ? {
-            status: "WAITING_REVIEW",
-            streamKey: "VIETTELPAY:API:scheduled",
-            mode: "SCHEDULED",
+            recovery: waitingReview ? {
+              status: "WAITING_REVIEW",
+              streamKey: "VIETTELPAY:API:scheduled",
+              mode: "SCHEDULED",
             attemptCount: 1,
             maxAttempts: 3,
             retryable: false,
             completedUnitCount: 1,
-            totalUnitCount: 2,
-            duplicateCount: 0,
-            units: [],
-            events: [],
-          } : null,
+              totalUnitCount: 2,
+              duplicateCount: 0,
+              units: [{ unitKey: "page:2", label: "Page 2", page: 2, status: "WAITING_REVIEW", attemptCount: 1 }],
+              events: [{ eventId: "page:2:WAITING_REVIEW", unitKey: "page:2", status: "WAITING_REVIEW", timestamp: "2026-08-10T04:00:00Z" }],
+            } : null,
         }],
       }),
     });
@@ -297,6 +379,47 @@ test("operator polling stops when a run enters waiting review", async ({ page })
   const runButton = row.getByRole("button", { name: /Run/ });
   await runButton.click();
   await expect(runButton).toContainText("Run", { timeout: 5_000 });
+  await expect(row).toContainText("Waiting Review");
+  await row.getByRole("button", { name: /More options for VIETTELPAY/ }).click();
+  await row.getByRole("menuitem", { name: /View runtime details/ }).click();
+  const waitingDialog = page.getByRole("dialog");
+  await expect(waitingDialog.locator('[class*="markerWAITING_REVIEW"]')).toHaveCSS("color", "rgb(240, 185, 11)");
+  await page.keyboard.press("Escape");
+  const callsAfterTerminal = runListCalls;
+  await page.waitForTimeout(1_500);
+  expect(runListCalls).toBe(callsAfterTerminal);
+});
+
+test("operator keeps the newest schedule state when polling responses finish out of order", async ({ page }) => {
+  let runListCalls = 0;
+  await page.route("**/api/v1/automation/jobs**", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    runListCalls += 1;
+    const requestNumber = runListCalls;
+    if (requestNumber === 2) await new Promise((resolve) => setTimeout(resolve, 3_500));
+    const waitingReview = requestNumber >= 3;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        jobs: [{
+          partner: "VNPAY",
+          fetchMethod: "FILEDROP",
+          schedule: "0 7 * * *",
+          destination: "VNPAY_SETTLEMENT",
+          enabled: true,
+          status: waitingReview ? "WAITING_REVIEW" : "FETCHING",
+          statusMessage: waitingReview ? "Mapping approval is required." : "Fetching source units.",
+          pendingReviewPackets: waitingReview ? 1 : 0,
+          latestRuntimeRun: { id: "run-vnpay", status: waitingReview ? "WAITING_REVIEW" : "FETCHING" },
+          recovery: waitingReview ? { status: "WAITING_REVIEW", units: [], events: [] } : null,
+        }],
+      }),
+    });
+  });
+
+  await page.goto("/schedules");
+  const row = page.getByRole("row", { name: /VNPAY/ });
   await expect(row).toContainText("Waiting Review");
   const callsAfterTerminal = runListCalls;
   await page.waitForTimeout(1_500);
@@ -319,6 +442,21 @@ test("operator can start a VNPAY backfill and see its approval progress", async 
           status: "HEALTHY",
           pendingReviewPackets: 1,
           latestRuntimeRun: null,
+          activeBackfill: {
+            _id: "backfill-vnpay-1",
+            partner: "VNPAY",
+            fetchConfigId: "vnpay-fetch-config",
+            mode: "BACKFILL",
+            status: "WAITING_CONFIG",
+            fromDate: "2026-08-07",
+            toDate: "2026-08-11",
+            currentDate: "2026-08-10",
+            completedDays: 1,
+            totalDays: 3,
+            approvalRequired: true,
+            days: [],
+          },
+          recentPackets: [{ _id: "packet-vnpay-1", partner: "VNPAY", fileName: "settlement_VNPAY.xlsx", status: "PENDING", sourceType: "SCHEDULER_JOB", createdAt: "2026-08-07T00:00:00Z" }],
           recovery: null,
         }],
       }),
@@ -378,12 +516,27 @@ test("operator can start a VNPAY backfill and see its approval progress", async 
   await page.goto("/schedules");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const row = page.getByRole("row", { name: /VNPAY/ });
+  await expect(row).toContainText("Backfill Review");
   await row.getByRole("button", { name: /More options for VNPAY/ }).click();
-  await expect(row.getByRole("menuitem", { name: /Backfill date range/ })).toBeVisible();
-  await row.getByRole("menuitem", { name: /Backfill date range/ }).click();
+  await expect(row.getByRole("menuitem", { name: /Open pending review/ })).toBeVisible();
+  await row.getByRole("menuitem", { name: /Open pending review/ }).click();
+  await expect(page).toHaveURL(/\/review-center\?packet=packet-vnpay-1/);
+  await page.goto("/schedules");
+  await expect(page.getByRole("row", { name: /VNPAY/ })).toBeVisible();
+  const refreshedRow = page.getByRole("row", { name: /VNPAY/ });
+  const blockedRunButton = refreshedRow.getByRole("button", { name: "Run", exact: true });
+  await expect(blockedRunButton).toHaveAttribute("aria-disabled", "true");
+  await blockedRunButton.click();
+  await expect(page.getByRole("alert")).toContainText("Backfill is WAITING CONFIG at 2026-08-10");
+  await refreshedRow.getByRole("button", { name: /More options for VNPAY/ }).click();
+  await expect(refreshedRow.getByRole("menuitem", { name: "Run schedule now", exact: true })).toHaveAttribute("aria-disabled", "true");
+  await expect(refreshedRow.getByRole("menuitem", { name: /Backfill date range/ })).toBeVisible();
+  await refreshedRow.getByRole("menuitem", { name: /Backfill date range/ }).click();
 
   const formDialog = page.getByRole("dialog");
   await expect(formDialog).toContainText("Backfill VNPAY");
+  await expect(formDialog.getByLabel("From date")).toHaveValue("2026-08-10");
+  await expect(formDialog.getByLabel("To date")).toHaveValue("2026-08-11");
   await formDialog.getByLabel("From date").fill("2026-08-12");
   await formDialog.getByLabel("To date").fill("2026-08-11");
   await expect(formDialog.getByRole("alert")).toContainText("on or before");

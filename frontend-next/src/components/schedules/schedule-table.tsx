@@ -11,12 +11,13 @@ interface Props {
   onBackfill: (partner: string) => void;
   onRetryRecovery?: (partner: string) => void;
   onViewRecovery?: (job: ScheduleJob) => void;
+  onOpenReview?: (partner: string) => void;
   runningPartners?: Record<string, boolean>;
   retryingRecoveryPartners?: Record<string, boolean>;
   emptyMessage?: string;
 }
 
-export function ScheduleTable({ jobs, onRunJob, onBackfill, onRetryRecovery, onViewRecovery, runningPartners = {}, retryingRecoveryPartners = {}, emptyMessage }: Props) {
+export function ScheduleTable({ jobs, onRunJob, onBackfill, onRetryRecovery, onViewRecovery, onOpenReview, runningPartners = {}, retryingRecoveryPartners = {}, emptyMessage }: Props) {
   if (jobs.length === 0) {
     return (
       <div style={{ padding: 24, textAlign: "center", color: "var(--text-muted)" }}>
@@ -94,6 +95,9 @@ export function ScheduleTable({ jobs, onRunJob, onBackfill, onRetryRecovery, onV
                       onBackfill={() => onBackfill(job.partner)}
                       onRetry={onRetryRecovery ? () => onRetryRecovery(job.partner) : undefined}
                       onViewRecovery={onViewRecovery ? () => onViewRecovery(job) : undefined}
+                      onOpenReview={onOpenReview && job.recentPackets?.some((packet) => packet.status === "PENDING")
+                        ? () => onOpenReview(job.partner)
+                        : undefined}
                     />
                   </div>
                 </td>

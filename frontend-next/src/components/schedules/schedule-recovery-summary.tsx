@@ -32,13 +32,22 @@ export function ScheduleRecoverySummary({ job }: Props) {
   const isFailed = job.status === "FAILED" || recoveryStatus === "FAILED";
   const isBlocked = job.status === "BLOCKED" || recoveryStatus === "BLOCKED";
   const isWaitingReview = job.status === "WAITING_REVIEW" || recoveryStatus === "WAITING_REVIEW";
+  const isSafeDuplicate = job.status === "SAFE_DUPLICATE" || job.safeDuplicate === true || recovery?.safeDuplicate === true;
+  const backfillStatus = job.activeBackfill?.status;
+  const hasBackfill = Boolean(job.activeBackfill);
+  const backfillWaitingForReview = backfillStatus === "WAITING_CONFIG";
+  const backfillFailed = backfillStatus === "FAILED";
 
   // Primary Status
   let primaryLabel = "Ready";
   let statusDotClass = styles.statusDotReady;
   let textClass = styles.statusTextReady;
 
-  if (isFailed) {
+  if (hasBackfill) {
+    primaryLabel = backfillFailed ? "Backfill Failed" : backfillWaitingForReview ? "Backfill Review" : "Backfill";
+    statusDotClass = backfillFailed ? styles.statusDotFailed : backfillWaitingForReview ? styles.statusDotWarning : styles.statusDotRunning;
+    textClass = backfillFailed ? styles.statusTextFailed : backfillWaitingForReview ? styles.statusTextWarning : styles.statusTextRunning;
+  } else if (isFailed) {
     primaryLabel = "Failed";
     statusDotClass = styles.statusDotFailed;
     textClass = styles.statusTextFailed;
@@ -58,11 +67,18 @@ export function ScheduleRecoverySummary({ job }: Props) {
     primaryLabel = "Waiting Review";
     statusDotClass = styles.statusDotWarning;
     textClass = styles.statusTextWarning;
+  } else if (isSafeDuplicate) {
+    primaryLabel = "Safe Duplicate";
+    statusDotClass = styles.statusDotReady;
+    textClass = styles.statusTextReady;
   }
 
   // Secondary Line (Max 1 short line, ONLY when relevant)
   let subLine: string | null = null;
-  if (isFailed || isBlocked) {
+  if (hasBackfill) {
+    const label = String(backfillStatus || "ACTIVE").replaceAll("_", " ");
+    subLine = `${label}${job.activeBackfill?.currentDate ? ` · ${job.activeBackfill.currentDate}` : ""}`;
+  } else if (isFailed || isBlocked) {
     if (recovery?.lastError || recovery?.errorCode) {
       subLine = parseErrorSummary(recovery.lastError, recovery.errorCode);
     } else if (recoveryStatus === "FAILED") {
@@ -74,6 +90,8 @@ export function ScheduleRecoverySummary({ job }: Props) {
     subLine = `${recovery.completedUnitCount} / ${recovery.totalUnitCount} units`;
   } else if (isWaitingReview) {
     subLine = "Action required";
+  } else if (isSafeDuplicate) {
+    subLine = job.duplicateMessage || recovery?.duplicateMessage || "Already processed; skipped safely";
   }
 
   const ariaLabel = `${job.partner} status ${primaryLabel}${subLine ? `. ${subLine}` : ""}`;

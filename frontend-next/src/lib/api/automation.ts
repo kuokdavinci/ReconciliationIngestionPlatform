@@ -134,6 +134,9 @@ function normalizeRecovery(value: unknown): RecoverySummary | null {
     completedUnitCount: asNumber(value.completedUnitCount),
     totalUnitCount: asNumber(value.totalUnitCount, units.length),
     duplicateCount: asNumber(value.duplicateCount),
+    safeDuplicate: value.safeDuplicate === true,
+    duplicateSourceOutcome: asString(value.duplicateSourceOutcome),
+    duplicateMessage: asString(value.duplicateMessage),
     events,
   };
 }

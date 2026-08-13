@@ -102,7 +102,7 @@ export function useGuidedReview({
       }
     };
     void load();
-    const interval = window.setInterval(() => { void load(); }, 1500);
+    const interval = window.setInterval(() => { void load(); }, 500);
     return () => {
       cancelled = true;
       window.clearInterval(interval);

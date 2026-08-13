@@ -76,7 +76,10 @@ async def test_run_automation_job_now():
         return task
 
     with (
-        patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
+        patch(
+            "src.api.automation.PartnerRuntimeRunRepository.create",
+            new=AsyncMock(return_value=queued_run),
+        ),
         patch("src.api.automation.asyncio.create_task", side_effect=_discard_background_task),
         patch.object(settings, "automation_orchestrator", "local"),
     ):
@@ -226,7 +229,10 @@ async def test_run_now_allows_new_file_after_mapping_review_was_approved():
 
     with (
         patch("src.api.automation._find_recovery_checkpoint", new=AsyncMock(return_value=checkpoint)),
-        patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
+            patch(
+                "src.api.automation.PartnerRuntimeRunRepository.create",
+                new=AsyncMock(return_value=queued_run),
+            ),
         patch.object(settings, "automation_orchestrator", "local"),
         patch("src.api.automation.asyncio.create_task") as create_task,
     ):
@@ -281,8 +287,10 @@ async def test_retry_without_checkpoint_starts_a_safe_fresh_fetch():
 
     with (
         patch("src.api.automation._find_recovery_checkpoint", new=AsyncMock(return_value=None)),
-        patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
-        patch("src.api.automation.update_runtime_run", new=AsyncMock()),
+        patch(
+            "src.api.automation.PartnerRuntimeRunRepository.create",
+            new=AsyncMock(return_value=queued_run),
+        ),
     ):
         payload = await retry_automation_job(request, "VIETTELPAY")
 
@@ -349,8 +357,14 @@ async def test_retry_manually_clears_up_for_retry_task_in_existing_airflow_run()
             new=AsyncMock(return_value=latest_run),
         ),
         patch("src.api.automation._find_recovery_checkpoint", new=AsyncMock(return_value=None)),
-        patch("src.api.automation.update_runtime_run", new=AsyncMock()) as update_run,
-        patch("src.api.automation.create_runtime_run", new=AsyncMock()) as create_run,
+        patch(
+            "src.api.automation.PartnerRuntimeRunRepository.update_fields",
+            new=AsyncMock(),
+        ) as update_run,
+        patch(
+            "src.api.automation.PartnerRuntimeRunRepository.create",
+            new=AsyncMock(),
+        ) as create_run,
     ):
         payload = await retry_automation_job(request, "VIETTELPAY")
 
@@ -417,14 +431,12 @@ async def test_retry_refuses_new_run_when_existing_airflow_state_cannot_be_read(
             new=AsyncMock(return_value=latest_run),
         ),
         patch("src.api.automation._find_recovery_checkpoint", new=AsyncMock(return_value=None)),
-        patch("src.api.automation._queue_scheduler_run", new=AsyncMock()) as queue_run,
     ):
         with pytest.raises(HTTPException) as error:
             await retry_automation_job(request, "VIETTELPAY")
 
     assert error.value.status_code == 409
     assert "no new Airflow DAG run was created" in str(error.value.detail)
-    queue_run.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -477,8 +489,14 @@ async def test_run_automation_job_dispatches_through_injected_airflow_gateway():
     )
 
     with (
-        patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
-        patch("src.api.automation.update_runtime_run", new=AsyncMock()) as update_run,
+        patch(
+            "src.api.automation.PartnerRuntimeRunRepository.create",
+            new=AsyncMock(return_value=queued_run),
+        ),
+        patch(
+            "src.api.automation.PartnerRuntimeRunRepository.update_fields",
+            new=AsyncMock(),
+        ) as update_run,
     ):
         payload = await run_automation_job_now(request, "ZALOPAY")
 
@@ -494,7 +512,7 @@ async def test_run_automation_job_dispatches_through_injected_airflow_gateway():
         "state": "SUBMITTED",
     }
     assert payload["run"]["orchestration"]["dagRunId"] == f"manual__{queued_run.id}"
-    assert update_run.await_args.kwargs["orchestration"]["correlationId"] == (
+    assert update_run.await_args.args[1]["orchestration"]["correlationId"] == (
         f"runtime:{queued_run.id}"
     )
 
@@ -538,11 +556,17 @@ async def test_run_automation_job_marks_runtime_failed_when_gateway_is_unavailab
     )
 
     with (
-        patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
-        patch("src.api.automation.update_runtime_run", new=AsyncMock()) as update_run,
+        patch(
+            "src.api.automation.PartnerRuntimeRunRepository.create",
+            new=AsyncMock(return_value=queued_run),
+        ),
+        patch(
+            "src.api.automation.PartnerRuntimeRunRepository.update_fields",
+            new=AsyncMock(),
+        ) as update_run,
     ):
         with pytest.raises(HTTPException) as error:
             await run_automation_job_now(request, "ZALOPAY")
 
     assert error.value.status_code == 503
-    assert update_run.await_args.kwargs["status"] == PartnerRuntimeRunStatus.FAILED
+    assert update_run.await_args.args[1]["status"] == PartnerRuntimeRunStatus.FAILED.value

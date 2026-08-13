@@ -4,23 +4,31 @@ import asyncio
 import inspect
 import logging
 from datetime import date, datetime, timedelta, timezone
-from uuid import uuid4
-from zoneinfo import ZoneInfo
+from types import SimpleNamespace
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
 from src.application.automation import ExecuteStreamCommand, execute_stream
+from src.application.automation.job_commands import AutomationJobCommandService
+from src.application.automation.job_contracts import (
+    AutomationApplicationError,
+    AutomationConflictError,
+    AutomationNotFoundError,
+    AutomationUnavailableError,
+    AutomationValidationError,
+    ResolveAutomationRecoveryCommand,
+    RetryAutomationJobCommand,
+    RunAutomationJobCommand,
+)
+from src.application.automation.job_queries import AutomationJobQueryService
 from src.application.automation.stream_identity import source_stream_key
 from src.application.automation.workflows import (
     WorkflowGateway,
-    WorkflowProvider,
     WorkflowSubmission,
-    WorkflowSubmissionConflict,
     WorkflowUnavailable,
 )
-from src.application.ingestion.recovery_view import build_recovery_view
 from src.config.settings import settings
 from src.domain.fetch_config.models import FetchMethod
 from src.domain.ingestion.checkpoints import IngestionMode
@@ -29,8 +37,6 @@ from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from src.domain.runtime.models import (
     PartnerRuntimeRunStatus,
-    PartnerRuntimeTriggerType,
-    RuntimeOrchestrationContext,
 )
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
 from src.infrastructure.review.repository import ReviewPacketRepository
@@ -43,12 +49,7 @@ from src.application.automation.backfill_service import (
     BackfillRunValidationError,
     serialize_backfill_run,
 )
-from src.application.runtime.service import (
-    create_runtime_run,
-    serialize_partner_runtime_run,
-    update_runtime_run,
-)
-from src.domain.ingestion.retry_policy import RetryPolicy
+from src.application.runtime.service import serialize_partner_runtime_run
 from src.application.audit.service import record_audit_event
 from src.infrastructure.mapping.composition import build_config_loader
 from src.api.background_tasks import track_background_task
@@ -96,6 +97,17 @@ class _LazyWorkflowGateway:
         if self._gateway is None:
             self._gateway = self._factory()
         return await self._gateway.trigger(command)
+
+    async def retry_task(self, *args, **kwargs):
+        if self._gateway is None:
+            self._gateway = self._factory()
+        retryer = getattr(self._gateway, "retry_task", None)
+        if not callable(retryer):
+            raise WorkflowUnavailable("Workflow gateway does not support in-place task retry")
+        result = retryer(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
 
 def _stream_key_for_config(config) -> str | None:
@@ -385,135 +397,101 @@ async def _airflow_task_state(request: Request, db, runtime_run_data: dict | Non
         return None
 
 
-async def _retry_existing_airflow_run(
-    request: Request,
-    db,
-    latest_run,
-    latest_run_data: dict | None,
-    task_state: str | None,
-    actor: str,
-):
-    """Clear a retryable task in-place instead of creating another DAG run."""
-
-    if task_state not in _AIRFLOW_MANUAL_RETRY_STATES or not latest_run_data:
-        return None
-    orchestration = latest_run_data.get("orchestration") or {}
-    dag_run_id = orchestration.get("dagRunId")
-    if not dag_run_id:
-        return None
-    gateway = _workflow_gateway(request, db)
-    retryer = getattr(gateway, "retry_task", None)
-    if not callable(retryer):
-        raise WorkflowUnavailable("Airflow gateway does not support in-place task retry")
-    result = retryer(
-        dag_run_id,
-        task_id=orchestration.get("taskId") or "run_stream",
-        map_index=(
-            orchestration["mapIndex"]
-            if orchestration.get("mapIndex") is not None
-            else 0
-        ),
-    )
-    if inspect.isawaitable(result):
-        result = await result
-    if not isinstance(result, WorkflowSubmission):
-        raise WorkflowUnavailable("Airflow task retry returned an invalid submission")
-    message = "Manual retry requested in the existing Airflow DAG run."
-    retry_event = {
-        "eventId": f"{latest_run.id}:manual-retry:{uuid4()}",
-        "status": "RETRY_REQUESTED",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "actor": actor,
-        "message": message,
-    }
-    await update_runtime_run(
-        db,
-        str(latest_run.id),
-        status=PartnerRuntimeRunStatus.QUEUED,
-        message=message,
-        stats={"retryable": True, "airflowTaskState": task_state, "retryActor": actor},
-        clear_finished_at=True,
-        attempt_event=retry_event,
-    )
-    latest_run.status = PartnerRuntimeRunStatus.QUEUED
-    latest_run.message = message
-    latest_run.finished_at = None
-    latest_run.attempt_history.append(retry_event)
-    return {
-        "ok": True,
-        "queued": True,
-        "retried": True,
-        "actor": actor,
-        "partner": latest_run.partner,
-        "message": message,
-        "runtimeRunId": str(latest_run.id),
-        "resumedFromUnitKey": None,
-        "run": serialize_partner_runtime_run(latest_run),
-        "workflow": result.model_dump(by_alias=True, mode="json"),
-    }
 
 
-async def _queue_scheduler_run(
-    request: Request,
-    db,
-    config,
-    *,
-    actor: str,
-    message: str,
-):
-    reconciliation_date = datetime.now(ZoneInfo(settings.business_timezone)).date()
-    run = await create_runtime_run(
-        db,
-        partner=config.partner,
-        date=reconciliation_date.isoformat(),
-        trigger_type=PartnerRuntimeTriggerType.SCHEDULER,
-        triggered_by=actor,
-        status=PartnerRuntimeRunStatus.QUEUED,
-        message=message,
-    )
-    command = ExecuteStreamCommand(
-        fetchConfigId=str(config.id),
-        partner=config.partner,
-        configVersion=str(config.updated_at),
-        reconciliationDate=reconciliation_date,
-        runtimeRunId=str(run.id),
-        correlationId=f"runtime:{run.id}",
-    )
-    try:
-        submission = await _workflow_gateway(request, db).trigger(command)
-    except WorkflowSubmissionConflict as exc:
-        await _mark_submission_failed(db, run, "DAG_RUN_ID_COLLISION")
-        raise HTTPException(status_code=409, detail="Workflow run ID collision.") from exc
-    except WorkflowUnavailable as exc:
-        await _mark_submission_failed(db, run, "ORCHESTRATOR_UNAVAILABLE")
-        raise HTTPException(status_code=503, detail="Workflow orchestration is unavailable.") from exc
+def _automation_error_status(error: AutomationApplicationError) -> int:
+    if isinstance(error, AutomationNotFoundError):
+        return 404
+    if isinstance(error, AutomationValidationError):
+        return 400
+    if isinstance(error, AutomationConflictError):
+        return 409
+    if isinstance(error, AutomationUnavailableError):
+        return 503
+    return 400
 
-    if submission.provider == WorkflowProvider.AIRFLOW:
-        orchestration = RuntimeOrchestrationContext(
-            dagId=submission.workflow_id,
-            dagRunId=submission.workflow_run_id,
-            taskId="run_stream",
-            correlationId=command.correlation_id,
+
+def _job_query_service(request: Request, db) -> AutomationJobQueryService:
+    async def task_state_resolver(runtime_run_data):
+        return await _airflow_task_state(request, db, runtime_run_data)
+
+    return AutomationJobQueryService(
+        db=db,
+        fetch_repo=FetchConfigRepository(db),
+        packet_repo=ReviewPacketRepository(db),
+        runtime_run_repo=PartnerRuntimeRunRepository(db),
+        checkpoint_repo=IngestionCheckpointRepository(db),
+        backfill_repo=BackfillRunRepository(db),
+        task_state_resolver=task_state_resolver,
+    )
+
+
+def _job_command_service(request: Request, db) -> AutomationJobCommandService:
+    checkpoint_repo = IngestionCheckpointRepository(db)
+
+    async def checkpoint_finder(config):
+        return await _find_recovery_checkpoint(checkpoint_repo, config)
+
+    async def task_state_resolver(runtime_run_data):
+        return await _airflow_task_state(request, db, runtime_run_data)
+
+    async def pending_review_finder(partner: str) -> bool:
+        pending_review = await db["review_packet"].find_one(
+            {
+                "partner": partner,
+                "sourceType": "SCHEDULER_JOB",
+                "status": "PENDING",
+            },
+            projection={"_id": 1},
         )
-        await update_runtime_run(
+        return pending_review is not None
+
+    async def audit_recorder(*, config, action, actor, metadata):
+        await record_audit_event(
             db,
-            str(run.id),
-            orchestration=orchestration.model_dump(by_alias=True, mode="json"),
+            entity_type="INGESTION_CHECKPOINT",
+            entity_id=f"{config.partner}:{config.fetch_method.value}:scheduled",
+            action=action,
+            actor=actor,
+            metadata=metadata,
         )
-        run.orchestration = orchestration
-    return run, submission
 
-
-async def _mark_submission_failed(db, run, error_code: str) -> None:
-    message = f"Workflow submission failed ({error_code})."
-    await update_runtime_run(
-        db,
-        str(run.id),
-        status=PartnerRuntimeRunStatus.FAILED,
-        message=message,
-        stats={"errorCode": error_code, "retryable": False},
-        finished_at=datetime.now(timezone.utc),
+    return AutomationJobCommandService(
+        fetch_repo=FetchConfigRepository(db),
+        backfill_repo=BackfillRunRepository(db),
+        runtime_repo=PartnerRuntimeRunRepository(db),
+        checkpoint_repo=checkpoint_repo,
+        workflow_gateway=_LazyWorkflowGateway(lambda: _workflow_gateway(request, db)),
+        runtime_service=SimpleNamespace(
+            serialize_partner_runtime_run=serialize_partner_runtime_run
+        ),
+        checkpoint_finder=checkpoint_finder,
+        task_state_resolver=task_state_resolver,
+        pending_review_finder=pending_review_finder,
+        audit_recorder=audit_recorder,
     )
+
+
+async def _recovery_resolution_payload(request: Request) -> tuple[str, str]:
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Recovery resolution payload must be valid JSON.",
+        ) from exc
+    action = str(payload.get("action") or "").upper()
+    reason = str(payload.get("reason") or "").strip()
+    if action not in {"RETRY", "SKIP"}:
+        raise HTTPException(status_code=400, detail="Recovery action must be RETRY or SKIP.")
+    if not reason:
+        raise HTTPException(status_code=400, detail="A reason is required for recovery resolution.")
+    if len(reason) > 500:
+        raise HTTPException(
+            status_code=400,
+            detail="Recovery reason must be 500 characters or fewer.",
+        )
+    return action, reason
 
 
 class BackfillStartPayload(BaseModel):
@@ -522,297 +500,30 @@ class BackfillStartPayload(BaseModel):
     fetch_config_id: str | None = Field(default=None, alias="fetchConfigId")
 
 
+
+
 @router.get("/jobs")
 async def list_automation_jobs(request: Request):
     db = _get_db(request)
-    fetch_repo = FetchConfigRepository(db)
-    packet_repo = ReviewPacketRepository(db)
-    runtime_run_repo = PartnerRuntimeRunRepository(db)
-    checkpoint_repo = IngestionCheckpointRepository(db)
-    backfill_repo = BackfillRunRepository(db)
-    configs = await fetch_repo.find_enabled()
-    checkpoint_identities = [
-        {
-            "partner": config.partner,
-            "fetchConfigId": str(config.id),
-            "sourceType": config.fetch_method.value,
-            "streamKey": _stream_key_for_config(config),
-            "mode": IngestionMode.SCHEDULED,
-        }
-        for config in configs
-    ]
-    checkpoints = await checkpoint_repo.find_by_streams(checkpoint_identities)
-    checkpoint_by_identity = {
-        (
-            checkpoint.partner,
-            checkpoint.fetch_config_id,
-            checkpoint.source_type,
-            checkpoint.mode,
-        ): checkpoint
-        for checkpoint in checkpoints
-    }
-    max_attempts = RetryPolicy().max_attempts
-    packets = await packet_repo.find_many({})
-    packets.sort(key=lambda item: item.created_at, reverse=True)
-    pending_by_partner: dict[str, int] = {}
-    recent_packet_docs: dict[str, list[dict]] = {}
-    pending_packet_keys: set[tuple[str, str, str]] = set()
-    for packet in packets:
-        if packet.source_type.value != "SCHEDULER_JOB":
-            continue
-        if packet.status.value == "PENDING":
-            # A partner/file type has one active mapping proposal. Collapse
-            # legacy duplicate packets here so retries cannot surface two
-            # operator actions for the same scheduler stream.
-            packet_key = (
-                packet.partner,
-                packet.source_type.value,
-                packet.file_type_detected,
-            )
-            if packet_key in pending_packet_keys:
-                continue
-            pending_packet_keys.add(packet_key)
-            pending_by_partner[packet.partner] = pending_by_partner.get(packet.partner, 0) + 1
-        recent_packet_docs.setdefault(packet.partner, []).append({
-            "_id": str(packet.id),
-            "fileName": packet.file_name,
-            "status": packet.status.value,
-            "sourceType": packet.source_type.value,
-            "decisionMode": packet.decision_mode.value if packet.decision_mode else None,
-            "recommendedAction": packet.recommended_action,
-            "parseStrategy": packet.parse_strategy,
-            "riskSummary": packet.risk_summary,
-            "createdAt": packet.created_at.isoformat(),
-            "reviewedAt": packet.reviewed_at.isoformat() if packet.reviewed_at else None,
-        })
-    for partner_packets in recent_packet_docs.values():
-        partner_packets.sort(key=lambda item: item["createdAt"], reverse=True)
+    service = _job_query_service(request, db)
+    return {"jobs": await service.list_jobs()}
 
-    jobs = []
-    for config in configs:
-        method_config = config.get_method_config()
-        destination = "-"
-        if method_config is not None:
-          if hasattr(method_config, "remote_path"):
-              destination = getattr(method_config, "remote_path")
-          elif hasattr(method_config, "base_url"):
-              destination = getattr(method_config, "base_url")
-          elif hasattr(method_config, "directory"):
-              destination = getattr(method_config, "directory")
-        latest_run = await runtime_run_repo.find_latest_by_partner(config.partner)
-        recent_runs = await runtime_run_repo.find_recent_by_partner(config.partner, limit=5)
-        latest_file_raw = await db["reconciliation_file"].find_one(
-            {"partner": config.partner},
-            sort=[("createdAt", -1)],
-        )
-        latest_file = None
-        if latest_file_raw is not None:
-            latest_file = {
-                "id": str(latest_file_raw.get("_id")),
-                "fileName": latest_file_raw.get("fileName"),
-                "processingStatus": latest_file_raw.get("processingStatus"),
-                "reconciliationDate": latest_file_raw.get("reconciliationDate").isoformat() if isinstance(latest_file_raw.get("reconciliationDate"), datetime) else str(latest_file_raw.get("reconciliationDate") or ""),
-                "createdAt": latest_file_raw.get("createdAt").isoformat() if isinstance(latest_file_raw.get("createdAt"), datetime) else str(latest_file_raw.get("createdAt") or ""),
-            }
-
-        latest_run_data = serialize_partner_runtime_run(latest_run) if latest_run else None
-        attempt_history = _merge_runtime_attempt_history(recent_runs, latest_run_data)
-        airflow_task_state = await _airflow_task_state(request, db, latest_run_data)
-        if latest_run_data is not None and airflow_task_state is not None:
-            latest_run_data.setdefault("orchestration", {})["taskState"] = airflow_task_state
-        checkpoint = checkpoint_by_identity.get(
-            (
-                config.partner,
-                str(config.id),
-                config.fetch_method.value,
-                IngestionMode.SCHEDULED,
-            )
-        )
-        active_backfill = await backfill_repo.find_latest_active_by_partner(config.partner)
-        latest_run_stats = (latest_run_data or {}).get("stats") or {}
-        duplicate_outcome = latest_run_stats.get("outcome")
-        if duplicate_outcome is None and latest_run_stats.get("replayed", 0) > 0:
-            duplicate_outcome = "FETCH_UNIT_REPLAY"
-        is_safe_duplicate = latest_run_stats.get("safeDuplicate") is True or duplicate_outcome in {
-            "FILE_DUPLICATE",
-            "FETCH_UNIT_REPLAY",
-            "NO_NEW_FILE",
-            "SAFE_DUPLICATE",
-        }
-        airflow_retry_active = airflow_task_state in _AIRFLOW_RETRYING_TASK_STATES
-        airflow_terminal_retry = airflow_task_state in _AIRFLOW_MANUAL_RETRY_STATES
-        application_runtime_active = latest_run_data and latest_run_data.get("status") in _ACTIVE_RUNTIME_STATUSES
-        active_run = (
-            latest_run_data
-            if latest_run_data
-            and (
-                (application_runtime_active and not airflow_terminal_retry)
-                or airflow_retry_active
-            )
-            else None
-        )
-        has_pending_file = _has_pending_file(
-            fetch_method=config.fetch_method,
-            latest_file=latest_file,
-            latest_run=latest_run,
-            is_duplicate_outcome=is_safe_duplicate,
-        )
-        status = "HEALTHY"
-        status_message = "No active runtime work."
-        if airflow_retry_active:
-            status = "RETRYING"
-            status_message = "Airflow is retrying this run; wait for it to finish before starting another run."
-        elif active_run:
-            status = active_run.get("status") or "RUNNING"
-            status_message = active_run.get("message") or "Runtime flow is active."
-        elif latest_run_data and latest_run_data.get("status") == PartnerRuntimeRunStatus.FAILED.value:
-            status = "FAILED"
-            status_message = latest_run_data.get("message") or "Latest runtime run failed."
-        elif airflow_terminal_retry:
-            status = "FAILED"
-            status_message = "Airflow task failed; Retry will clear the task in the existing DAG run."
-        elif is_safe_duplicate:
-            status = "SAFE_DUPLICATE"
-            status_message = {
-                "FILE_DUPLICATE": "File already processed. Ingestion and reconciliation were skipped safely.",
-                "FETCH_UNIT_REPLAY": "Fetch unit already processed. Ingestion and reconciliation were skipped safely.",
-                "NO_NEW_FILE": "No new file was found. Ingestion and reconciliation were skipped.",
-                "SAFE_DUPLICATE": "This source file was already processed. The retry was skipped safely.",
-            }.get(duplicate_outcome, "This source file was already processed. The retry was skipped safely.")
-        elif has_pending_file:
-            status = "PENDING"
-            status_message = "A partner file is available and waiting for reconciliation."
-        jobs.append({
-            "partner": config.partner,
-            "fetchMethod": config.fetch_method.value,
-            "schedule": config.schedule,
-            "enabled": config.enabled,
-            "localDownloadDir": config.local_download_dir,
-            "destination": destination,
-            "pendingReviewPackets": pending_by_partner.get(config.partner, 0),
-            "updatedAt": config.updated_at.isoformat() if isinstance(config.updated_at, datetime) else str(config.updated_at),
-            "recentPackets": recent_packet_docs.get(config.partner, [])[:3],
-            "status": status,
-            "statusMessage": status_message,
-            "duplicateOutcome": duplicate_outcome,
-            "safeDuplicate": is_safe_duplicate,
-            "duplicateSourceOutcome": latest_run_stats.get("duplicateSourceOutcome"),
-            "duplicateMessage": status_message if is_safe_duplicate else None,
-            "hasPendingFile": has_pending_file,
-            "latestRuntimeRun": latest_run_data,
-            "recentRuntimeRuns": [
-                serialize_partner_runtime_run(item) for item in recent_runs
-            ],
-            "activeRuntimeRun": active_run,
-            "latestFile": latest_file,
-            "recovery": build_recovery_view(
-                checkpoint=checkpoint,
-                latest_run=latest_run_data,
-                max_attempts=max_attempts,
-                attempt_history=attempt_history,
-                expected_unit_count=(
-                    getattr(method_config.pagination, "max_pages", None)
-                    if config.fetch_method.value == "API"
-                    and getattr(method_config, "pagination", None) is not None
-                    else None
-                ),
-            ),
-            "activeBackfill": serialize_backfill_run(active_backfill) if active_backfill else None,
-        })
-    return {"jobs": jobs}
 
 
 @router.post("/jobs/{partner}/run")
 async def run_automation_job_now(request: Request, partner: str):
     actor = require_actor(request, payload_field_name="actor")
     db = _get_db(request)
-    fetch_repo = FetchConfigRepository(db)
-    config = await fetch_repo.find_by_partner(partner)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Automation job not found for partner.")
-    if not config.enabled:
-        raise HTTPException(status_code=400, detail="Automation job is disabled.")
-
-    active_backfill = await BackfillRunRepository(db).find_latest_active_by_partner(partner)
-    if active_backfill is not None:
-        status = getattr(active_backfill.status, "value", active_backfill.status)
-        checkpoint = active_backfill.current_date.isoformat() if active_backfill.current_date else "the current checkpoint"
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Backfill is {status} at {checkpoint}; continue this partner from the Backfill action "
-                "instead of Run now."
-            ),
+    service = _job_command_service(request, db)
+    try:
+        return await service.run_now(
+            RunAutomationJobCommand(partner=partner, actor=actor)
         )
-
-    checkpoint_repo = IngestionCheckpointRepository(db)
-    checkpoint = await _find_recovery_checkpoint(checkpoint_repo, config)
-    latest_run = await PartnerRuntimeRunRepository(db).find_latest_by_partner(partner)
-    latest_run_data = serialize_partner_runtime_run(latest_run) if latest_run else None
-    airflow_task_state = await _airflow_task_state(request, db, latest_run_data)
-    if airflow_task_state in _AIRFLOW_RETRYING_TASK_STATES:
+    except AutomationApplicationError as exc:
         raise HTTPException(
-            status_code=409,
-            detail="Airflow is already retrying this run; wait for the native retry to finish before running again.",
-        )
-    if latest_run is not None and getattr(latest_run.status, "value", latest_run.status) in _ACTIVE_RUNTIME_STATUSES:
-        raise HTTPException(status_code=409, detail="An Airflow/runtime attempt is already active; wait for it to finish or retry.")
-    if checkpoint is not None and _has_live_claim(checkpoint):
-        raise HTTPException(status_code=409, detail="Recovery is already processing a live source-unit claim.")
-    if checkpoint is not None:
-        if checkpoint.status == "BLOCKED":
-            raise HTTPException(
-                status_code=409,
-                detail="Checkpoint is BLOCKED and requires operator resolution before starting a new run.",
-            )
-        if _checkpoint_waiting_for_mapping_review(checkpoint):
-            pending_review = await db["review_packet"].find_one(
-                {
-                    "partner": partner,
-                    "sourceType": "SCHEDULER_JOB",
-                    "status": "PENDING",
-                },
-                projection={"_id": 1},
-            )
-            if pending_review is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Checkpoint is waiting for mapping review; approve the review packet before running again.",
-                )
-        if checkpoint.status == "FAILED":
-            if checkpoint.retryable is not True:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Checkpoint failure is terminal and cannot be retried from Run now.",
-                )
-            prepared = await checkpoint_repo.prepare_manual_retry(
-                checkpoint,
-                operator_id=actor,
-                reason="Operator requested immediate run for a retryable checkpoint",
-            )
-            if not prepared:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Checkpoint changed before Run now could prepare the retry.",
-                )
-
-    run, submission = await _queue_scheduler_run(
-        request,
-        db,
-        config,
-        actor=actor,
-        message="Automation run queued. Watch runtime state for live progress.",
-    )
-    return {
-        "ok": True,
-        "queued": True,
-        "actor": actor,
-        "partner": partner,
-        "message": "Automation run queued. Watch runtime state for live progress.",
-        "runtimeRunId": str(run.id),
-        "run": serialize_partner_runtime_run(run),
-        "workflow": submission.model_dump(by_alias=True, mode="json"),
-    }
+            status_code=_automation_error_status(exc),
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/jobs/{partner}/backfill")
@@ -844,189 +555,41 @@ async def get_backfill_run(request: Request, backfill_run_id: str):
     return serialize_backfill_run(run)
 
 
+
+
 @router.post("/jobs/{partner}/recovery/retry")
 async def retry_automation_job(request: Request, partner: str):
     actor = require_actor(request, payload_field_name="actor")
     db = _get_db(request)
-    fetch_repo = FetchConfigRepository(db)
-    config = await fetch_repo.find_by_partner(partner)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Automation job not found for partner.")
-    if not config.enabled:
-        raise HTTPException(status_code=400, detail="Automation job is disabled.")
-
-    checkpoint_repo = IngestionCheckpointRepository(db)
-    checkpoint = await _find_recovery_checkpoint(checkpoint_repo, config)
-    latest_run = await PartnerRuntimeRunRepository(db).find_latest_by_partner(partner)
-    latest_run_data = serialize_partner_runtime_run(latest_run) if latest_run else None
-    airflow_task_state = await _airflow_task_state(request, db, latest_run_data)
-    orchestration = (latest_run_data or {}).get("orchestration") or {}
-    has_existing_airflow_run = (
-        settings.automation_orchestrator == "airflow"
-        and bool(orchestration.get("dagRunId"))
-    )
-    if has_existing_airflow_run and airflow_task_state not in _AIRFLOW_MANUAL_RETRY_STATES:
-        state = airflow_task_state or "unknown"
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Existing Airflow DAG run is not manually retryable (task state: {state}); "
-                "no new Airflow DAG run was created."
-            ),
-        )
-    if (
-        latest_run is not None
-        and getattr(latest_run.status, "value", latest_run.status) in _ACTIVE_RUNTIME_STATUSES
-        and airflow_task_state not in _AIRFLOW_MANUAL_RETRY_STATES
-    ):
-        raise HTTPException(status_code=409, detail="An Airflow/runtime retry is already active; wait for it to finish.")
-    if checkpoint is None:
-        try:
-            existing_retry = await _retry_existing_airflow_run(
-                request,
-                db,
-                latest_run,
-                latest_run_data,
-                airflow_task_state,
-                actor,
-            ) if latest_run is not None else None
-        except WorkflowUnavailable as exc:
-            raise HTTPException(status_code=503, detail="Airflow task retry is unavailable.") from exc
-        if existing_retry is not None:
-            return existing_retry
-        # A fetch can fail before the first source unit is claimed (the
-        # durable-staging path deliberately does not claim partial streams).
-        # There is then no checkpoint to resume, but a manual retry is still
-        # safe: it starts a fresh fetch and reuses any idempotently staged raw
-        # pages instead of making the operator fall back to Run now.
-        run, submission = await _queue_scheduler_run(
-            request,
-            db,
-            config,
-            actor=actor,
-            message="Retry queued after a fetch failure before checkpoint creation.",
-        )
-        return {
-            "ok": True,
-            "queued": True,
-            "actor": actor,
-            "partner": partner,
-            "message": "Retry queued after a fetch failure before checkpoint creation.",
-            "runtimeRunId": str(run.id),
-            "resumedFromUnitKey": None,
-            "run": serialize_partner_runtime_run(run),
-            "workflow": submission.model_dump(by_alias=True, mode="json"),
-        }
-    if _has_live_claim(checkpoint):
-        raise HTTPException(status_code=409, detail="Recovery is already processing a live source-unit claim.")
-    if checkpoint.status == "BLOCKED":
-        raise HTTPException(status_code=409, detail="Checkpoint is BLOCKED and requires operator resolution before retry.")
-    if checkpoint.status == "FAILED":
-        if checkpoint.retryable is not True:
-            raise HTTPException(status_code=409, detail="Checkpoint failure is terminal and cannot be retried.")
-        prepared = await checkpoint_repo.prepare_manual_retry(
-            checkpoint,
-            operator_id=actor,
-            reason="Operator requested immediate recovery retry",
-        )
-        if not prepared:
-            raise HTTPException(status_code=409, detail="Checkpoint changed before recovery retry could be claimed.")
-    elif checkpoint.status == "DISCOVERED":
-        if (checkpoint.resolution_metadata or {}).get("action") != "RETRY":
-            raise HTTPException(status_code=409, detail="Checkpoint is waiting for review or operator resolution.")
-    elif checkpoint.status != "PROCESSING":
-        raise HTTPException(status_code=409, detail=f"Checkpoint status {checkpoint.status} is not recoverable.")
-
+    service = _job_command_service(request, db)
     try:
-        existing_retry = await _retry_existing_airflow_run(
-            request,
-            db,
-            latest_run,
-            latest_run_data,
-            airflow_task_state,
-            actor,
-        ) if latest_run is not None else None
-    except WorkflowUnavailable as exc:
-        raise HTTPException(status_code=503, detail="Airflow task retry is unavailable.") from exc
-    if existing_retry is not None:
-        return existing_retry
-
-    run, submission = await _queue_scheduler_run(
-        request,
-        db,
-        config,
-        actor=actor,
-        message="Recovery retry queued from checkpoint.",
-    )
-    return {
-        "ok": True,
-        "queued": True,
-        "actor": actor,
-        "partner": partner,
-        "message": "Recovery retry queued from checkpoint.",
-        "runtimeRunId": str(run.id),
-        "resumedFromUnitKey": checkpoint.current_unit_key,
-        "run": serialize_partner_runtime_run(run),
-        "workflow": submission.model_dump(by_alias=True, mode="json"),
-    }
+        return await service.retry(
+            RetryAutomationJobCommand(partner=partner, actor=actor)
+        )
+    except AutomationApplicationError as exc:
+        raise HTTPException(
+            status_code=_automation_error_status(exc),
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/jobs/{partner}/recovery/resolve")
 async def resolve_automation_recovery(request: Request, partner: str):
     actor = require_actor(request, payload_field_name="actor")
-    try:
-        payload = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Recovery resolution payload must be valid JSON.") from exc
-    action = str(payload.get("action") or "").upper()
-    reason = str(payload.get("reason") or "").strip()
-    if action not in {"RETRY", "SKIP"}:
-        raise HTTPException(status_code=400, detail="Recovery action must be RETRY or SKIP.")
-    if not reason:
-        raise HTTPException(status_code=400, detail="A reason is required for recovery resolution.")
-    if len(reason) > 500:
-        raise HTTPException(status_code=400, detail="Recovery reason must be 500 characters or fewer.")
-
+    action, reason = await _recovery_resolution_payload(request)
     db = _get_db(request)
-    fetch_repo = FetchConfigRepository(db)
-    config = await fetch_repo.find_by_partner(partner)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Automation job not found for partner.")
-    checkpoint_repo = IngestionCheckpointRepository(db)
-    checkpoint = await _find_recovery_checkpoint(checkpoint_repo, config)
-    if checkpoint is None or checkpoint.status != "BLOCKED" or not checkpoint.current_unit_key:
-        raise HTTPException(status_code=409, detail="Only a BLOCKED checkpoint with a current unit can be resolved.")
-
-    unit_key = checkpoint.current_unit_key
-    resolved = await checkpoint_repo.resolve_blocked(
-        checkpoint,
-        unit_key=unit_key,
-        action=action,
-        reason=reason,
-        operator_id=actor,
-    )
-    if not resolved:
-        raise HTTPException(status_code=409, detail="Checkpoint changed before recovery resolution was applied.")
-
-    await record_audit_event(
-        db,
-        entity_type="INGESTION_CHECKPOINT",
-        entity_id=f"{config.partner}:{config.fetch_method.value}:scheduled",
-        action=f"RECOVERY_{action}",
-        actor=actor,
-        metadata={
-            "partner": config.partner,
-            "unitKey": unit_key,
-            "reason": reason,
-            "action": action,
-        },
-    )
-    return {
-        "ok": True,
-        "actor": actor,
-        "partner": config.partner,
-        "action": action,
-        "unitKey": unit_key,
-        "status": "DISCOVERED",
-        "message": f"Recovery checkpoint resolved with action {action}.",
-    }
+    service = _job_command_service(request, db)
+    try:
+        return await service.resolve(
+            ResolveAutomationRecoveryCommand(
+                partner=partner,
+                actor=actor,
+                action=action,
+                reason=reason,
+            )
+        )
+    except AutomationApplicationError as exc:
+        raise HTTPException(
+            status_code=_automation_error_status(exc),
+            detail=str(exc),
+        ) from exc

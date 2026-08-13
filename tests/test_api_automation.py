@@ -445,7 +445,10 @@ async def test_retry_automation_job_resumes_failed_checkpoint_with_actor():
         headers={"X-Actor": "ops-user"},
     )
     with (
-        patch("src.api.automation.create_runtime_run", new=AsyncMock(return_value=queued_run)),
+            patch(
+                "src.api.automation.PartnerRuntimeRunRepository.create",
+                new=AsyncMock(return_value=queued_run),
+            ),
         patch("src.api.automation.asyncio.create_task", side_effect=_discard_background_task),
         patch.object(settings, "automation_orchestrator", "local"),
     ):

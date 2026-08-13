@@ -381,7 +381,33 @@ class ReviewMappingWorkflow:
         actor: str | None,
         scope_type: str | None = None,
     ) -> dict[str, Any]:
-        packet = await self._get_pending_packet(packet_id)
+        packet = await self.packet_repo.find_one({"_id": packet_id})
+        if packet is None:
+            raise ReviewNotFoundError("Review packet not found.")
+        already_approved_backfill = (
+            packet.status == ReviewPacketStatus.APPROVED
+            and packet.decision_mode == ReviewDecisionMode.APPROVE_ACTIVATE_NEXT_RUNTIME
+            and bool(packet.backfill_run_id)
+        )
+        if already_approved_backfill:
+            if not _has_passing_runtime_gate(packet):
+                raise ReviewValidationError("Runtime validation must pass before approval.")
+            post_approve_run = await self.approve_activate_action(
+                self.db,
+                packet,
+                actor,
+                schedule_background=self.schedule_background,
+                workflow_gateway=self.workflow_gateway,
+            )
+            response = {"ok": True, "packet": self.packet_serializer(packet)}
+            if post_approve_run is not None:
+                if "backfillRun" in post_approve_run:
+                    response["backfillRun"] = post_approve_run["backfillRun"]
+                else:
+                    response["postApproveRun"] = post_approve_run
+            return response
+        if packet.status != ReviewPacketStatus.PENDING:
+            raise ReviewConflictError("Only pending review packets can be processed.")
         if not _has_passing_runtime_gate(packet):
             raise ReviewValidationError("Runtime validation must pass before approval.")
         await self.update_packet_scope(self.db, packet_id, packet, scope_type)

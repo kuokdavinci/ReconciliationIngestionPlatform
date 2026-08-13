@@ -151,6 +151,31 @@ async def test_approve_activate_requires_a_passing_runtime_gate_and_delegates_ac
 
 
 @pytest.mark.asyncio
+async def test_approve_activate_retries_approved_backfill_packet_idempotently():
+    packet = _packet(
+        status=ReviewPacketStatus.APPROVED,
+        gates=[{"gateKey": "runtime_validation", "status": "pass"}],
+    )
+    packet.backfill_run_id = "backfill-001"
+    packet.decision_mode = ReviewDecisionMode.APPROVE_ACTIVATE_NEXT_RUNTIME
+    approve_action = AsyncMock(return_value={"backfillRun": {"_id": "backfill-001"}})
+    mark_packet = AsyncMock()
+    workflow, _packet_repo, _mapping_repo_instance, _context, _generator = _workflow(
+        packet=packet,
+        approve_activate_action=approve_action,
+        mark_packet=mark_packet,
+        update_packet_scope=AsyncMock(),
+    )
+
+    result = await workflow.approve_activate("packet-1", actor="reviewer@example.com")
+
+    assert result["ok"] is True
+    assert result["backfillRun"] == {"_id": "backfill-001"}
+    approve_action.assert_awaited_once()
+    mark_packet.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_save_rejects_invalid_mapping_contract():
     workflow, _packet_repo, _mapping_repo_instance, _context, _generator = _workflow(packet=_packet())
 

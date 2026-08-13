@@ -235,44 +235,47 @@ async def approve_packet_mapping_and_reprocess(
 
     mapping_repo = MappingConfigRepository(db)
     config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
-    if config is None or config.status != MappingConfigStatus.PENDING_APPROVAL:
+    if config is None:
         return None
 
-    now = datetime.now(timezone.utc)
-    current_approved = await mapping_repo.find_by_partner_and_type(
-        config.partner, config.workflow_type, config.file_type
-    )
-    if current_approved is not None:
+    if config.status == MappingConfigStatus.PENDING_APPROVAL:
+        now = datetime.now(timezone.utc)
+        current_approved = await mapping_repo.find_by_partner_and_type(
+            config.partner, config.workflow_type, config.file_type
+        )
+        if current_approved is not None:
+            await mapping_repo.collection.update_one(
+                {"_id": str(current_approved.id)},
+                {"$set": {
+                    "status": MappingConfigStatus.SUPERSEDED.value,
+                    "supersededAt": now,
+                    "supersededByConfigId": str(config.id),
+                }},
+            )
+        health = dict(config.config_health or {})
+        health.update(
+            {
+                "stale": False,
+                "status": MappingConfigStatus.APPROVED.value,
+                "approvedAt": now,
+                "reasoning": (health.get("reasoning") or "Approved from review packet."),
+            }
+        )
         await mapping_repo.collection.update_one(
-            {"_id": str(current_approved.id)},
+            {"_id": packet.draft_mapping_id},
             {"$set": {
-                "status": MappingConfigStatus.SUPERSEDED.value,
-                "supersededAt": now,
-                "supersededByConfigId": str(config.id),
+                "status": MappingConfigStatus.APPROVED.value,
+                "approvedAt": now,
+                "approvedBy": reviewed_by,
+                "configHealth": health,
             }},
         )
-    health = dict(config.config_health or {})
-    health.update(
-        {
-            "stale": False,
-            "status": MappingConfigStatus.APPROVED.value,
-            "approvedAt": now,
-            "reasoning": (health.get("reasoning") or "Approved from review packet."),
-        }
-    )
-    await mapping_repo.collection.update_one(
-        {"_id": packet.draft_mapping_id},
-        {"$set": {
-            "status": MappingConfigStatus.APPROVED.value,
-            "approvedAt": now,
-            "approvedBy": reviewed_by,
-            "configHealth": health,
-        }},
-    )
-    config.status = MappingConfigStatus.APPROVED
-    config.approved_at = now
-    config.approved_by = reviewed_by
-    config.config_health = health
+        config.status = MappingConfigStatus.APPROVED
+        config.approved_at = now
+        config.approved_by = reviewed_by
+        config.config_health = health
+    elif config.status != MappingConfigStatus.APPROVED:
+        return None
 
     if getattr(packet, "backfill_run_id", None):
         gateway = workflow_gateway

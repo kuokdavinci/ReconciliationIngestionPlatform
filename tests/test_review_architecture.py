@@ -11,7 +11,11 @@ import pytest
 from src.config.config_health import _collect_review_sample_rows, _create_mapping_proposal
 from src.config.signature import StructureSignature
 from src.core.enums import FileType
-from src.application.review.actions import _rebind_replacement_transactions
+from src.application.review.actions import (
+    _rebind_replacement_transactions,
+    approve_packet_mapping_and_reprocess,
+)
+from src.domain.mapping.models import MappingConfigStatus
 
 from src.domain.review.models import (
     CopilotAction,
@@ -60,6 +64,76 @@ class _Database:
 
     def __getitem__(self, name):
         return self._collections[name]
+
+
+@pytest.mark.asyncio
+async def test_approved_mapping_still_resumes_waiting_backfill() -> None:
+    mapping_repo = MagicMock()
+    mapping_repo.find_one = AsyncMock(
+        return_value=SimpleNamespace(
+            id="mapping-v1",
+            partner="VNPAY",
+            workflow_type="UPC",
+            file_type=FileType.SETTLEMENT,
+            status=MappingConfigStatus.APPROVED,
+            config_version="VNPAY_v01",
+            config_health={},
+        )
+    )
+    mapping_repo.find_by_partner_and_type = AsyncMock(return_value=None)
+    mapping_repo.collection.update_one = AsyncMock()
+    backfill_service = MagicMock()
+    backfill_service.resume_after_approval = AsyncMock(
+        return_value=SimpleNamespace(id="backfill-001")
+    )
+    packet = SimpleNamespace(
+        draft_mapping_id="mapping-v1",
+        backfill_run_id="backfill-001",
+    )
+
+    with patch(
+        "src.application.review.actions.MappingConfigRepository",
+        return_value=mapping_repo,
+    ), patch(
+        "src.application.review.actions.BackfillRunService",
+        return_value=backfill_service,
+    ), patch(
+        "src.application.review.actions.serialize_backfill_run",
+        return_value={"_id": "backfill-001", "status": "QUEUED"},
+    ):
+        result = await approve_packet_mapping_and_reprocess(
+            db=MagicMock(),
+            packet=packet,
+            reviewed_by="reviewer@example.com",
+            schedule_background=lambda _awaitable: None,
+            workflow_gateway=MagicMock(),
+        )
+
+    assert result == {
+        "backfillRun": {"_id": "backfill-001", "status": "QUEUED"}
+    }
+    backfill_service.resume_after_approval.assert_awaited_once_with(
+        backfill_run_id="backfill-001",
+        mapping_version="VNPAY_v01",
+    )
+
+
+@pytest.mark.asyncio
+async def test_mapping_status_sync_does_not_close_backfill_packet() -> None:
+    collection = MagicMock()
+    collection.update_many = AsyncMock(return_value=SimpleNamespace(modified_count=1))
+    repository = object.__new__(ReviewPacketRepository)
+    repository.collection = collection
+
+    changed = await repository.sync_mapping_status(
+        "mapping-v1",
+        ReviewPacketStatus.APPROVED,
+        datetime(2026, 8, 13, tzinfo=timezone.utc),
+    )
+
+    assert changed == 1
+    query = collection.update_many.await_args.args[0]
+    assert query["backfillRunId"] == {"$exists": False}
 
 
 @pytest.mark.asyncio

@@ -105,6 +105,10 @@ class ReviewPacketRepository(BaseRepository[ReviewPacket]):
                     {"proposalConfigId": str(config_id)},
                 ],
                 "status": ReviewPacketStatus.PENDING.value,
+                # A backfill packet has a second approval boundary: the
+                # packet decision must resume its waiting run.  Mapping
+                # Studio approval must not close that packet prematurely.
+                "backfillRunId": {"$exists": False},
             },
             {
                 "$set": {

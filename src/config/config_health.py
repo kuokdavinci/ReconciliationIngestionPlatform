@@ -91,6 +91,7 @@ async def check_and_refresh_config(
     source_file_path: Optional[str] = None,
     reconciliation_date: Optional[datetime] = None,
     raw_stage_key: Optional[str] = None,
+    backfill_run_id: Optional[str] = None,
 ) -> MappingConfig:
     """Detect stale config and create a pending proposal without changing runtime."""
     sig = compute_signature(file_path, sample_size=SAMPLE_SIZE)
@@ -145,6 +146,7 @@ async def check_and_refresh_config(
         source_file_path=source_file_path,
         reconciliation_date=reconciliation_date,
         raw_stage_key=raw_stage_key,
+        backfill_run_id=backfill_run_id,
     )
 
     if config is not None or not settings.strict_mapping_approval_enabled:
@@ -167,6 +169,7 @@ async def create_stream_scope_review_packet(
     source_file_path: str | None,
     reconciliation_date: datetime,
     raw_stage_key: str,
+    backfill_run_id: str | None = None,
 ) -> ReviewPacket:
     """Create or refresh the human scope gate for one staged API stream."""
     packet_repo = ReviewPacketRepository(database)
@@ -231,6 +234,8 @@ async def create_stream_scope_review_packet(
         },
         "runtimeDecisionHint": "APPROVE_CURRENT_MAPPING_FOR_STAGED_STREAM",
     }
+    if backfill_run_id is not None:
+        fields["backfillRunId"] = backfill_run_id
     if existing is not None:
         await packet_repo.update_one(
             {"_id": str(existing.id), "status": ReviewPacketStatus.PENDING.value}, fields
@@ -341,6 +346,7 @@ async def _create_mapping_proposal(
     source_file_path: Optional[str] = None,
     reconciliation_date: Optional[datetime] = None,
     raw_stage_key: Optional[str] = None,
+    backfill_run_id: Optional[str] = None,
 ) -> tuple[MappingConfig, CopilotAction]:
     packet_repo = ReviewPacketRepository(config_repo.collection.database)
     sample_rows = await _collect_review_sample_rows(
@@ -399,6 +405,7 @@ async def _create_mapping_proposal(
                         activeRuntimeConfigId=str(active_runtime.id) if active_runtime else None,
                         proposalConfigId=str(existing_pending.id),
                         targetActionId=str(existing_action.id),
+                        backfillRunId=backfill_run_id,
                         sourceFileId=source_file_id,
                         sourceFilePath=source_file_path,
                         rawStageKey=raw_stage_key,
@@ -441,29 +448,32 @@ async def _create_mapping_proposal(
                 # Keep the review packet attached to the latest file so scope
                 # analysis can exclude the current source file from its DB key
                 # comparison and approval reprocessing uses the right payload.
+                packet_update = {
+                    "fileName": source_file_name or f"{partner.lower()}-scheduled-fetch",
+                    "structureSignature": signature_payload,
+                    "sourceFileId": source_file_id,
+                    "sourceFilePath": source_file_path,
+                    "rawStageKey": raw_stage_key,
+                    "reconciliationDate": reconciliation_date,
+                    "scopeType": scope_meta["scopeType"],
+                    "scopeConfidence": scope_meta["scopeConfidence"],
+                    "scopeReason": scope_meta["scopeReason"],
+                    "scopeSignals": scope_meta["scopeSignals"],
+                    "samplePreview": _review_sample_preview(sample_rows),
+                    "internalRecordCount": internal_evidence["recordCount"],
+                    "internalPreview": internal_evidence["sample"],
+                    "riskSummary": {
+                        "severity": "medium",
+                        "summary": reason,
+                    },
+                    "draftMappingId": str(existing_pending.id),
+                    "targetActionId": str(existing_action.id),
+                }
+                if backfill_run_id is not None:
+                    packet_update["backfillRunId"] = backfill_run_id
                 await packet_repo.update_one(
                     {"_id": str(existing_packet.id), "status": ReviewPacketStatus.PENDING.value},
-                    {
-                        "fileName": source_file_name or f"{partner.lower()}-scheduled-fetch",
-                        "structureSignature": signature_payload,
-                        "sourceFileId": source_file_id,
-                        "sourceFilePath": source_file_path,
-                        "rawStageKey": raw_stage_key,
-                        "reconciliationDate": reconciliation_date,
-                        "scopeType": scope_meta["scopeType"],
-                        "scopeConfidence": scope_meta["scopeConfidence"],
-                        "scopeReason": scope_meta["scopeReason"],
-                        "scopeSignals": scope_meta["scopeSignals"],
-                        "samplePreview": _review_sample_preview(sample_rows),
-                        "internalRecordCount": internal_evidence["recordCount"],
-                        "internalPreview": internal_evidence["sample"],
-                        "riskSummary": {
-                            "severity": "medium",
-                            "summary": reason,
-                        },
-                        "draftMappingId": str(existing_pending.id),
-                        "targetActionId": str(existing_action.id),
-                    },
+                    packet_update,
                 )
             return existing_pending, existing_action
 
@@ -489,17 +499,20 @@ async def _create_mapping_proposal(
                 )
                 reused_action = await action_repo.find_one({"_id": str(action_id)})
                 if reused_proposal is not None and reused_action is not None:
+                    packet_update = {
+                        "structureSignature": signature_payload,
+                        "sourceFileId": source_file_id,
+                        "sourceFilePath": source_file_path,
+                        "rawStageKey": raw_stage_key,
+                        "reconciliationDate": reconciliation_date,
+                        "internalRecordCount": internal_evidence["recordCount"],
+                        "internalPreview": internal_evidence["sample"],
+                    }
+                    if backfill_run_id is not None:
+                        packet_update["backfillRunId"] = backfill_run_id
                     await packet_repo.update_one(
                         {"_id": str(staged_packet.id), "status": ReviewPacketStatus.PENDING.value},
-                        {
-                            "structureSignature": signature_payload,
-                            "sourceFileId": source_file_id,
-                            "sourceFilePath": source_file_path,
-                            "rawStageKey": raw_stage_key,
-                            "reconciliationDate": reconciliation_date,
-                            "internalRecordCount": internal_evidence["recordCount"],
-                            "internalPreview": internal_evidence["sample"],
-                        },
+                        packet_update,
                     )
                     return reused_proposal, reused_action
 
@@ -591,6 +604,7 @@ async def _create_mapping_proposal(
         activeRuntimeConfigId=str(active_runtime.id) if active_runtime else None,
         proposalConfigId=str(proposal.id),
         targetActionId=str(action.id),
+        backfillRunId=backfill_run_id,
         sourceFileId=source_file_id,
         sourceFilePath=source_file_path,
         rawStageKey=raw_stage_key,

@@ -48,8 +48,8 @@ class BaseRepository(Generic[T]):
         await self.collection.insert_one(data)
         return doc
 
-    async def find_one(self, query: dict) -> Optional[T]:
-        raw = await self.collection.find_one(query)
+    async def find_one(self, query: dict, *, sort: list[tuple[str, int]] | None = None) -> Optional[T]:
+        raw = await self.collection.find_one(query, sort=sort) if sort else await self.collection.find_one(query)
         if raw is None:
             return None
         return self._from_mongo(raw)

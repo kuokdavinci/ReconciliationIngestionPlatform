@@ -10,6 +10,7 @@ SUCCESS_OUTCOMES = {
     ExecuteStreamOutcome.COMPLETED,
     ExecuteStreamOutcome.NO_DATA,
     ExecuteStreamOutcome.ALREADY_PROCESSED,
+    ExecuteStreamOutcome.SAFE_DUPLICATE,
 }
 
 

@@ -763,6 +763,50 @@ async def test_save_draft_mapping_for_packet_attaches_real_draft_id():
 
 
 @pytest.mark.asyncio
+async def test_save_draft_mapping_preserves_existing_signature_when_packet_has_none():
+    review_collection = MagicMock()
+    review_collection.find_one = AsyncMock(return_value={
+        "_id": "pkt-signature-fallback",
+        "sourceType": "SCHEDULER_JOB",
+        "partner": "MOMO",
+        "fileName": "momo.xlsx",
+        "fileTypeDetected": "SETTLEMENT",
+        "draftMappingId": "mapping-001",
+        "structureSignature": None,
+        "validationGates": [],
+        "parseStrategy": {},
+        "status": "PENDING",
+        "createdAt": "2024-01-01T00:00:00+00:00",
+    })
+    review_collection.update_one = AsyncMock()
+    mapping_repo = MagicMock()
+    mapping_repo.find_one = AsyncMock(return_value=SimpleNamespace(
+        id="mapping-001",
+        workflow_type="UPC",
+        config_version="MOMO_v001",
+        structure_signature={"headers": ["txn_id", "amount"]},
+    ))
+    mapping_repo.collection.update_one = AsyncMock()
+    request = _make_request(_make_db(review_collection=review_collection))
+
+    payload = SaveDraftMappingPayload.model_validate({
+        "sheetName": "Sheet1",
+        "startRow": 2,
+        "fieldMappings": [
+            {"path": "id", "column": 1, "type": "STRING", "required": True},
+            {"path": "amount", "column": 2, "type": "DECIMAL", "required": True},
+            {"path": "status", "constant": "SUCCESS", "type": "CONSTANT", "required": True},
+        ],
+    })
+
+    with patch("src.api.review_packets.MappingConfigRepository", return_value=mapping_repo):
+        await save_draft_mapping_for_packet(request, "pkt-signature-fallback", payload)
+
+    update_payload = mapping_repo.collection.update_one.await_args.args[1]["$set"]
+    assert update_payload["structureSignature"] == {"headers": ["txn_id", "amount"]}
+
+
+@pytest.mark.asyncio
 async def test_save_draft_mapping_for_packet_rejects_missing_status():
     review_collection = MagicMock()
     mapping_collection = MagicMock()

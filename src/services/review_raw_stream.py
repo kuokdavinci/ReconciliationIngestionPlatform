@@ -82,7 +82,11 @@ def _read_file_page(
     limit: int,
 ) -> dict[str, Any]:
     structure_signature = packet.structure_signature or {}
-    start_row = int(structure_signature.get("firstDataRowIndex") or 1)
+    start_row = int(
+        structure_signature.get("firstDataRowIndex")
+        or (packet.parse_strategy or {}).get("startRow")
+        or 1
+    )
     rows: list[dict[str, Any]] = []
     total_records = 0
     for row_index, values in enumerate(
@@ -188,7 +192,11 @@ async def iter_review_stream_records(
         key=_page_sort_key,
     )
     structure_signature = packet.structure_signature or {}
-    start_row = int(structure_signature.get("firstDataRowIndex") or 1)
+    start_row = int(
+        structure_signature.get("firstDataRowIndex")
+        or (packet.parse_strategy or {}).get("startRow")
+        or 1
+    )
 
     with tempfile.TemporaryDirectory(prefix="review-raw-") as temp_dir:
         stream_row_index = 1

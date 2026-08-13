@@ -73,6 +73,72 @@ async def test_execute_stream_loads_config_and_normalizes_no_data_result() -> No
 
 
 @pytest.mark.asyncio
+async def test_execute_stream_preserves_safe_duplicate_outcome() -> None:
+    config = _fetch_config()
+    repository = MagicMock()
+    repository.find_by_id = AsyncMock(return_value=config)
+    runner = AsyncMock(return_value={
+        "success": True,
+        "outcome": "SAFE_DUPLICATE",
+        "safeDuplicate": True,
+        "duplicateSourceOutcome": "STREAM_ALREADY_COMPLETED",
+        "runtimeRun": {"id": "runtime-duplicate", "status": "COMPLETED"},
+        "stats": {},
+    })
+
+    result = await execute_stream(
+        ExecuteStreamCommand(
+            fetchConfigId=str(config.id),
+            partner=config.partner,
+            configVersion=str(config.updated_at),
+            reconciliationDate=date(2026, 8, 9),
+        ),
+        db=MagicMock(),
+        config_loader=MagicMock(),
+        fetch_config_repository=repository,
+        checkpoint_repository=_checkpoint_repository(),
+        runner=runner,
+    )
+
+    assert result.outcome == ExecuteStreamOutcome.SAFE_DUPLICATE
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_forwards_backfill_parent_to_source_runner() -> None:
+    config = _fetch_config()
+    repository = MagicMock()
+    repository.find_by_id = AsyncMock(return_value=config)
+    runner = AsyncMock(
+        return_value={
+            "success": True,
+            "outcome": "NO_NEW_FILE",
+            "runtimeRun": {"id": "runtime-backfill", "status": "COMPLETED"},
+            "stats": {},
+        }
+    )
+
+    await execute_stream(
+        ExecuteStreamCommand(
+            fetchConfigId=str(config.id),
+            partner=config.partner,
+            configVersion=str(config.updated_at),
+            mode="BACKFILL",
+            backfillRunId="backfill-1",
+            reconciliationDate=date(2026, 8, 9),
+            fromDate=date(2026, 8, 7),
+            toDate=date(2026, 8, 11),
+        ),
+        db=MagicMock(),
+        config_loader=MagicMock(),
+        fetch_config_repository=repository,
+        checkpoint_repository=_checkpoint_repository(),
+        runner=runner,
+    )
+
+    assert runner.await_args.kwargs["backfill_run_id"] == "backfill-1"
+
+
+@pytest.mark.asyncio
 async def test_execute_stream_rejects_a_backfill_parent_without_a_day() -> None:
     config = _fetch_config()
     repository = MagicMock()

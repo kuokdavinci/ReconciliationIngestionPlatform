@@ -105,7 +105,7 @@ def _create_test_app():
 
 
 def test_list_automation_jobs_filters_to_scheduler_packets():
-    app, fetch_collection, packet_collection, _, _, _, _, _ = _create_test_app()
+    app, fetch_collection, packet_collection, _, _, _, backfill_collection, _ = _create_test_app()
     fetch_collection.find = MagicMock(return_value=_AsyncCursor([
         {
             "_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -118,6 +118,20 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
             "updatedAt": "2026-06-02T10:24:34.686000",
         }
     ]))
+    backfill_collection.find_one = AsyncMock(return_value={
+        "_id": "backfill-vnpay-1",
+        "partner": "ZALOPAY",
+        "fetchConfigId": "123e4567-e89b-12d3-a456-426614174000",
+        "mode": "BACKFILL",
+        "status": "WAITING_CONFIG",
+        "fromDate": "2026-08-07",
+        "toDate": "2026-08-11",
+        "currentDate": "2026-08-10",
+        "completedDays": 1,
+        "totalDays": 3,
+        "approvalRequired": True,
+        "days": [],
+    })
     packet_collection.find = MagicMock(return_value=_AsyncCursor([
         {
             "_id": "pkt-scheduler-1",
@@ -191,6 +205,58 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
     assert len(job["recentPackets"]) == 2
     assert all(packet["sourceType"] == "SCHEDULER_JOB" for packet in job["recentPackets"])
     assert job["recentPackets"][1]["decisionMode"] == "APPROVE_KEEP_CURRENT_FOR_FILE"
+    assert job["activeBackfill"]["currentDate"] == "2026-08-10"
+
+
+@pytest.mark.asyncio
+async def test_backfill_review_packet_attachment_is_scoped_to_current_business_date():
+    from src.api.automation import _attach_pending_backfill_review_packet
+
+    packet_collection = MagicMock()
+    packet_collection.find_one = AsyncMock(return_value={"_id": "packet-2026-08-10"})
+    packet_collection.update_one = AsyncMock()
+    backfill_collection = MagicMock()
+    backfill_collection.find_one = AsyncMock(return_value={"currentDate": "2026-08-10"})
+    db = MagicMock()
+    db.__getitem__ = MagicMock(
+        side_effect=lambda name: {
+            "review_packet": packet_collection,
+            "backfill_run": backfill_collection,
+        }[name]
+    )
+
+    packet_id = await _attach_pending_backfill_review_packet(db, "VNPAY", "backfill-1")
+
+    assert packet_id == "packet-2026-08-10"
+    packet_query = packet_collection.find_one.await_args.args[0]
+    assert packet_query["reconciliationDate"]["$gte"].date().isoformat() == "2026-08-10"
+    assert packet_query["reconciliationDate"]["$lte"].date().isoformat() == "2026-08-10"
+
+
+@pytest.mark.asyncio
+async def test_backfill_review_packet_is_not_reassigned_to_a_duplicate_parent():
+    from src.api.automation import _attach_pending_backfill_review_packet
+
+    packet_collection = MagicMock()
+    packet_collection.find_one = AsyncMock(return_value={
+        "_id": "packet-2026-08-10",
+        "backfillRunId": "existing-backfill",
+    })
+    packet_collection.update_one = AsyncMock()
+    backfill_collection = MagicMock()
+    backfill_collection.find_one = AsyncMock(return_value={"currentDate": "2026-08-10"})
+    db = MagicMock()
+    db.__getitem__ = MagicMock(
+        side_effect=lambda name: {
+            "review_packet": packet_collection,
+            "backfill_run": backfill_collection,
+        }[name]
+    )
+
+    packet_id = await _attach_pending_backfill_review_packet(db, "VNPAY", "duplicate-backfill")
+
+    assert packet_id is None
+    packet_collection.update_one.assert_not_awaited()
 
 
 def test_duplicate_run_takes_precedence_over_pending_file_status():
@@ -236,6 +302,8 @@ def test_duplicate_run_takes_precedence_over_pending_file_status():
     assert response.status_code == 200
     job = response.json()["jobs"][0]
     assert job["duplicateOutcome"] == "FILE_DUPLICATE"
+    assert job["safeDuplicate"] is True
+    assert job["status"] == "SAFE_DUPLICATE"
     assert job["hasPendingFile"] is False
     assert job["statusMessage"] == (
         "File already processed. Ingestion and reconciliation were skipped safely."
@@ -491,6 +559,51 @@ async def test_run_automation_job_rejects_live_processing_claim():
 
     assert error.value.status_code == 409
     assert "live source-unit claim" in str(error.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_run_automation_job_rejects_active_backfill():
+    from fastapi import HTTPException
+
+    from src.api.automation import run_automation_job_now
+    from src.domain.backfill.models import BackfillDayRecord, BackfillRun, BackfillRunStatus
+
+    app, fetch_collection, _, _, _, _, _, _ = _create_test_app()
+    config_id = "123e4567-e89b-12d3-a456-426614174000"
+    fetch_collection.find_one = AsyncMock(return_value={
+        "_id": config_id,
+        "partner": "VNPAY",
+        "fetchMethod": "FILEDROP",
+        "enabled": True,
+        "filedrop": {"directory": "mock_data", "pattern": "*.xlsx"},
+        "updatedAt": "2026-08-06T04:00:00",
+    })
+    active_backfill = BackfillRun(
+        _id="backfill-vnpay-1",
+        partner="VNPAY",
+        fetchConfigId=config_id,
+        status=BackfillRunStatus.WAITING_CONFIG,
+        fromDate=datetime(2026, 8, 10, tzinfo=UTC).date(),
+        toDate=datetime(2026, 8, 13, tzinfo=UTC).date(),
+        currentDate=datetime(2026, 8, 10, tzinfo=UTC).date(),
+        totalDays=4,
+        approvalRequired=True,
+        days=[BackfillDayRecord(businessDate=datetime(2026, 8, 10, tzinfo=UTC).date())],
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=app.state.db)),
+        headers={"X-Actor": "ops-user"},
+    )
+
+    with patch(
+        "src.api.automation.BackfillRunRepository.find_latest_active_by_partner",
+        new=AsyncMock(return_value=active_backfill),
+    ), pytest.raises(HTTPException) as error:
+        await run_automation_job_now(request, "VNPAY")
+
+    assert error.value.status_code == 409
+    assert "Backfill is WAITING_CONFIG at 2026-08-10" in str(error.value.detail)
+    assert "instead of Run now" in str(error.value.detail)
 
 
 @pytest.mark.asyncio

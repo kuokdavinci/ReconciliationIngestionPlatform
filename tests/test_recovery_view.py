@@ -226,6 +226,7 @@ def test_replay_is_distinguished_from_failure_without_checkpoint():
     )
 
     assert view["status"] == "REPLAYED"
+    assert view["safeDuplicate"] is True
     assert view["units"] == []
 
 

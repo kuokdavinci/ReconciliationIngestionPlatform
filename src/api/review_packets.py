@@ -694,6 +694,7 @@ async def save_draft_mapping_for_packet(
     if existing is not None:
         workflow_type = existing.workflow_type
     workflow_type = workflow_type or packet.parse_strategy.get("workflowType") or "UPC"
+    structure_signature = packet.structure_signature or getattr(existing, "structure_signature", None)
 
     field_mappings, mapping_warnings = canonicalize_field_mappings(
         [item.model_dump(by_alias=True) for item in payload.field_mappings]
@@ -715,7 +716,7 @@ async def save_draft_mapping_for_packet(
         startRow=payload.start_row,
         fieldMappings=field_mappings,
         configVersion=getattr(existing, "config_version", None) if existing is not None else None,
-        structureSignature=packet.structure_signature,
+        structureSignature=structure_signature,
         status=MappingConfigStatus.PENDING_APPROVAL,
         configHealth=config_health,
     )
@@ -742,7 +743,7 @@ async def save_draft_mapping_for_packet(
                 "fieldMappings": field_mappings,
                 "status": MappingConfigStatus.PENDING_APPROVAL.value,
                 "configHealth": config_health,
-                "structureSignature": packet.structure_signature,
+                "structureSignature": structure_signature,
                 "workflowType": workflow_type,
                 "fileType": file_type.value,
             }},
@@ -757,7 +758,7 @@ async def save_draft_mapping_for_packet(
             startRow=payload.start_row,
             fieldMappings=field_mappings,
             configVersion=await _next_pending_version(request, packet.partner),
-            structureSignature=packet.structure_signature,
+            structureSignature=structure_signature,
             status=MappingConfigStatus.PENDING_APPROVAL,
             configHealth=config_health,
         )

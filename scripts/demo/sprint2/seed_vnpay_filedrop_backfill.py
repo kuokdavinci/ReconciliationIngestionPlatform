@@ -12,6 +12,13 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from openpyxl import Workbook
 
 from src.config.settings import settings
+from src.domain.backfill.models import (
+    BackfillApprovalContext,
+    BackfillDayRecord,
+    BackfillDayStatus,
+    BackfillRun,
+    BackfillRunStatus,
+)
 from src.core.enums import TransactionStatus
 from src.domain.fetch_config.models import FetchConfig, FetchMethod, FileDropConfig
 from src.domain.internal_transaction.models import InternalTransaction
@@ -22,6 +29,8 @@ DEFAULT_PARTNER = "VNPAY"
 DEFAULT_FILE_DIR = Path("./mock_data")
 DEFAULT_FROM_DAYS_AGO = 3
 SEED_PREFIX = "seed-vnpay-filedrop-backfill"
+SEED_BACKFILL_RUN_ID = f"{SEED_PREFIX}-run"
+VNPAY_HEADERS = ["id", "trace", "amount", "status", "transDate"]
 
 
 def build_backfill_dates(from_date: str, to_date: str) -> list[date]:
@@ -57,7 +66,7 @@ def write_source_file(directory: Path, day: date) -> Path:
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Sheet1"
-    sheet.append(["id", "trace", "amount", "status", "transDate"])
+    sheet.append(VNPAY_HEADERS)
     for index in range(1, 4):
         sheet.append([
             f"VNPAY_{day:%Y%m%d}_{index:03d}",
@@ -168,7 +177,7 @@ def build_draft_mapping(day: date) -> dict:
         "configVersion": "VNPAY_BACKFILL_DRAFT_V1",
         "configHealth": {"status": "PENDING_APPROVAL", "seedTag": SEED_PREFIX},
         "structureSignature": {
-            "headers": ["id", "trace", "amount", "status", "transDate"],
+            "headers": VNPAY_HEADERS,
             "headerRowIndex": 1,
             "firstDataRowIndex": 2,
         },
@@ -177,15 +186,26 @@ def build_draft_mapping(day: date) -> dict:
     }
 
 
-def build_review_packet(day: date, file_path: Path) -> dict:
+def build_review_packet(
+    day: date,
+    file_path: Path,
+    *,
+    backfill_run_id: str | None = None,
+) -> dict:
     packet_id = f"{SEED_PREFIX}-packet-{day:%Y%m%d}"
     created_at = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
-    return {
+    packet = {
         "_id": packet_id,
         "sourceType": "SCHEDULER_JOB",
         "partner": DEFAULT_PARTNER,
         "fileName": file_path.name,
         "fileTypeDetected": "SETTLEMENT",
+        "structureSignature": {
+            "headers": VNPAY_HEADERS,
+            "headerRowIndex": 1,
+            "firstDataRowIndex": 2,
+            "columnCount": len(VNPAY_HEADERS),
+        },
         "draftMappingId": f"{SEED_PREFIX}-mapping",
         "draftMappingVersion": "VNPAY_BACKFILL_DRAFT_V1",
         "sourceFilePath": str(file_path),
@@ -207,6 +227,62 @@ def build_review_packet(day: date, file_path: Path) -> dict:
         "status": "PENDING",
         "createdAt": created_at,
     }
+    if backfill_run_id is not None:
+        packet["backfillRunId"] = backfill_run_id
+    return packet
+
+
+def build_backfill_run(
+    from_date: date,
+    to_date: date,
+    fetch_config_id: str,
+    review_packet_id: str,
+) -> dict:
+    """Build the durable waiting checkpoint used by the VNPAY demo fixture."""
+
+    business_dates = [
+        value
+        for value in build_backfill_dates(from_date.isoformat(), to_date.isoformat())
+        if value.weekday() < 5
+    ]
+    if not business_dates:
+        raise ValueError("Backfill fixture range must include a business day")
+
+    now = datetime.now(timezone.utc)
+    run = BackfillRun(
+        _id=SEED_BACKFILL_RUN_ID,
+        partner=DEFAULT_PARTNER,
+        fetchConfigId=fetch_config_id,
+        status=BackfillRunStatus.WAITING_CONFIG,
+        fromDate=from_date,
+        toDate=to_date,
+        currentDate=business_dates[0],
+        completedDays=0,
+        totalDays=len(business_dates),
+        approvalRequired=True,
+        approvalContext=BackfillApprovalContext(
+            workflowType="UPC",
+            fileType="SETTLEMENT",
+            reviewPacketId=review_packet_id,
+            reason="Deterministic VNPAY FileDrop backfill fixture is waiting for mapping approval.",
+        ),
+        triggeredBy="seed-vnpay-filedrop-backfill",
+        createdAt=now,
+        updatedAt=now,
+        days=[
+            BackfillDayRecord(
+                businessDate=value,
+                status=(
+                    BackfillDayStatus.WAITING_CONFIG
+                    if index == 0
+                    else BackfillDayStatus.PENDING
+                ),
+                updatedAt=now,
+            )
+            for index, value in enumerate(business_dates)
+        ],
+    )
+    return run.model_dump(by_alias=True, mode="json")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -254,9 +330,23 @@ async def reset_fixture(from_date: str, to_date: str, file_dir: str) -> list[Pat
         await db["partner_runtime_run"].delete_many({"partner": DEFAULT_PARTNER})
         await db["ingestion_checkpoint"].delete_many({"partner": DEFAULT_PARTNER})
         await db["reconciliation_file"].delete_many({"partner": DEFAULT_PARTNER})
-        await FetchConfigRepository(db).create(build_fetch_config())
+        fetch_config = build_fetch_config()
+        await FetchConfigRepository(db).create(fetch_config)
         await db["reconciliation_mapping_config"].insert_one(build_draft_mapping(first_day))
-        await db["review_packet"].insert_one(build_review_packet(first_day, first_file))
+        packet = build_review_packet(
+            first_day,
+            first_file,
+            backfill_run_id=SEED_BACKFILL_RUN_ID,
+        )
+        await db["backfill_run"].insert_one(
+            build_backfill_run(
+                date.fromisoformat(from_date),
+                date.fromisoformat(to_date),
+                str(fetch_config.id),
+                packet["_id"],
+            )
+        )
+        await db["review_packet"].insert_one(packet)
     finally:
         client.close()
     return files

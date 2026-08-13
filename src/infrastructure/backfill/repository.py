@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from src.domain.backfill.models import BackfillRun
+from src.domain.backfill.models import BackfillRun, BackfillRunStatus
 from src.infrastructure.persistence.mongo_repository import BaseRepository
 
 
@@ -16,6 +16,24 @@ class BackfillRunRepository(BaseRepository[BackfillRun]):
 
     async def find_by_id(self, backfill_run_id: str) -> Optional[BackfillRun]:
         return await self.find_one({"_id": backfill_run_id})
+
+    async def find_latest_active_by_partner(self, partner: str) -> Optional[BackfillRun]:
+        """Return the latest durable backfill checkpoint for operator resumption."""
+        return await self.find_one(
+            {
+                "partner": partner,
+                "mode": "BACKFILL",
+                "status": {
+                    "$in": [
+                        BackfillRunStatus.WAITING_CONFIG.value,
+                        BackfillRunStatus.QUEUED.value,
+                        BackfillRunStatus.RUNNING.value,
+                        BackfillRunStatus.FAILED.value,
+                    ]
+                },
+            },
+            sort=[("updatedAt", -1), ("createdAt", -1)],
+        )
 
     async def create(self, doc: BackfillRun) -> BackfillRun:
         payload = self._to_mongo(doc)

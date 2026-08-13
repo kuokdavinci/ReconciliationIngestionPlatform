@@ -12,7 +12,7 @@ from src.domain.ingestion.checkpoints import (
     SourceUnitSummary,
 )
 
-_REPLAY_OUTCOMES = {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY", "NO_NEW_FILE"}
+_REPLAY_OUTCOMES = {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY", "NO_NEW_FILE", "SAFE_DUPLICATE"}
 _ACTIVE_RUNTIME_STATUSES = {
     "QUEUED",
     "FETCHING",
@@ -346,5 +346,10 @@ def build_recovery_view(
         "fetchedUnitCount": fetched_unit_count,
         "totalUnitCount": total_unit_count,
         "duplicateCount": _duplicate_count(latest_run),
+        "safeDuplicate": latest_stats.get("safeDuplicate") is True or latest_stats.get("outcome") in _REPLAY_OUTCOMES,
+        "duplicateSourceOutcome": latest_stats.get("duplicateSourceOutcome") or (
+            latest_stats.get("outcome") if latest_stats.get("outcome") in _REPLAY_OUTCOMES else None
+        ),
+        "duplicateMessage": latest_run.get("message") if latest_stats.get("safeDuplicate") is True or latest_stats.get("outcome") in _REPLAY_OUTCOMES else None,
         "events": events,
     }

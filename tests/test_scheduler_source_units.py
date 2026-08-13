@@ -394,9 +394,17 @@ async def test_scheduler_does_not_fetch_after_completed_api_stream_on_next_run(t
             config_loader=MagicMock(),
             reconciliation_date=datetime(2024, 7, 7, tzinfo=UTC),
         )
+        third = await run_fetch_config_once(
+            config=config,
+            db=db,
+            config_loader=MagicMock(),
+            reconciliation_date=datetime(2024, 7, 7, tzinfo=UTC),
+        )
 
     assert first["success"] is True
     assert second["success"] is True
+    assert third["outcome"] == "SAFE_DUPLICATE"
+    assert third["safeDuplicate"] is True
     assert [call.get("page", 1) for call in fetcher.calls] == [1, 2]
 
 

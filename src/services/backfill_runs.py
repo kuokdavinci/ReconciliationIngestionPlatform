@@ -99,6 +99,25 @@ class BackfillRunService:
         if not config.enabled:
             raise BackfillRunValidationError("Automation job is disabled.")
 
+        existing_run_finder = getattr(self._backfill_repo, "find_latest_active_by_partner", None)
+        existing_run = (
+            await existing_run_finder(partner)
+            if existing_run_finder is not None
+            else None
+        )
+        if existing_run is not None:
+            if existing_run.from_date == from_date and existing_run.to_date == to_date:
+                return existing_run
+            status = getattr(existing_run.status, "value", existing_run.status)
+            checkpoint = (
+                existing_run.current_date.isoformat()
+                if existing_run.current_date
+                else "the current checkpoint"
+            )
+            raise BackfillRunConflictError(
+                f"An active backfill is already {status} at {checkpoint}; resume that run instead of creating another."
+            )
+
         mapping_version = await self._approved_mapping_version_finder(partner)
         approval_required = mapping_version is None
         run = BackfillRun(

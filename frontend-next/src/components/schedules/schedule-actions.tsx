@@ -86,7 +86,7 @@ export function ScheduleActions({
           disabled={retryDisabled}
           title="Retry failed operation"
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>refresh</span>
+          <span aria-hidden="true" className="material-symbols-outlined" style={{ fontSize: 14 }}>refresh</span>
           <span>{retrying ? "Retrying…" : "Retry"}</span>
         </Button>
       ) : runtimeActive || running ? (
@@ -96,7 +96,7 @@ export function ScheduleActions({
           disabled
           title="Execution in progress"
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>sync</span>
+          <span aria-hidden="true" className="material-symbols-outlined" style={{ fontSize: 14 }}>sync</span>
           <span>Running…</span>
         </Button>
       ) : (
@@ -108,7 +108,7 @@ export function ScheduleActions({
           aria-disabled={runBlockedByBackfill || undefined}
           title={backfillActive ? "Backfill is active; continue from Backfill" : "Run schedule now"}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>play_arrow</span>
+          <span aria-hidden="true" className="material-symbols-outlined" style={{ fontSize: 14 }}>play_arrow</span>
           <span>Run</span>
         </Button>
       )}
@@ -124,12 +124,12 @@ export function ScheduleActions({
           aria-label={`More options for ${job.partner}`}
           title="More options"
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>more_horiz</span>
+          <span aria-hidden="true" className="material-symbols-outlined" style={{ fontSize: 18 }}>more_horiz</span>
         </button>
 
         {menuOpen && (
           <div className={`${styles.dropdownMenu} ${dropup ? styles.dropdownMenuUp : ""}`} role="menu">
-            {showRetryAsPrimary ? (
+            {showRetryAsPrimary || backfillActive ? (
               <button
                 type="button"
                 role="menuitem"
@@ -139,7 +139,7 @@ export function ScheduleActions({
                 aria-disabled={runBlockedByBackfill || undefined}
                 title={backfillActive ? "Backfill is active; continue from Backfill" : undefined}
               >
-                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>play_arrow</span>
+                <span aria-hidden="true" className="material-symbols-outlined" style={{ fontSize: 15 }}>play_arrow</span>
                 <span>Run schedule now</span>
               </button>
             ) : isRetryable && onRetry ? (
@@ -150,7 +150,7 @@ export function ScheduleActions({
                 onClick={() => { setMenuOpen(false); onRetry(); }}
                 disabled={retryDisabled}
               >
-                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>refresh</span>
+                <span aria-hidden="true" className="material-symbols-outlined" style={{ fontSize: 15 }}>refresh</span>
                 <span>Retry failed recovery</span>
               </button>
             ) : null}
@@ -162,7 +162,7 @@ export function ScheduleActions({
                 className={styles.dropdownMenuItem}
                 onClick={() => { setMenuOpen(false); onOpenReview(); }}
               >
-                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>rate_review</span>
+                <span aria-hidden="true" className="material-symbols-outlined" style={{ fontSize: 15 }}>rate_review</span>
                 <span>Open pending review</span>
               </button>
             )}
@@ -174,7 +174,7 @@ export function ScheduleActions({
               onClick={() => { setMenuOpen(false); onBackfill(); }}
               disabled={running || runtimeActive}
             >
-              <span className="material-symbols-outlined" style={{ fontSize: 15 }}>calendar_month</span>
+              <span aria-hidden="true" className="material-symbols-outlined" style={{ fontSize: 15 }}>calendar_month</span>
               <span>Backfill date range…</span>
             </button>
 
@@ -185,7 +185,7 @@ export function ScheduleActions({
                 className={styles.dropdownMenuItem}
                 onClick={() => { setMenuOpen(false); onViewRecovery(); }}
               >
-                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>analytics</span>
+                <span aria-hidden="true" className="material-symbols-outlined" style={{ fontSize: 15 }}>analytics</span>
                 <span>View runtime details</span>
               </button>
             )}

@@ -526,8 +526,11 @@ test("operator can start a VNPAY backfill and see its approval progress", async 
   const refreshedRow = page.getByRole("row", { name: /VNPAY/ });
   const blockedRunButton = refreshedRow.getByRole("button", { name: "Run", exact: true });
   await expect(blockedRunButton).toHaveAttribute("aria-disabled", "true");
-  await blockedRunButton.click();
-  await expect(page.getByRole("alert")).toContainText("Backfill is WAITING CONFIG at 2026-08-10");
+  // The action stays clickable so the operator receives the backfill guidance toast.
+  // Playwright treats aria-disabled as non-actionable, so force the synthetic click
+  // while preserving the accessibility state asserted above.
+  await blockedRunButton.click({ force: true });
+  await expect(page.getByRole("alert").filter({ hasText: "Backfill is WAITING CONFIG at 2026-08-10" })).toBeVisible();
   await refreshedRow.getByRole("button", { name: /More options for VNPAY/ }).click();
   await expect(refreshedRow.getByRole("menuitem", { name: "Run schedule now", exact: true })).toHaveAttribute("aria-disabled", "true");
   await expect(refreshedRow.getByRole("menuitem", { name: /Backfill date range/ })).toBeVisible();

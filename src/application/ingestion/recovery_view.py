@@ -311,6 +311,15 @@ def build_recovery_view(
             ],
         )
     )
+    duplicate_message = (
+        latest_run.get("message")
+        if latest_run is not None
+        and (
+            latest_stats.get("safeDuplicate") is True
+            or latest_stats.get("outcome") in _REPLAY_OUTCOMES
+        )
+        else None
+    )
     return {
         "status": status,
         "streamKey": _safe_stream_key(checkpoint),
@@ -350,6 +359,6 @@ def build_recovery_view(
         "duplicateSourceOutcome": latest_stats.get("duplicateSourceOutcome") or (
             latest_stats.get("outcome") if latest_stats.get("outcome") in _REPLAY_OUTCOMES else None
         ),
-        "duplicateMessage": latest_run.get("message") if latest_stats.get("safeDuplicate") is True or latest_stats.get("outcome") in _REPLAY_OUTCOMES else None,
+        "duplicateMessage": duplicate_message,
         "events": events,
     }

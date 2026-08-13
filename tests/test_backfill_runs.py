@@ -285,6 +285,57 @@ async def test_resume_after_mapping_approval_reuses_parent_and_submits_one_backf
 
 
 @pytest.mark.asyncio
+async def test_resume_after_approval_refreshes_payload_after_existing_workflow_collision():
+    from src.application.automation.backfill_service import BackfillRunService
+    from src.domain.backfill.models import BackfillRunStatus
+
+    gateway = SimpleNamespace(
+        trigger=AsyncMock(
+            side_effect=[
+                WorkflowSubmission(
+                    provider=WorkflowProvider.AIRFLOW,
+                    workflowId="reconciliation_ingestion",
+                    workflowRunId="manual__backfill-1",
+                    state=WorkflowSubmissionState.ALREADY_EXISTS,
+                ),
+                WorkflowSubmission(
+                    provider=WorkflowProvider.AIRFLOW,
+                    workflowId="reconciliation_ingestion",
+                    workflowRunId="manual__backfill-1:approval-retry:123e4567-e89b-12d3-a456-426614174111",
+                    state=WorkflowSubmissionState.SUBMITTED,
+                ),
+            ]
+        )
+    )
+    repo = _FakeBackfillRepo()
+    service = BackfillRunService(
+        fetch_repo=_FakeFetchRepo(_config()),
+        backfill_repo=repo,
+        workflow_gateway=gateway,
+        approved_mapping_version_finder=AsyncMock(return_value=None),
+    )
+    waiting_run = await service.start(
+        partner="VNPAY",
+        actor="ops-user",
+        from_date=date(2026, 8, 10),
+        to_date=date(2026, 8, 11),
+    )
+
+    resumed = await service.resume_after_approval(
+        backfill_run_id=str(waiting_run.id),
+        mapping_version="VNPAY_BACKFILL_V1",
+    )
+
+    assert resumed.status == BackfillRunStatus.QUEUED
+    assert gateway.trigger.await_count == 2
+    fresh_command = gateway.trigger.await_args_list[1].args[0]
+    assert fresh_command.runtime_run_id.endswith(
+        f":approval-retry:{waiting_run.fetch_config_id}"
+    )
+    assert fresh_command.fetch_config_id == waiting_run.fetch_config_id
+
+
+@pytest.mark.asyncio
 async def test_resume_after_approval_retries_stale_queued_checkpoint_task():
     from src.application.automation.backfill_service import BackfillRunService
     from src.domain.backfill.models import BackfillDayStatus, BackfillRunStatus
@@ -295,7 +346,7 @@ async def test_resume_after_approval_retries_stale_queued_checkpoint_task():
             return_value=WorkflowSubmission(
                 provider=WorkflowProvider.AIRFLOW,
                 workflowId="reconciliation_ingestion",
-                workflowRunId="manual__backfill-stale:approval-retry",
+                workflowRunId="manual__backfill-stale:approval-retry:123e4567-e89b-12d3-a456-426614174111",
                 state=WorkflowSubmissionState.SUBMITTED,
             )
         ),
@@ -334,7 +385,9 @@ async def test_resume_after_approval_retries_stale_queued_checkpoint_task():
     assert resumed.status == BackfillRunStatus.QUEUED
     gateway.trigger.assert_awaited_once()
     command = gateway.trigger.await_args.args[0]
-    assert command.runtime_run_id == f"{waiting_run.id}:approval-retry"
+    assert command.runtime_run_id.endswith(
+        f":approval-retry:{waiting_run.fetch_config_id}"
+    )
     assert command.fetch_config_id == str(waiting_run.fetch_config_id)
     gateway.task_state.assert_awaited_once_with(
         f"manual__{waiting_run.id}",
@@ -355,7 +408,7 @@ async def test_resume_after_approval_requeues_failed_running_checkpoint():
             return_value=WorkflowSubmission(
                 provider=WorkflowProvider.AIRFLOW,
                 workflowId="reconciliation_ingestion",
-                workflowRunId="manual__backfill-stale:approval-retry",
+                workflowRunId="manual__backfill-stale:approval-retry:123e4567-e89b-12d3-a456-426614174111",
                 state=WorkflowSubmissionState.SUBMITTED,
             )
         ),

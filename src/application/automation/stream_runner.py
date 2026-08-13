@@ -183,6 +183,11 @@ async def run_source_stream(
         structured_logger=structured_logger,
         reconciliation_run_id=str(run.id),
         mapping_config_version=mapping_config_version,
+        backfill_run_id=backfill_run_id,
+        # A backfill compares the pinned config with each day's source
+        # structure. Equivalent days return the same approved config; a drift
+        # day raises a review outcome and releases its checkpoint.
+        config_health_check_enabled=True,
     )
     retry_policy = RetryPolicy()
     raw_page_repo = RawIngestionPageRepository(db)

@@ -242,6 +242,7 @@ class IngestionPipeline:
             file_type=command.file_type,
             reconciliation_date=command.reconciliation_date,
             config_version=command.config_version,
+            backfill_run_id=command.backfill_run_id,
             fetch_unit_metadata=command.fetch_unit_metadata,
             enable_config_health_check=command.enable_config_health_check,
         )
@@ -254,6 +255,7 @@ class IngestionPipeline:
         file_type: Any,
         reconciliation_date: Any,
         config_version: Optional[str] = None,
+        backfill_run_id: str | None = None,
         fetch_unit_metadata: Optional[dict[str, Any]] = None,
         enable_config_health_check: bool = False,
     ) -> IngestionResult:
@@ -266,6 +268,7 @@ class IngestionPipeline:
                 file_type=file_type,
                 reconciliation_date=reconciliation_date,
                 config_version=config_version,
+                backfill_run_id=backfill_run_id,
                 fetch_unit_metadata=fetch_unit_metadata,
                 enable_config_health_check=enable_config_health_check,
             )
@@ -382,6 +385,7 @@ class IngestionPipeline:
                 config_version=command.config_version,
                 source_file_id=claimed.source_file_id,
                 enable_health_check=command.enable_config_health_check,
+                backfill_run_id=command.backfill_run_id,
                 mapping_repository=self._mapping_repo,
             )
         except ConfigurationApprovalRequiredError as approval_exc:
@@ -503,6 +507,7 @@ class IngestionPipeline:
         file_type: Any,  # FileType enum
         reconciliation_date: Any,  # datetime
         config_version: Optional[str] = None,
+        backfill_run_id: str | None = None,
         fetch_unit_metadata: Optional[dict[str, Any]] = None,
         enable_config_health_check: bool = False,
     ) -> IngestionResult:
@@ -536,6 +541,7 @@ class IngestionPipeline:
             file_type=file_type,
             reconciliation_date=reconciliation_date,
             config_version=config_version,
+            backfill_run_id=backfill_run_id,
             fetch_unit_metadata=fetch_unit_metadata,
             enable_config_health_check=enable_config_health_check,
         )

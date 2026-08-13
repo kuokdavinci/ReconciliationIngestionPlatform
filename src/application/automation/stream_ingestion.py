@@ -115,6 +115,8 @@ def build_source_unit_ingestor(
     structured_logger: Optional[StructuredLogger],
     reconciliation_run_id: str | None = None,
     mapping_config_version: str | None = None,
+    backfill_run_id: str | None = None,
+    config_health_check_enabled: bool = True,
 ) -> tuple[Any, dict[str, int]]:
     stats = {
         "totalRows": 0,
@@ -159,7 +161,11 @@ def build_source_unit_ingestor(
             structured_logger=structured_logger,
             fetch_unit_metadata=unit_metadata,
             config_version=mapping_config_version,
-            enable_config_health_check=(not config_health_checked or not is_paginated_api),
+            backfill_run_id=backfill_run_id,
+            enable_config_health_check=(
+                config_health_check_enabled
+                and (not config_health_checked or not is_paginated_api)
+            ),
             validate_rows=config.validate_rows,
         )
         if not result or not result.file_record:
@@ -239,6 +245,7 @@ async def run_ingestion(
     structured_logger: Optional[StructuredLogger] = None,
     fetch_unit_metadata: Optional[dict[str, Any]] = None,
     config_version: Optional[str] = None,
+    backfill_run_id: Optional[str] = None,
     enable_config_health_check: bool = True,
     validate_rows: bool = False,
 ) -> IngestionResult | None:
@@ -273,6 +280,7 @@ async def run_ingestion(
                 file_type=FileType.SETTLEMENT,
                 reconciliation_date=reconciliation_date,
                 config_version=config_version,
+                backfill_run_id=backfill_run_id,
                 fetch_unit_metadata=fetch_unit_metadata,
                 enable_config_health_check=enable_config_health_check,
             )

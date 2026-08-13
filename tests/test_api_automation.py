@@ -208,6 +208,70 @@ def test_list_automation_jobs_filters_to_scheduler_packets():
     assert job["activeBackfill"]["currentDate"] == "2026-08-10"
 
 
+def test_list_automation_jobs_hides_equivalent_pending_backfill_packet():
+    app, fetch_collection, packet_collection, _, _, _, backfill_collection, _ = _create_test_app()
+    fetch_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "123e4567-e89b-12d3-a456-426614174000",
+            "partner": "VNPAY",
+            "fetchMethod": "FILEDROP",
+            "schedule": "none",
+            "enabled": True,
+            "localDownloadDir": "./downloads",
+            "methodConfig": {"directory": "mock_data"},
+            "updatedAt": "2026-08-13T09:30:59.048000",
+        }
+    ]))
+    packet_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "pkt-vnpay-duplicate",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "VNPAY",
+            "fileName": "settlement_VNPAY_20260813.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "structureSignature": {
+                "headers": ["id", "trace", "amount"],
+                "columnCount": 3,
+                "hash": "same-structure",
+            },
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "PENDING",
+            "createdAt": "2026-08-13T09:32:27.556000",
+        },
+        {
+            "_id": "pkt-vnpay-start-date",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "VNPAY",
+            "fileName": "settlement_VNPAY_20260810.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "structureSignature": {
+                "headers": ["id", "trace", "amount"],
+                "columnCount": 3,
+            },
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "APPROVED",
+            "createdAt": "2026-08-10T00:00:00",
+        },
+    ]))
+    backfill_collection.find_one = AsyncMock(return_value=None)
+
+    client = TestClient(app)
+    response = client.get("/api/v1/automation/jobs")
+
+    assert response.status_code == 200
+    job = response.json()["jobs"][0]
+    assert job["pendingReviewPackets"] == 0
+    assert [packet["_id"] for packet in job["recentPackets"]] == ["pkt-vnpay-start-date"]
+
+
 @pytest.mark.asyncio
 async def test_backfill_review_packet_attachment_is_scoped_to_current_business_date():
     from src.api.automation import _attach_pending_backfill_review_packet

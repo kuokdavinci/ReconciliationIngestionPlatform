@@ -17,6 +17,7 @@ class ProcessFileCommand:
     file_type: Any
     reconciliation_date: Any
     config_version: str | None = None
+    backfill_run_id: str | None = None
     fetch_unit_metadata: dict[str, Any] | None = None
     enable_config_health_check: bool = False
 

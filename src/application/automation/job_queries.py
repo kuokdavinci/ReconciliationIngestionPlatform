@@ -8,6 +8,7 @@ from src.application.automation.stream_identity import source_stream_key
 from src.application.automation.backfill_service import serialize_backfill_run
 from src.application.ingestion.recovery_view import build_recovery_view
 from src.application.runtime.service import serialize_partner_runtime_run
+from src.config.signature import structure_signatures_equivalent
 from src.domain.fetch_config.models import FetchMethod
 from src.domain.ingestion.checkpoints import IngestionMode
 from src.domain.ingestion.retry_policy import RetryPolicy
@@ -141,15 +142,40 @@ class AutomationJobQueryService:
         pending_by_partner: dict[str, int] = {}
         recent_packet_docs: dict[str, list[dict[str, Any]]] = {}
         pending_packet_keys: set[tuple[str, str, str]] = set()
+        approved_shapes: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for packet in packets:
+            if packet.source_type.value != "SCHEDULER_JOB" or packet.status.value != "APPROVED":
+                continue
+            packet_key = (
+                packet.partner,
+                packet.source_type.value,
+                packet.file_type_detected,
+            )
+            approved_shapes.setdefault(packet_key, []).append(
+                packet.structure_signature or {}
+            )
         for packet in packets:
             if packet.source_type.value != "SCHEDULER_JOB":
                 continue
-            if packet.status.value == "PENDING":
-                packet_key = (
-                    packet.partner,
-                    packet.source_type.value,
-                    packet.file_type_detected,
+            packet_key = (
+                packet.partner,
+                packet.source_type.value,
+                packet.file_type_detected,
+            )
+            if (
+                packet.status.value == "PENDING"
+                and any(
+                    structure_signatures_equivalent(
+                        packet.structure_signature,
+                        approved_shape,
+                    )
+                    for approved_shape in approved_shapes.get(packet_key, [])
                 )
+            ):
+                # Keep the duplicate packet for audit, but do not expose it
+                # as a second review item after a backfill approval.
+                continue
+            if packet.status.value == "PENDING":
                 if packet_key in pending_packet_keys:
                     continue
                 pending_packet_keys.add(packet_key)

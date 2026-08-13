@@ -50,6 +50,7 @@ from src.application.review.errors import (
     ReviewUnavailableError,
     ReviewValidationError,
 )
+from src.config.signature import structure_signatures_equivalent
 
 
 router = APIRouter(prefix="/api/v1/review-packets")
@@ -454,24 +455,48 @@ async def list_review_packets(
     partner: Optional[str] = Query(default=None),
 ):
     query: dict = {}
-    if status:
-        query["status"] = status
+    requested_status = status.upper() if isinstance(status, str) and status else None
     if partner:
         query["partner"] = partner
     packets = await _repo(request).find_many(query)
     packets.sort(key=lambda item: item.created_at, reverse=True)
+    approved_shapes: dict[tuple[str, str, str], list[dict]] = {}
+    for packet in packets:
+        if packet.status != ReviewPacketStatus.APPROVED:
+            continue
+        key = (packet.partner, packet.source_type.value, packet.file_type_detected)
+        approved_shapes.setdefault(key, []).append(packet.structure_signature or {})
+
     seen_pending_scheduler_keys: set[tuple[str, str, str]] = set()
     visible_packets = []
     for packet in packets:
+        packet_key = (packet.partner, packet.source_type.value, packet.file_type_detected)
+        if (
+            packet.status == ReviewPacketStatus.PENDING
+            and packet.source_type == ReviewPacketSourceType.SCHEDULER_JOB
+            and any(
+                structure_signatures_equivalent(packet.structure_signature, approved_shape)
+                for approved_shape in approved_shapes.get(packet_key, [])
+            )
+        ):
+            # A backfill approval covers the same structure for the full
+            # parent run. Keep the duplicate document for audit, but do not
+            # surface it as a second actionable review packet.
+            continue
         if (
             packet.source_type == ReviewPacketSourceType.SCHEDULER_JOB
             and packet.status == ReviewPacketStatus.PENDING
         ):
-            key = (packet.partner, packet.source_type.value, packet.file_type_detected)
-            if key in seen_pending_scheduler_keys:
+            if packet_key in seen_pending_scheduler_keys:
                 continue
-            seen_pending_scheduler_keys.add(key)
+            seen_pending_scheduler_keys.add(packet_key)
         visible_packets.append(packet)
+    if requested_status:
+        visible_packets = [
+            packet
+            for packet in visible_packets
+            if packet.status.value == requested_status
+        ]
     return {"packets": [_serialize(packet) for packet in visible_packets]}
 
 

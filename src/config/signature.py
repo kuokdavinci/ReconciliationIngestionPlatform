@@ -64,6 +64,31 @@ def _compute_hash(headers: list[str], column_count: int) -> str:
     return hashlib.md5(raw.encode()).hexdigest()
 
 
+def structure_signature_shape(signature: Any) -> tuple[tuple[str, ...], int] | None:
+    """Return the stable shape portion of a persisted or computed signature."""
+    if isinstance(signature, StructureSignature):
+        headers = signature.headers
+        column_count = signature.column_count
+    elif isinstance(signature, dict):
+        headers = signature.get("headers")
+        column_count = signature.get("columnCount")
+    else:
+        return None
+
+    if not isinstance(headers, list) or not headers:
+        return None
+    if not isinstance(column_count, int):
+        column_count = len(headers)
+    return tuple(str(header) for header in headers), column_count
+
+
+def structure_signatures_equivalent(left: Any, right: Any) -> bool:
+    """Compare file structure without considering sample row values or hashes."""
+    left_shape = structure_signature_shape(left)
+    right_shape = structure_signature_shape(right)
+    return left_shape is not None and left_shape == right_shape
+
+
 def _read_raw_csv(path: Path, max_rows: int = 20) -> list[list[str]]:
     delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
     with open(path, newline="", encoding="utf-8") as f:

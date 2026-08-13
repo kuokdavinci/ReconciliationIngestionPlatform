@@ -36,6 +36,7 @@ from src.domain.fetch_config.models import (
 )
 from src.domain.ingestion.checkpoints import (
     CheckpointStatus,
+    IngestionMode,
     IngestionCheckpoint,
 )
 
@@ -229,6 +230,58 @@ async def test_stream_runner_fetches_and_ingests_api_pages_one_at_a_time(tmp_pat
     assert result["stats"]["reconciliationCount"] == 2
     commands = [call.args[0] for call in reconciliation.return_value.execute.await_args_list]
     assert [command.reconciliation_run_id for command in commands] == ["run-1", "run-1"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_with_approved_mapping_checks_each_day_for_structure_drift(tmp_path):
+    config = FetchConfig(
+        partner="VNPAY",
+        fetch_method=FetchMethod.FILEDROP,
+        cleanup_after_ingest=False,
+        filedrop=FileDropConfig(directory=str(tmp_path)),
+    )
+    fetcher = _PagedFetcher(tmp_path)
+    checkpoint_repo = _SequentialCheckpointRepository()
+    health_check_flags = []
+    ingestion_result = SimpleNamespace(
+        file_record=SimpleNamespace(
+            id="file-backfill-1", processing_status=ProcessingStatus.COMPLETED
+        ),
+        stats=SimpleNamespace(
+            total_rows=1, success_rows=1, duplicate_rows=0, failed_rows=0
+        ),
+        errors=[],
+        outcome="INGESTED",
+    )
+
+    async def run_ingestion(**kwargs):
+        health_check_flags.append(kwargs["enable_config_health_check"])
+        return ingestion_result
+
+    run = SimpleNamespace(id="run-backfill-1")
+    db = MagicMock()
+    with (
+        patch("src.application.automation.stream_runner.create_runtime_run", new=AsyncMock(return_value=run)),
+        patch("src.application.automation.stream_runtime.update_runtime_run", new=AsyncMock()),
+        patch("src.application.automation.stream_runner.update_runtime_run", new=AsyncMock()),
+        patch("src.application.automation.stream_runner.IngestionCheckpointRepository", return_value=checkpoint_repo),
+        patch("src.application.automation.stream_runner.create_fetcher", return_value=fetcher),
+        patch("src.application.automation.stream_ingestion.run_ingestion", new=run_ingestion),
+        patch("src.application.automation.stream_ingestion.build_reconciliation_service") as reconciliation,
+    ):
+        reconciliation.return_value.execute = AsyncMock(return_value=[])
+        result = await run_source_stream(
+            config=config,
+            db=db,
+            config_loader=MagicMock(),
+            reconciliation_date=datetime(2026, 8, 13, tzinfo=UTC),
+            mode=IngestionMode.BACKFILL,
+            mapping_config_version="VNPAY_BACKFILL_V1",
+            backfill_run_id="backfill-1",
+        )
+
+    assert result["success"] is True
+    assert health_check_flags == [True]
 
 
 @pytest.mark.asyncio

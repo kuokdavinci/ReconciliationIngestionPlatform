@@ -33,6 +33,7 @@ async def test_run_ingestion_uses_the_public_process_file_command():
             batch_size=100,
             fetch_unit_metadata={"sourceUnitKey": "page-1"},
             config_version="v1",
+            backfill_run_id="backfill-001",
             enable_config_health_check=True,
             validate_rows=True,
         )
@@ -45,6 +46,7 @@ async def test_run_ingestion_uses_the_public_process_file_command():
     assert command.partner == "VIETTELPAY"
     assert command.fetch_unit_metadata == {"sourceUnitKey": "page-1"}
     assert command.config_version == "v1"
+    assert command.backfill_run_id == "backfill-001"
     assert command.enable_config_health_check is True
 
 

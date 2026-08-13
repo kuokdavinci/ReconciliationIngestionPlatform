@@ -478,6 +478,55 @@ async def test_list_review_packets_collapses_duplicate_pending_scheduler_packets
 
 
 @pytest.mark.asyncio
+async def test_list_review_packets_hides_pending_packet_for_approved_same_structure():
+    review_collection = MagicMock()
+    review_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "pkt-pending-duplicate",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "VNPAY",
+            "fileName": "settlement_VNPAY_20260813.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "structureSignature": {
+                "headers": ["id", "trace", "amount"],
+                "columnCount": 3,
+                "hash": "same-structure",
+            },
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "PENDING",
+            "createdAt": "2026-08-13T03:00:00+00:00",
+        },
+        {
+            "_id": "pkt-approved-start-date",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "VNPAY",
+            "fileName": "settlement_VNPAY_20260810.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "structureSignature": {
+                "headers": ["id", "trace", "amount"],
+                "columnCount": 3,
+            },
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "APPROVED",
+            "createdAt": "2026-08-10T03:00:00+00:00",
+        },
+    ]))
+    request = _make_request(_make_db(review_collection=review_collection))
+
+    data = await list_review_packets(request, partner="VNPAY")
+
+    assert [packet["_id"] for packet in data["packets"]] == ["pkt-approved-start-date"]
+
+
+@pytest.mark.asyncio
 async def test_approve_keep_current_packet():
     review_collection = MagicMock()
     action_collection = MagicMock()

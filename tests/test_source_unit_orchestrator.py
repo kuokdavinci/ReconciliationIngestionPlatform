@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.scheduler.source_unit_orchestrator import process_source_units
+from src.application.ingestion.source_unit_orchestrator import process_source_units
 from src.services.retry_policy import RetryPolicy
 
 

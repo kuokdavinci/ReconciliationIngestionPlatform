@@ -88,7 +88,7 @@ async def main() -> None:
     _write_weird_file_2(weird_file_2)
 
     print(f"Seeded ZALOPAY fetch config and weird file: {weird_file}")
-    print("Run the scheduler job once or call daily_partner_fetch_job() to trigger AI detect.")
+    print("Trigger the Airflow-backed automation run to start AI detection.")
     client.close()
 
 

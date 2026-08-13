@@ -4,11 +4,15 @@
 
 `docker-compose.yml` currently defines:
 
+- `postgres`
 - `mongodb`
 - `sftp`
 - `mongo-express`
 - `api`
-- `scheduler`
+- `airflow-api-server`
+- `airflow-scheduler`
+- `airflow-dag-processor`
+- `viettelpay-mock`
 
 ## Start
 
@@ -62,13 +66,10 @@ Credentials come from `.env`:
 - exposed port: `8000`
 - startup command: `uvicorn src.api:create_app --factory --host 0.0.0.0 --port 8000`
 
-## Scheduler Container
-
-- container: `reconciliation-scheduler`
-- startup command: `python run.py --start-scheduler`
-
 ## Notes
 
-- `api` and `scheduler` both receive an `APP_MONGODB_URL` override pointing at the Compose MongoDB service.
-- `scheduler` also overrides `SFTP_HOST=sftp`.
+- Airflow is the only workflow owner. `airflow-scheduler` executes DAG scheduling and task orchestration; it does not start a second application scheduler.
+- `api` and `airflow-scheduler` receive an `APP_MONGODB_URL` override pointing at the Compose MongoDB service.
+- `airflow-scheduler` also overrides `SFTP_HOST=sftp`.
+- `viettelpay-mock` uses `Dockerfile.viettelpay-mock`, exposes port `8001`, and keeps its state under the mounted `mock_data` directory.
 - `mongo-express` is meant for local inspection only unless you add auth and network restrictions explicitly.

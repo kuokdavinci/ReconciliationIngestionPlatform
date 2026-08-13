@@ -108,9 +108,7 @@ def guarded_import(name, *args, **kwargs):
 
 builtins.__import__ = guarded_import
 from src.application.automation import run_source_stream
-from src.scheduler.jobs import run_fetch_config_once
 assert callable(run_source_stream)
-assert run_fetch_config_once is run_source_stream
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

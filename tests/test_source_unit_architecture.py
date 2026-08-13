@@ -17,7 +17,7 @@ def test_legacy_source_unit_module_is_a_compatibility_facade() -> None:
     assert LegacySourceUnitMetadata is SourceUnitMetadata
 
 
-def test_scheduler_source_unit_module_is_an_application_compatibility_facade() -> None:
-    from src.scheduler.source_unit_orchestrator import process_source_units
-
-    assert process_source_units is application_process_source_units
+def test_source_unit_orchestrator_is_application_owned() -> None:
+    assert application_process_source_units.__module__ == (
+        "src.application.ingestion.source_unit_orchestrator"
+    )

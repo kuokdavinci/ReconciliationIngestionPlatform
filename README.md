@@ -21,7 +21,6 @@ The repository contains a FastAPI backend, a Next.js dashboard, PostgreSQL/Mongo
 flowchart LR
     S[Partner file / API / SFTP]
     F[src/fetchers]
-    J[src/scheduler]
     AF[Airflow DAG/control plane]
     P[src/pipeline]
     A[src/application]
@@ -33,9 +32,9 @@ flowchart LR
     API[FastAPI]
     UI[Next.js dashboard]
 
-    S --> F --> J --> P
+    S --> F --> A
     AF --> A
-    P --> A
+    A --> P
     P --> I
     A --> D
     I --> PG
@@ -57,7 +56,7 @@ flowchart LR
 | Infrastructure | MongoDB/PostgreSQL repositories and composition roots | `src/infrastructure/` |
 | Ingestion pipeline | File claims, row processing, metrics and lifecycle state | `src/pipeline/` |
 | Fetchers | Filedrop, SFTP and API retrieval | `src/fetchers/` |
-| Scheduler/orchestration | Partner jobs, source units and runtime execution | `src/scheduler/`, `src/application/automation/`, `dags/` |
+| Automation/orchestration | Partner streams, source units and runtime execution | `src/application/automation/`, `dags/` |
 | Reconciliation | Scope classification, matching and result persistence | `src/reconciliation/` |
 | Dashboard | Review, mapping, schedules and operational views | `frontend-next/src/` |
 
@@ -104,7 +103,7 @@ For an ordered backfill, the packet is linked to the durable parent through
 `backfillRunId` and the current business date. Guided Review can therefore show
 the backfill's daily progress and resume the same Airflow parent after mapping
 approval. The Schedules page also exposes a direct **Open pending review**
-action when a scheduler packet is available.
+action when an automation review packet is available.
 
 ### 4. Scheduled automation
 
@@ -304,7 +303,6 @@ src/                 Backend application
   pipeline/          Ingestion pipeline stages
   fetchers/          FileDrop, SFTP and API fetchers
   reconciliation/    Matching and scope logic
-  scheduler/         Ingestion runner used by Airflow (legacy package name)
   analysis/          Insights and AI-provider integration
 frontend-next/       Active Next.js dashboard
 tests/               Unit, architecture, integration and E2E tests

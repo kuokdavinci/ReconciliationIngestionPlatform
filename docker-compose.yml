@@ -220,7 +220,7 @@ services:
   viettelpay-mock:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.viettelpay-mock
     container_name: viettelpay-mock
     command: python -m scripts.demo.sprint2.mock_api --host 0.0.0.0 --port 8001 --state-file /app/mock_data/viettelpay_sprint2/mock_api_state.json
     ports:

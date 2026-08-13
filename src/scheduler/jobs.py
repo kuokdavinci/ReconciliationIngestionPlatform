@@ -19,6 +19,12 @@ from src.config.config_health import (
     check_and_refresh_config,
     create_stream_scope_review_packet,
 )
+from src.application.automation.stream_identity import (
+    fetch_source_endpoint as _fetch_source_endpoint,
+    raw_stage_key as _raw_stage_key,
+    stream_identity as _stream_identity,
+    units_after_checkpoint as _units_after_checkpoint,
+)
 from src.core.enums import FileType, ProcessingStatus
 from src.core.error_formatting import summarize_runtime_error
 from src.fetchers import create_fetcher
@@ -94,17 +100,6 @@ def _runtime_attempt_event(
     return event
 
 
-def _fetch_source_endpoint(config: FetchConfig) -> str:
-    method_config = config.get_method_config()
-    if config.fetch_method == FetchMethod.API:
-        return method_config.base_url
-    if config.fetch_method == FetchMethod.SFTP:
-        return f"sftp://{method_config.host}:{method_config.port}{method_config.remote_path}"
-    if config.fetch_method == FetchMethod.FILEDROP:
-        return f"filedrop://{method_config.directory}/{method_config.pattern}"
-    raise ValueError(f"Unsupported fetch method: {config.fetch_method}")
-
-
 def _fetch_unit_metadata(
     config: FetchConfig,
     fetch_metadata: dict[str, Any],
@@ -121,25 +116,6 @@ def _fetch_unit_metadata(
     return metadata
 
 
-def _source_stream_key(config: FetchConfig) -> str:
-    """Return a stable logical stream identity, independent of run date."""
-
-    return f"{config.partner}:{config.fetch_method.value}:{_fetch_source_endpoint(config)}"
-
-
-def _raw_stage_key(config: FetchConfig, reconciliation_date: datetime) -> str:
-    """Stable raw-page staging identity for one partner/date/config version."""
-
-    return ":".join(
-        (
-            config.partner,
-            _source_stream_key(config),
-            reconciliation_date.date().isoformat(),
-            str(config.updated_at),
-        )
-    )
-
-
 def _current_business_day_start(now: datetime | None = None) -> datetime:
     """Return today's configured business date at local midnight."""
 
@@ -153,27 +129,6 @@ def _current_business_day_start(now: datetime | None = None) -> datetime:
         second=0,
         microsecond=0,
     )
-
-
-def _stream_identity(
-    config: FetchConfig,
-    *,
-    mode: IngestionMode = IngestionMode.SCHEDULED,
-    reconciliation_date: datetime | None = None,
-) -> dict[str, Any]:
-    stream_key = _source_stream_key(config)
-    if mode == IngestionMode.BACKFILL:
-        if reconciliation_date is None:
-            raise ValueError("Backfill stream identity requires reconciliation_date.")
-        stream_key = f"{stream_key}:backfill:{reconciliation_date.date().isoformat()}"
-    return {
-        "partner": config.partner,
-        "fetchConfigId": str(config.id),
-        "sourceType": config.fetch_method.value,
-        "streamKey": stream_key,
-        "configVersion": str(config.updated_at),
-        "sourceEndpoint": _fetch_source_endpoint(config),
-    }
 
 
 def _checkpoint_result(checkpoint: Any) -> dict[str, Any]:
@@ -201,26 +156,6 @@ def _unit_high_water_mark(unit: SourceUnitMetadata) -> dict[str, Any]:
         "contentHash": unit.content_hash,
         "hasMore": unit.has_more,
     }
-
-
-def _units_after_checkpoint(
-    units: Sequence[SourceUnitMetadata | dict[str, Any]], checkpoint: Any
-) -> list[SourceUnitMetadata]:
-    """Skip the already completed prefix discovered in the same order."""
-
-    units = _source_units(units)
-    completed_key = getattr(checkpoint, "last_completed_unit_key", None)
-    completed_hash = (getattr(checkpoint, "high_water_mark", None) or {}).get("contentHash")
-    if not completed_key:
-        completed_key = None
-    for index, unit in enumerate(units):
-        # The content-hash fallback keeps checkpoints created before the
-        # mtime-independent source-unit identity change replay-safe.
-        if unit.source_unit_key == completed_key or (
-            completed_hash and unit.content_hash == completed_hash
-        ):
-            return units[index + 1 :]
-    return units
 
 
 def _ingestion_error_result(

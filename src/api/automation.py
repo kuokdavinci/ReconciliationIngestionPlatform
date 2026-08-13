@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
 from src.application.automation import ExecuteStreamCommand, execute_stream
+from src.application.automation.stream_identity import source_stream_key
 from src.application.automation.workflows import (
     WorkflowGateway,
     WorkflowProvider,
@@ -33,7 +34,6 @@ from src.domain.runtime.models import (
 )
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
 from src.infrastructure.review.repository import ReviewPacketRepository
-from src.scheduler.jobs import _source_stream_key
 from src.services.backfill_runs import (
     BackfillRunError,
     BackfillRunService,
@@ -83,7 +83,7 @@ class _LazyWorkflowGateway:
 
 def _stream_key_for_config(config) -> str | None:
     try:
-        return _source_stream_key(config)
+        return source_stream_key(config)
     except (AttributeError, ValueError):
         return None
 

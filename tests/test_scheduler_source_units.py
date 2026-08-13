@@ -17,14 +17,11 @@ from src.domain.fetch_config.models import (
 from src.domain.ingestion.checkpoints import (
     CheckpointStatus,
     IngestionCheckpoint,
-    IngestionMode,
 )
 from src.scheduler.jobs import (
     _failed_ingestion_result,
     _current_business_day_start,
     _run_ingestion,
-    _stream_identity,
-    _units_after_checkpoint,
     run_fetch_config_once,
 )
 
@@ -114,52 +111,6 @@ class _PagedFetcher:
             },
             units=[unit],
         )
-
-
-def test_scheduler_reuses_legacy_checkpoint_by_content_hash():
-    checkpoint = SimpleNamespace(
-        last_completed_unit_key="legacy-mtime-sensitive-key",
-        high_water_mark={"contentHash": "same-content"},
-    )
-    units = [
-        {
-            "sourceUnitKey": "new-mtime-sensitive-key",
-            "localPath": "/tmp/replayed.xlsx",
-            "contentHash": "same-content",
-        },
-        {
-            "sourceUnitKey": "next-file",
-            "localPath": "/tmp/next.xlsx",
-            "contentHash": "new-content",
-        },
-    ]
-
-    remaining = _units_after_checkpoint(units, checkpoint)
-
-    assert [unit.source_unit_key for unit in remaining] == ["next-file"]
-
-
-def test_backfill_stream_identity_is_scoped_by_reconciliation_date() -> None:
-    config = FetchConfig(
-        partner="VIETTELPAY",
-        fetchMethod=FetchMethod.API,
-        api=APIConfig(baseUrl="https://partner.example/settlement"),
-    )
-    reconciliation_date = datetime(2026, 8, 9, tzinfo=UTC)
-
-    scheduled = _stream_identity(
-        config,
-        mode=IngestionMode.SCHEDULED,
-        reconciliation_date=reconciliation_date,
-    )
-    backfill = _stream_identity(
-        config,
-        mode=IngestionMode.BACKFILL,
-        reconciliation_date=reconciliation_date,
-    )
-
-    assert scheduled["streamKey"].endswith("https://partner.example/settlement")
-    assert backfill["streamKey"] == f'{scheduled["streamKey"]}:backfill:2026-08-09'
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from src.application.automation.contracts import (
     ExecuteStreamOutcome,
     ExecuteStreamResult,
 )
+from src.application.automation.stream_identity import stream_identity
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from src.domain.runtime.models import PartnerRuntimeRunStatus
@@ -106,9 +107,7 @@ def _orchestration_payload(command: ExecuteStreamCommand) -> dict[str, Any] | No
 
 
 async def _find_checkpoint(repository, config, command, reconciliation_date):
-    from src.scheduler.jobs import _stream_identity
-
-    identity = _stream_identity(
+    identity = stream_identity(
         config,
         mode=command.mode,
         reconciliation_date=reconciliation_date,

@@ -7,10 +7,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from src.domain.ingestion.checkpoints import IngestionCheckpoint
+from src.application.automation.stream_identity import units_after_checkpoint
+from src.application.ingestion.source_unit_orchestrator import process_source_units
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from scripts.demo.sprint2.fixture import ViettelPayMockFixture
-from src.scheduler.source_unit_orchestrator import process_source_units
-from src.scheduler.jobs import _units_after_checkpoint
 from src.services.retry_policy import RetryPolicy
 
 
@@ -201,7 +201,7 @@ async def run_sprint2_evaluation() -> dict[str, Any]:
         raise AssertionError("checkpoint must exist after the controlled page 2 failure")
     if checkpoint.last_completed_unit_key is None:
         raise AssertionError("page 1 must be completed before resume")
-    pending_units = _units_after_checkpoint(units, checkpoint)
+    pending_units = units_after_checkpoint(units, checkpoint)
     identity["lastCompletedUnitKey"] = checkpoint.last_completed_unit_key
     before = _checkpoint_snapshot(checkpoint)
     started = time.perf_counter()

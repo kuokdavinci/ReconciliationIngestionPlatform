@@ -272,6 +272,67 @@ async def test_resume_after_mapping_approval_reuses_parent_and_submits_one_backf
     assert command.mapping_version == "VNPAY_BACKFILL_V1"
 
 
+@pytest.mark.asyncio
+async def test_resume_after_approval_retries_stale_queued_checkpoint_task():
+    from src.application.automation.backfill_service import BackfillRunService
+    from src.domain.backfill.models import BackfillDayStatus, BackfillRunStatus
+    from src.domain.runtime.models import RuntimeOrchestrationContext
+
+    gateway = SimpleNamespace(
+        trigger=AsyncMock(),
+        task_state=AsyncMock(return_value="success"),
+        retry_task=AsyncMock(
+            return_value=WorkflowSubmission(
+                provider=WorkflowProvider.AIRFLOW,
+                workflowId="reconciliation_ingestion",
+                workflowRunId="manual__backfill-stale",
+                state=WorkflowSubmissionState.RETRIED,
+            )
+        ),
+    )
+    repo = _FakeBackfillRepo()
+    service = BackfillRunService(
+        fetch_repo=_FakeFetchRepo(_config()),
+        backfill_repo=repo,
+        workflow_gateway=gateway,
+        approved_mapping_version_finder=AsyncMock(return_value=None),
+    )
+
+    waiting_run = await service.start(
+        partner="VNPAY",
+        actor="ops-user",
+        from_date=date(2026, 8, 10),
+        to_date=date(2026, 8, 11),
+    )
+    waiting_run.status = BackfillRunStatus.QUEUED
+    waiting_run.approval_required = False
+    waiting_run.orchestration = RuntimeOrchestrationContext(
+        dagId="reconciliation_ingestion",
+        dagRunId="manual__backfill-stale",
+        taskId="run_stream",
+        correlationId=f"backfill:{waiting_run.id}",
+    )
+    waiting_run.days[0].status = BackfillDayStatus.WAITING_CONFIG
+
+    resumed = await service.resume_after_approval(
+        backfill_run_id=str(waiting_run.id),
+        mapping_version="VNPAY_BACKFILL_V1",
+    )
+
+    assert resumed.status == BackfillRunStatus.QUEUED
+    gateway.trigger.assert_not_awaited()
+    gateway.task_state.assert_awaited_once_with(
+        "manual__backfill-stale",
+        task_id="run_stream",
+        map_index=0,
+    )
+    gateway.retry_task.assert_awaited_once_with(
+        "manual__backfill-stale",
+        task_id="run_stream",
+        map_index=0,
+    )
+
+
 def test_serialize_backfill_run_exposes_status_and_day_progress():
     from src.domain.backfill.models import (
         BackfillApprovalContext,

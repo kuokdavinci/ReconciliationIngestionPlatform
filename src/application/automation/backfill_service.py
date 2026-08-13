@@ -11,6 +11,7 @@ from src.application.automation.workflows import (
 )
 from src.domain.backfill.models import (
     BackfillApprovalContext,
+    BackfillDayStatus,
     BackfillDayRecord,
     BackfillRun,
     BackfillRunStatus,
@@ -206,7 +207,8 @@ class BackfillRunService:
         mapping_version: str,
     ) -> BackfillRun:
         run = await self.get(backfill_run_id)
-        if run.status != BackfillRunStatus.WAITING_CONFIG:
+        stale_queued_checkpoint = self._is_stale_queued_checkpoint(run)
+        if run.status != BackfillRunStatus.WAITING_CONFIG and not stale_queued_checkpoint:
             raise BackfillRunConflictError("Backfill is not waiting for mapping approval.")
         config = await self._fetch_repo.find_by_id(run.fetch_config_id)
         if config is None or config.partner != run.partner or not config.enabled:
@@ -219,12 +221,15 @@ class BackfillRunService:
             configVersion=str(config.updated_at),
             mappingVersion=mapping_version,
         )
-        try:
-            submission = await self._workflow_gateway.trigger(command)
-        except WorkflowSubmissionConflict as exc:
-            raise BackfillRunConflictError("Workflow run ID collision.") from exc
-        except WorkflowUnavailable as exc:
-            raise BackfillRunUnavailableError("Workflow orchestration is unavailable.") from exc
+        if stale_queued_checkpoint:
+            submission = await self._retry_stale_queued_checkpoint(run)
+        else:
+            try:
+                submission = await self._workflow_gateway.trigger(command)
+            except WorkflowSubmissionConflict as exc:
+                raise BackfillRunConflictError("Workflow run ID collision.") from exc
+            except WorkflowUnavailable as exc:
+                raise BackfillRunUnavailableError("Workflow orchestration is unavailable.") from exc
 
         orchestration = RuntimeOrchestrationContext(
             dagId=submission.workflow_id,
@@ -246,6 +251,61 @@ class BackfillRunService:
         run.mapping_version = mapping_version
         run.orchestration = orchestration
         return run
+
+    @staticmethod
+    def _is_stale_queued_checkpoint(run: BackfillRun) -> bool:
+        if run.status != BackfillRunStatus.QUEUED or run.orchestration is None:
+            return False
+        current_date = run.current_date
+        return any(
+            day.status == BackfillDayStatus.WAITING_CONFIG
+            and (current_date is None or day.business_date == current_date)
+            for day in run.days
+        )
+
+    async def _retry_stale_queued_checkpoint(self, run: BackfillRun):
+        orchestration = run.orchestration
+        task_state_reader = getattr(self._workflow_gateway, "task_state", None)
+        task_retrier = getattr(self._workflow_gateway, "retry_task", None)
+        if orchestration is None or not callable(task_state_reader) or not callable(task_retrier):
+            raise BackfillRunUnavailableError(
+                "The existing backfill checkpoint cannot be recovered by its workflow provider."
+            )
+
+        task_id = orchestration.task_id or "run_stream"
+        map_index = orchestration.map_index if orchestration.map_index is not None else 0
+        try:
+            task_state = await task_state_reader(
+                orchestration.dag_run_id,
+                task_id=task_id,
+                map_index=map_index,
+            )
+        except Exception as exc:
+            raise BackfillRunUnavailableError(
+                "Unable to inspect the existing backfill workflow."
+            ) from exc
+
+        if str(task_state or "").lower() not in {
+            "success",
+            "failed",
+            "upstream_failed",
+            "up_for_retry",
+        }:
+            raise BackfillRunConflictError(
+                "The existing backfill workflow is still active; wait for it before resuming."
+            )
+        try:
+            return await task_retrier(
+                orchestration.dag_run_id,
+                task_id=task_id,
+                map_index=map_index,
+            )
+        except WorkflowSubmissionConflict as exc:
+            raise BackfillRunConflictError("Workflow run ID collision.") from exc
+        except Exception as exc:
+            raise BackfillRunUnavailableError(
+                "The existing backfill workflow could not be retried."
+            ) from exc
 
     @staticmethod
     def _command_for_run(*, run: BackfillRun, **values: Any) -> ExecuteStreamCommand:

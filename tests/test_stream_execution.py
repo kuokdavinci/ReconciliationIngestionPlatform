@@ -73,6 +73,38 @@ async def test_execute_stream_loads_config_and_normalizes_no_data_result() -> No
 
 
 @pytest.mark.asyncio
+async def test_execute_stream_defaults_to_the_application_runner() -> None:
+    config = _fetch_config()
+    repository = MagicMock()
+    repository.find_by_id = AsyncMock(return_value=config)
+    runner = AsyncMock(
+        return_value={
+            "success": True,
+            "outcome": "NO_NEW_FILE",
+            "runtimeRun": {"id": "runtime-default", "status": "COMPLETED"},
+            "stats": {},
+        }
+    )
+
+    with patch("src.application.automation.service.run_source_stream", runner):
+        result = await execute_stream(
+            ExecuteStreamCommand(
+                fetchConfigId=str(config.id),
+                partner=config.partner,
+                configVersion=str(config.updated_at),
+                reconciliationDate=date(2026, 8, 9),
+            ),
+            db=MagicMock(),
+            config_loader=MagicMock(),
+            fetch_config_repository=repository,
+            checkpoint_repository=_checkpoint_repository(),
+        )
+
+    assert result.runtime_run_id == "runtime-default"
+    assert runner.await_args.kwargs["config"] is config
+
+
+@pytest.mark.asyncio
 async def test_execute_stream_preserves_safe_duplicate_outcome() -> None:
     config = _fetch_config()
     repository = MagicMock()

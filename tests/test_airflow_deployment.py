@@ -76,8 +76,9 @@ def test_airflow_dag_uses_public_sdk_and_global_schedule() -> None:
     assert "ExecuteStreamOutcome.WAITING_REVIEW" in dag_source
     assert "stream_execution_result payload=" in dag_source
     assert "fetchConfigId" in dag_source
-    assert "source_unit_fetched" in (ROOT / "src/scheduler/jobs.py").read_text()
-    assert "sourceUnitKey=" in (ROOT / "src/scheduler/jobs.py").read_text()
+    runner_source = (ROOT / "src/application/automation/stream_runner.py").read_text()
+    assert "source_unit_fetched" in runner_source
+    assert "sourceUnitKey=" in runner_source
     assert "checkpoint={checkpoint}" in dag_source
     assert "counters={counters}" in dag_source
     assert "stream_execution_exception" in dag_source
@@ -106,8 +107,10 @@ def guarded_import(name, *args, **kwargs):
     return real_import(name, *args, **kwargs)
 
 builtins.__import__ = guarded_import
+from src.application.automation import run_source_stream
 from src.scheduler.jobs import run_fetch_config_once
-assert callable(run_fetch_config_once)
+assert callable(run_source_stream)
+assert run_fetch_config_once is run_source_stream
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

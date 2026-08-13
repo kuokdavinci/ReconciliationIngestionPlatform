@@ -11,6 +11,7 @@ from src.application.automation.contracts import (
     ExecuteStreamResult,
 )
 from src.application.automation.stream_identity import stream_identity
+from src.application.automation.stream_runner import run_source_stream
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from src.domain.runtime.models import PartnerRuntimeRunStatus
@@ -59,10 +60,7 @@ async def execute_stream(
             )
         raise
 
-    if runner is None:
-        from src.scheduler.jobs import run_fetch_config_once
-
-        runner = run_fetch_config_once
+    selected_runner = runner or run_source_stream
 
     reconciliation_day = command.reconciliation_date
     if reconciliation_day is None:
@@ -73,7 +71,7 @@ async def execute_stream(
         time.min,
         tzinfo=BUSINESS_TIMEZONE,
     )
-    raw_result = await runner(
+    raw_result = await selected_runner(
         config=config,
         db=db,
         config_loader=config_loader,

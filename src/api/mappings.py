@@ -16,22 +16,30 @@ from src.config.ai_generator import generate_config_from_samples
 from src.config.settings import settings
 from src.config.signature import compute_signature
 from src.core.enums import FileType
-from src.domain.review.models import (
-    CopilotAction,
-    CopilotActionStatus,
-    CopilotActionType,
-)
 from src.infrastructure.review.repository import CopilotActionRepository
 from src.domain.mapping.models import MappingConfig, MappingConfigStatus
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.domain.review.models import (
-    ReviewPacketStatus,
-    ReviewPacket,
     ReviewPacketSourceType,
 )
 from src.infrastructure.review.repository import ReviewPacketRepository
 from src.reconciliation.scope import classify_scope
 from src.application.audit.service import record_audit_event
+from src.application.mapping.errors import (
+    MappingConflictError,
+    MappingNotFoundError,
+    MappingValidationError,
+)
+from src.application.mapping.proposals import (
+    CreateMappingProposalCommand,
+    MappingProposalService,
+)
+from src.application.mapping.service import (
+    ApproveMappingCommand,
+    MappingApplicationService,
+    RejectMappingCommand,
+    SaveMappingCommand,
+)
 from src.domain.mapping.contract import (
     canonicalize_field_mappings,
     serialize_field_mappings,
@@ -90,44 +98,43 @@ def _serialize_config(config: MappingConfig) -> dict:
     return data
 
 
-async def _sync_action_for_config(
-    request: Request,
-    config_id: str,
-    status: CopilotActionStatus,
-    reviewed_by: str | None,
-) -> None:
-    await _get_action_repo(request).collection.update_many(
-        {
-            "$or": [{"draftMappingId": config_id}, {"targetConfigId": config_id}],
-            "status": CopilotActionStatus.PENDING_APPROVAL.value,
-        },
-        {
-            "$set": {
-                "status": status.value,
-                "reviewedAt": datetime.now(timezone.utc),
-                "reviewedBy": reviewed_by,
-            }
-        },
+def _mapping_application_service(request: Request) -> MappingApplicationService:
+    return MappingApplicationService(
+        mapping_repo=_get_repo(request),
+        action_repo=_get_action_repo(request),
+        review_packet_repo=_get_review_packet_repo(request),
+        audit_recorder=lambda **kwargs: record_audit_event(_get_db(request), **kwargs),
+        cache_invalidator=invalidate_insight_cache,
     )
 
 
-async def _sync_review_packets_for_config(
-    request: Request,
-    config_id: str,
-    status: ReviewPacketStatus,
-) -> None:
-    await _get_review_packet_repo(request).collection.update_many(
-        {
-            "$or": [{"draftMappingId": config_id}, {"proposalConfigId": config_id}],
-            "status": "PENDING",
-        },
-        {
-            "$set": {
-                "status": status.value,
-                "reviewedAt": datetime.now(timezone.utc),
-            }
-        },
+def _mapping_proposal_service(request: Request) -> MappingProposalService:
+    async def classify(*, partner: str, reconciliation_date):
+        return await classify_scope(
+            _get_db(request),
+            partner=partner,
+            reconciliation_date=reconciliation_date,
+        )
+
+    return MappingProposalService(
+        mapping_repo=_get_repo(request),
+        action_repo=_get_action_repo(request),
+        review_packet_repo=_get_review_packet_repo(request),
+        signature_builder=compute_signature,
+        config_generator=generate_config_from_samples,
+        scope_classifier=classify,
     )
+
+
+def _mapping_error(error: Exception) -> HTTPException:
+    if isinstance(error, MappingNotFoundError):
+        return HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, MappingConflictError):
+        return HTTPException(status_code=400, detail=str(error))
+    if isinstance(error, MappingValidationError):
+        status = 500 if str(error).startswith("AI mapping generation failed") else 400
+        return HTTPException(status_code=status, detail=str(error))
+    return HTTPException(status_code=500, detail=str(error))
 
 
 class MappingReviewPayload(BaseModel):
@@ -165,85 +172,18 @@ async def approve_mapping_config_action(
     payload: MappingReviewPayload,
 ):
     payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
-    repo = _get_repo(request)
-    config = await repo.find_one({"_id": config_id})
-    if config is None:
-        raise HTTPException(status_code=404, detail="Mapping config not found.")
-    if config.status != MappingConfigStatus.PENDING_APPROVAL:
-        raise HTTPException(status_code=400, detail="Only pending configs can be approved.")
-
-    now = datetime.now(timezone.utc)
-    current_approved = await repo.find_by_partner_and_type(
-        config.partner, config.workflow_type, config.file_type
-    )
-    if current_approved is not None:
-        await repo.collection.update_one(
-            {"_id": str(current_approved.id)},
-            {
-                "$set": {
-                    "status": MappingConfigStatus.SUPERSEDED.value,
-                    "supersededAt": now,
-                    "supersededByConfigId": str(config.id),
-                }
-            },
-        )
-
-    health = dict(config.config_health or {})
-    health.update(
-        {
-            "stale": False,
-            "status": MappingConfigStatus.APPROVED.value,
-            "approvedAt": now,
-        }
-    )
-    if payload.confidence is not None:
-        health["confidence"] = payload.confidence
-    if payload.reasoning is not None:
-        health["reasoning"] = payload.reasoning
-
-    await repo.collection.update_one(
-        {"_id": config_id},
-        {
-            "$set": {
-                "status": MappingConfigStatus.APPROVED.value,
-                "approvedAt": now,
-                "approvedBy": payload.reviewed_by,
-                "configHealth": health,
-            }
-        },
-    )
-    await _sync_action_for_config(
-        request, config_id, CopilotActionStatus.APPROVED, payload.reviewed_by
-    )
-    await _sync_review_packets_for_config(
-        request, config_id, ReviewPacketStatus.APPROVED
-    )
-
-    config.status = MappingConfigStatus.APPROVED
-    config.approved_at = now
-    config.approved_by = payload.reviewed_by
-    config.config_health = health
-
     try:
-        await invalidate_insight_cache(config.partner, date="")
-    except Exception as cache_exc:
-        logger.error(f"Failed to invalidate insight cache for {config.partner}: {cache_exc}")
-
-    await record_audit_event(
-        _get_db(request),
-        entity_type="MAPPING_CONFIG",
-        entity_id=config_id,
-        action="APPROVED",
-        actor=payload.reviewed_by,
-        metadata={
-            "partner": config.partner,
-            "reference": getattr(config, "config_version", None) or str(config.id),
-            "mappingVersion": getattr(config, "config_version", None) or str(config.id),
-            "status": config.status.value,
-        },
-    )
-
-    return {"ok": True, "mapping": _serialize_config(config)}
+        result = await _mapping_application_service(request).approve(
+            ApproveMappingCommand(
+                config_id=config_id,
+                actor=payload.reviewed_by,
+                confidence=payload.confidence,
+                reasoning=payload.reasoning,
+            )
+        )
+        return {"ok": True, "mapping": _serialize_config(result.config)}
+    except Exception as exc:
+        raise _mapping_error(exc) from exc
 
 
 @router.post("/{config_id}/approve")
@@ -261,46 +201,13 @@ async def reject_mapping_config_action(
     payload: MappingReviewPayload,
 ):
     payload.reviewed_by = require_actor(request, payload_actor=payload.reviewed_by)
-    repo = _get_repo(request)
-    config = await repo.find_one({"_id": config_id})
-    if config is None:
-        raise HTTPException(status_code=404, detail="Mapping config not found.")
-    if config.status != MappingConfigStatus.PENDING_APPROVAL:
-        raise HTTPException(status_code=400, detail="Only pending configs can be rejected.")
-
-    health = dict(config.config_health or {})
-    health.update({"status": MappingConfigStatus.REJECTED.value})
-    await repo.collection.update_one(
-        {"_id": config_id},
-        {
-            "$set": {
-                "status": MappingConfigStatus.REJECTED.value,
-                "configHealth": health,
-            }
-        },
-    )
-    await _sync_action_for_config(
-        request, config_id, CopilotActionStatus.REJECTED, payload.reviewed_by
-    )
-    await _sync_review_packets_for_config(
-        request, config_id, ReviewPacketStatus.REJECTED
-    )
-    config.status = MappingConfigStatus.REJECTED
-    config.config_health = health
-    await record_audit_event(
-        _get_db(request),
-        entity_type="MAPPING_CONFIG",
-        entity_id=config_id,
-        action="REJECTED",
-        actor=payload.reviewed_by,
-        metadata={
-            "partner": config.partner,
-            "reference": getattr(config, "config_version", None) or str(config.id),
-            "mappingVersion": getattr(config, "config_version", None) or str(config.id),
-            "status": config.status.value,
-        },
-    )
-    return {"ok": True, "mapping": _serialize_config(config)}
+    try:
+        result = await _mapping_application_service(request).reject(
+            RejectMappingCommand(config_id=config_id, actor=payload.reviewed_by)
+        )
+        return {"ok": True, "mapping": _serialize_config(result.config)}
+    except Exception as exc:
+        raise _mapping_error(exc) from exc
 
 
 @router.post("/{config_id}/reject")
@@ -314,40 +221,17 @@ async def reject_mapping_config(
 
 @router.post("")
 async def save_mapping_config(request: Request, config: MappingConfig):
-    repo = _get_repo(request)
-    query = {
-        "partner": config.partner,
-        "workflowType": config.workflow_type,
-        "fileType": config.file_type.value,
-        "status": MappingConfigStatus.APPROVED.value,
-    }
-    existing = await repo.find_one(query)
-    config_dict = repo._to_mongo(config)
-    
-    # Generate dynamic version if it's missing or generic
-    if not config.config_version or config.config_version in ("v_manual", "v_ai_generated", "latest"):
-        config_dict["configVersion"] = await repo.allocate_next_version(config.partner)
-        
-    health = {
-        "stale": False,
-        "status": MappingConfigStatus.APPROVED.value,
-        "approvedAt": datetime.now(timezone.utc),
-        "confidence": 1.0,
-        "reasoning": "Manually saved by administrator.",
-    }
-    config_dict["configHealth"] = health
-    config_dict["status"] = MappingConfigStatus.APPROVED.value
     try:
-        await invalidate_insight_cache(config.partner, date="")
-    except Exception as cache_exc:
-        logger.error(f"Failed to invalidate insight cache for {config.partner}: {cache_exc}")
-
-    if existing:
-        config_dict["_id"] = existing.id
-        await repo.collection.replace_one({"_id": existing.id}, config_dict)
-        return {"ok": True, "message": "Mapping config updated successfully.", "mapping": config_dict}
-    await repo.collection.insert_one(config_dict)
-    return {"ok": True, "message": "Mapping config created successfully.", "mapping": config_dict}
+        result = await _mapping_application_service(request).save(
+            SaveMappingCommand(config=config)
+        )
+        return {
+            "ok": True,
+            "message": result.message,
+            "mapping": _serialize_config(result.config),
+        }
+    except Exception as exc:
+        raise _mapping_error(exc) from exc
 
 
 async def _create_mapping_proposal_from_source_file(
@@ -357,180 +241,19 @@ async def _create_mapping_proposal_from_source_file(
     source_type: str = ReviewPacketSourceType.UPLOAD.value,
     source_file=None,
 ) -> dict:
-    sig = compute_signature(source_file_path)
-    if not sig.headers:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    config_dict, error = await generate_config_from_samples(
-        partner=partner,
-        headers=sig.headers,
-        sample_rows=sig.sample_rows,
-        known_constants={"provider": partner},
-        header_row_index=sig.header_row_index,
-        first_data_row_index=sig.first_data_row_index,
-    )
-    if error or config_dict is None:
-        raise HTTPException(status_code=500, detail=f"AI mapping generation failed: {error}")
-
-    field_mappings_raw = config_dict.get("fieldMappings") or []
-    field_mappings_serialized, mapping_warnings = canonicalize_field_mappings(
-        serialize_field_mappings(field_mappings_raw)
-    )
-
-    next_ver = await _get_repo(request).allocate_next_version(partner)
-    proposal = MappingConfig(
-        partner=partner,
-        workflowType="UPC",
-        fileType=FileType.SETTLEMENT,
-        sheetName=config_dict.get("sheetName") or "Sheet1",
-        startRow=config_dict.get("startRow") or 2,
-        fieldMappings=field_mappings_serialized,
-        configVersion=next_ver,
-        structureSignature=sig.to_dict(),
-        status=MappingConfigStatus.PENDING_APPROVAL,
-        configHealth={
-            "stale": False,
-            "status": MappingConfigStatus.PENDING_APPROVAL.value,
-            "confidence": config_dict.get("confidence") or 0.85,
-            "reasoning": config_dict.get("reasoning") or "Automatically generated by AI.",
-        },
-    )
-    await _get_repo(request).create(proposal)
-
-    action = CopilotAction(
-        type=CopilotActionType.MAPPING_PROPOSAL,
-        status=CopilotActionStatus.PENDING_APPROVAL,
-        partner=partner,
-        workflowType="UPC",
-        fileType=FileType.SETTLEMENT,
-        draftMappingId=str(proposal.id),
-        payload={
-            "proposedMappings": field_mappings_serialized,
-            "sheetName": proposal.sheet_name,
-            "startRow": proposal.start_row,
-            "confidence": config_dict.get("confidence") or 0.85,
-            "reasoning": config_dict.get("reasoning") or "Automatically generated by AI.",
-            "headers": sig.headers,
-            "sampleRows": sig.sample_rows[:10],
-        },
-        reason="Generated from source file for review",
-    )
-    await _get_action_repo(request).create(action)
-    active_runtime = await _get_repo(request).find_by_partner_and_type(
-        partner, "UPC", FileType.SETTLEMENT
-    )
-    scope_meta = await classify_scope(
-        _get_db(request),
-        partner=partner,
-        reconciliation_date=None,
-    )
-    validation_gates = [
-        {
-            "gateKey": "structure_signature",
-            "label": "Structure signature generated",
-            "status": "pass",
-            "reason": "File headers and shape were fingerprinted successfully.",
-        },
-        {
-            "gateKey": "required_fields",
-            "label": "Required fields proposed",
-            "status": "pass" if any(m.get("path") in {"id", "amount", "transDate"} for m in field_mappings_serialized) else "warn",
-            "reason": "AI generated canonical fields for settlement parsing.",
-        },
-        {
-            "gateKey": "runtime_impact",
-            "label": "Runtime impact assessed",
-            "status": "warn" if active_runtime else "warn",
-            "reason": "Approved runtime config will be kept until reviewer decides." if active_runtime else "No approved runtime config exists yet.",
-        },
-    ]
-    recommended_action_type = "APPROVE_AND_ACTIVATE_NEXT_RUNTIME" if active_runtime else "APPROVE_REQUIRED_BEFORE_RUNTIME"
-    recommended_reason = (
-        "Structure changed from the currently approved runtime; use the old runtime until review completes."
-        if active_runtime
-        else "No approved runtime config exists, so this draft must be reviewed before ingestion can continue."
-    )
-    packet = ReviewPacket(
-        sourceType=ReviewPacketSourceType(source_type),
-        partner=partner,
-        fileName=source_file_path.name,
-        fileTypeDetected=FileType.SETTLEMENT.value,
-        structureSignature=proposal.structure_signature,
-        activeRuntimeConfigId=str(active_runtime.id) if active_runtime else None,
-        draftMappingId=str(proposal.id),
-        targetActionId=str(action.id),
-        sourceFileId=str(source_file.id) if source_file is not None else None,
-        sourceFilePath=str(source_file_path),
-        scopeType=scope_meta["scopeType"],
-        scopeConfidence=scope_meta["scopeConfidence"],
-        scopeReason=scope_meta["scopeReason"],
-        scopeSignals=scope_meta["scopeSignals"],
-        recommendedAction={
-            "actionType": recommended_action_type,
-            "reason": recommended_reason,
-            "confidence": config_dict.get("confidence") or 0.85,
-        },
-        parseStrategy={
-            "sheetName": proposal.sheet_name,
-            "startRow": proposal.start_row,
-            "fieldMappingCount": len(field_mappings_serialized),
-            "strategy": "AI inferred spreadsheet draft mapping",
-        },
-        validationGates=validation_gates,
-        samplePreview=[
-            {"rowIndex": idx + 1, "values": row}
-            for idx, row in enumerate(sig.sample_rows[:5])
-        ],
-        riskSummary={
-            "severity": "high" if not active_runtime else "medium",
-            "summary": recommended_reason,
-        },
-        runtimeDecisionHint=(
-            "KEEP_CURRENT_RUNTIME_UNTIL_APPROVED" if active_runtime else "BLOCK_UNTIL_APPROVED"
-        ),
-    )
-    await _get_review_packet_repo(request).create(packet)
-
-    confidence_scores = {
-        mapping["path"]: config_dict.get("confidence", 0.85)
-        for mapping in field_mappings_serialized
-        if mapping.get("path")
-    }
-
-    response_config = {
-        "partner": partner,
-        "workflowType": "UPC",
-        "fileType": "SETTLEMENT",
-        "sheetName": proposal.sheet_name,
-        "startRow": proposal.start_row,
-        "configVersion": proposal.config_version,
-        "fieldMappings": field_mappings_serialized,
-        "status": MappingConfigStatus.PENDING_APPROVAL.value,
-        "configHealth": proposal.config_health,
-    }
-    return {
-        "ok": True,
-        "mapping": field_mappings_serialized,
-        "confidenceScores": confidence_scores,
-        "warnings": mapping_warnings,
-        "suggestedConstants": [
-            {"path": "currency", "constant": "VND", "reason": "Default settlement currency"}
-        ],
-        "config": response_config,
-        "configStatus": MappingConfigStatus.PENDING_APPROVAL.value,
-        "draftMappingId": str(proposal.id),
-        "reviewItemId": str(packet.id),
-        "isRuntimeEligible": False,
-        "scopeAssessment": scope_meta,
-        "planSummary": {
-            "sheetName": proposal.sheet_name,
-            "startRow": proposal.start_row,
-            "fieldMappingCount": len(field_mappings_serialized),
-        },
-        "headers": sig.headers,
-        "sampleRows": sig.sample_rows[:10],
-    }
-
+    try:
+        result = await _mapping_proposal_service(request).create_from_source_file(
+            CreateMappingProposalCommand(
+                partner=partner,
+                source_file_path=source_file_path,
+                source_type=source_type,
+                source_file=source_file,
+            )
+        )
+        return result.response
+    except MappingValidationError as exc:
+        status_code = 500 if str(exc).startswith("AI mapping generation failed") else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 async def _create_mapping_proposal_from_upload(
     request: Request,

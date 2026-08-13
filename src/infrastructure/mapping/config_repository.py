@@ -138,6 +138,13 @@ class MappingConfigRepository(BaseRepository[MappingConfig]):
         )
         return result.modified_count > 0
 
+    async def update_pending_draft(self, config_id: str, updates: dict[str, Any]) -> bool:
+        result = await self.collection.update_one(
+            {"_id": str(config_id), "status": MappingConfigStatus.PENDING_APPROVAL.value},
+            {"$set": updates},
+        )
+        return result.modified_count > 0
+
     async def replace_approved(self, config: MappingConfig) -> MappingConfig:
         data = self._to_mongo(config)
         await self.collection.replace_one({"_id": data["_id"]}, data)

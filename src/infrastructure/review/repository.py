@@ -115,6 +115,48 @@ class ReviewPacketRepository(BaseRepository[ReviewPacket]):
         )
         return result.modified_count
 
+    async def update_mapping_draft(
+        self,
+        *,
+        packet_id: str,
+        draft_mapping_id: str,
+        draft_mapping_version: str,
+        parse_strategy: dict,
+        validation_gates: list[dict],
+    ) -> bool:
+        result = await self.collection.update_one(
+            {"_id": str(packet_id), "status": ReviewPacketStatus.PENDING.value},
+            {
+                "$set": {
+                    "draftMappingId": draft_mapping_id,
+                    "draftMappingVersion": draft_mapping_version,
+                    "parseStrategy": parse_strategy,
+                    "validationGates": validation_gates,
+                }
+            },
+        )
+        modified_count = getattr(result, "modified_count", 0)
+        return modified_count > 0 if isinstance(modified_count, int) else True
+
+    async def update_scope_evidence(
+        self,
+        *,
+        packet_id: str,
+        internal_record_count: int,
+        internal_preview: list[dict],
+    ) -> bool:
+        result = await self.collection.update_one(
+            {"_id": str(packet_id)},
+            {
+                "$set": {
+                    "internalRecordCount": internal_record_count,
+                    "internalPreview": internal_preview,
+                }
+            },
+        )
+        modified_count = getattr(result, "modified_count", 0)
+        return modified_count > 0 if isinstance(modified_count, int) else True
+
 
 class CopilotActionRepository(BaseRepository[CopilotAction]):
     """Repository for copilot approval items."""

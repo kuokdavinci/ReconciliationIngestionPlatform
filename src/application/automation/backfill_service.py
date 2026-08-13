@@ -222,7 +222,7 @@ class BackfillRunService:
             mappingVersion=mapping_version,
         )
         if stale_queued_checkpoint:
-            submission = await self._retry_stale_queued_checkpoint(run)
+            submission = await self._recover_stale_queued_checkpoint(run, command)
         else:
             try:
                 submission = await self._workflow_gateway.trigger(command)
@@ -254,20 +254,27 @@ class BackfillRunService:
 
     @staticmethod
     def _is_stale_queued_checkpoint(run: BackfillRun) -> bool:
-        if run.status != BackfillRunStatus.QUEUED or run.orchestration is None:
+        if (
+            run.status not in {BackfillRunStatus.QUEUED, BackfillRunStatus.RUNNING}
+            or run.orchestration is None
+        ):
             return False
         current_date = run.current_date
         return any(
-            day.status == BackfillDayStatus.WAITING_CONFIG
+            day.status in {BackfillDayStatus.WAITING_CONFIG, BackfillDayStatus.RUNNING}
             and (current_date is None or day.business_date == current_date)
             for day in run.days
         )
 
-    async def _retry_stale_queued_checkpoint(self, run: BackfillRun):
+    async def _recover_stale_queued_checkpoint(
+        self,
+        run: BackfillRun,
+        command: ExecuteStreamCommand,
+    ):
         orchestration = run.orchestration
         task_state_reader = getattr(self._workflow_gateway, "task_state", None)
         task_retrier = getattr(self._workflow_gateway, "retry_task", None)
-        if orchestration is None or not callable(task_state_reader) or not callable(task_retrier):
+        if orchestration is None or not callable(task_state_reader):
             raise BackfillRunUnavailableError(
                 "The existing backfill checkpoint cannot be recovered by its workflow provider."
             )
@@ -285,7 +292,8 @@ class BackfillRunService:
                 "Unable to inspect the existing backfill workflow."
             ) from exc
 
-        if str(task_state or "").lower() not in {
+        normalized_task_state = str(task_state or "").lower()
+        if normalized_task_state not in {
             "success",
             "failed",
             "upstream_failed",
@@ -293,6 +301,61 @@ class BackfillRunService:
         }:
             raise BackfillRunConflictError(
                 "The existing backfill workflow is still active; wait for it before resuming."
+            )
+
+        current_day = next(
+            (
+                day
+                for day in run.days
+                if run.current_date is None or day.business_date == run.current_date
+            ),
+            None,
+        )
+        if normalized_task_state == "success" and (
+            current_day is None or current_day.status != BackfillDayStatus.WAITING_CONFIG
+        ):
+            raise BackfillRunConflictError(
+                "The workflow completed but the backfill checkpoint was not finalized."
+            )
+
+        await self._backfill_repo.update_day(
+            str(run.id),
+            current_day.business_date.isoformat() if current_day is not None else str(run.current_date),
+            status=BackfillDayStatus.WAITING_CONFIG.value,
+            message="Recovered after a stale backfill orchestration checkpoint.",
+        )
+        if current_day is not None:
+            current_day.status = BackfillDayStatus.WAITING_CONFIG
+            current_day.message = "Recovered after a stale backfill orchestration checkpoint."
+        await self._backfill_repo.update_status(
+            str(run.id),
+            status=BackfillRunStatus.QUEUED.value,
+            approvalRequired=False,
+            currentDate=run.current_date,
+        )
+
+        # The deterministic seed DAG may point to a deleted fetch config. Use
+        # a stable resume runtime id so the fresh command carries current
+        # config identifiers without creating a new application backfill.
+        if orchestration.dag_run_id == f"manual__{run.id}":
+            fresh_command = self._command_for_run(
+                run=run,
+                fetchConfigId=command.fetch_config_id,
+                partner=command.partner,
+                configVersion=command.config_version,
+                mappingVersion=command.mapping_version,
+                runtimeRunId=f"{run.id}:approval-retry",
+            )
+            try:
+                return await self._workflow_gateway.trigger(fresh_command)
+            except WorkflowSubmissionConflict as exc:
+                raise BackfillRunConflictError("Workflow run ID collision.") from exc
+            except WorkflowUnavailable as exc:
+                raise BackfillRunUnavailableError("Workflow orchestration is unavailable.") from exc
+
+        if not callable(task_retrier):
+            raise BackfillRunUnavailableError(
+                "The existing backfill checkpoint cannot be retried by its workflow provider."
             )
         try:
             return await task_retrier(
@@ -310,10 +373,11 @@ class BackfillRunService:
     @staticmethod
     def _command_for_run(*, run: BackfillRun, **values: Any) -> ExecuteStreamCommand:
         mapping_version = values.pop("mappingVersion", run.mapping_version)
+        runtime_run_id = values.pop("runtimeRunId", str(run.id))
         return ExecuteStreamCommand(
             **values,
             mode=IngestionMode.BACKFILL,
-            runtimeRunId=str(run.id),
+            runtimeRunId=runtime_run_id,
             correlationId=f"backfill:{run.id}",
             mappingVersion=mapping_version,
             backfillRunId=str(run.id),

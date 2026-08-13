@@ -63,6 +63,18 @@ class _FakeBackfillRepo:
             setattr(run, aliases.get(key, key), value)
         return True
 
+    async def update_day(self, backfill_run_id: str, business_date: str, **changes):
+        run = self.by_id[backfill_run_id]
+        for day in run.days:
+            if day.business_date.isoformat() == business_date:
+                aliases = {
+                    "runtimeRunId": "runtime_run_id",
+                }
+                for key, value in changes.items():
+                    setattr(day, aliases.get(key, key), value)
+                return True
+        return False
+
 
 def _config(*, enabled: bool = True) -> FetchConfig:
     return FetchConfig(
@@ -279,16 +291,16 @@ async def test_resume_after_approval_retries_stale_queued_checkpoint_task():
     from src.domain.runtime.models import RuntimeOrchestrationContext
 
     gateway = SimpleNamespace(
-        trigger=AsyncMock(),
-        task_state=AsyncMock(return_value="success"),
-        retry_task=AsyncMock(
+        trigger=AsyncMock(
             return_value=WorkflowSubmission(
                 provider=WorkflowProvider.AIRFLOW,
                 workflowId="reconciliation_ingestion",
-                workflowRunId="manual__backfill-stale",
-                state=WorkflowSubmissionState.RETRIED,
+                workflowRunId="manual__backfill-stale:approval-retry",
+                state=WorkflowSubmissionState.SUBMITTED,
             )
         ),
+        task_state=AsyncMock(return_value="success"),
+        retry_task=AsyncMock(),
     )
     repo = _FakeBackfillRepo()
     service = BackfillRunService(
@@ -308,7 +320,7 @@ async def test_resume_after_approval_retries_stale_queued_checkpoint_task():
     waiting_run.approval_required = False
     waiting_run.orchestration = RuntimeOrchestrationContext(
         dagId="reconciliation_ingestion",
-        dagRunId="manual__backfill-stale",
+        dagRunId=f"manual__{waiting_run.id}",
         taskId="run_stream",
         correlationId=f"backfill:{waiting_run.id}",
     )
@@ -320,17 +332,68 @@ async def test_resume_after_approval_retries_stale_queued_checkpoint_task():
     )
 
     assert resumed.status == BackfillRunStatus.QUEUED
-    gateway.trigger.assert_not_awaited()
+    gateway.trigger.assert_awaited_once()
+    command = gateway.trigger.await_args.args[0]
+    assert command.runtime_run_id == f"{waiting_run.id}:approval-retry"
+    assert command.fetch_config_id == str(waiting_run.fetch_config_id)
     gateway.task_state.assert_awaited_once_with(
-        "manual__backfill-stale",
+        f"manual__{waiting_run.id}",
         task_id="run_stream",
         map_index=0,
     )
-    gateway.retry_task.assert_awaited_once_with(
-        "manual__backfill-stale",
-        task_id="run_stream",
-        map_index=0,
+    gateway.retry_task.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resume_after_approval_requeues_failed_running_checkpoint():
+    from src.application.automation.backfill_service import BackfillRunService
+    from src.domain.backfill.models import BackfillDayStatus, BackfillRunStatus
+    from src.domain.runtime.models import RuntimeOrchestrationContext
+
+    gateway = SimpleNamespace(
+        trigger=AsyncMock(
+            return_value=WorkflowSubmission(
+                provider=WorkflowProvider.AIRFLOW,
+                workflowId="reconciliation_ingestion",
+                workflowRunId="manual__backfill-stale:approval-retry",
+                state=WorkflowSubmissionState.SUBMITTED,
+            )
+        ),
+        task_state=AsyncMock(return_value="failed"),
+        retry_task=AsyncMock(),
     )
+    repo = _FakeBackfillRepo()
+    service = BackfillRunService(
+        fetch_repo=_FakeFetchRepo(_config()),
+        backfill_repo=repo,
+        workflow_gateway=gateway,
+        approved_mapping_version_finder=AsyncMock(return_value=None),
+    )
+
+    run = await service.start(
+        partner="VNPAY",
+        actor="ops-user",
+        from_date=date(2026, 8, 10),
+        to_date=date(2026, 8, 11),
+    )
+    run.status = BackfillRunStatus.RUNNING
+    run.orchestration = RuntimeOrchestrationContext(
+        dagId="reconciliation_ingestion",
+        dagRunId=f"manual__{run.id}",
+        taskId="run_stream",
+        correlationId=f"backfill:{run.id}",
+    )
+    run.days[0].status = BackfillDayStatus.RUNNING
+
+    resumed = await service.resume_after_approval(
+        backfill_run_id=str(run.id),
+        mapping_version="VNPAY_BACKFILL_V1",
+    )
+
+    assert resumed.status == BackfillRunStatus.QUEUED
+    assert resumed.days[0].status == BackfillDayStatus.WAITING_CONFIG
+    gateway.trigger.assert_awaited_once()
+    gateway.retry_task.assert_not_awaited()
 
 
 def test_serialize_backfill_run_exposes_status_and_day_progress():

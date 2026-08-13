@@ -5,12 +5,14 @@ from src.domain.fetch_config.models import FetchMethod
 from scripts.demo.sprint2.seed_vnpay_filedrop_backfill import (
     DEFAULT_PARTNER,
     build_backfill_dates,
+    build_backfill_run,
     build_draft_mapping,
     build_fetch_config,
     build_internal_preview,
     build_internal_transactions,
     build_review_packet,
     build_source_filename,
+    SEED_BACKFILL_RUN_ID,
 )
 
 
@@ -60,3 +62,36 @@ def test_vnpay_fixture_seeds_internal_rows_for_review_evidence():
     ]
     assert len(build_internal_preview(day)) == packet["internalRecordCount"] == 3
     assert packet["internalPreview"][0]["partnerTxnId"] == "TRACE_20260810_001"
+    assert packet["structureSignature"]["headers"] == ["id", "trace", "amount", "status", "transDate"]
+    assert packet["structureSignature"]["columnCount"] == 5
+
+
+def test_vnpay_fixture_seeds_waiting_checkpoint_at_first_business_date():
+    run = build_backfill_run(
+        date(2026, 8, 10),
+        date(2026, 8, 13),
+        "vnpay-fetch-config",
+        f"{SEED_BACKFILL_RUN_ID}-packet-20260810",
+    )
+
+    assert run["_id"] == SEED_BACKFILL_RUN_ID
+    assert run["status"] == "WAITING_CONFIG"
+    assert run["currentDate"] == "2026-08-10"
+    assert run["approvalRequired"] is True
+    assert run["approvalContext"]["reviewPacketId"].endswith("20260810")
+    assert [day["businessDate"] for day in run["days"]] == [
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-12",
+        "2026-08-13",
+    ]
+
+
+def test_vnpay_fixture_links_review_packet_to_waiting_checkpoint():
+    packet = build_review_packet(
+        date(2026, 8, 10),
+        Path("mock_data/settlement_VNPAY_20260810.xlsx"),
+        backfill_run_id=SEED_BACKFILL_RUN_ID,
+    )
+
+    assert packet["backfillRunId"] == SEED_BACKFILL_RUN_ID

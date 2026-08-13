@@ -29,6 +29,18 @@ Phạm vi đầu tiên đã được triển khai với Airflow `3.3.0`, `LocalE
   `AIRFLOW_GLOBAL_SCHEDULE=none`; APScheduler control plane đã được decommission
   sau khi VNPAY backfill đạt 3/3 ngày `COMPLETED`.
 
+### Review/schedule hardening hiện tại
+
+- Review Step 3 mặc định chỉ hiển thị phần tổng quan; trace samples được mở
+  theo yêu cầu để tránh modal bị dài và khó đọc.
+- Packet sinh trong backfill luôn mang `backfillRunId`; packet pending được
+  chọn theo đúng `reconciliationDate`, tránh nối nhầm packet của ngày khác.
+- Schedules có action **Open pending review**, **Backfill date range** và
+  **View runtime details** trong overflow menu. Polling dùng request sequence
+  để response cũ không ghi đè state mới khi run chuyển sang `WAITING_REVIEW`.
+- Runtime timeline phân biệt completed (xanh), waiting/processing (amber) và
+  failed/blocked (đỏ); màu đỏ chỉ dùng cho lỗi.
+
 Các file vận hành chính: `Dockerfile.airflow`, `requirements-airflow.txt`, `docker-compose.yml`, `dags/reconciliation_ingestion.py` và `docker/bootstrap-airflow-db.sh`.
 
 ### ViettelPay live pilot evidence

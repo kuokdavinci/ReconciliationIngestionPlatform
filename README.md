@@ -100,6 +100,12 @@ Supported scope decisions include `FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLAC
 
 Review packets coordinate scope analysis, mapping review, runtime validation and approval decisions. The main route group is `/api/v1/review-packets`.
 
+For an ordered backfill, the packet is linked to the durable parent through
+`backfillRunId` and the current business date. Guided Review can therefore show
+the backfill's daily progress and resume the same Airflow parent after mapping
+approval. The Schedules page also exposes a direct **Open pending review**
+action when a scheduler packet is available.
+
 ### 4. Scheduled automation
 
 The default Compose stack uses Airflow as the only application orchestrator.
@@ -184,6 +190,11 @@ npm --prefix frontend-next run dev
 Dashboard: <http://localhost:3000>
 
 The dashboard proxies `/api/*` requests to the backend at `http://localhost:8000`.
+
+The Schedules page ignores late responses from older polling requests, so a
+terminal `WAITING_REVIEW` or `FAILED` state cannot be overwritten by a slower
+`RUNNING` response. Runtime details use amber markers for waiting/processing
+states and reserve red for failed or blocked events.
 
 The Schedules page exposes a compact action grid for each configured partner.
 For FileDrop backfills, an operator selects an inclusive date range, then

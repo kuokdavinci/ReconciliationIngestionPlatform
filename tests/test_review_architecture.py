@@ -187,6 +187,7 @@ async def test_reused_pending_review_packet_tracks_latest_source_file() -> None:
             source_file_id="new-file-001",
             source_file_path="/tmp/settlement_MOMO_phase2.xlsx",
             reconciliation_date=datetime(2026, 8, 6, tzinfo=timezone.utc),
+            backfill_run_id="backfill-001",
         )
 
     assert result == (pending_config, existing_action)
@@ -195,6 +196,7 @@ async def test_reused_pending_review_packet_tracks_latest_source_file() -> None:
     assert query == {"_id": "packet-001", "status": "PENDING"}
     assert update["sourceFileId"] == "new-file-001"
     assert update["sourceFilePath"] == "/tmp/settlement_MOMO_phase2.xlsx"
+    assert update["backfillRunId"] == "backfill-001"
 
 
 @pytest.mark.asyncio
@@ -323,9 +325,11 @@ async def test_new_review_packet_keeps_all_page_samples(tmp_path) -> None:
             source_file_id="page-3",
             source_file_path=page_paths[-1],
             reconciliation_date=datetime(2026, 8, 10, tzinfo=timezone.utc),
+            backfill_run_id="backfill-001",
         )
 
     packet = packet_repo.create.await_args.args[0]
+    assert packet.backfill_run_id == "backfill-001"
     assert len(packet.sample_preview) == 6
     assert [row["values"][0] for row in packet.sample_preview] == [
         "VTP-001",

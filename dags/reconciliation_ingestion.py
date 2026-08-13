@@ -39,6 +39,7 @@ SUCCESS_OUTCOMES = {
     ExecuteStreamOutcome.COMPLETED,
     ExecuteStreamOutcome.NO_DATA,
     ExecuteStreamOutcome.ALREADY_PROCESSED,
+    ExecuteStreamOutcome.SAFE_DUPLICATE,
     # Missing/changed mapping configuration is an operator gate, not a task
     # failure.  The application runtime remains WAITING_REVIEW and the
     # generated review packet is the source of truth for the next action.
@@ -136,6 +137,8 @@ async def _execute_backfill(command: ExecuteStreamCommand, task_instance, dag_ru
                         "correlationId": day_command.correlation_id,
                     }
                 )
+            if day_command.reconciliation_date is None:
+                raise ValueError("Backfill day reconciliation date is required.")
             day_runtime = await create_runtime_run(
                 db,
                 partner=day_command.partner,
@@ -156,11 +159,23 @@ async def _execute_backfill(command: ExecuteStreamCommand, task_instance, dag_ru
             )
             payload = result.model_dump(by_alias=True, mode="json")
             if payload.get("outcome") == ExecuteStreamOutcome.WAITING_REVIEW:
+                packet_query: dict[str, Any] = {
+                    "partner": child_command.partner,
+                    "status": "PENDING",
+                }
+                if child_command.reconciliation_date is not None:
+                    day_start = pendulum.datetime(
+                        child_command.reconciliation_date.year,
+                        child_command.reconciliation_date.month,
+                        child_command.reconciliation_date.day,
+                        tz="Asia/Ho_Chi_Minh",
+                    )
+                    packet_query["reconciliationDate"] = {
+                        "$gte": day_start,
+                        "$lt": day_start.add(days=1),
+                    }
                 packet = await db["review_packet"].find_one(
-                    {
-                        "partner": child_command.partner,
-                        "status": "PENDING",
-                    },
+                    packet_query,
                     projection={"_id": 1},
                     sort=[("createdAt", -1)],
                 )

@@ -3,24 +3,34 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import type { BackfillRun } from "@/types/schedules";
 import styles from "./backfill.module.css";
 
 interface Props {
   partner: string | null;
+  activeBackfill?: BackfillRun | null;
   open: boolean;
   submitting?: boolean;
   onClose: () => void;
   onSubmit: (fromDate: string, toDate: string) => Promise<void>;
 }
 
-function isoDate(date: Date) {
-  return date.toISOString().slice(0, 10);
+function businessDateToday() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
-export function BackfillDialog({ partner, open, submitting = false, onClose, onSubmit }: Props) {
-  const today = useMemo(() => new Date(), []);
-  const [fromDate, setFromDate] = useState(() => isoDate(new Date(today.getTime() - 3 * 86_400_000)));
-  const [toDate, setToDate] = useState(() => isoDate(today));
+export function BackfillDialog({ partner, activeBackfill = null, open, submitting = false, onClose, onSubmit }: Props) {
+  const today = useMemo(() => businessDateToday(), []);
+  const checkpointDate = activeBackfill?.currentDate || activeBackfill?.fromDate || today;
+  const checkpointToDate = activeBackfill?.toDate || checkpointDate;
+  const [fromDate, setFromDate] = useState(checkpointDate);
+  const [toDate, setToDate] = useState(checkpointToDate);
+
   const invalidRange = Boolean(fromDate && toDate && fromDate > toDate);
   const dayCount = (() => {
     if (!fromDate || !toDate || invalidRange) return 0;
@@ -53,7 +63,11 @@ export function BackfillDialog({ partner, open, submitting = false, onClose, onS
         {invalidRange && <p className={styles.error} role="alert">From date must be on or before to date.</p>}
         <div className={styles.preview}>
           <strong>{dayCount} business day{dayCount === 1 ? "" : "s"}</strong>
-          <span>Sequential execution · scheduled checkpoint isolated</span>
+          <span>
+            {activeBackfill
+              ? `Checkpoint found · continuing from ${checkpointDate}`
+              : `No backfill checkpoint found · defaulting to ${today}`}
+          </span>
         </div>
         <div className={styles.footer}>
           <Button type="button" variant="tertiary" onClick={onClose}>Cancel</Button>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { getReviewPacketRawRecords } from "@/lib/api/review-center";
 import type { RawStreamPage, RawStreamRow, ReviewPacket } from "@/types/review-center";
@@ -33,9 +33,10 @@ interface Props {
   packet: ReviewPacket;
   packetId: string;
   highlightedColumns?: string[];
+  onColumnsDetected?: (count: number) => void;
 }
 
-export function GuidedReviewRawStreamPanel({ packet, packetId, highlightedColumns = [] }: Props) {
+export function GuidedReviewRawStreamPanel({ packet, packetId, highlightedColumns = [], onColumnsDetected }: Props) {
   const [data, setData] = useState<RawStreamPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -60,6 +61,9 @@ export function GuidedReviewRawStreamPanel({ packet, packetId, highlightedColumn
     }
     return Array.from(names);
   }, [data?.rows]);
+  useEffect(() => {
+    if (columns.length > 0) onColumnsDetected?.(columns.length);
+  }, [columns.length, onColumnsDetected]);
   const fileScopedEvidence = Boolean(
     packet.sourceFilePath &&
     (!packet.rawStageKey || packet.rawStageKey.includes(":FILEDROP:") || packet.rawStageKey.includes(":SFTP:")),
@@ -68,14 +72,28 @@ export function GuidedReviewRawStreamPanel({ packet, packetId, highlightedColumn
   const toggleExpanded = () => {
     const nextExpanded = !expanded;
     setExpanded(nextExpanded);
-    if (nextExpanded) void loadPage(0);
+    if (nextExpanded && !data) void loadPage(0);
   };
 
+  // Load a bounded page early so Step 2 can show the available partner-column
+  // count even when older packets have no structure signature attached.
+  useEffect(() => {
+    const preload = async () => {
+      if (!data) await loadPage(0);
+    };
+    void preload();
+  }, [data, loadPage]);
+
   return (
-    <section className={styles.rawStreamPanel} aria-label="Retained raw stream records">
+    <section
+      className={styles.rawStreamPanel}
+      aria-label={fileScopedEvidence ? "Source file records" : "Retained raw stream records"}
+    >
       <div className={styles.sectionCardHeading}>
         <div>
-          <h5 className={styles.sectionCardTitle}>Partner records for mapping</h5>
+          <h5 className={styles.sectionCardTitle}>
+            {fileScopedEvidence ? "Partner source file records" : "Partner retained stream records"}
+          </h5>
           <p className={styles.sectionCardCopy}>
             {!fileScopedEvidence
               ? "Records are read from the retained raw stream that approval will replay. The table is paginated so large streams stay outside the packet payload."

@@ -110,6 +110,29 @@ async def test_reads_file_scoped_rows_when_packet_has_no_raw_stage(tmp_path: Pat
     assert result["rows"][0]["sourceUnitKey"] == "settlement.csv"
 
 
+@pytest.mark.asyncio
+async def test_file_reader_uses_parse_strategy_when_structure_signature_is_missing(tmp_path: Path):
+    source = tmp_path / "settlement.csv"
+    source.write_text("id,amount\nMOMO-001,100\nMOMO-002,200\n")
+    packet = ReviewPacket(
+        _id="packet-file-2",
+        sourceType="SCHEDULER_JOB",
+        partner="MOMO",
+        fileName="settlement.csv",
+        fileTypeDetected="SETTLEMENT",
+        sourceFilePath=str(source),
+        parseStrategy={"startRow": 2},
+    )
+
+    result = await read_review_stream_page(db=object(), packet=packet, offset=0, limit=50)
+
+    assert result["totalRecords"] == 2
+    assert [row["values"] for row in result["rows"]] == [
+        ("MOMO-001", "100"),
+        ("MOMO-002", "200"),
+    ]
+
+
 def test_resolves_airflow_source_path_inside_api_container(tmp_path: Path):
     source = tmp_path / "settlement.xlsx"
     source.write_bytes(b"fixture")

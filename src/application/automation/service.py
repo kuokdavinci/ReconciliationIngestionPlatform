@@ -83,6 +83,7 @@ async def execute_stream(
         runtime_run_id=command.runtime_run_id,
         orchestration=_orchestration_payload(command),
         mapping_config_version=command.mapping_version,
+        backfill_run_id=command.backfill_run_id,
         raise_on_unexpected=True,
     )
     result = _normalize_result(raw_result)
@@ -182,6 +183,8 @@ def _map_outcome(
         return ExecuteStreamOutcome.BLOCKED
     if not raw_result.get("success"):
         return ExecuteStreamOutcome.FAILED
+    if raw_outcome == "SAFE_DUPLICATE":
+        return ExecuteStreamOutcome.SAFE_DUPLICATE
     if raw_result.get("streamAlreadyCompleted") or raw_outcome in {
         "FETCH_UNIT_REPLAY",
         "FILE_DUPLICATE",

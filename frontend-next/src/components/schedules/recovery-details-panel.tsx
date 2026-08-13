@@ -30,6 +30,14 @@ function unitSymbol(status: RecoveryUnitSummary["status"]) {
   return "○";
 }
 
+function eventSymbol(status: string) {
+  const normalized = status.toUpperCase();
+  if (["COMPLETED", "SKIPPED", "REPLAYED"].includes(normalized)) return "✓";
+  if (["FAILED", "BLOCKED"].includes(normalized)) return "!";
+  if (["PROCESSING", "PENDING", "WAITING_REVIEW"].includes(normalized)) return "•";
+  return "○";
+}
+
 function unitLabel(unit: RecoveryUnitSummary) {
   return unit.label || (unit.page ? `Page ${unit.page}` : unit.unitKey);
 }
@@ -53,6 +61,12 @@ export function RecoveryDetailsPanel({
   const [resolutionDraft, setResolutionDraft] = useState({ partner: "", reason: "" });
   const isOpen = Boolean(job?.recovery);
   const recovery = job?.recovery;
+  const runtimeRun = job?.latestRuntimeRun;
+  const runtimeStats = runtimeRun?.stats || {};
+  const isSafeDuplicate = job?.safeDuplicate === true
+    || recovery?.safeDuplicate === true
+    || runtimeStats.safeDuplicate === true
+    || ["FILE_DUPLICATE", "FETCH_UNIT_REPLAY", "NO_NEW_FILE", "SAFE_DUPLICATE"].includes(String(runtimeStats.outcome));
   const resolutionReason = resolutionDraft.partner === (job?.partner || "")
     ? resolutionDraft.reason
     : "";
@@ -114,9 +128,31 @@ export function RecoveryDetailsPanel({
 
         <div className={styles.recoveryPanelBody}>
           <div className={styles.recoveryStatusHeader}>
-            <Badge severity={statusSeverity(recovery.status)}>{recovery.status}</Badge>
+            <Badge severity={isSafeDuplicate ? "low" : statusSeverity(recovery.status)}>
+              {isSafeDuplicate ? "SAFE DUPLICATE" : recovery.status}
+            </Badge>
             <span className={styles.recoveryStreamKey}>{recovery.streamKey || "No stream identity"}</span>
           </div>
+
+          {runtimeRun && (
+            <section className={styles.runtimeResultCard} aria-labelledby="runtime-result-title">
+              <div className={styles.runtimeResultHeader}>
+                <h3 id="runtime-result-title" className={styles.recoverySectionTitle}>Runtime result</h3>
+                {isSafeDuplicate && <Badge severity="low">Skipped safely</Badge>}
+              </div>
+              <dl className={styles.recoveryMetaGrid}>
+                <div><dt>Status</dt><dd>{isSafeDuplicate ? "SAFE_DUPLICATE" : runtimeRun.status || "-"}</dd></div>
+                <div><dt>Runtime ID</dt><dd>{runtimeRun.id || runtimeRun._id || "-"}</dd></div>
+                <div><dt>Source outcome</dt><dd>{String(runtimeStats.duplicateSourceOutcome || runtimeStats.outcome || "-")}</dd></div>
+                <div><dt>Reconciliation</dt><dd>{runtimeRun.reconciliationCount ?? "Skipped"}</dd></div>
+              </dl>
+              <p className={styles.recoveryRuntimeMessage}>
+                {isSafeDuplicate
+                  ? job?.duplicateMessage || recovery?.duplicateMessage || runtimeRun.message || "The source was already processed and no new records were written."
+                  : runtimeRun.message || "-"}
+              </p>
+            </section>
+          )}
 
           <dl className={styles.recoveryMetaGrid}>
             <div><dt>Last completed</dt><dd>{recovery.lastCompletedUnitKey || "-"}</dd></div>
@@ -154,20 +190,30 @@ export function RecoveryDetailsPanel({
               <p className={styles.recoveryEmpty}>No persisted recovery events are available yet.</p>
             ) : (
               <ol className={styles.recoveryEventList}>
-                {recovery.events.map((event) => (
-                  <li key={event.eventId} className={styles.recoveryEventItem}>
-                    <strong>
-                      Request {event.requestAttempt || 1}/{recovery.maxAttempts} · {event.status}{event.action ? ` · ${event.action}` : ""}
-                    </strong>
-                    <span>
-                      {event.unitKey || "stream"} · {formatDateTime(event.timestamp)}
-                      {event.actor ? ` · ${event.actor}` : ""}
-                    </span>
-                    {(event.errorCode || event.reason || event.message) && (
-                      <small>{event.errorCode || event.reason || event.message}</small>
-                    )}
-                  </li>
-                ))}
+                {recovery.events.map((event) => {
+                  const eventStatus = String(event.status || "UNKNOWN")
+                    .toUpperCase()
+                    .replace(/[^A-Z0-9_]/g, "_");
+                  return (
+                    <li key={event.eventId} className={`${styles.recoveryEventItem} ${styles[`event${eventStatus}`]}`}>
+                      <span className={styles.recoveryEventMarker} aria-hidden="true">
+                        {eventSymbol(eventStatus)}
+                      </span>
+                      <div className={styles.recoveryEventCopy}>
+                        <strong>
+                          Request {event.requestAttempt || 1}/{recovery.maxAttempts} · {event.status}{event.action ? ` · ${event.action}` : ""}
+                        </strong>
+                        <span>
+                          {event.unitKey || "stream"} · {formatDateTime(event.timestamp)}
+                          {event.actor ? ` · ${event.actor}` : ""}
+                        </span>
+                        {(event.errorCode || event.reason || event.message) && (
+                          <small>{event.errorCode || event.reason || event.message}</small>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
               </ol>
             )}
           </section>

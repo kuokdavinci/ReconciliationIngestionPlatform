@@ -66,18 +66,26 @@ function SchedulesContent() {
   const [backfillRunId, setBackfillRunId] = useState<string | null>(() => searchParams.get("backfillRunId"));
   const [startingBackfill, setStartingBackfill] = useState(false);
   const runtimePollRef = useRef<number | null>(null);
+  const jobsRef = useRef<ScheduleJob[]>([]);
+  const loadRequestRef = useRef(0);
   const { showToast } = useToast();
 
   const loadJobs = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
     try {
       const response = await api.listJobs();
-      setJobs(response.jobs ?? []);
-      return response.jobs ?? [];
+      const nextJobs = response.jobs ?? [];
+      if (requestId !== loadRequestRef.current) return jobsRef.current;
+      jobsRef.current = nextJobs;
+      setJobs(nextJobs);
+      return nextJobs;
     } catch {
-      showToast("Failed to load schedules from backend", "error");
-      return [];
+      if (requestId === loadRequestRef.current) {
+        showToast("Failed to load schedules from backend", "error");
+      }
+      return jobsRef.current;
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   }, [showToast]);
   const loadJobsRef = useRef(loadJobs);
@@ -89,6 +97,12 @@ function SchedulesContent() {
     () => jobs.find((job) => job.partner === selectedRecoveryPartner) ?? null,
     [jobs, selectedRecoveryPartner],
   );
+  const handleOpenReview = (partner: string) => {
+    const packet = jobs.find((job) => job.partner === partner)?.recentPackets?.find(
+      (item) => item.status === "PENDING",
+    );
+    if (packet?._id) router.push(`/review-center?packet=${encodeURIComponent(packet._id)}`);
+  };
   const recoveryFilter = parseRecoveryFilter(searchParams.get("recovery"));
   const partnerFilter = searchParams.get("partner") || ALL_PARTNERS;
   const partnerOptions = useMemo(
@@ -117,6 +131,7 @@ function SchedulesContent() {
   const hasActiveJobRunning = useMemo(() => {
     return jobs.some((j) => isActiveRuntimeStatus(j.status));
   }, [jobs]);
+  const hasActiveBackfill = useMemo(() => jobs.some((j) => Boolean(j.activeBackfill)), [jobs]);
 
   useEffect(() => {
     const loadTimer = window.setTimeout(() => {
@@ -124,7 +139,7 @@ function SchedulesContent() {
     }, 0);
     // Set up polling if there's any active job running
     let intervalId: NodeJS.Timeout | null = null;
-    if (hasActiveJobRunning) {
+    if (hasActiveJobRunning || hasActiveBackfill) {
       intervalId = setInterval(() => {
         void loadJobsRef.current();
       }, 3000);
@@ -134,7 +149,7 @@ function SchedulesContent() {
       window.clearTimeout(loadTimer);
       if (intervalId) clearInterval(intervalId);
     };
-  }, [hasActiveJobRunning]);
+  }, [hasActiveJobRunning, hasActiveBackfill]);
 
   useEffect(() => {
     return () => {
@@ -156,7 +171,7 @@ function SchedulesContent() {
   const pollRuntimeRun = useCallback((
     partner: string,
     runtimeRunId: string,
-    onSettled: () => void,
+    onSettled: (latestRun: ScheduleJob["latestRuntimeRun"]) => void,
     attemptsLeft = 15,
   ) => {
     const poll = async (remaining: number) => {
@@ -173,7 +188,7 @@ function SchedulesContent() {
 
       if (terminal || remaining <= 1) {
         runtimePollRef.current = null;
-        onSettled();
+        onSettled(latestRun);
         return;
       }
 
@@ -186,17 +201,36 @@ function SchedulesContent() {
   }, [loadJobs]);
 
   const handleRunJob = async (partner: string) => {
+    const activeBackfill = jobs.find((job) => job.partner === partner)?.activeBackfill;
+    if (activeBackfill) {
+      const status = activeBackfill.status.replaceAll("_", " ");
+      const checkpoint = activeBackfill.currentDate || "the current checkpoint";
+      showToast(
+        `Cannot run ${partner} now. Backfill is ${status} at ${checkpoint}; continue from the Backfill action.`,
+        "error",
+      );
+      return;
+    }
+
     try {
       setRunningPartners((prev) => ({ ...prev, [partner]: true }));
       const res = await api.runJob(partner);
       showToast(res.message || `Triggered run for ${partner}`, "success");
       await loadJobs();
-      pollRuntimeRun(partner, res.runtimeRunId, () => {
+      pollRuntimeRun(partner, res.runtimeRunId, (latestRun) => {
         setRunningPartners((prev) => ({ ...prev, [partner]: false }));
+        const stats = latestRun?.stats || {};
+        if (stats.safeDuplicate === true || ["FILE_DUPLICATE", "FETCH_UNIT_REPLAY", "NO_NEW_FILE", "SAFE_DUPLICATE"].includes(String(stats.outcome))) {
+          showToast(
+            `Safe duplicate: ${latestRun?.message || "the file was already processed and skipped safely."}`,
+            "success",
+          );
+        }
       });
-    } catch {
+    } catch (error) {
       setRunningPartners((prev) => ({ ...prev, [partner]: false }));
-      showToast(`Failed to trigger run for ${partner}`, "error");
+      const message = error instanceof Error ? error.message : `Failed to trigger run for ${partner}`;
+      showToast(message, "error");
     }
   };
 
@@ -238,6 +272,7 @@ function SchedulesContent() {
       const response = await api.startBackfill(backfillPartner, { fromDate, toDate });
       setBackfillRunId(response._id);
       setBackfillPartner(null);
+      await loadJobs();
       showToast(`Backfill queued for ${backfillPartner}`, "success");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start backfill.";
@@ -366,6 +401,7 @@ function SchedulesContent() {
               onBackfill={(partner) => setBackfillPartner(partner)}
               onRetryRecovery={(partner) => { void handleRetryRecovery(partner); }}
               onViewRecovery={(job) => setSelectedRecoveryPartner(job.partner)}
+              onOpenReview={handleOpenReview}
               runningPartners={runningPartners}
               retryingRecoveryPartners={retryingRecoveryPartner ? { [retryingRecoveryPartner]: true } : {}}
               emptyMessage={recoveryFilter === "ALL" ? undefined : "No partner matches this recovery status."}
@@ -402,7 +438,12 @@ function SchedulesContent() {
       />
 
       <BackfillDialog
+        key={(() => {
+          const checkpoint = jobs.find((job) => job.partner === backfillPartner)?.activeBackfill;
+          return `${backfillPartner ?? "closed"}-${checkpoint?._id ?? "no-checkpoint"}-${checkpoint?.currentDate ?? ""}-${checkpoint?.toDate ?? ""}`;
+        })()}
         partner={backfillPartner}
+        activeBackfill={jobs.find((job) => job.partner === backfillPartner)?.activeBackfill ?? null}
         open={Boolean(backfillPartner)}
         submitting={startingBackfill}
         onClose={() => { if (!startingBackfill) setBackfillPartner(null); }}

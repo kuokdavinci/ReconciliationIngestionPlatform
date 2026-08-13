@@ -258,16 +258,46 @@ async def _attach_pending_backfill_review_packet(
     partner: str,
     backfill_run_id: str,
 ) -> str | None:
+    from datetime import date, datetime, time
+    from zoneinfo import ZoneInfo
+
+    from src.services.business_day import business_day_bounds
+
+    backfill_run = await db["backfill_run"].find_one(
+        {"_id": backfill_run_id},
+        projection={"currentDate": 1},
+    )
+    date_filter: dict[str, dict[str, datetime]] = {}
+    current_date = (backfill_run or {}).get("currentDate")
+    if current_date:
+        if isinstance(current_date, datetime):
+            current_date = current_date.date()
+        elif not isinstance(current_date, date):
+            current_date = date.fromisoformat(str(current_date)[:10])
+        business_timezone = ZoneInfo(settings.business_timezone)
+        start_of_day, end_of_day = business_day_bounds(
+            datetime.combine(current_date, time.min, tzinfo=business_timezone)
+        )
+        date_filter = {
+            "reconciliationDate": {
+                "$gte": start_of_day,
+                "$lte": end_of_day,
+            }
+        }
     packet = await db["review_packet"].find_one(
         {
             "partner": partner,
             "status": "PENDING",
             "sourceType": "SCHEDULER_JOB",
+            **date_filter,
         },
         projection={"_id": 1},
         sort=[("createdAt", -1)],
     )
     if packet is None:
+        return None
+    packet_backfill_run_id = packet.get("backfillRunId")
+    if packet_backfill_run_id and str(packet_backfill_run_id) != backfill_run_id:
         return None
     packet_id = str(packet["_id"])
     await db["review_packet"].update_one(
@@ -482,6 +512,7 @@ async def list_automation_jobs(request: Request):
     packet_repo = ReviewPacketRepository(db)
     runtime_run_repo = PartnerRuntimeRunRepository(db)
     checkpoint_repo = IngestionCheckpointRepository(db)
+    backfill_repo = BackfillRunRepository(db)
     configs = await fetch_repo.find_enabled()
     checkpoint_identities = [
         {
@@ -580,14 +611,16 @@ async def list_automation_jobs(request: Request):
                 IngestionMode.SCHEDULED,
             )
         )
+        active_backfill = await backfill_repo.find_latest_active_by_partner(config.partner)
         latest_run_stats = (latest_run_data or {}).get("stats") or {}
         duplicate_outcome = latest_run_stats.get("outcome")
         if duplicate_outcome is None and latest_run_stats.get("replayed", 0) > 0:
             duplicate_outcome = "FETCH_UNIT_REPLAY"
-        is_duplicate_outcome = duplicate_outcome in {
+        is_safe_duplicate = latest_run_stats.get("safeDuplicate") is True or duplicate_outcome in {
             "FILE_DUPLICATE",
             "FETCH_UNIT_REPLAY",
             "NO_NEW_FILE",
+            "SAFE_DUPLICATE",
         }
         airflow_retry_active = airflow_task_state in _AIRFLOW_RETRYING_TASK_STATES
         airflow_terminal_retry = airflow_task_state in _AIRFLOW_MANUAL_RETRY_STATES
@@ -605,7 +638,7 @@ async def list_automation_jobs(request: Request):
             fetch_method=config.fetch_method,
             latest_file=latest_file,
             latest_run=latest_run,
-            is_duplicate_outcome=is_duplicate_outcome,
+            is_duplicate_outcome=is_safe_duplicate,
         )
         status = "HEALTHY"
         status_message = "No active runtime work."
@@ -621,12 +654,14 @@ async def list_automation_jobs(request: Request):
         elif airflow_terminal_retry:
             status = "FAILED"
             status_message = "Airflow task failed; Retry will clear the task in the existing DAG run."
-        elif is_duplicate_outcome:
+        elif is_safe_duplicate:
+            status = "SAFE_DUPLICATE"
             status_message = {
                 "FILE_DUPLICATE": "File already processed. Ingestion and reconciliation were skipped safely.",
                 "FETCH_UNIT_REPLAY": "Fetch unit already processed. Ingestion and reconciliation were skipped safely.",
                 "NO_NEW_FILE": "No new file was found. Ingestion and reconciliation were skipped.",
-            }[duplicate_outcome]
+                "SAFE_DUPLICATE": "This source file was already processed. The retry was skipped safely.",
+            }.get(duplicate_outcome, "This source file was already processed. The retry was skipped safely.")
         elif has_pending_file:
             status = "PENDING"
             status_message = "A partner file is available and waiting for reconciliation."
@@ -643,7 +678,9 @@ async def list_automation_jobs(request: Request):
             "status": status,
             "statusMessage": status_message,
             "duplicateOutcome": duplicate_outcome,
-            "duplicateMessage": status_message if is_duplicate_outcome else None,
+            "safeDuplicate": is_safe_duplicate,
+            "duplicateSourceOutcome": latest_run_stats.get("duplicateSourceOutcome"),
+            "duplicateMessage": status_message if is_safe_duplicate else None,
             "hasPendingFile": has_pending_file,
             "latestRuntimeRun": latest_run_data,
             "recentRuntimeRuns": [
@@ -663,6 +700,7 @@ async def list_automation_jobs(request: Request):
                     else None
                 ),
             ),
+            "activeBackfill": serialize_backfill_run(active_backfill) if active_backfill else None,
         })
     return {"jobs": jobs}
 
@@ -677,6 +715,18 @@ async def run_automation_job_now(request: Request, partner: str):
         raise HTTPException(status_code=404, detail="Automation job not found for partner.")
     if not config.enabled:
         raise HTTPException(status_code=400, detail="Automation job is disabled.")
+
+    active_backfill = await BackfillRunRepository(db).find_latest_active_by_partner(partner)
+    if active_backfill is not None:
+        status = getattr(active_backfill.status, "value", active_backfill.status)
+        checkpoint = active_backfill.current_date.isoformat() if active_backfill.current_date else "the current checkpoint"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Backfill is {status} at {checkpoint}; continue this partner from the Backfill action "
+                "instead of Run now."
+            ),
+        )
 
     checkpoint_repo = IngestionCheckpointRepository(db)
     checkpoint = await _find_recovery_checkpoint(checkpoint_repo, config)

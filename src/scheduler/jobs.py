@@ -427,11 +427,28 @@ async def _finish_source_stream_run(
         "FILE_DUPLICATE": "File already processed. Ingestion and reconciliation were skipped safely.",
         "FETCH_UNIT_REPLAY": "Fetch unit already processed. Ingestion and reconciliation were skipped safely.",
         "NO_NEW_FILE": "No new file was found. Ingestion and reconciliation were skipped.",
+        "SAFE_DUPLICATE": "This source file was already processed. The retry was skipped safely.",
     }
     waiting_for_review = (
         result.get("outcome") == "WAITING_REVIEW"
         or result.get("waitingForReview") is True
     )
+    duplicate_source_outcome = result.get("outcome")
+    if result.get("streamAlreadyCompleted"):
+        duplicate_source_outcome = "STREAM_ALREADY_COMPLETED"
+        result = {
+            **result,
+            "outcome": "SAFE_DUPLICATE",
+            "safeDuplicate": True,
+            "duplicateSourceOutcome": duplicate_source_outcome,
+        }
+    elif duplicate_source_outcome in duplicate_messages:
+        result = {
+            **result,
+            "safeDuplicate": True,
+            "duplicateSourceOutcome": duplicate_source_outcome,
+        }
+    persisted_stats = {**stats, **result}
     if waiting_for_review:
         terminal_status = PartnerRuntimeRunStatus.WAITING_REVIEW
         await update_runtime_run(
@@ -440,7 +457,7 @@ async def _finish_source_stream_run(
             status=terminal_status,
             message=result.get("error")
             or "A draft mapping is waiting for review before ingestion can continue.",
-            stats={**stats, **result},
+            stats=persisted_stats,
             finished_at=datetime.now(timezone.utc),
             attempt_event=_runtime_attempt_event(
                 run,
@@ -459,7 +476,7 @@ async def _finish_source_stream_run(
                 result.get("outcome"),
                 "Sequential source-unit ingestion completed successfully.",
             ),
-            stats={**stats, **result},
+            stats=persisted_stats,
             finished_at=datetime.now(timezone.utc),
             attempt_event=_runtime_attempt_event(
                 run,
@@ -475,7 +492,7 @@ async def _finish_source_stream_run(
             str(run.id),
             status=terminal_status,
             message=result.get("error") or "Source-unit ingestion failed.",
-            stats={**stats, **result},
+            stats=persisted_stats,
             finished_at=datetime.now(timezone.utc),
             attempt_event=_runtime_attempt_event(
                 run,
@@ -489,7 +506,7 @@ async def _finish_source_stream_run(
         "stage": "ingestion" if result.get("processed", 0) else "fetch",
         "partner": partner,
         **result,
-        "stats": stats,
+        "stats": persisted_stats,
         "runtimeRun": {
             "id": str(run.id),
             "status": (
@@ -515,6 +532,7 @@ async def run_fetch_config_once(
     runtime_run_id: str | None = None,
     orchestration: dict[str, Any] | None = None,
     mapping_config_version: str | None = None,
+    backfill_run_id: str | None = None,
     raise_on_unexpected: bool = False,
 ) -> dict[str, Any]:
     """Run one source stream sequentially from its checkpoint boundary."""
@@ -876,6 +894,7 @@ async def run_fetch_config_once(
                         source_file_path=first_staged_unit.local_path,
                         reconciliation_date=reconciliation_date,
                         raw_stage_key=raw_stage_key,
+                        backfill_run_id=backfill_run_id,
                     )
                 except ConfigurationApprovalRequiredError as approval_exc:
                     review_checkpoint, won_review_claim = await checkpoint_repo.claim_unit(
@@ -936,6 +955,7 @@ async def run_fetch_config_once(
                         source_file_path=first_staged_unit.local_path,
                         reconciliation_date=reconciliation_date,
                         raw_stage_key=raw_stage_key,
+                        backfill_run_id=backfill_run_id,
                     )
                     review_checkpoint, won_review_claim = await checkpoint_repo.claim_unit(
                         partner=identity["partner"],

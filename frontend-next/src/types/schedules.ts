@@ -74,6 +74,9 @@ export interface RecoverySummary {
   completedUnitCount: number;
   totalUnitCount: number;
   duplicateCount: number;
+  safeDuplicate?: boolean;
+  duplicateSourceOutcome?: string | null;
+  duplicateMessage?: string | null;
   events: RecoveryEvent[];
 }
 
@@ -85,7 +88,9 @@ export interface ScheduleJob {
   enabled: boolean;
   status: string;
   statusMessage?: string;
-  duplicateOutcome?: "FILE_DUPLICATE" | "FETCH_UNIT_REPLAY" | "NO_NEW_FILE";
+  duplicateOutcome?: "FILE_DUPLICATE" | "FETCH_UNIT_REPLAY" | "NO_NEW_FILE" | "SAFE_DUPLICATE";
+  safeDuplicate?: boolean;
+  duplicateSourceOutcome?: string | null;
   duplicateMessage?: string | null;
   hasPendingFile?: boolean;
   pendingReviewPackets?: number;
@@ -93,6 +98,7 @@ export interface ScheduleJob {
   recentRuntimeRuns?: RuntimeRunSummary[];
   activeRuntimeRun?: RuntimeRunSummary | null;
   recovery?: RecoverySummary | null;
+  activeBackfill?: BackfillRun | null;
   recentPackets?: RecentPacket[];
 }
 

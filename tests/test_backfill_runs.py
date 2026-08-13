@@ -41,6 +41,14 @@ class _FakeBackfillRepo:
     async def find_by_id(self, backfill_run_id: str):
         return self.by_id.get(backfill_run_id)
 
+    async def find_latest_active_by_partner(self, partner: str):
+        active_statuses = {"WAITING_CONFIG", "QUEUED", "RUNNING", "FAILED"}
+        for run in reversed(self.created):
+            status = getattr(run.status, "value", run.status)
+            if run.partner == partner and status in active_statuses:
+                return run
+        return None
+
     async def update_status(self, backfill_run_id: str, **changes):
         run = self.by_id[backfill_run_id]
         aliases = {
@@ -133,6 +141,42 @@ async def test_start_backfill_creates_waiting_config_parent_with_ordered_days():
         date(2026, 8, 11),
     ]
     gateway.trigger.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_backfill_reuses_same_active_parent_and_rejects_other_range():
+    from src.services.backfill_runs import BackfillRunConflictError, BackfillRunService
+
+    repo = _FakeBackfillRepo()
+    service = BackfillRunService(
+        fetch_repo=_FakeFetchRepo(_config()),
+        backfill_repo=repo,
+        workflow_gateway=SimpleNamespace(trigger=AsyncMock()),
+        approved_mapping_version_finder=AsyncMock(return_value=None),
+    )
+
+    await service.start(
+        partner="VNPAY",
+        actor="ops-user",
+        from_date=date(2026, 8, 10),
+        to_date=date(2026, 8, 11),
+    )
+
+    same_run = await service.start(
+        partner="VNPAY",
+        actor="ops-user",
+        from_date=date(2026, 8, 10),
+        to_date=date(2026, 8, 11),
+    )
+    assert same_run.id == repo.created[0].id
+
+    with pytest.raises(BackfillRunConflictError, match="active backfill"):
+        await service.start(
+            partner="VNPAY",
+            actor="ops-user",
+            from_date=date(2026, 8, 11),
+            to_date=date(2026, 8, 12),
+        )
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ import { GuidedReviewMappingStep } from "./guided-review-mapping-step";
 import { GuidedReviewValidationStep } from "./guided-review-validation-step";
 import { GuidedReviewDecisionStep } from "./guided-review-decision-step";
 import { useGuidedReview } from "./use-guided-review";
+import { resolveInternalReviewEvidence } from "./internal-review-evidence";
 
 const steps = ["Scope", "Mapping", "Validation", "Decision"];
 
@@ -20,10 +21,9 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onRefresh: () => void;
-  onApproved?: (result: { partner: string; backfillRunId?: string | null }) => void;
 }
 
-export function GuidedReviewModal({ packet, open, onClose, onRefresh, onApproved }: Props) {
+export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
   const { showToast } = useToast();
   const [traceDetailSampleIndex, setTraceDetailSampleIndex] = useState<number | null>(null);
 
@@ -71,6 +71,9 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh, onApproved
   } = useGuidedReview({ packet, open, onRefresh, onClose });
 
   const isApproved = localPacket ? String(localPacket.status).toUpperCase() === "APPROVED" : false;
+  const internalEvidence = localPacket
+    ? resolveInternalReviewEvidence(localPacket, scopeClassification)
+    : { recordCount: 0, preview: [] };
 
   if (!localPacket) return null;
 
@@ -148,8 +151,8 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh, onApproved
           sigHeaders={sigHeaders}
           summary={summary}
           topIssues={topIssues}
-          internalRecordCount={scopeClassification?.internalDbRecordCount ?? localPacket.internalRecordCount ?? 0}
-          internalPreview={scopeClassification?.internalPreview ?? localPacket.internalPreview ?? []}
+          internalRecordCount={internalEvidence.recordCount}
+          internalPreview={internalEvidence.preview}
           traceDetailSampleIndex={traceDetailSampleIndex}
           isValidatingRuntime={isValidatingRuntime}
           onValidateRuntime={async () => {
@@ -178,12 +181,6 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh, onApproved
             try {
               const result = await handleApproveActivate();
               showToast(result?.backfillRunId ? "Mapping approved. Ordered backfill has started." : "Approved and activated. Reprocessing has started.", "success");
-              if (result && !result.backfillRunId) {
-                onApproved?.({
-                  partner: result.partner,
-                  backfillRunId: result.backfillRunId,
-                });
-              }
             } catch (err: any) {
               showToast(err.message || "Failed to approve review packet.", "error");
             }

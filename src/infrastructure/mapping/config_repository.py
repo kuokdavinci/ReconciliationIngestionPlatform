@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import ReturnDocument
@@ -83,6 +83,69 @@ class MappingConfigRepository(BaseRepository[MappingConfig]):
             return_document=ReturnDocument.AFTER,
         )
         return f"{partner}_v{int(counter['sequence']):02d}"
+
+    async def mark_superseded(
+        self,
+        config_id: str,
+        superseded_by_config_id: str,
+        superseded_at: datetime,
+    ) -> bool:
+        result = await self.collection.update_one(
+            {"_id": str(config_id)},
+            {
+                "$set": {
+                    "status": MappingConfigStatus.SUPERSEDED.value,
+                    "supersededAt": superseded_at,
+                    "supersededByConfigId": str(superseded_by_config_id),
+                }
+            },
+        )
+        return result.modified_count > 0
+
+    async def mark_approved(
+        self,
+        config_id: str,
+        approved_at: datetime,
+        approved_by: str | None,
+        config_health: dict[str, Any],
+    ) -> bool:
+        result = await self.collection.update_one(
+            {"_id": str(config_id)},
+            {
+                "$set": {
+                    "status": MappingConfigStatus.APPROVED.value,
+                    "approvedAt": approved_at,
+                    "approvedBy": approved_by,
+                    "configHealth": config_health,
+                }
+            },
+        )
+        return result.modified_count > 0
+
+    async def mark_rejected(
+        self,
+        config_id: str,
+        config_health: dict[str, Any],
+    ) -> bool:
+        result = await self.collection.update_one(
+            {"_id": str(config_id)},
+            {
+                "$set": {
+                    "status": MappingConfigStatus.REJECTED.value,
+                    "configHealth": config_health,
+                }
+            },
+        )
+        return result.modified_count > 0
+
+    async def replace_approved(self, config: MappingConfig) -> MappingConfig:
+        data = self._to_mongo(config)
+        await self.collection.replace_one({"_id": data["_id"]}, data)
+        return config
+
+    async def insert_approved(self, config: MappingConfig) -> MappingConfig:
+        await self.collection.insert_one(self._to_mongo(config))
+        return config
 
     async def _find_max_partner_version_number(self, partner: str) -> int:
         cursor = self.collection.find(

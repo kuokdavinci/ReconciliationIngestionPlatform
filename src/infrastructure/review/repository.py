@@ -1,11 +1,13 @@
 """MongoDB adapters for review and post-approval workflows."""
 
+from datetime import datetime
 from typing import Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from src.domain.review.models import (
     CopilotAction,
+    CopilotActionStatus,
     PostApprovalRun,
     ReconciliationReviewRecord,
     ReviewPacket,
@@ -90,6 +92,29 @@ class ReviewPacketRepository(BaseRepository[ReviewPacket]):
             return None
         return self._from_mongo(raw)
 
+    async def sync_mapping_status(
+        self,
+        config_id: str,
+        status: ReviewPacketStatus,
+        reviewed_at: datetime,
+    ) -> int:
+        result = await self.collection.update_many(
+            {
+                "$or": [
+                    {"draftMappingId": str(config_id)},
+                    {"proposalConfigId": str(config_id)},
+                ],
+                "status": ReviewPacketStatus.PENDING.value,
+            },
+            {
+                "$set": {
+                    "status": status.value,
+                    "reviewedAt": reviewed_at,
+                }
+            },
+        )
+        return result.modified_count
+
 
 class CopilotActionRepository(BaseRepository[CopilotAction]):
     """Repository for copilot approval items."""
@@ -97,3 +122,28 @@ class CopilotActionRepository(BaseRepository[CopilotAction]):
     def __init__(self, db: AsyncIOMotorDatabase):
         super().__init__(collection_name="copilot_action", db=db)
         self._set_model_class(CopilotAction)
+
+    async def sync_mapping_status(
+        self,
+        config_id: str,
+        status: CopilotActionStatus,
+        reviewed_by: str | None,
+        reviewed_at: datetime,
+    ) -> int:
+        result = await self.collection.update_many(
+            {
+                "$or": [
+                    {"draftMappingId": str(config_id)},
+                    {"targetConfigId": str(config_id)},
+                ],
+                "status": CopilotActionStatus.PENDING_APPROVAL.value,
+            },
+            {
+                "$set": {
+                    "status": status.value,
+                    "reviewedAt": reviewed_at,
+                    "reviewedBy": reviewed_by,
+                }
+            },
+        )
+        return result.modified_count

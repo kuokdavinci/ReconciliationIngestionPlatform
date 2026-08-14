@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.application.reconciliation.service import ReconciliationCommand, ReconciliationService
+from src.reconciliation.document_executor import DocumentReconciliationExecutor
 from src.reconciliation.engine import ReconciliationEngine
 
 
@@ -45,8 +46,10 @@ def test_reconciliation_engine_accepts_injected_repository_ports():
         data_repo=data_repo,
         internal_repo=internal_repo,
         result_repo=result_repo,
+        backend="document",
     )
 
     assert engine._data_repo is data_repo
     assert engine._internal_repo is internal_repo
     assert engine._result_repo is result_repo
+    assert isinstance(engine._executor, DocumentReconciliationExecutor)

@@ -20,10 +20,16 @@ def mock_db() -> MagicMock:
     return db
 
 
+def test_reconciliation_accepts_explicit_document_backend(mock_db):
+    engine = ReconciliationEngine(mock_db, backend="document")
+
+    assert engine._backend == "document"
+
+
 @pytest.mark.asyncio
 async def test_reconciliation_matched(mock_db):
     """Test scenario where partner transaction matches internal transaction exactly."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     # 1. Setup mock data
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
@@ -77,7 +83,7 @@ async def test_reconciliation_matched(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_result_date_uses_business_date_at_utc_boundary(mock_db):
     """Persist the local business date when the input is a UTC boundary instant."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
     recon_date = datetime(2026, 8, 11, 17, tzinfo=timezone.utc)
     partner = "MOMO"
     partner_record = DataContainer(
@@ -143,7 +149,7 @@ def test_normalize_reconciliation_key_uses_trimmed_non_empty_fallback(candidates
 @pytest.mark.asyncio
 async def test_reconciliation_amount_mismatch(mock_db):
     """Test scenario where amounts differ between partner and internal."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -185,7 +191,7 @@ async def test_reconciliation_amount_mismatch(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_status_mismatch(mock_db):
     """Test scenario where statuses differ (but amount is correct)."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -227,7 +233,7 @@ async def test_reconciliation_status_mismatch(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_missing_internal(mock_db):
     """Test scenario where partner record exists but no internal record."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -260,7 +266,7 @@ async def test_reconciliation_missing_internal(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_missing_partner(mock_db):
     """Test scenario where internal record exists but no partner record."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -288,7 +294,7 @@ async def test_reconciliation_missing_partner(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_ignores_pending_internal_for_missing_partner(mock_db):
     """Pending internal rows should not produce MISSING_PARTNER results."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -317,7 +323,7 @@ async def test_reconciliation_ignores_pending_internal_for_missing_partner(mock_
 @pytest.mark.asyncio
 async def test_reconciliation_incremental_scope_ignores_unrelated_internal_rows(mock_db):
     """Incremental append should ignore out-of-scope internal rows already in DB."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -378,7 +384,7 @@ async def test_reconciliation_incremental_scope_ignores_unrelated_internal_rows(
 @pytest.mark.asyncio
 async def test_reconciliation_incremental_append_uses_current_batch_only(mock_db):
     """Incremental append should reconcile only the current source batch."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -440,7 +446,7 @@ async def test_reconciliation_incremental_append_uses_current_batch_only(mock_db
 @pytest.mark.asyncio
 async def test_reconciliation_full_snapshot_replaces_entire_day_slice(mock_db):
     """Full snapshot should still replace the whole day slice."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -481,7 +487,7 @@ async def test_reconciliation_full_snapshot_replaces_entire_day_slice(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_replacement_scope_replaces_prior_keys(mock_db):
     """Replacement scope should delete prior rows for the same key set across files."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -528,7 +534,7 @@ async def test_reconciliation_replacement_scope_replaces_prior_keys(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_duplicate_internal_handling(mock_db):
     """Test that duplicate internal records keep the latest based on updatedAt."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -588,7 +594,7 @@ async def test_reconciliation_duplicate_internal_handling(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_skipped_empty_status(mock_db):
     """A partner record with empty status is skipped by the pre-check guard."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -623,7 +629,7 @@ async def test_reconciliation_skipped_empty_status(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_all_records_skipped(mock_db):
     """Multiple partner records all with empty status — all skipped."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -661,7 +667,7 @@ async def test_reconciliation_all_records_skipped(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_mixed_valid_and_skipped(mock_db):
     """3 partner records: 1 valid (matched), 2 with empty status (skipped)."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -726,7 +732,7 @@ async def test_reconciliation_mixed_valid_and_skipped(mock_db):
 @pytest.mark.asyncio
 async def test_skipped_record_creates_unmapped_skipped(mock_db):
     """A skipped record creates a ReconciliationResult with UNMAPPED_SKIPPED status."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -760,7 +766,7 @@ async def test_skipped_record_creates_unmapped_skipped(mock_db):
 @pytest.mark.asyncio
 async def test_mixed_skipped_and_matched_guard(mock_db):
     """3 records: 1 valid matched, 2 skipped — 3 total results with correct statuses."""
-    engine = ReconciliationEngine(mock_db)
+    engine = ReconciliationEngine(mock_db, backend="document")
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -831,7 +837,12 @@ async def test_mixed_skipped_and_matched_guard(mock_db):
 @pytest.mark.asyncio
 async def test_reconciliation_flushes_results_in_chunks(mock_db):
     """Large result sets should be inserted in chunks instead of one unbounded batch."""
-    engine = ReconciliationEngine(mock_db, partner_batch_size=2, result_batch_size=2)
+    engine = ReconciliationEngine(
+        mock_db,
+        partner_batch_size=2,
+        result_batch_size=2,
+        backend="document",
+    )
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -873,7 +884,12 @@ async def test_reconciliation_flushes_results_in_chunks(mock_db):
 @pytest.mark.asyncio
 async def test_parallel_workers_produce_correct_counts(mock_db):
     """Parallel workers should not change total counts vs single worker."""
-    engine = ReconciliationEngine(mock_db, write_workers=4, result_batch_size=3)
+    engine = ReconciliationEngine(
+        mock_db,
+        write_workers=4,
+        result_batch_size=3,
+        backend="document",
+    )
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -928,7 +944,12 @@ async def test_parallel_workers_produce_correct_counts(mock_db):
 @pytest.mark.asyncio
 async def test_parallel_workers_no_duplicate_results(mock_db):
     """Parallel workers must not produce duplicate reconciliation results."""
-    engine = ReconciliationEngine(mock_db, write_workers=4, result_batch_size=2)
+    engine = ReconciliationEngine(
+        mock_db,
+        write_workers=4,
+        result_batch_size=2,
+        backend="document",
+    )
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -982,7 +1003,12 @@ async def test_parallel_workers_no_duplicate_results(mock_db):
 @pytest.mark.asyncio
 async def test_parallel_workers_correct_counts_mixed_outcomes(mock_db):
     """Parallel workers produce correct matched/mismatch/unmatched counts."""
-    engine = ReconciliationEngine(mock_db, write_workers=4, result_batch_size=2)
+    engine = ReconciliationEngine(
+        mock_db,
+        write_workers=4,
+        result_batch_size=2,
+        backend="document",
+    )
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"
@@ -1051,7 +1077,12 @@ async def test_parallel_workers_correct_counts_mixed_outcomes(mock_db):
 @pytest.mark.asyncio
 async def test_parallel_workers_with_unmatched_internal(mock_db):
     """Parallel workers produce correct unmatched internal count."""
-    engine = ReconciliationEngine(mock_db, write_workers=4, result_batch_size=2)
+    engine = ReconciliationEngine(
+        mock_db,
+        write_workers=4,
+        result_batch_size=2,
+        backend="document",
+    )
 
     recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
     partner = "MOMO"

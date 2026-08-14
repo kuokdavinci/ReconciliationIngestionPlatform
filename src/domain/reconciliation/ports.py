@@ -9,6 +9,8 @@ algorithm's public API.
 from datetime import datetime
 from typing import Any, Protocol
 
+from src.core.enums import ReconciliationScopeType
+
 
 class PartnerTransactionReader(Protocol):
     """Read canonical partner transactions for reconciliation."""
@@ -42,6 +44,25 @@ class ReconciliationResultWriter(Protocol):
 
     async def insert_many(self, documents: list[Any], ordered: bool = True) -> int:
         """Persist a batch of reconciliation results."""
+
+
+class ReconciliationExecutor(Protocol):
+    """Execute one reconciliation scope against an explicit storage backend."""
+
+    async def execute(
+        self,
+        *,
+        partner: str,
+        start_of_day: datetime,
+        end_of_day: datetime,
+        date_str: str,
+        scope_type: ReconciliationScopeType,
+        source_file_id: str | None = None,
+        reconciliation_run_id: str | None = None,
+        mapping_version: str | None = None,
+        started_at: float | None = None,
+    ) -> list[Any]:
+        """Execute reconciliation for the supplied business-day scope."""
 
 
 class ReconciliationRunner(Protocol):

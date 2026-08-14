@@ -24,7 +24,7 @@ from src.api.review_packets import (
 )
 from src.domain.review.models import ReviewPacket
 from src.application.review.runtime_validation import run_runtime_validation
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 
 
 def _make_request(db: MagicMock, headers: dict | None = None):
@@ -616,7 +616,7 @@ async def test_approve_activate_packet_triggers_post_approve_processing():
             "sourceFileId": "file-001",
         }),
     ), patch(
-        "src.models.mapping_config.MappingConfigRepository.find_by_partner_and_type",
+        "src.infrastructure.mapping.config_repository.MappingConfigRepository.find_by_partner_and_type",
         new=AsyncMock(return_value=None),
     ):
         data = await approve_activate_packet(

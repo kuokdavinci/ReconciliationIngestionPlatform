@@ -4,7 +4,7 @@
 
 from src.core.enums import FileType
 from src.core.types import FieldMapping, FieldMappingType
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 
 
 def _make_config(field_mappings: list[FieldMapping], version: str | None = None) -> MappingConfig:

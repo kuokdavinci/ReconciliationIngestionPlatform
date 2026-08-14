@@ -6,7 +6,7 @@ import pytest
 from openpyxl import Workbook
 
 from src.core.enums import FileType
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 from src.readers.excel_reader import ExcelStreamReader
 
 

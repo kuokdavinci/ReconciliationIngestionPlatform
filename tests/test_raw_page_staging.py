@@ -104,7 +104,7 @@ async def test_stage_cleans_gridfs_payload_when_metadata_insert_races(tmp_path):
 
 
 def test_raw_page_indexes_are_declared():
-    from src.models.indexes import INDEXES
+    from src.infrastructure.persistence.mongo_indexes import INDEXES
 
     assert "raw_ingestion_page" in INDEXES
     assert any(
@@ -182,7 +182,7 @@ async def test_scheduler_stages_all_pages_before_waiting_for_mapping(tmp_path):
         patch("src.application.automation.stream_runner.IngestionCheckpointRepository", return_value=Checkpoints()),
         patch("src.application.automation.stream_runner.create_fetcher", return_value=Fetcher()),
         patch(
-            "src.application.automation.stream_runner.check_and_refresh_config",
+            "src.application.automation.stream_runner.evaluate_stream_mapping",
             new=AsyncMock(side_effect=ConfigurationApprovalRequiredError("mapping required")),
         ) as preflight,
         patch("src.application.automation.stream_ingestion.run_ingestion", new=run_ingestion),
@@ -266,8 +266,8 @@ async def test_scheduler_sends_complete_paginated_stream_to_scope_review_with_ap
         patch("src.application.automation.stream_runner.update_runtime_run", new=AsyncMock()),
         patch("src.application.automation.stream_runner.IngestionCheckpointRepository", return_value=Checkpoints()),
         patch("src.application.automation.stream_runner.create_fetcher", return_value=Fetcher()),
-        patch("src.application.automation.stream_runner.check_and_refresh_config", new=AsyncMock(return_value=approved_mapping)),
-        patch("src.application.automation.stream_runner.create_stream_scope_review_packet", new=create_packet),
+        patch("src.application.automation.stream_runner.evaluate_stream_mapping", new=AsyncMock(return_value=approved_mapping)),
+        patch("src.application.automation.stream_runner.create_stream_review_packet", new=create_packet),
         patch("src.application.automation.stream_ingestion.run_ingestion", new=AsyncMock()) as run_ingestion,
     ):
         result = await run_source_stream(
@@ -358,7 +358,7 @@ async def test_failed_page_does_not_create_review_packet(tmp_path):
         patch("src.application.automation.stream_runner.update_runtime_run", new=AsyncMock()),
         patch("src.application.automation.stream_runner.IngestionCheckpointRepository", return_value=Checkpoints()) as checkpoint_repo,
         patch("src.application.automation.stream_runner.create_fetcher", return_value=FailingFetcher()),
-        patch("src.application.automation.stream_runner.check_and_refresh_config", new=AsyncMock()) as preflight,
+        patch("src.application.automation.stream_runner.evaluate_stream_mapping", new=AsyncMock()) as preflight,
         patch("src.application.automation.stream_ingestion.run_ingestion", new=AsyncMock()) as run_ingestion,
     ):
         result = await run_source_stream(

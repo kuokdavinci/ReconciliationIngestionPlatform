@@ -28,9 +28,9 @@ from src.application.review.actions import (
     approve_packet_mapping_and_reprocess,
     reprocess_packet_with_current_mapping,
     mark_packet,
-    serialize_post_approval_run,
     update_packet_scope,
 )
+from src.application.review.reprocessing import serialize_post_approval_run
 from src.infrastructure.mapping.composition import build_config_loader
 from src.application.review.ai_mapping_context import resolve_ai_generation_context
 from src.application.review.runtime_validation import (

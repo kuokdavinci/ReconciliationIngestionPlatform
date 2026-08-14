@@ -10,7 +10,7 @@ import pytest
 
 from src.core.enums import FileType
 from src.core.types import FieldMapping, FieldMappingType
-from src.models.mapping_config import MappingConfig
+from src.domain.mapping.models import MappingConfig
 
 
 def _make_config(partner: str = "MOMO", version: str | None = "v1.0") -> MappingConfig:

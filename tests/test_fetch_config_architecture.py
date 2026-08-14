@@ -13,27 +13,14 @@ from src.domain.fetch_config.models import (
     SFTPConfig,
 )
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
-from src.models.fetch_config import (
-    APIConfig as LegacyAPIConfig,
-    APIPaginationConfig as LegacyAPIPaginationConfig,
-    FetchConfig as LegacyFetchConfig,
-    FetchConfigRepository as LegacyFetchConfigRepository,
-    FetchMethod as LegacyFetchMethod,
-    FileDropConfig as LegacyFileDropConfig,
-    SFTPConfig as LegacySFTPConfig,
-)
-
-
-def test_legacy_fetch_config_module_is_a_compatibility_facade() -> None:
-    """Legacy imports must resolve to domain and infrastructure implementations."""
-
-    assert LegacyAPIConfig is APIConfig
-    assert LegacyAPIPaginationConfig is APIPaginationConfig
-    assert LegacyFetchConfig is FetchConfig
-    assert LegacyFetchConfigRepository is FetchConfigRepository
-    assert LegacyFetchMethod is FetchMethod
-    assert LegacyFileDropConfig is FileDropConfig
-    assert LegacySFTPConfig is SFTPConfig
+def test_fetch_config_domain_and_adapter_have_separate_ownership() -> None:
+    assert APIConfig.__module__ == "src.domain.fetch_config.models"
+    assert APIPaginationConfig.__module__ == "src.domain.fetch_config.models"
+    assert FetchConfig.__module__ == "src.domain.fetch_config.models"
+    assert FetchConfigRepository.__module__ == "src.infrastructure.fetch_config.repository"
+    assert FetchMethod.__module__ == "src.domain.fetch_config.models"
+    assert FileDropConfig.__module__ == "src.domain.fetch_config.models"
+    assert SFTPConfig.__module__ == "src.domain.fetch_config.models"
 
 
 @pytest.mark.asyncio

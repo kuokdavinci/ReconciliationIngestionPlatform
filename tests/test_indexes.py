@@ -10,7 +10,7 @@ class TestIndexesDefinition:
 
     def test_indexes_dict_has_all_collections(self):
         """INDEXES dict has entries for all three collections."""
-        from src.models.indexes import INDEXES
+        from src.infrastructure.persistence.mongo_indexes import INDEXES
 
         assert "reconciliation_file" in INDEXES
         assert "ingestion_checkpoint" in INDEXES
@@ -19,7 +19,7 @@ class TestIndexesDefinition:
 
     def test_indexes_are_lists_of_index_models(self):
         """Each collection's indexes is a list of IndexModel objects."""
-        from src.models.indexes import INDEXES
+        from src.infrastructure.persistence.mongo_indexes import INDEXES
 
         for collection, indexes in INDEXES.items():
             assert isinstance(indexes, list), f"{collection} indexes not a list"
@@ -35,7 +35,7 @@ class TestReconciliationFileIndexes:
 
     def test_unique_index_on_file_hash(self):
         """reconciliation_file has UNIQUE index on file_hash."""
-        from src.models.indexes import INDEXES
+        from src.infrastructure.persistence.mongo_indexes import INDEXES
 
         indexes = INDEXES["reconciliation_file"]
         hash_indexes = [
@@ -58,7 +58,7 @@ class TestReconciliationFileIndexes:
 
     def test_compound_index_on_partner_and_date(self):
         """reconciliation_file has compound index on partner + reconciliation_date."""
-        from src.models.indexes import INDEXES
+        from src.infrastructure.persistence.mongo_indexes import INDEXES
 
         indexes = INDEXES["reconciliation_file"]
         compound_indexes = [
@@ -87,7 +87,7 @@ class TestIngestionCheckpointIndexes:
     """Tests for the Sprint 2 checkpoint index contract."""
 
     def test_unique_stream_identity_index(self):
-        from src.models.indexes import INDEXES
+        from src.infrastructure.persistence.mongo_indexes import INDEXES
 
         indexes = INDEXES["ingestion_checkpoint"]
         unique = [
@@ -105,7 +105,7 @@ class TestIngestionCheckpointIndexes:
         assert len(unique) == 1
 
     def test_retry_query_index_contains_status_and_updated_time(self):
-        from src.models.indexes import INDEXES
+        from src.infrastructure.persistence.mongo_indexes import INDEXES
 
         assert any(
             list(idx.document["key"]) == ["status", "updatedAt"]
@@ -118,7 +118,7 @@ class TestMappingConfigIndexes:
 
     def test_compound_index_on_partner_workflow_type(self):
         """mapping_config has compound index on partner + workflow_type + file_type."""
-        from src.models.indexes import INDEXES
+        from src.infrastructure.persistence.mongo_indexes import INDEXES
 
         indexes = INDEXES["reconciliation_mapping_config"]
         assert len(indexes) >= 1, "No indexes defined for mapping_config"
@@ -134,7 +134,7 @@ class TestApplyIndexes:
 
     def test_apply_indexes_is_async(self):
         """apply_indexes function is async."""
-        from src.models.indexes import apply_indexes
+        from src.infrastructure.persistence.mongo_indexes import apply_indexes
 
         assert inspect.iscoroutinefunction(apply_indexes), (
             "apply_indexes must be an async function"
@@ -142,7 +142,7 @@ class TestApplyIndexes:
 
     def test_apply_indexes_accepts_database(self):
         """apply_indexes accepts AsyncIOMotorDatabase parameter."""
-        from src.models.indexes import apply_indexes
+        from src.infrastructure.persistence.mongo_indexes import apply_indexes
 
         sig = inspect.signature(apply_indexes)
         params = list(sig.parameters.keys())

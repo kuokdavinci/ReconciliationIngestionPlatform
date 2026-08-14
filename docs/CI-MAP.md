@@ -76,7 +76,7 @@ npm --prefix frontend-next run test:e2e
 | `src/application/ingestion/`, `src/pipeline/` | Ingestion Pipeline | checkpoint, raw staging, recovery view, backend tests |
 | `src/fetchers/`, `src/domain/ingestion/` | Ingestion Pipeline | source-unit identity, retry/error classification, integration tests |
 | `src/infrastructure/workflows/`, `dags/` | Airflow tests + `docker compose config --quiet` | Build Airflow image, DAG import, runtime correlation |
-| `src/domain/`, `src/infrastructure/` | Workflow sở hữu adapter | repository, migration, compatibility facade và API tests |
+| `src/domain/`, `src/infrastructure/` | Workflow sở hữu adapter | repository, migration và API tests |
 | `src/reconciliation/`, `src/application/reconciliation/` | Backend Quality | results, scope, review records, timezone/business-date tests |
 | `src/analysis/` | Analysis Eval | Backend Quality nếu API/service contract thay đổi |
 | `alembic/` | Backend + Ingestion | migration ordering, PostgreSQL integration |
@@ -107,5 +107,5 @@ Acceptance phải chứng minh Run Now, page failure/resume, Retry now trong cù
 1. Kiểm tra `codegraph status` và symbol/dependency của file đổi.
 2. Chọn workflow theo bảng blast radius.
 3. Chạy local equivalent và test contract liên quan.
-4. Kiểm tra public API, compatibility facade và runtime correlation.
+4. Kiểm tra public API, layer ownership và runtime correlation.
 5. Nếu thay đổi cấu trúc, chạy `codegraph sync .` rồi kiểm tra lại index.

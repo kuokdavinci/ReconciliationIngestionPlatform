@@ -16,7 +16,7 @@ class TestReconciliationFile:
 
     def test_create_with_all_required_fields(self):
         """ReconciliationFile can be instantiated with all required fields."""
-        from src.models.reconciliation_file import ReconciliationFile
+        from src.domain.ingestion.models import ReconciliationFile
 
         now = datetime.now(timezone.utc)
         doc = ReconciliationFile(
@@ -39,7 +39,7 @@ class TestReconciliationFile:
 
     def test_serialization_to_dict(self):
         """ReconciliationFile serializes to dict correctly for MongoDB insertion."""
-        from src.models.reconciliation_file import ReconciliationFile
+        from src.domain.ingestion.models import ReconciliationFile
 
         now = datetime.now(timezone.utc)
         doc = ReconciliationFile(
@@ -59,7 +59,7 @@ class TestReconciliationFile:
 
     def test_file_hash_uniqueness_intent(self):
         """ReconciliationFile.file_hash is used for duplicate detection."""
-        from src.models.reconciliation_file import ReconciliationFile
+        from src.domain.ingestion.models import ReconciliationFile
 
         now = datetime.now(timezone.utc)
         doc1 = ReconciliationFile(
@@ -87,7 +87,7 @@ class TestMappingConfig:
     def test_create_with_field_mappings(self):
         """MappingConfig accepts list of FieldMapping objects."""
         from src.core.types import FieldMapping, FieldMappingType
-        from src.models.mapping_config import MappingConfig
+        from src.domain.mapping.models import MappingConfig
 
         mappings = [
             FieldMapping(
@@ -120,7 +120,7 @@ class TestMappingConfig:
     def test_serialization_to_dict(self):
         """MappingConfig serializes to dict correctly."""
         from src.core.types import FieldMapping, FieldMappingType
-        from src.models.mapping_config import MappingConfig
+        from src.domain.mapping.models import MappingConfig
 
         doc = MappingConfig(
             partner="MOMO",
@@ -143,7 +143,7 @@ class TestDataContainer:
 
     def test_partner_data_creation(self):
         """PartnerData can be created with all fields."""
-        from src.models.data_container import PartnerData
+        from src.domain.partner_transaction.models import PartnerData
 
         doc = PartnerData(
             **{"_id": "61838642196"},
@@ -161,7 +161,7 @@ class TestDataContainer:
 
     def test_partner_data_amount_is_decimal(self):
         """PartnerData.amount uses Decimal type (not float)."""
-        from src.models.data_container import PartnerData
+        from src.domain.partner_transaction.models import PartnerData
 
         doc = PartnerData(
             id="123",
@@ -174,7 +174,7 @@ class TestDataContainer:
 
     def test_partner_data_rejects_float_amount(self):
         """PartnerData rejects float amounts for financial correctness."""
-        from src.models.data_container import PartnerData
+        from src.domain.partner_transaction.models import PartnerData
 
         with pytest.raises(ValidationError):
             PartnerData(
@@ -186,7 +186,7 @@ class TestDataContainer:
 
     def test_data_container_with_nested_partner_data(self):
         """DataContainer.partner_data is a nested PartnerData object (not string)."""
-        from src.models.data_container import DataContainer, PartnerData
+        from src.domain.partner_transaction.models import DataContainer, PartnerData
 
         partner = PartnerData(
             id="61838642196",
@@ -211,7 +211,7 @@ class TestDataContainer:
 
     def test_data_container_serialization(self):
         """DataContainer serializes to dict with nested partnerData object."""
-        from src.models.data_container import DataContainer, PartnerData
+        from src.domain.partner_transaction.models import DataContainer, PartnerData
 
         partner = PartnerData(
             id="61838642196",
@@ -242,7 +242,7 @@ class TestBaseRepository:
 
     def test_repository_has_required_methods(self):
         """BaseRepository provides create, find_one, find_many, update_one, delete_one."""
-        from src.models.repository import BaseRepository
+        from src.infrastructure.persistence.mongo_repository import BaseRepository
 
         assert hasattr(BaseRepository, "create")
         assert hasattr(BaseRepository, "find_one")
@@ -252,7 +252,7 @@ class TestBaseRepository:
 
     def test_repository_constructor(self):
         """BaseRepository constructor takes collection_name and database."""
-        from src.models.repository import BaseRepository
+        from src.infrastructure.persistence.mongo_repository import BaseRepository
 
         mock_db = MagicMock()
         repo = BaseRepository(collection_name="test_collection", db=mock_db)
@@ -266,7 +266,7 @@ class TestReconciliationFileRepository:
 
     def test_has_specialized_methods(self):
         """ReconciliationFileRepository has domain-specific query methods."""
-        from src.models.reconciliation_file import ReconciliationFileRepository
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 
         assert hasattr(ReconciliationFileRepository, "find_by_file_hash")
         assert hasattr(ReconciliationFileRepository, "create_or_get_by_file_hash")
@@ -277,7 +277,8 @@ class TestReconciliationFileRepository:
     @pytest.mark.asyncio
     async def test_create_or_get_by_file_hash_returns_existing_on_duplicate(self):
         from pymongo.errors import DuplicateKeyError
-        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+        from src.domain.ingestion.models import ReconciliationFile
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 
         mock_db = MagicMock()
         mock_collection = AsyncMock()
@@ -314,7 +315,8 @@ class TestReconciliationFileRepository:
 
     @pytest.mark.asyncio
     async def test_create_or_get_by_file_hash_inserts_new_record(self):
-        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+        from src.domain.ingestion.models import ReconciliationFile
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 
         mock_db = MagicMock()
         mock_collection = AsyncMock()
@@ -341,7 +343,8 @@ class TestReconciliationFileRepository:
     @pytest.mark.asyncio
     async def test_create_or_get_resolves_fetch_unit_duplicate(self):
         from pymongo.errors import DuplicateKeyError
-        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+        from src.domain.ingestion.models import ReconciliationFile
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 
         mock_db = MagicMock()
         mock_collection = AsyncMock()
@@ -383,7 +386,8 @@ class TestReconciliationFileRepository:
     async def test_concurrent_file_claim_has_one_canonical_winner(self):
         import asyncio
         from pymongo.errors import DuplicateKeyError
-        from src.models.reconciliation_file import ReconciliationFile, ReconciliationFileRepository
+        from src.domain.ingestion.models import ReconciliationFile
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 
         mock_db = MagicMock()
         mock_collection = AsyncMock()
@@ -417,7 +421,7 @@ class TestMappingConfigRepository:
 
     def test_has_specialized_methods(self):
         """MappingConfigRepository has domain-specific query methods."""
-        from src.models.mapping_config import MappingConfigRepository
+        from src.infrastructure.mapping.config_repository import MappingConfigRepository
 
         assert hasattr(MappingConfigRepository, "find_by_partner_and_type")
         assert hasattr(MappingConfigRepository, "find_by_version")
@@ -425,7 +429,7 @@ class TestMappingConfigRepository:
 
 class TestDataContainerRepository:
     def test_has_specialized_methods(self):
-        from src.models.data_container import DataContainerRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
 
         assert hasattr(DataContainerRepository, "find_by_trace")
         assert hasattr(DataContainerRepository, "find_by_ingestion_key")
@@ -435,7 +439,7 @@ class TestDataContainerRepository:
         assert hasattr(DataContainerRepository, "delete_by_source_file")
 
     def test_repository_uses_explicit_postgres_engine(self):
-        from src.models.data_container import DataContainerRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
 
         engine = object()
         repo = DataContainerRepository(db=MagicMock(), engine=engine)
@@ -445,7 +449,7 @@ class TestDataContainerRepository:
 
     @pytest.mark.asyncio
     async def test_insert_many_returns_zero_for_empty_list(self):
-        from src.models.data_container import DataContainerRepository
+        from src.infrastructure.partner_transaction.repository import DataContainerRepository
 
         repo = DataContainerRepository(engine=object())
 
@@ -454,7 +458,8 @@ class TestDataContainerRepository:
 
 class TestDataContainerIngestionKey:
     def test_ingestion_key_roundtrip_via_row_helpers(self):
-        from src.models.data_container import (DataContainer, PartnerData, data_container_to_row, row_to_data_container)
+        from src.domain.partner_transaction.models import DataContainer, PartnerData
+        from src.infrastructure.partner_transaction.repository import data_container_to_row, row_to_data_container
         now = datetime.now(timezone.utc)
         partner = PartnerData(id="TXN001", trace="TRACE001", status="SUCCESS", amount=Decimal("100000"), currency="VND")
         doc = DataContainer(identify="MOMO", workflow_type="UPC", reconciliation_date=now, source_file_id=uuid.uuid4(), partner_data=partner, ingestion_key="MOMO:TXN001")
@@ -470,15 +475,15 @@ class TestModelImports:
 
     def test_all_imports(self):
         """All model imports succeed."""
-        from src.models.reconciliation_file import (
+        from src.domain.ingestion.models import (
             ReconciliationFile,
         )
-        from src.models.mapping_config import MappingConfig
-        from src.models.data_container import (
+        from src.domain.mapping.models import MappingConfig
+        from src.domain.partner_transaction.models import (
             DataContainer,
             PartnerData,
         )
-        from src.models.repository import BaseRepository
+        from src.infrastructure.persistence.mongo_repository import BaseRepository
 
         # Verify they are classes
         assert isinstance(ReconciliationFile, type)
@@ -491,7 +496,7 @@ class TestModelImports:
 class TestPostgresSchema:
     def test_partner_transaction_has_unique_identity_constraint(self):
         from sqlalchemy import UniqueConstraint
-        from src.models.postgres import PartnerTransactionTable
+        from src.infrastructure.persistence.postgres_schema import PartnerTransactionTable
 
         unique_constraints = [
             constraint

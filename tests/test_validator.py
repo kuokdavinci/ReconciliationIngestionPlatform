@@ -324,7 +324,7 @@ class TestDuplicateDetection:
     @pytest.mark.asyncio
     async def test_transaction_duplicate_detected(self):
         """Transaction duplicate detected when repo returns match."""
-        from src.models.data_container import DataContainer, PartnerData
+        from src.domain.partner_transaction.models import DataContainer, PartnerData
 
         rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
         partner = PartnerData(
@@ -394,7 +394,7 @@ class TestDuplicateDetection:
     @pytest.mark.asyncio
     async def test_file_duplicate_detected(self):
         """File duplicate detected when repo returns match."""
-        from src.models.reconciliation_file import ReconciliationFile
+        from src.domain.ingestion.models import ReconciliationFile
 
         rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
         existing_file = ReconciliationFile(
@@ -457,8 +457,8 @@ class TestDuplicateDetection:
     @pytest.mark.asyncio
     async def test_both_transaction_and_file_duplicates(self):
         """Both transaction + file duplicates detected simultaneously."""
-        from src.models.data_container import DataContainer, PartnerData
-        from src.models.reconciliation_file import ReconciliationFile
+        from src.domain.partner_transaction.models import DataContainer, PartnerData
+        from src.domain.ingestion.models import ReconciliationFile
 
         rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
         partner = PartnerData(
@@ -598,7 +598,7 @@ class TestFullValidationPipeline:
     @pytest.mark.asyncio
     async def test_valid_transaction_with_transaction_duplicate(self):
         """Valid transaction with transaction duplicate → is_valid=False, 1 error."""
-        from src.models.data_container import DataContainer, PartnerData
+        from src.domain.partner_transaction.models import DataContainer, PartnerData
 
         rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
         partner = PartnerData(
@@ -641,7 +641,7 @@ class TestFullValidationPipeline:
     @pytest.mark.asyncio
     async def test_valid_transaction_with_file_duplicate(self):
         """Valid transaction with file duplicate → is_valid=False, 1 error."""
-        from src.models.reconciliation_file import ReconciliationFile
+        from src.domain.ingestion.models import ReconciliationFile
 
         rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
         existing_file = ReconciliationFile(
@@ -677,7 +677,7 @@ class TestFullValidationPipeline:
     @pytest.mark.asyncio
     async def test_invalid_transaction_with_negative_amount_and_duplicate(self):
         """Invalid transaction (negative amount) with transaction duplicate → 2 errors."""
-        from src.models.data_container import DataContainer, PartnerData
+        from src.domain.partner_transaction.models import DataContainer, PartnerData
 
         rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
         partner = PartnerData(
@@ -721,8 +721,8 @@ class TestFullValidationPipeline:
     @pytest.mark.asyncio
     async def test_invalid_transaction_with_missing_id_and_both_duplicates(self):
         """Invalid transaction (missing id) with both duplicates → 3 errors."""
-        from src.models.data_container import DataContainer, PartnerData
-        from src.models.reconciliation_file import ReconciliationFile
+        from src.domain.partner_transaction.models import DataContainer, PartnerData
+        from src.domain.ingestion.models import ReconciliationFile
 
         rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
         partner = PartnerData(

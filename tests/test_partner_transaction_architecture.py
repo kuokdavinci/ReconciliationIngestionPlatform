@@ -7,17 +7,10 @@ import pytest
 
 from src.domain.partner_transaction.models import DataContainer, PartnerData
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
-from src.models.data_container import (
-    DataContainer as LegacyDataContainer,
-    DataContainerRepository as LegacyRepository,
-    PartnerData as LegacyPartnerData,
-)
-
-
-def test_partner_transaction_implementation_has_legacy_compatibility_identity():
-    assert LegacyDataContainer is DataContainer
-    assert LegacyPartnerData is PartnerData
-    assert LegacyRepository is DataContainerRepository
+def test_partner_transaction_domain_and_adapter_have_separate_ownership():
+    assert DataContainer.__module__ == "src.domain.partner_transaction.models"
+    assert PartnerData.__module__ == "src.domain.partner_transaction.models"
+    assert DataContainerRepository.__module__ == "src.infrastructure.partner_transaction.repository"
 
 
 def test_partner_transaction_repository_accepts_explicit_postgres_engine():

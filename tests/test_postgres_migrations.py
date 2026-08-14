@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from src.config.settings import settings
-from src.models.postgres import _alembic_config, init_postgres_db
+from src.infrastructure.persistence.postgres_connection import _alembic_config, init_postgres_db
 
 
 pytestmark = pytest.mark.integration

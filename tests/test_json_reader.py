@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from src.models.mapping_config import MappingConfig, FileType
+from src.core.enums import FileType
+from src.domain.mapping.models import MappingConfig
 from src.readers import create_reader
 from src.readers.json_reader import JSONStreamReader
 

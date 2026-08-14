@@ -11,8 +11,9 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from src.config.settings import settings
-from src.models.data_container import DataContainer, DataContainerRepository, PartnerData
-from src.models.postgres import PartnerTransactionTable
+from src.domain.partner_transaction.models import DataContainer, PartnerData
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
+from src.infrastructure.persistence.postgres_schema import PartnerTransactionTable
 
 
 pytestmark = pytest.mark.integration

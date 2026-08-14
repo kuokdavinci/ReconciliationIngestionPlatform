@@ -9,7 +9,7 @@ import pytest
 from src.fetchers.filedrop_fetcher import FileDropFetcher
 from src.fetchers.sftp_fetcher import SFTPFetcher
 from src.fetchers.base import BaseFetcher
-from src.models.fetch_config import FileDropConfig, SFTPConfig
+from src.domain.fetch_config.models import FileDropConfig, SFTPConfig
 
 
 def test_relative_local_paths_are_resolved_from_application_root(tmp_path, monkeypatch):

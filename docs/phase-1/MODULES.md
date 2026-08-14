@@ -11,7 +11,7 @@ Bản đồ dưới đây phản ánh package hiện có trong `src/`, `dags/` v
 | `src/api/` | FastAPI routers và delivery contracts | `__init__.py`, `automation.py`, `review_packets.py`, `reconciliation.py` |
 | `src/application/automation/` | Stream execution, job command/query, checkpoint wiring, backfill, Airflow contracts | `service.py::execute_stream`, `stream_runner.py::run_source_stream`, `stream_identity.py`, `backfill_service.py` |
 | `src/application/ingestion/` | Source-unit orchestration, error classification, recovery view | `source_unit_orchestrator.py::process_source_units`, `recovery_view.py` |
-| `src/application/review/` | Review packet, evidence, raw stream, validation, mapping approval/reprocess | `actions.py`, `mapping_workflow.py`, `raw_stream.py`, `runtime_validation.py` |
+| `src/application/review/` | Review packet, evidence, raw stream, validation, mapping approval/reprocess | `actions.py`, `mapping_workflow.py`, `reprocessing.py`, `raw_stream.py` |
 | `src/application/reconciliation/` | Manual reconciliation use cases và context queries | `service.py`, `manual_runs.py`, `queries.py` |
 | `src/application/mapping/` | Mapping proposal, save/approve/reject và validation | `service.py`, `proposals.py`, `errors.py` |
 | `src/application/runtime/` | Tạo/cập nhật/serialize runtime run | `service.py` |
@@ -26,7 +26,7 @@ Bản đồ dưới đây phản ánh package hiện có trong `src/`, `dags/` v
 | `src/analysis/` | Insights, metrics, reports, alerts, guardrails, provider fallback | `provider.py`, `insights.py`, `services.py`, `guardrails.py` |
 | `src/config/` | Settings, mapping loader/cache/validator, config health, AI mapping | `settings.py`, `loader.py`, `validator.py`, `config_health.py` |
 | `src/core/` | Shared enums, constants, business date, canonical types | `enums.py`, `types.py`, `business_day.py` |
-| `src/models/` | Compatibility/persistence models và index facades | `fetch_config.py`, `review_packet.py`, `partner_runtime_run.py`, `postgres.py` |
+| `src/infrastructure/persistence/` | Mongo index definitions, PostgreSQL schema/connection và persistence bootstrap | `mongo_indexes.py`, `postgres_schema.py`, `postgres_connection.py` |
 | `src/logging/` | Structured logging helpers | `logger.py` |
 
 ## Airflow và runtime entrypoints

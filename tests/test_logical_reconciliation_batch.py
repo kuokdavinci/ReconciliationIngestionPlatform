@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.enums import ProcessingStatus
-from src.application.review.actions import _reprocess_staged_pages
+from src.application.review.reprocessing import reprocess_staged_pages
 
 
 def _pages():
@@ -110,18 +110,17 @@ async def test_three_pages_share_one_file_and_reconcile_once():
     raw_repo, file_repo, transaction_repo, result_repo, pipeline, reconciliation = harness
 
     with (
-        patch("src.application.review.actions.RawIngestionPageRepository", return_value=raw_repo),
-        patch("src.application.review.actions.ReconciliationFileRepository", return_value=file_repo),
-        patch("src.application.review.actions.DataContainerRepository", return_value=transaction_repo),
-        patch("src.application.review.actions.ReconciliationResultRepository", return_value=result_repo),
-        patch("src.application.review.actions.build_ingestion_pipeline", return_value=pipeline),
-        patch("src.application.review.actions.build_reconciliation_service", return_value=reconciliation),
-        patch("src.application.review.actions.build_config_loader", return_value=MagicMock()),
-        patch("src.application.review.actions.invalidate_insight_cache", new=AsyncMock(return_value=True)),
-        patch("src.application.review.actions.update_runtime_run", new=AsyncMock()),
-        patch("src.application.review.actions._update_post_approval_run", new=AsyncMock()),
+        patch("src.application.review.reprocessing.RawIngestionPageRepository", return_value=raw_repo),
+        patch("src.application.review.reprocessing.ReconciliationFileRepository", return_value=file_repo),
+        patch("src.application.review.reprocessing.DataContainerRepository", return_value=transaction_repo),
+        patch("src.application.review.reprocessing.ReconciliationResultRepository", return_value=result_repo),
+        patch("src.application.review.reprocessing.build_ingestion_pipeline", return_value=pipeline),
+        patch("src.application.review.reprocessing.build_reconciliation_service", return_value=reconciliation),
+        patch("src.application.review.reprocessing.build_config_loader", return_value=MagicMock()),
+        patch("src.application.review.reprocessing.update_runtime_run", new=AsyncMock()),
+        patch("src.application.review.reprocessing._update_post_approval_run", new=AsyncMock()),
     ):
-        result = await _reprocess_staged_pages(
+        result = await reprocess_staged_pages(
             db=MagicMock(),
             packet=_packet(),
             config=_config(),
@@ -153,16 +152,16 @@ async def test_failed_middle_page_stops_before_reconciliation():
     raw_repo, file_repo, transaction_repo, result_repo, pipeline, reconciliation = harness
 
     with (
-        patch("src.application.review.actions.RawIngestionPageRepository", return_value=raw_repo),
-        patch("src.application.review.actions.ReconciliationFileRepository", return_value=file_repo),
-        patch("src.application.review.actions.DataContainerRepository", return_value=transaction_repo),
-        patch("src.application.review.actions.ReconciliationResultRepository", return_value=result_repo),
-        patch("src.application.review.actions.build_ingestion_pipeline", return_value=pipeline),
-        patch("src.application.review.actions.build_config_loader", return_value=MagicMock()),
-        patch("src.application.review.actions.update_runtime_run", new=AsyncMock()),
-        patch("src.application.review.actions._update_post_approval_run", new=AsyncMock()),
+        patch("src.application.review.reprocessing.RawIngestionPageRepository", return_value=raw_repo),
+        patch("src.application.review.reprocessing.ReconciliationFileRepository", return_value=file_repo),
+        patch("src.application.review.reprocessing.DataContainerRepository", return_value=transaction_repo),
+        patch("src.application.review.reprocessing.ReconciliationResultRepository", return_value=result_repo),
+        patch("src.application.review.reprocessing.build_ingestion_pipeline", return_value=pipeline),
+        patch("src.application.review.reprocessing.build_config_loader", return_value=MagicMock()),
+        patch("src.application.review.reprocessing.update_runtime_run", new=AsyncMock()),
+        patch("src.application.review.reprocessing._update_post_approval_run", new=AsyncMock()),
     ):
-        result = await _reprocess_staged_pages(
+        result = await reprocess_staged_pages(
             db=MagicMock(),
             packet=_packet(),
             config=_config(),
@@ -190,17 +189,17 @@ async def test_reconciliation_failure_marks_logical_batch_failed():
     reconciliation.execute = AsyncMock(side_effect=RuntimeError("reconciliation failed"))
 
     with (
-        patch("src.application.review.actions.RawIngestionPageRepository", return_value=raw_repo),
-        patch("src.application.review.actions.ReconciliationFileRepository", return_value=file_repo),
-        patch("src.application.review.actions.DataContainerRepository", return_value=transaction_repo),
-        patch("src.application.review.actions.ReconciliationResultRepository", return_value=result_repo),
-        patch("src.application.review.actions.build_ingestion_pipeline", return_value=pipeline),
-        patch("src.application.review.actions.build_reconciliation_service", return_value=reconciliation),
-        patch("src.application.review.actions.build_config_loader", return_value=MagicMock()),
-        patch("src.application.review.actions.update_runtime_run", new=AsyncMock()),
-        patch("src.application.review.actions._update_post_approval_run", new=AsyncMock()),
+        patch("src.application.review.reprocessing.RawIngestionPageRepository", return_value=raw_repo),
+        patch("src.application.review.reprocessing.ReconciliationFileRepository", return_value=file_repo),
+        patch("src.application.review.reprocessing.DataContainerRepository", return_value=transaction_repo),
+        patch("src.application.review.reprocessing.ReconciliationResultRepository", return_value=result_repo),
+        patch("src.application.review.reprocessing.build_ingestion_pipeline", return_value=pipeline),
+        patch("src.application.review.reprocessing.build_reconciliation_service", return_value=reconciliation),
+        patch("src.application.review.reprocessing.build_config_loader", return_value=MagicMock()),
+        patch("src.application.review.reprocessing.update_runtime_run", new=AsyncMock()),
+        patch("src.application.review.reprocessing._update_post_approval_run", new=AsyncMock()),
     ):
-        result = await _reprocess_staged_pages(
+        result = await reprocess_staged_pages(
             db=MagicMock(),
             packet=_packet(),
             config=_config(),

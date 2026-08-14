@@ -21,8 +21,8 @@ Incremental recovery, quarantine dữ liệu lỗi và observability thuộc cá
 | Khu vực | Thành phần | Kết quả |
 |---|---|---|
 | Schema | `alembic/versions/0002_ingestion_idempotency.py` | Thêm `ingestion_key` và hợp đồng uniqueness trong PostgreSQL. |
-| Persistence | `src/models/postgres.py`, `src/models/data_container.py` | Repository giao dịch PostgreSQL và ghi batch an toàn khi conflict. |
-| Claim | `src/models/reconciliation_file.py`, `src/models/indexes.py` | Cơ chế atomic create-or-get cho file/fetch-unit. |
+| Persistence | `src/infrastructure/persistence/postgres_schema.py`, `src/infrastructure/partner_transaction/repository.py` | Repository giao dịch PostgreSQL và ghi batch an toàn khi conflict. |
+| Claim | `src/infrastructure/ingestion/file_repository.py`, `src/infrastructure/persistence/mongo_indexes.py` | Cơ chế atomic create-or-get cho file/fetch-unit. |
 | Pipeline | `src/pipeline/ingestion_pipeline.py`, `src/core/types.py` | Suy ra key, xử lý replay và thống kê chi tiết. |
 | Runtime | `src/fetchers/*`, `src/application/automation/stream_runner.py`, `src/api/automation.py` | Truyền metadata idempotency và công bố duplicate outcome. |
 | E2E | `scripts/demo/sprint1/seed_momo_e2e.py`, `tests/test_sprint1_eval_benchmark.py` | Helper seed và bộ đánh giá Sprint 1. |

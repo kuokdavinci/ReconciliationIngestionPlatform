@@ -12,22 +12,14 @@ from src.domain.runtime.models import (
     RuntimeOrchestrationContext,
 )
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
-from src.models.partner_runtime_run import (
-    PartnerRuntimeRun as LegacyPartnerRuntimeRun,
-    PartnerRuntimeRunRepository as LegacyPartnerRuntimeRunRepository,
-    PartnerRuntimeRunStatus as LegacyPartnerRuntimeRunStatus,
-    PartnerRuntimeTriggerType as LegacyPartnerRuntimeTriggerType,
-)
 from src.application.runtime.service import serialize_partner_runtime_run, update_runtime_run
 
 
-def test_legacy_runtime_module_is_a_compatibility_facade() -> None:
-    """Legacy imports must resolve to domain and infrastructure implementations."""
-
-    assert LegacyPartnerRuntimeRun is PartnerRuntimeRun
-    assert LegacyPartnerRuntimeRunRepository is PartnerRuntimeRunRepository
-    assert LegacyPartnerRuntimeRunStatus is PartnerRuntimeRunStatus
-    assert LegacyPartnerRuntimeTriggerType is PartnerRuntimeTriggerType
+def test_runtime_domain_and_adapter_have_separate_ownership() -> None:
+    assert PartnerRuntimeRun.__module__ == "src.domain.runtime.models"
+    assert PartnerRuntimeRunRepository.__module__ == "src.infrastructure.runtime.repository"
+    assert PartnerRuntimeRunStatus.__module__ == "src.domain.runtime.models"
+    assert PartnerRuntimeTriggerType.__module__ == "src.domain.runtime.models"
 
 
 def test_runtime_run_serializes_airflow_correlation() -> None:

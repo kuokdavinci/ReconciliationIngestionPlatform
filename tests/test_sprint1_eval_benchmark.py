@@ -21,17 +21,17 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.core.enums import FileType
 from src.core.types import FieldMapping, FieldMappingType
-from src.models.mapping_config import MappingConfig
-from src.models.data_container import DataContainerRepository
-from src.models.reconciliation_file import ReconciliationFileRepository
-from src.models.postgres import get_pg_engine
+from src.domain.mapping.models import MappingConfig
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
+from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+from src.infrastructure.persistence.postgres_connection import get_pg_engine
 from src.pipeline import IngestionPipeline
 from src.config.settings import settings
-from src.models.indexes import INDEXES
+from src.infrastructure.persistence.mongo_indexes import INDEXES
 
 
 def _benchmark_transaction(identify: str, key: str):
-    from src.models.data_container import DataContainer, PartnerData
+    from src.domain.partner_transaction.models import DataContainer, PartnerData
 
     return DataContainer(
         identify=identify,
@@ -51,7 +51,7 @@ def _benchmark_transaction(identify: str, key: str):
 
 async def _run_mongo_claim_scenarios(eval_results, record_eval):
     """Run file/fetch-unit claims against the real Mongo metadata store."""
-    from src.models.reconciliation_file import ReconciliationFile
+    from src.domain.ingestion.models import ReconciliationFile
 
     client = AsyncIOMotorClient(settings.mongodb_url, serverSelectionTimeoutMS=3000)
     try:
@@ -159,7 +159,7 @@ async def test_run_sprint1_eval_and_generate_report():
     engine = get_pg_engine()
     
     # Ensure tables exist directly via SQLAlchemy Base metadata
-    from src.models.postgres import Base
+    from src.infrastructure.persistence.postgres_schema import Base
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("DELETE FROM partner_transaction WHERE identify = 'MOMO_EVAL'"))
@@ -515,9 +515,9 @@ async def test_run_sprint1_eval_and_generate_report():
         repository_sources = "\n".join(
             Path(path).read_text(encoding="utf-8")
             for path in (
-                "src/models/data_container.py",
-                "src/models/internal_transaction.py",
-                "src/models/reconciliation_result.py",
+                "src/infrastructure/partner_transaction/repository.py",
+                "src/infrastructure/postgres/internal_transaction_repository.py",
+                "src/infrastructure/postgres/reconciliation_result_repository.py",
             )
         )
         forbidden_mongo_collections = (

@@ -14,6 +14,7 @@ from src.infrastructure.review.repository import ReviewPacketRepository
 from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.application.review.errors import ReviewNotFoundError, ReviewValidationError
+from src.application.copilot.action_recommendations import build_recommendation_actions
 
 
 def _enum_value(value: Any) -> str:
@@ -271,7 +272,7 @@ class CopilotContextService:
                 latest_file=latest_file,
                 latest_file_status=latest_file_status,
             )
-            primary_action, secondary_actions, decision_actions = self._actions(
+            primary_action, secondary_actions, decision_actions = build_recommendation_actions(
                 status=status,
                 has_packet=has_packet,
                 has_draft=has_draft,
@@ -463,74 +464,6 @@ class CopilotContextService:
         else:
             lines.append(_business_copy("The latest file has no blocking processing failure."))
         return lines
-
-    def _actions(
-        self,
-        *,
-        status: str,
-        has_packet: bool,
-        has_draft: bool,
-        has_runtime: bool,
-    ) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-        secondary: list[dict[str, Any]] = [
-            {
-                "key": "refresh_context",
-                "label": "Refresh recommendation",
-                "style": "secondary",
-                "enabled": True,
-            }
-        ]
-        primary: Optional[dict[str, Any]] = None
-        decision: list[dict[str, Any]] = []
-
-        if status == "healthy":
-            return None, secondary, decision
-
-        if has_packet or has_draft:
-            primary = {
-                "key": "review_proposal",
-                "label": "Open Review Center",
-                "style": "primary",
-                "enabled": True,
-            }
-            secondary.append({
-                "key": "open_mapping_details",
-                "label": "Open mapping details",
-                "style": "secondary",
-                "enabled": True,
-            })
-            if has_packet:
-                decision = [
-                    {
-                        "key": "approve_activate_next_runtime",
-                        "label": "Approve activate next runtime",
-                        "style": "secondary",
-                        "enabled": True,
-                    },
-                    {
-                        "key": "approve_keep_current",
-                        "label": "Keep current",
-                        "style": "secondary",
-                        "enabled": has_runtime,
-                    },
-                    {
-                        "key": "reject_proposal",
-                        "label": "Reject",
-                        "style": "secondary",
-                        "enabled": True,
-                    },
-                ]
-            return primary, secondary, decision
-
-        # monitor or blocked (no pending review, but no runtime or file warnings)
-        label = "Open Mapping Studio" if status == "blocked" else "Open mapping details or Open file details"
-        primary = {
-            "key": "open_mapping_details",
-            "label": label,
-            "style": "primary",
-            "enabled": True,
-        }
-        return primary, secondary, decision
 
     def _file_evidence(self, latest_file: Any | None) -> Optional[dict[str, Any]]:
         if latest_file is None:

@@ -53,15 +53,15 @@ Notebook/script và báo cáo là deliverable bắt buộc của Sprint 3. UI qu
 
 ## File dự kiến modified
 
-- `src/models/quarantine_record.py` — model, enum trạng thái/severity/phase và repository.
-- `src/models/indexes.py` — index theo file/unit/status/partner và index phục vụ reprocess.
+- `src/domain/ingestion/quarantine.py` và `src/infrastructure/ingestion/quarantine_repository.py` — model, enum trạng thái/severity/phase và repository.
+- `src/infrastructure/persistence/mongo_indexes.py` — index theo file/unit/status/partner và index phục vụ reprocess.
 - `src/core/types.py` — mở rộng `ValidationError`/`ProcessingStats` với phase, code, severity và counters.
 - `src/normalizer/normalizer.py` — trả error code/phase nhất quán cho lỗi normalize.
 - `src/validators/validator.py` — gắn severity/code và phân biệt validation với duplicate.
 - `src/pipeline/ingestion_pipeline.py` — persist quarantine theo batch, xử lý fatal-vs-record, cập nhật counters.
 - `scripts/eda/partner_quality_profile.py` hoặc `notebooks/eda_partner_quality.ipynb` — profiling fixture và sinh quality profile/report.
 - `src/quality/` — các quality rule deterministic dùng chung sau khi thử nghiệm trong EDA; không đặt trong `src/analysis/` để tránh trộn với AI insights sau đối soát.
-- `src/models/reconciliation_file.py` — lưu rejected/duplicate/quarantine counts và trạng thái batch.
+- `src/domain/ingestion/models.py` và `src/infrastructure/ingestion/file_repository.py` — lưu rejected/duplicate/quarantine counts và trạng thái batch.
 - `src/api/automation.py` hoặc router ingestion mới — endpoint vận hành reprocess quarantine; chỉ thêm API backend tối thiểu, không làm frontend.
 - `tests/test_validator.py`, `tests/test_normalizer.py`, `tests/test_ingestion_integration.py`, `tests/test_models.py` — test quarantine persistence, fatal structure, partial batch và reprocess.
 - `tests/test_data_quality_profile.py` — test profile, schema drift, missing/duplicate, outlier flag và quality decision trên fixture.

@@ -18,3 +18,14 @@
 - Focused tests: `rtk proxy .venv/bin/pytest -q tests/test_reconciliation.py tests/test_reconciliation_architecture.py tests/test_reconciliation_run_architecture.py` — `32 passed in 0.20s`.
 - Ruff: focused Task 3 source/tests — `All checks passed!`.
 - Fix commit: `5c78924` (`fix: type reconciliation document executor`).
+
+## Fix round 2
+
+- Fix commit: `8fa838e` (`fix: preserve reconciliation writes and scoped deletion`).
+- Root cause: result deletion was defined but not deferred to the first non-empty write, and completed write tasks were pruned before `asyncio.gather()` could retrieve failures. The typed internal-reader port also incorrectly used the reconciliation-output union, making the PostgreSQL executor incompatible with the executor protocol.
+- Fix: route unmapped, matched/unmatched partner, unmatched internal, and final buffers through one non-empty flush helper; delete once immediately before the first write; retain every write task for `asyncio.gather()`; keep the `__anext__` fallback and typed aliases/Literal; separate internal-reader output typing and annotate the PostgreSQL executor with `ReconciliationOutput` safely.
+- Regression evidence: `test_reconciliation_reraises_document_write_failure` now propagates `insert_many` errors; empty input and pending-only input do not delete; existing scope tests verify exactly-once deletion.
+- Focused tests: `rtk proxy .venv/bin/pytest -q tests/test_reconciliation.py tests/test_reconciliation_architecture.py tests/test_reconciliation_run_architecture.py` — `35 passed in 0.20s`.
+- Ruff: focused Task 3 source/tests — `All checks passed!`.
+- Mypy: focused Task 3 source/composition check — `Success: no issues found in 5 source files`.
+- Scope: only the five Task 3 implementation/test files were included in `8fa838e`; TODO.md and unrelated dirty/untracked documentation were not staged.

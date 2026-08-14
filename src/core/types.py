@@ -63,30 +63,6 @@ class CanonicalTransaction(BaseModel):
         return v
 
 
-class PartnerData(BaseModel):
-    """Raw partner data as a nested object (not a JSON string).
-
-    Represents the original partner transaction before normalization.
-    """
-
-    id: str
-    trace: Optional[str] = None
-    status: str
-    amount: Decimal
-    currency: str
-    transDate: Optional[datetime] = None
-    extra: dict[str, Any] = {}
-
-    @field_validator("amount", mode="before")
-    @classmethod
-    def reject_float(cls, v: Any) -> Any:
-        if isinstance(v, float):
-            raise ValueError(
-                "amount must be Decimal, int, or str — float is not allowed"
-            )
-        return v
-
-
 class ValidationError(BaseModel):
     """Validation error for a specific field or row."""
 

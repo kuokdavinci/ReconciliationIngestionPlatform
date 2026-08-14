@@ -1,3 +1,4 @@
+from pathlib import Path
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
@@ -5,8 +6,17 @@ from uuid import uuid4
 
 import pytest
 
+import src.core.types as core_types
 from src.domain.partner_transaction.models import DataContainer, PartnerData
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
+
+
+def test_core_types_does_not_define_partner_data():
+    source = Path(core_types.__file__).read_text()
+
+    assert "class PartnerData" not in source
+
+
 def test_partner_transaction_domain_and_adapter_have_separate_ownership():
     assert DataContainer.__module__ == "src.domain.partner_transaction.models"
     assert PartnerData.__module__ == "src.domain.partner_transaction.models"

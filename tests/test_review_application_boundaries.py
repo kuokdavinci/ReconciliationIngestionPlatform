@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -119,6 +120,75 @@ async def test_reprocessing_facade_forwards_legacy_builder_patch_points() -> Non
     assert reconcile.await_args.kwargs["pipeline_builder"] is pipeline
     assert reconcile.await_args.kwargs["config_loader_builder"] is config_loader
     assert reconcile.await_args.kwargs["reconciliation_service_builder"] is reconciliation
+
+
+@pytest.mark.asyncio
+async def test_reprocessing_facade_forwards_replay_lifecycle_callbacks() -> None:
+    updater = AsyncMock()
+    runtime_updater = AsyncMock()
+    replacement_rebinder = AsyncMock()
+    replay_result = {"ok": True}
+
+    with patch(
+        "src.application.review.reprocessing._replay_staged_pages",
+        new=AsyncMock(return_value=replay_result),
+    ) as replay:
+        result = await reprocessing.reprocess_staged_pages(
+            db=object(),
+            packet=object(),
+            config=object(),
+            run_id="post-approval-1",
+            runtime_run_id="runtime-1",
+            raw_stage_key="stream-1",
+            updater=updater,
+            runtime_updater=runtime_updater,
+            replacement_rebinder=replacement_rebinder,
+        )
+
+    assert result == replay_result
+    assert replay.await_args.kwargs["updater"] is updater
+    assert replay.await_args.kwargs["runtime_updater"] is runtime_updater
+    assert replay.await_args.kwargs["replacement_rebinder"] is replacement_rebinder
+
+
+@pytest.mark.asyncio
+async def test_post_approval_failure_closes_active_runtime_projection() -> None:
+    from src.application.review.post_approval_reconciliation import (
+        run_post_approval_reprocess,
+    )
+    from src.domain.runtime.models import PartnerRuntimeRunStatus, PartnerRuntimeTriggerType
+
+    packet = SimpleNamespace(partner="VIETTELPAY")
+    config = SimpleNamespace(id="mapping-1")
+    runtime = SimpleNamespace(
+        id="runtime-1",
+        trigger_type=PartnerRuntimeTriggerType.POST_APPROVAL_REPROCESS,
+        status=PartnerRuntimeRunStatus.INGESTING,
+    )
+    packet_repo = SimpleNamespace(find_one=AsyncMock(return_value=packet))
+    config_repo = SimpleNamespace(find_one=AsyncMock(return_value=config))
+    runtime_repo = SimpleNamespace(find_latest_by_partner=AsyncMock(return_value=runtime))
+    updater = AsyncMock()
+    runtime_updater = AsyncMock()
+    processor = AsyncMock(side_effect=RuntimeError("replay exploded"))
+
+    await run_post_approval_reprocess(
+        object(),
+        "post-approval-1",
+        "packet-1",
+        "mapping-1",
+        packet_repository_factory=lambda _: packet_repo,
+        config_repository_factory=lambda _: config_repo,
+        updater=updater,
+        processor=processor,
+        runtime_repository_factory=lambda _: runtime_repo,
+        runtime_updater=runtime_updater,
+    )
+
+    assert updater.await_args.kwargs["status"].value == "FAILED"
+    assert runtime_updater.await_args.args[1] == "runtime-1"
+    assert runtime_updater.await_args.kwargs["status"] is PartnerRuntimeRunStatus.FAILED
+    assert runtime_updater.await_args.kwargs["finished_at"] is not None
 
 
 @pytest.mark.asyncio

@@ -73,6 +73,9 @@ async def reprocess_staged_pages(
     run_id: str,
     runtime_run_id: str,
     raw_stage_key: str,
+    updater: Callable[..., Awaitable[None]] | None = None,
+    runtime_updater: Callable[..., Awaitable[None]] | None = None,
+    replacement_rebinder: Callable[..., Awaitable[int]] | None = None,
 ) -> dict | None:
     """Compatibility entry point delegating page replay to its application service."""
     _sync_staged_compatibility_points()
@@ -83,6 +86,9 @@ async def reprocess_staged_pages(
         run_id=run_id,
         runtime_run_id=runtime_run_id,
         raw_stage_key=raw_stage_key,
+        updater=updater or _update_post_approval_run,
+        runtime_updater=runtime_updater or update_runtime_run,
+        replacement_rebinder=replacement_rebinder or _rebind_replacement_transactions,
     )
 
 

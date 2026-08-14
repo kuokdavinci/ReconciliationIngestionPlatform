@@ -33,6 +33,7 @@ from src.infrastructure.review.repository import (
     PostApprovalRunRepository,
     ReviewPacketRepository,
 )
+from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
 
 
 ScheduleBackground = Callable[[Awaitable[None]], None]
@@ -152,6 +153,47 @@ async def queue_post_approval_reprocess(
     return serialize_post_approval_run(run)
 
 
+async def _mark_latest_post_approval_runtime_failed(
+    db: Any,
+    partner: str,
+    message: str,
+    *,
+    runtime_repository_factory: Callable[[Any], Any] = PartnerRuntimeRunRepository,
+    runtime_updater: Callable[..., Awaitable[None]] = update_runtime_run,
+) -> None:
+    """Close the runtime projection when the post-approval worker crashes.
+
+    The post-approval record and the shared runtime record are separate
+    projections. The worker must close both, otherwise the schedules view
+    keeps treating the latest ``INGESTING``/``RECONCILING`` runtime as active
+    forever after an unexpected exception.
+    """
+    runtime_run = await runtime_repository_factory(db).find_latest_by_partner(partner)
+    if runtime_run is None:
+        return
+    trigger_type = getattr(runtime_run.trigger_type, "value", runtime_run.trigger_type)
+    if trigger_type != PartnerRuntimeTriggerType.POST_APPROVAL_REPROCESS.value:
+        return
+    status = getattr(runtime_run.status, "value", runtime_run.status)
+    if status in {
+        PartnerRuntimeRunStatus.COMPLETED.value,
+        PartnerRuntimeRunStatus.FAILED.value,
+    }:
+        return
+    await runtime_updater(
+        db,
+        str(runtime_run.id),
+        status=PartnerRuntimeRunStatus.FAILED,
+        message=f"Post-approval processing failed: {message}",
+        stats={
+            "errorCode": "POST_APPROVAL_PROCESSING_FAILED",
+            "error": message,
+            "retryable": False,
+        },
+        finished_at=datetime.now(timezone.utc),
+    )
+
+
 async def run_post_approval_reprocess(
     db: Any,
     run_id: str,
@@ -162,6 +204,8 @@ async def run_post_approval_reprocess(
     config_repository_factory: Callable[[Any], Any] = MappingConfigRepository,
     updater: Callable[..., Awaitable[None]] = update_post_approval_run,
     processor: Callable[..., Awaitable[dict | None]] | None = None,
+    runtime_repository_factory: Callable[[Any], Any] = PartnerRuntimeRunRepository,
+    runtime_updater: Callable[..., Awaitable[None]] = update_runtime_run,
 ) -> None:
     packet = await packet_repository_factory(db).find_one({"_id": packet_id})
     config = await config_repository_factory(db).find_one({"_id": config_id})
@@ -188,6 +232,13 @@ async def run_post_approval_reprocess(
             message=f"Post-approval processing failed: {summarized_error}",
             finished_at=datetime.now(timezone.utc),
             errors=[summarized_error],
+        )
+        await _mark_latest_post_approval_runtime_failed(
+            db,
+            packet.partner,
+            summarized_error,
+            runtime_repository_factory=runtime_repository_factory,
+            runtime_updater=runtime_updater,
         )
 
 

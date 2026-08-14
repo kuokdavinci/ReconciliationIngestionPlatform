@@ -68,6 +68,30 @@ def build_review_packet(
     return ReviewPacket(**packet_fields)
 
 
+def build_mapping_action(
+    *,
+    partner: str,
+    workflow_type: str,
+    file_type: FileType,
+    proposal_id: str,
+    payload: dict[str, Any],
+    reason: str,
+    draft_mapping: bool = False,
+) -> CopilotAction:
+    """Build the mapping action shared by uploads and scheduled proposals."""
+    fields: dict[str, Any] = {
+        "type": CopilotActionType.MAPPING_PROPOSAL,
+        "status": CopilotActionStatus.PENDING_APPROVAL,
+        "partner": partner,
+        "workflowType": workflow_type,
+        "fileType": file_type,
+        "draftMappingId" if draft_mapping else "targetConfigId": str(proposal_id),
+        "payload": payload,
+        "reason": reason,
+    }
+    return CopilotAction(**fields)
+
+
 def build_source_file_action(
     *,
     partner: str,
@@ -79,13 +103,11 @@ def build_source_file_action(
     sample_rows: list[list[str]],
 ) -> CopilotAction:
     """Build the upload-generated action while keeping mapping metadata stable."""
-    return CopilotAction(
-        type=CopilotActionType.MAPPING_PROPOSAL,
-        status=CopilotActionStatus.PENDING_APPROVAL,
+    return build_mapping_action(
         partner=partner,
-        workflowType="UPC",
-        fileType=FileType.SETTLEMENT,
-        draftMappingId=str(proposal.id),
+        workflow_type="UPC",
+        file_type=FileType.SETTLEMENT,
+        proposal_id=str(proposal.id),
         payload={
             "proposedMappings": field_mappings,
             "sheetName": proposal.sheet_name,
@@ -96,6 +118,7 @@ def build_source_file_action(
             "sampleRows": sample_rows[:10],
         },
         reason="Generated from source file for review",
+        draft_mapping=True,
     )
 
 
@@ -225,7 +248,6 @@ async def create_stream_scope_review_packet(
         record_count=(scope_meta.get("scopeSignals") or {}).get("internalDbRecordCount"),
     )
     fields: dict[str, Any] = {
-        "fileName": source_file_name,
         "structureSignature": signature_payload,
         "activeRuntimeConfigId": str(active_runtime_config.id),
         "sourceFilePath": source_file_path,
@@ -455,13 +477,12 @@ async def create_scheduled_mapping_proposal(
         },
     )
     await config_repo.create(proposal)
-    action_fields: dict[str, Any] = {
-        "type": CopilotActionType.MAPPING_PROPOSAL,
-        "partner": partner,
-        "workflowType": workflow_type,
-        "fileType": file_type,
-        "targetConfigId": str(proposal.id),
-        "payload": {
+    action = build_mapping_action(
+        partner=partner,
+        workflow_type=workflow_type,
+        file_type=file_type,
+        proposal_id=str(proposal.id),
+        payload={
             "proposedMappings": [],
             "sheetName": proposal.sheet_name,
             "startRow": proposal.start_row,
@@ -469,9 +490,8 @@ async def create_scheduled_mapping_proposal(
             "confidence": 0.0,
             "reasoning": result["reasoning"],
         },
-        "reason": reason,
-    }
-    action = CopilotAction(**action_fields)
+        reason=reason,
+    )
     await action_repo.create(action)
     active_runtime = await config_repo.find_by_partner_and_type(partner, workflow_type, file_type)
     packet = _build_scheduled_packet(

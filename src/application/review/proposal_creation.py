@@ -180,6 +180,39 @@ def build_source_file_review_packet(
     )
 
 
+async def create_studio_handoff_review_packet(
+    *,
+    mapping: MappingConfig,
+    mapping_id: str,
+    packet_repo: ReviewPacketRepository,
+) -> ReviewPacket:
+    """Create the Mapping Studio handoff packet through the application layer."""
+    packet = build_review_packet(
+        source_type=ReviewPacketSourceType.STUDIO_HANDOFF.value,
+        partner=mapping.partner,
+        file_name=mapping.sheet_name or "Manual Configuration",
+        file_type=mapping.file_type or FileType.SETTLEMENT,
+        fields={
+            "structureSignature": mapping.structure_signature,
+            "draftMappingId": mapping_id,
+            "parseStrategy": {
+                "sheetName": mapping.sheet_name,
+                "startRow": mapping.start_row,
+                "fieldMappingCount": len(mapping.field_mappings or []),
+            },
+            "riskSummary": {
+                "severity": "medium",
+                "summary": "Draft mapping handed off from Mapping Studio for review.",
+            },
+            "recommendedAction": {
+                "actionType": "APPROVE_REQUIRED_BEFORE_RUNTIME",
+                "reason": "Draft mapping ready for review and approval.",
+            },
+        },
+    )
+    return await packet_repo.create(packet)
+
+
 async def _find_pending_stage_packet(
     packet_repo: ReviewPacketRepository,
     *,

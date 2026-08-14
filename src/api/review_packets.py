@@ -31,6 +31,7 @@ from src.application.review.actions import (
     mark_packet,
     update_packet_scope,
 )
+from src.application.review.proposal_creation import create_studio_handoff_review_packet
 from src.application.review.reprocessing import serialize_post_approval_run
 from src.infrastructure.mapping.composition import build_config_loader
 from src.application.review.ai_mapping_context import resolve_ai_generation_context
@@ -549,29 +550,12 @@ async def create_review_packet_from_mapping(
     if mapping is None:
         raise HTTPException(status_code=404, detail="Mapping config not found.")
 
-    packet = ReviewPacket(
-        source_type=ReviewPacketSourceType.STUDIO_HANDOFF,
-        partner=mapping.partner,
-        file_name=mapping.sheet_name or "Manual Configuration",
-        file_type_detected=mapping.file_type or "SETTLEMENT",
-        structure_signature=mapping.structure_signature,
-        draft_mapping_id=mapping_id,
-        parse_strategy={
-            "sheetName": mapping.sheet_name,
-            "startRow": mapping.start_row,
-            "fieldMappingCount": len(mapping.field_mappings or []),
-        },
-        risk_summary={
-            "severity": "medium",
-            "summary": "Draft mapping handed off from Mapping Studio for review.",
-        },
-        recommended_action={
-            "actionType": "APPROVE_REQUIRED_BEFORE_RUNTIME",
-            "reason": "Draft mapping ready for review and approval.",
-        },
-    )
     repo = _repo(request)
-    created = await repo.create(packet)
+    created = await create_studio_handoff_review_packet(
+        mapping=mapping,
+        mapping_id=mapping_id,
+        packet_repo=repo,
+    )
     return {"ok": True, "packet": _serialize(created)}
 
 

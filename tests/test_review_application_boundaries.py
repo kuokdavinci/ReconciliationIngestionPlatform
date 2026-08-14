@@ -3,9 +3,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.application.review import proposal_creation
 from src.application.review import reprocessing
 from src.application.review.proposal_creation import build_review_packet
 from src.core.enums import FileType
+from src.domain.mapping.models import MappingConfig
 from src.domain.review.models import ReviewPacketSourceType
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +62,13 @@ def test_config_health_delegates_review_artifact_creation_to_application() -> No
     assert "from src.infrastructure.review.repository import" not in source
 
 
+def test_review_packets_router_delegates_studio_handoff_packet_creation_to_application() -> None:
+    source = (ROOT / "src" / "api" / "review_packets.py").read_text()
+
+    assert "create_studio_handoff_review_packet" in source
+    assert "ReviewPacket(" not in source
+
+
 def test_reprocessing_is_a_facade_for_replay_and_post_approval_lifecycle() -> None:
     source = (REVIEW_ROOT / "reprocessing.py").read_text()
 
@@ -110,3 +119,55 @@ async def test_reprocessing_facade_forwards_legacy_builder_patch_points() -> Non
     assert reconcile.await_args.kwargs["pipeline_builder"] is pipeline
     assert reconcile.await_args.kwargs["config_loader_builder"] is config_loader
     assert reconcile.await_args.kwargs["reconciliation_service_builder"] is reconciliation
+
+
+@pytest.mark.asyncio
+async def test_create_studio_handoff_review_packet_preserves_route_fields() -> None:
+    class InMemoryPacketRepo:
+        def __init__(self) -> None:
+            self.created_packet = None
+
+        async def create(self, packet):
+            self.created_packet = packet
+            return packet
+
+    mapping = MappingConfig(
+        _id="mapping-123",
+        partner="MOMO",
+        workflowType="UPC",
+        fileType=FileType.SETTLEMENT,
+        sheetName="Studio Sheet",
+        startRow=4,
+        fieldMappings=[
+            {"path": "id", "column": "A", "type": "STRING", "required": True},
+            {"path": "amount", "column": "B", "type": "DECIMAL", "required": True},
+            {"path": "currency", "type": "CONSTANT", "constant": "VND"},
+        ],
+        structureSignature={"columns": ["id", "amount", "currency"]},
+    )
+    repo = InMemoryPacketRepo()
+
+    packet = await proposal_creation.create_studio_handoff_review_packet(
+        mapping=mapping,
+        mapping_id="mapping-123",
+        packet_repo=repo,
+    )
+
+    assert repo.created_packet is packet
+    assert packet.source_type == ReviewPacketSourceType.STUDIO_HANDOFF
+    assert packet.partner == "MOMO"
+    assert packet.draft_mapping_id == "mapping-123"
+    assert packet.file_name == "Studio Sheet"
+    assert packet.parse_strategy == {
+        "sheetName": "Studio Sheet",
+        "startRow": 4,
+        "fieldMappingCount": 3,
+    }
+    assert packet.risk_summary == {
+        "severity": "medium",
+        "summary": "Draft mapping handed off from Mapping Studio for review.",
+    }
+    assert packet.recommended_action == {
+        "actionType": "APPROVE_REQUIRED_BEFORE_RUNTIME",
+        "reason": "Draft mapping ready for review and approval.",
+    }

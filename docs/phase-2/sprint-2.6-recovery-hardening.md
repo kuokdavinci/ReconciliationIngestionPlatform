@@ -1,7 +1,9 @@
-# Sprint 2 / 2.5 Recovery Hardening
+# Sprint 2.5 — Recovery Hardening (merged from former Sprint 2.6)
 
 **Branch:** `fix/sprint2-airflow-recovery-hardening`  
-**Status:** Implementation and automated verification complete; live rollout evidence remains environment-dependent
+**Status:** Part of the merged Sprint 2.5 milestone; implementation and automated verification complete, but Sprint 2.5 acceptance remains partial and live rollout evidence is still environment-dependent
+
+> File name giữ `sprint-2.6-recovery-hardening.md` để không làm gãy liên kết lịch sử. Tài liệu này không đại diện cho một sprint độc lập; nó là evidence của Sprint 2.5 cùng với Airflow integration.
 **Owner:** Platform/ingestion team
 
 This document tracks the implementation of the global review findings from
@@ -145,9 +147,6 @@ reconciliation file.
   reconciliation_file, 6 partner rows sharing one sourceFileId, and one
   reconciliation run returning all 6 results. The regression suite covers both
   the successful three-page path and the failed-middle-page path.
-- Design and execution references:
-  [`docs/superpowers/specs/2026-08-11-full-stream-review-mapping-design.md`](../superpowers/specs/2026-08-11-full-stream-review-mapping-design.md)
-  and [`docs/superpowers/plans/2026-08-11-full-stream-review-mapping.md`](../superpowers/plans/2026-08-11-full-stream-review-mapping.md).
 
 ### 2026-08-11 — Scheduler scope-gate correction
 

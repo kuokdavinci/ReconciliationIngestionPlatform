@@ -1,91 +1,64 @@
-# CI Map & Change Blast Radius
+# CI Map và Change Blast Radius
 
-Tài liệu này mô tả cách thay đổi trong repository đi qua các workflow CI. Dùng nó để chọn đúng nhóm test trước khi commit hoặc review PR.
+**Cập nhật:** 2026-08-14
+
+Tài liệu này map thay đổi source → workflow kiểm chứng. Workflow thật nằm trong `.github/workflows/`; command dưới đây là local equivalent để chạy trước commit.
 
 ## Workflow overview
 
 ```mermaid
 flowchart LR
-    PR[Pull request to main] --> B[Backend Quality]
-    PR --> I[Ingestion Pipeline]
-    PUSH[Push or merge to main] --> B
-    PUSH --> I
-    PUSH --> E
-    PUSH --> F
-    PR --> E
-
-    B --> B1[PostgreSQL 16 + Alembic]
-    B --> B2[Ruff + Mypy]
-    B --> B3[Backend tests]
-
-    I --> I1[PostgreSQL 16 + Alembic]
-    I --> I2[Ruff ingestion scope]
-    I --> I3[Ingestion tests]
-
-    E --> E1[Analysis guardrails]
-    E --> E2[Provider fallback]
-    E --> E3[Analysis scenarios]
-    E --> E4[Analysis quality tests]
-
-    PR --> F[Frontend CI]
-    F --> F1[ESLint + TypeScript]
-    F --> F2[Next.js production build]
-    F --> F3[Playwright interaction smoke tests]
+    Change[Source change] --> Backend[Backend Quality]
+    Change --> Ingestion[Ingestion Pipeline]
+    Change --> Analysis[Analysis Eval]
+    Change --> Frontend[Frontend CI]
+    Backend --> B[Migration + Ruff + Mypy + backend tests]
+    Ingestion --> I[Migration + ingestion tests + benchmark]
+    Analysis --> A[Guardrails + providers + scenarios]
+    Frontend --> F[ESLint + TypeScript + Webpack + Playwright]
 ```
-
-The backend, ingestion and analysis workflows use Python 3.11, `uv sync --all-extras --dev`, PostgreSQL 16 and `AI_API_KEY=sk-test-fake-key` where required. Frontend CI uses Node.js 22 and runs independently of backend services.
 
 ## Workflow matrix
 
-| Workflow | Trigger | Main validation | Test scope | Main source areas |
-|---|---|---|---|---|
-| [Backend Quality](../.github/workflows/backend-quality.yml) | Push/merge to `main`, PR to `main`, manual | Alembic, Ruff, Mypy | All backend tests except real LLM E2E, ingestion integration/pipeline, MOMO E2E and Sprint 1 benchmark | `src/`, `dags/`, `scripts/`, `cli/` |
-| [Ingestion Pipeline](../.github/workflows/ingestion-pipeline.yml) | Push/merge to `main`, PR to `main`, manual | Alembic, ingestion Ruff | Index, ingestion integration/pipeline, MOMO E2E and Sprint 1 benchmark | `src/fetchers/`, `src/pipeline/`, `src/scheduler/`, ingestion services/models |
-| [Eval — AI Analysis Quality](../.github/workflows/eval.yml) | Push to `main`/`feature/*`, PR to `main`, manual | Analysis behavior without a real LLM | Guardrails, providers, scenarios, insights, services, schemas, metrics, grouping, alerter and reporter | `src/analysis/`, related analysis APIs/services/schemas |
-| [Frontend CI](../.github/workflows/frontend-ci.yml) | Push/merge to `main`, PR to `main` (frontend paths), manual | ESLint, TypeScript, Next.js webpack build, Playwright | Dashboard route navigation and Mapping Studio interaction smoke tests | `frontend-next/` |
+| Workflow | Trigger chính | Validation | Source scope |
+|---|---|---|---|
+| [Backend Quality](../.github/workflows/backend-quality.yml) | Push/PR `main`, manual | Alembic, Ruff, Mypy, backend tests | `src/`, `dags/`, `scripts/`, `cli/` |
+| [Ingestion Pipeline](../.github/workflows/ingestion-pipeline.yml) | Push/PR `main`, manual | Alembic, ingestion lint, integration/pipeline/eval tests | `src/fetchers/`, `src/pipeline/`, `src/application/automation/`, ingestion models/repositories, demo scenarios |
+| [Eval — AI Analysis Quality](../.github/workflows/eval.yml) | Push `main`/`feature/*`, PR, manual | Guardrails, provider fallback, scenario quality | `src/analysis/` và analysis API/services |
+| [Frontend CI](../.github/workflows/frontend-ci.yml) | Push/PR, frontend paths, manual | ESLint, TypeScript, Webpack build, Playwright | `frontend-next/` |
 
-## Exact command map
+Backend/Eval/Ingestion dùng Python 3.11, `uv sync --all-extras --dev` và PostgreSQL 16. Frontend CI dùng Node.js 22. Các test analysis yêu cầu `AI_API_KEY` fake; real LLM E2E được loại khỏi quality gate mặc định.
+
+## Local commands
 
 ### Backend Quality
 
-```text
+```bash
+uv sync --all-extras --dev
 uv run alembic upgrade head
 uv run ruff check src dags scripts cli
 uv run mypy src/ --show-error-codes
-uv run pytest tests/ \
-  --ignore=tests/test_analysis_e2e.py \
-  --ignore=tests/test_ingestion_integration.py \
-  --ignore=tests/test_ingestion_pipeline.py \
-  --ignore=tests/test_seed_momo_e2e.py \
-  --ignore=tests/test_sprint1_eval_benchmark.py
+uv run pytest tests/ --ignore=tests/test_analysis_e2e.py --ignore=tests/test_ingestion_integration.py --ignore=tests/test_ingestion_pipeline.py --ignore=tests/test_seed_momo_e2e.py --ignore=tests/test_sprint1_eval_benchmark.py
 ```
 
 ### Ingestion Pipeline
 
-```text
+```bash
 uv run alembic upgrade head
-uv run ruff check src/fetchers src/pipeline src/scheduler src/services
-  src/models/fetch_config.py src/models/indexes.py scripts/demo/scenarios
-uv run pytest tests/test_indexes.py tests/test_ingestion_integration.py
-  tests/test_ingestion_pipeline.py tests/test_seed_momo_e2e.py
-  tests/test_sprint1_eval_benchmark.py
+uv run ruff check src/fetchers src/pipeline src/application/automation scripts/demo/scenarios
+uv run pytest tests/test_indexes.py tests/test_ingestion_integration.py tests/test_ingestion_pipeline.py tests/test_seed_momo_e2e.py tests/test_sprint1_eval_benchmark.py
 ```
 
-### Eval
+### Analysis Eval
 
-```text
-uv run pytest tests/test_analysis_guardrails.py
-uv run pytest tests/test_analysis_providers.py
-uv run pytest tests/test_analysis_scenarios.py
-uv run pytest tests/test_analysis_insights.py tests/test_analysis_services.py
-  tests/test_analysis_schemas.py tests/test_analysis_metrics.py
-  tests/test_analysis_grouping.py tests/test_analysis_alerter.py
-  tests/test_analysis_reporter.py
+```bash
+AI_API_KEY=sk-test-fake-key uv run pytest tests/test_analysis_guardrails.py tests/test_analysis_providers.py tests/test_analysis_scenarios.py
+AI_API_KEY=sk-test-fake-key uv run pytest tests/test_analysis_insights.py tests/test_analysis_services.py tests/test_analysis_schemas.py tests/test_analysis_metrics.py tests/test_analysis_grouping.py tests/test_analysis_alerter.py tests/test_analysis_reporter.py
 ```
 
 ### Frontend CI
 
-```text
+```bash
 npm --prefix frontend-next ci
 npm --prefix frontend-next run lint
 npm --prefix frontend-next run typecheck
@@ -96,40 +69,43 @@ npm --prefix frontend-next run test:e2e
 
 ## Blast-radius guide
 
-| Changed area | Run first | Also inspect |
+| Thay đổi | Chạy trước | Kiểm tra thêm |
 |---|---|---|
-| `src/api/`, `src/config/` | Backend Quality | API tests, compatibility facades and runtime callers |
-| `src/services/`, `src/reconciliation/` | Backend Quality | Reconciliation/review tests and API response contracts |
-| `src/pipeline/` | Ingestion Pipeline | Backend Quality if orchestration/runtime contracts changed |
-| `src/fetchers/`, `src/scheduler/` | Ingestion Pipeline | Backend Quality for automation/job APIs |
-| `src/application/automation/`, `src/infrastructure/workflows/` | Backend Quality plus Airflow contract tests | Automation API, runtime correlation and DAG payload compatibility |
-| `dags/`, `Dockerfile.airflow`, `docker-compose.yml` | `tests/test_airflow_*.py` plus `docker compose config` | Build the Airflow image and import the DAG in that image |
-| `src/models/fetch_config.py`, `src/models/indexes.py` | Both Backend Quality and Ingestion Pipeline | Domain/infrastructure facades and Mongo index tests |
-| `src/domain/` or `src/infrastructure/` | Workflow owning its adapters | Legacy import paths, repository tests and related API tests |
-| `src/analysis/` | Eval | Backend Quality because its general test command also includes analysis tests |
-| `alembic/` | Backend Quality and Ingestion Pipeline | PostgreSQL integration behavior and migration ordering |
-| `.github/workflows/` | The edited workflow | Its exact local command and YAML scope/exclusions |
-| `frontend-next/` | Frontend CI | Run frontend lint, type check, webpack build and Playwright interaction tests |
+| `src/api/`, `src/config/` | Backend Quality | API contract, app factory, runtime callers |
+| `src/application/automation/` | Backend Quality + Airflow tests | `tests/test_airflow_*.py`, automation/recovery/backfill tests, DAG payload |
+| `src/application/ingestion/`, `src/pipeline/` | Ingestion Pipeline | checkpoint, raw staging, recovery view, backend tests |
+| `src/fetchers/`, `src/domain/ingestion/` | Ingestion Pipeline | source-unit identity, retry/error classification, integration tests |
+| `src/infrastructure/workflows/`, `dags/` | Airflow tests + `docker compose config --quiet` | Build Airflow image, DAG import, runtime correlation |
+| `src/domain/`, `src/infrastructure/` | Workflow sở hữu adapter | repository, migration, compatibility facade và API tests |
+| `src/reconciliation/`, `src/application/reconciliation/` | Backend Quality | results, scope, review records, timezone/business-date tests |
+| `src/analysis/` | Analysis Eval | Backend Quality nếu API/service contract thay đổi |
+| `alembic/` | Backend + Ingestion | migration ordering, PostgreSQL integration |
+| `frontend-next/` | Frontend CI | route navigation, API mocks, Playwright |
 
-## Change review sequence
+## Airflow-specific verification
 
-```text
-1. Identify changed symbols and imports with codegraph.
-2. Map the changed path to the table above.
-3. Run the owning workflow command locally.
-4. Run dependent workflow commands when the change crosses a boundary.
-5. Check compatibility facades and public API contracts.
-6. Reindex codegraph after structural changes.
+Khi thay đổi DAG, gateway, orchestration contract hoặc Compose:
+
+```bash
+docker compose config --quiet
+uv run pytest tests/test_airflow_deployment.py tests/test_airflow_runtime.py tests/test_airflow_backfill.py
+docker compose build airflow-api-server
 ```
 
-## Important CI boundaries
+Live pilot cần bổ sung:
 
-- Backend Quality intentionally excludes ingestion integration/pipeline tests; a backend-only green check does not prove the ingestion pipeline is healthy.
-- Ingestion Pipeline covers the pipeline and benchmark path but does not replace the broader backend test suite.
-- Eval validates analysis behavior separately and uses fake configuration; it does not verify production provider connectivity.
-- Frontend CI runs browser interaction smoke tests with API requests mocked at the browser boundary, so it does not require a backend or database service.
-- Codegraph provides structural dependency information. Workflow semantics, database state, Docker networking and environment-specific behavior still require CI/test verification.
+```bash
+curl --fail http://localhost:8080/api/v2/monitor/health
+docker compose exec airflow-api-server airflow dags list-import-errors
+docker compose logs --tail 120 airflow-scheduler airflow-dag-processor
+```
 
-## Maintenance rule
+Acceptance phải chứng minh Run Now, page failure/resume, Retry now trong cùng `dagRunId`, review packet, ordered backfill và PostgreSQL row counts.
 
-When adding or renaming a workflow, test group or major source boundary, update this file in the same change. The workflow YAML remains the executable source of truth; this map is the review and blast-radius guide.
+## Review sequence
+
+1. Kiểm tra `codegraph status` và symbol/dependency của file đổi.
+2. Chọn workflow theo bảng blast radius.
+3. Chạy local equivalent và test contract liên quan.
+4. Kiểm tra public API, compatibility facade và runtime correlation.
+5. Nếu thay đổi cấu trúc, chạy `codegraph sync .` rồi kiểm tra lại index.

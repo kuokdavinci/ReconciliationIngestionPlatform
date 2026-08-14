@@ -1,172 +1,73 @@
 # Module Map
 
-**Cập nhật lần cuối:** 2026-06-16
+**Cập nhật:** 2026-08-14
 
-## Backend Packages
+Bản đồ dưới đây phản ánh package hiện có trong `src/`, `dags/` và `frontend-next/src/`. Không còn `src/scheduler/`, `src/services/` hoặc dashboard `frontend/` trong codegraph hiện tại.
 
-### `src/core`
+## Backend
 
-Shared enums, constants, canonical types, và error formatting.
-
-**Files:**
-- `enums.py` — `ProcessingStatus`, `TransactionStatus`, `FileType`, `ReconciliationStatus`, `ReconciliationScopeType`
-- `types.py` — `FieldMapping`, `CanonicalTransaction`, `PartnerData`, `ValidationError`, `ProcessingStats`
-- `constants.py` — `DEFAULT_CURRENCY`, `FILE_HASH_KEY`, duplicate key patterns
-- `error_formatting.py` — `summarize_runtime_error` helper cho UI-safe error messages
-
-### `src/config`
-
-Runtime settings, mapping config loading/validation, cache, signatures, config-health workflows, AI mapping generation.
-
-**Files:**
-- `settings.py` — Runtime settings via pydantic-settings
-- `loader.py` — Config loader from MongoDB
-- `validator.py` — Config validation rules
-- `cache.py` — Config caching layer
-- `signature.py` — File structure signature computation
-- `config_health.py` — Config health check workflows
-- `ai_generator.py` — AI-powered mapping generation from samples
-
-### `src/readers`
-
-Input readers cho Excel, CSV, và JSON sources.
-
-**Files:**
-- `excel_reader.py`
-- `csv_reader.py`
-- `json_reader.py`
-
-### `src/normalizer`
-
-Transform raw source rows thành canonical field values.
-
-**Files:**
-- `normalizer.py` — `TransactionNormalizer` class
-
-### `src/validators`
-
-Canonical transaction validation và duplicate checks.
-
-**Files:**
-- `validator.py`
-
-### `src/models`
-
-MongoDB-backed domain models, repositories, và index definitions.
-
-**Files:**
-
-| Model file | Collection | Purpose |
-|---|---|---|---|
-| `reconciliation_file.py` | `reconciliation_file` | File metadata và processing status |
-| `data_container.py` | `data_container` | Partner canonical records |
-| `internal_transaction.py` | `internal_transaction` | Internal transaction records |
-| `reconciliation_result.py` | `reconciliation_result` | Reconciliation match/mismatch results |
-| `mapping_config.py` | `reconciliation_mapping_config` | Field mapping configs (approved + pending) |
-| `review_packet.py` | `review_packet` | Review packets cho approval workflows |
-| `copilot_action.py` | `copilot_action` | Copilot action tracking |
-| `fetch_config.py` | `fetch_config` | Automation fetch configuration |
-| `reconciliation_run.py` | `reconciliation_run` | Manual reconciliation run tracking |
-| `post_approval_run.py` | `post_approval_run` | Post-approval reprocess tracking |
-| `partner_runtime_run.py` | `partner_runtime_run` | Unified runtime visibility (scheduler/manual/post-approval) |
-| `reconciliation_review_record.py` | `reconciliation_review_record` | Review notes và resolution state per record |
-| `repository.py` | — | Base repository class (`BaseRepository`) |
-| `indexes.py` | — | MongoDB index definitions và startup creation |
-| `postgres.py` | PostgreSQL tables | SQLAlchemy models: `PartnerTransactionTable`, `InternalTransactionTable`, `ReconciliationResultTable` |
-
-### `src/pipeline`
-
-Ingestion orchestration.
-
-**Files:**
-- `ingestion_pipeline.py` — `IngestionPipeline` class
-
-### `src/reconciliation`
-
-Matching và classification logic cho partner vs internal records.
-
-**Files:**
-- `engine.py` — `ReconciliationEngine` với streaming, batch scope resolution, và buffered writes
-- `scope.py` — Business-key scope classification helpers và same-day evidence
-
-### `src/api`
-
-FastAPI routers.
-
-**Routers:**
-
-| Module file | Prefix | Endpoints |
+| Package | Trách nhiệm | Entry points / file tiêu biểu |
 |---|---|---|
-| `insights.py` | `/api/v1` | `/insights/summary`, `/insights/discrepancies`, `/reports/daily` |
-| `reconciliation.py` | `/api/v1/reconciliation` | Reconciliation execute, results, review notes, run tracking |
-| `data_explorer.py` | `/api/v1/data` | Data browsing và filtering |
-| `mappings.py` | `/api/v1/mappings` | Mapping config CRUD, proposals, file upload |
-| `mappings.py` (router_v2) | `/api/v1/mapping` | Short-form mapping operations |
-| `copilot.py` | `/api/v1/copilot` | Context assembly và action proxies |
-| `operations.py` | `/api/v1/operations` | Intake status, approval overview |
-| `review_packets.py` | `/api/v1/review-packets` | Review lifecycle: approve-activate, approve-keep-current, reject, send-to-studio, runtime validation, AI generation, scope |
-| `automation.py` | `/api/v1/automation` | Scheduler visibility, run-now, fetch config management |
+| `src/api/` | FastAPI routers và delivery contracts | `__init__.py`, `automation.py`, `review_packets.py`, `reconciliation.py` |
+| `src/application/automation/` | Stream execution, job command/query, checkpoint wiring, backfill, Airflow contracts | `service.py::execute_stream`, `stream_runner.py::run_source_stream`, `stream_identity.py`, `backfill_service.py` |
+| `src/application/ingestion/` | Source-unit orchestration, error classification, recovery view | `source_unit_orchestrator.py::process_source_units`, `recovery_view.py` |
+| `src/application/review/` | Review packet, evidence, raw stream, validation, mapping approval/reprocess | `actions.py`, `mapping_workflow.py`, `raw_stream.py`, `runtime_validation.py` |
+| `src/application/reconciliation/` | Manual reconciliation use cases và context queries | `service.py`, `manual_runs.py`, `queries.py` |
+| `src/application/mapping/` | Mapping proposal, save/approve/reject và validation | `service.py`, `proposals.py`, `errors.py` |
+| `src/application/runtime/` | Tạo/cập nhật/serialize runtime run | `service.py` |
+| `src/domain/` | Domain models, ports và state contracts | `ingestion/`, `runtime/`, `review/`, `mapping/`, `reconciliation/` |
+| `src/infrastructure/` | Mongo/PostgreSQL repositories, mappers, composition và workflow gateways | `persistence/`, `postgres/`, `workflows/airflow.py` |
+| `src/pipeline/` | File-level và row-level ingestion | `ingestion_pipeline.py`, `row_pipeline.py`, `batch_writer.py`, `file_claim.py` |
+| `src/fetchers/` | Partner input adapters | `api_fetcher.py`, `filedrop_fetcher.py`, `sftp_fetcher.py`, `base.py` |
+| `src/readers/` | CSV, JSON, Excel readers | `csv_reader.py`, `json_reader.py`, `excel_reader.py` |
+| `src/normalizer/` | Raw row → canonical value | `normalizer.py` |
+| `src/validators/` | Canonical transaction validation | `validator.py` |
+| `src/reconciliation/` | Key normalization, scope classification, matching engine | `keys.py`, `scope.py`, `engine.py` |
+| `src/analysis/` | Insights, metrics, reports, alerts, guardrails, provider fallback | `provider.py`, `insights.py`, `services.py`, `guardrails.py` |
+| `src/config/` | Settings, mapping loader/cache/validator, config health, AI mapping | `settings.py`, `loader.py`, `validator.py`, `config_health.py` |
+| `src/core/` | Shared enums, constants, business date, canonical types | `enums.py`, `types.py`, `business_day.py` |
+| `src/models/` | Compatibility/persistence models và index facades | `fetch_config.py`, `review_packet.py`, `partner_runtime_run.py`, `postgres.py` |
+| `src/logging/` | Structured logging helpers | `logger.py` |
 
-### `src/analysis`
+## Airflow và runtime entrypoints
 
-Insight generation, provider abstraction, schemas, prompts, reporting, caching, alerting.
-
-**Files:**
-- `config.py`, `provider.py`, `schemas.py`, `insights.py`, `prompts.py`, `services.py`
-- `metrics.py`, `grouping.py`, `reporter.py`, `cache.py`, `alerter.py`, `guardrails.py`
-
-### `src/services`
-
-Higher-level services used bởi APIs.
-
-**Files:**
-
-| File | Trách nhiệm |
+| File | Vai trò |
 |---|---|
-| `copilot_context.py` | Rule-based Copilot context assembly cho dashboard (intake/review/reconciliation/automation screens) |
-| `mapping_contract.py` | Mapping contract normalization (`canonicalize_field_mappings`, `serialize_field_mappings`), validation (`validate_mapping_contract`, `MappingContractValidation`) |
-| `review_packet_actions.py` | Shared review packet approval actions (`approve_packet_mapping_and_reprocess`, `mark_packet`, `reprocess_and_reconcile`), post-approval run tracking, background task management |
-| `runtime_runs.py` | Unified runtime run visibility helpers (`create_runtime_run`, `update_runtime_run`, `serialize_partner_runtime_run`) |
+| `run.py` | CLI dispatch cho `--serve`, ingestion và reconciliation |
+| `api/server.py` | Uvicorn server wrapper |
+| `backend/app.py` | Compatibility export của `create_app` |
+| `dags/reconciliation_ingestion.py` | Airflow DAG `reconciliation_ingestion`, select streams và mapped run |
+| `src/infrastructure/workflows/airflow.py` | Airflow REST gateway |
+| `src/application/automation/contracts.py` | `ExecuteStreamCommand`, `ExecuteStreamResult`, outcome contract |
 
-### `src/scheduler`
+## API router map
 
-Scheduler setup và job execution cho automated partner fetch flows.
-
-**Files:**
-- `config.py`, `scheduler.py`, `jobs.py`
-
-### `src/fetchers`
-
-Fetcher implementations và method-specific remote input handling.
-
-**Files:**
-- `base.py`, `sftp_fetcher.py`, `filedrop_fetcher.py`, `api_fetcher.py`
-
-### `src/logging`
-
-Structured logging helpers.
-
-**Files:**
-- `logger.py` — Structured logger factory
+| File | Prefix | Nghiệp vụ |
+|---|---|---|
+| `insights.py` | `/api/v1` | Insights và daily reports |
+| `reconciliation.py` | `/api/v1/reconciliation` | Results, stats, runs, review records |
+| `data_explorer.py` | `/api/v1/data` | Transactions, files, stats |
+| `mappings.py` | `/api/v1/mappings`, `/api/v1/mapping` | Mapping CRUD, validate, publish, generate |
+| `copilot.py` | `/api/v1/copilot` | Context và action approval |
+| `operations.py` | `/api/v1/operations` | Intake/ingestion operations |
+| `review_packets.py` | `/api/v1/review-packets` | Review, evidence, scope, approval/reprocess |
+| `automation.py` | `/api/v1/automation` | Jobs, Run Now, retry, recovery, backfill |
+| `audit.py` | `/api/v1/audit` | Audit events |
 
 ## Frontend
 
-### `frontend-next/`
+`frontend-next/src/` dùng App Router và chia theo feature:
 
-**Files:**
+- `app/`: `reconciliation`, `review-center`, `mapping-studio`, `schedules`, `audit-log` và home.
+- `components/`: `layout`, `ui`, `reconciliation`, `review-center`, `mapping-studio`, `schedules`, `audit`.
+- `lib/api/`: typed clients cho automation, review center, mapping, reconciliation và audit.
+- `lib/state/`: stores và mock data cho UI.
+- `types/`: API/domain types.
 
-| File/Directory | Purpose |
-|---|---|
-| `src/app/` | Next.js App Router pages (reconciliation, review-center, mapping-studio, schedules, audit-log) |
-| `src/components/` | React components organized by domain (ui/, layout/, reconciliation/, review-center/, mapping-studio/, schedules/, audit/) |
-| `src/lib/api/` | Typed HTTP client modules per domain (`client.ts`, `reconciliation.ts`, `review-center.ts`, `mapping-studio.ts`, `audit.ts`, `automation.ts`) |
-| `src/lib/state/` | Custom React hooks (useReconciliationStore) + mock data |
-| `src/types/` | TypeScript interfaces for all domain models |
-| `package.json` | npm scripts, dependencies (next@16, react@19, tailwindcss@4) |
-| `next.config.ts` | Next.js config with `/api/:path*` proxy to backend |
-| `postcss.config.mjs` | PostCSS + Tailwind CSS v4 |
-| `tsconfig.json` | TypeScript config with `@/*` path alias |
+## Tests và scripts
 
----
-
-*Module analysis: 2026-06-24*
+- `tests/`: unit, architecture contract, API, integration, evaluation và E2E.
+- `scripts/demo/`: demo scenario MOMO, ViettelPay, VNPAY và ZaloPay.
+- `scripts/seeding/`: seed database/dataset.
+- `scripts/tools/`: inspect/generate/check helpers.
+- `scripts/*benchmark.py`: benchmark reconcile và reproducibility.

@@ -4,6 +4,10 @@
 **Timing:** Sau khi Sprint 2 hoàn tất và có regression evidence đầy đủ  
 **Owner:** Platform/ingestion team
 
+> Sprint 2.5 là milestone hợp nhất của **Airflow integration** và **recovery hardening**. Nội dung hardening trước đây được lưu trong [recovery hardening evidence](sprint-2.6-recovery-hardening.md); tên file cũ chỉ được giữ để bảo toàn liên kết lịch sử, không biểu thị một sprint độc lập.
+
+**Acceptance status:** Chưa hoàn tất. Pilot và automated regression đã có, nhưng hiện còn **5/11 acceptance criteria** chưa được đánh dấu hoàn thành; live rerun/health evidence của hardening cũng còn mở.
+
 ## Goal
 
 Thay thế APScheduler bằng Apache Airflow ở lớp scheduling và workflow control-plane, đồng thời tái sử dụng fetcher, ingestion pipeline, checkpoint và recovery contract đã hoàn tất ở Sprint 2.
@@ -369,6 +373,8 @@ replay-safe claim.
 
 ## Acceptance criteria
 
+Tổng hợp hiện tại: **6/11 đạt**, **5/11 còn pending**. Các mục `[ ]` là điều kiện đóng Sprint 2.5, không chỉ là follow-up tùy chọn.
+
 - [x] Airflow có thể trigger scheduled/manual run và ordered backfill run; VNPAY
   fixture/UI approval flow có regression coverage.
 - [x] API pagination stage toàn bộ raw page ngoài transaction store, sau đó ingestion/replay vẫn xử lý từng page theo thứ tự và checkpoint không advance vượt persistence boundary.
@@ -381,6 +387,16 @@ replay-safe claim.
 - [ ] Scheduled checkpoint không bị thay đổi bởi backfill.
 - [ ] Có rollback per partner và không cần reset dữ liệu để rollback.
 - [x] APScheduler đã được gỡ khỏi manual-pilot deployment sau final verification.
+
+### Acceptance còn mở
+
+| Mục | Bằng chứng cần bổ sung |
+|---|---|
+| FileDrop/SFTP ordering và source retention | Chạy recovery thực tế qua từng fingerprint, chứng minh source còn đủ lâu để resume |
+| Bounded retry giữa Airflow và application | Matrix retry/timeout/error chứng minh không retry vô hạn hoặc retry chồng |
+| `BLOCKED`, operator resolve/skip, `WAITING_REVIEW` | Contract/integration acceptance cho từng state transition và action |
+| Scheduled checkpoint không bị backfill thay đổi | Chạy ordered backfill đồng thời với scheduled checkpoint và đối chiếu trước/sau |
+| Rollback per partner không reset dữ liệu | Thực hiện rollback pilot theo partner, giữ nguyên checkpoint/runtime và audit evidence |
 
 ## Risks and mitigations
 

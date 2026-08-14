@@ -7,9 +7,9 @@ Xác định pipeline đang ở đâu, lỗi ở bước nào, số lượng và
 ## Đối chiếu hiện trạng
 
 - `src/logging/logger.py` đã có event file/row và JSON formatter.
-- `src/models/partner_runtime_run.py`/`src/services/runtime_runs.py` đã có trạng thái unified cho scheduler, nhưng state hiện còn gắn với flow tiếp tục sang reconciliation.
+- `src/domain/runtime/models.py`/`src/application/runtime/service.py` đã có trạng thái unified cho automation/runtime, nhưng state hiện còn gắn với flow tiếp tục sang reconciliation.
 - `IngestionPipeline` có timing nội bộ và ghi `PERF_INGEST` qua logger; metrics chưa được persist theo stage và chưa có checkpoint/attempt correlation đầy đủ.
-- `src/scheduler/jobs.py` cập nhật runtime status nhưng chưa ghi stage-level counts/errors/fetch metadata thống nhất.
+- `src/application/automation/stream_runner.py` và `src/application/runtime/service.py` cập nhật runtime status nhưng chưa ghi stage-level counts/errors/fetch metadata thống nhất.
 
 ## Quyết định đề xuất
 
@@ -24,9 +24,9 @@ Xác định pipeline đang ở đâu, lỗi ở bước nào, số lượng và
 - `src/core/enums.py` — thêm ingestion stage/run outcome enums nếu chưa có abstraction phù hợp.
 - `src/core/types.py` — thêm stage metrics và run counters dùng chung.
 - `src/models/partner_runtime_run.py` — thêm stage history/current stage, attempt, error và ingest metrics.
-- `src/services/runtime_runs.py` — helper update stage/counters/error theo atomic update.
+- `src/application/runtime/service.py` — helper update stage/counters/error theo atomic update.
 - `src/pipeline/ingestion_pipeline.py` — emit/persist lifecycle theo stage và partial status; gắn run/source context.
-- `src/scheduler/jobs.py` — truyền run context, ghi fetch stage/result và không che khuất lỗi ingest.
+- `src/application/automation/stream_runner.py` — truyền run context, ghi fetch stage/result và không che khuất lỗi ingest.
 - `src/logging/logger.py` — mở rộng event types/fields cho stage, batch, checkpoint và quarantine.
 - `src/models/reconciliation_file.py` — lưu lifecycle summary ở file-level.
 - `src/models/indexes.py` — index theo partner/stage/status/time cho truy vấn operational.

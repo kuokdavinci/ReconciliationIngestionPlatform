@@ -5,7 +5,8 @@ import inspect
 import time
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, Optional
+from decimal import Decimal
+from typing import Any, Optional, Protocol, TypeGuard, cast
 
 from src.core.enums import ReconciliationScopeType, ReconciliationStatus, TransactionStatus
 from src.domain.partner_transaction.models import DataContainer
@@ -16,6 +17,32 @@ from src.domain.reconciliation.ports import (
     ReconciliationResultWriter,
 )
 from src.logging import get_structured_logger
+
+
+class _InternalDocumentRepository(Protocol):
+    collection: Any
+
+    def _convert_from_mongo_types(self, raw: Any) -> dict[str, Any]:
+        """Convert a raw document into repository-compatible values."""
+
+
+class _PartnerDocumentRepository(Protocol):
+    collection: Any
+
+    def _from_mongo(self, raw: dict[str, Any]) -> DataContainer:
+        """Convert a raw document into a canonical partner transaction."""
+
+
+def _has_internal_document_capability(
+    repository: InternalTransactionReader,
+) -> TypeGuard[_InternalDocumentRepository]:
+    return hasattr(repository, "collection")
+
+
+def _has_partner_document_capability(
+    repository: PartnerTransactionReader,
+) -> TypeGuard[_PartnerDocumentRepository]:
+    return hasattr(repository, "collection")
 
 
 class DocumentReconciliationExecutor:
@@ -104,7 +131,7 @@ class DocumentReconciliationExecutor:
             "updatedAt": 1,
         }
         internal_by_key: dict[str, dict] = {}
-        if hasattr(self._internal_repo, "collection"):
+        if _has_internal_document_capability(self._internal_repo):
             cursor = self._internal_repo.collection.find(
                 internal_query,
                 projection=projection,
@@ -121,7 +148,10 @@ class DocumentReconciliationExecutor:
                         and partner_txn_id not in scoped_partner_keys
                     ):
                         continue
-                    status = normalized.get("status")
+                    status = cast(
+                        TransactionStatus | str,
+                        normalized.get("status"),
+                    )
                     if not self._is_finalized_internal_status(status):
                         continue
                     candidate = {
@@ -171,7 +201,7 @@ class DocumentReconciliationExecutor:
         return internal_by_key
 
     async def _iter_partner_record_batches(self, partner_query: dict):
-        if hasattr(self._data_repo, "collection"):
+        if _has_partner_document_capability(self._data_repo):
             cursor = self._data_repo.collection.find(partner_query).batch_size(
                 self._partner_batch_size
             )
@@ -207,8 +237,8 @@ class DocumentReconciliationExecutor:
         date: str,
         partnerTxnId: str,
         internalTxnId: Optional[str] = None,
-        partnerAmount: Optional[object] = None,
-        internalAmount: Optional[object] = None,
+        partnerAmount: Optional[Decimal] = None,
+        internalAmount: Optional[Decimal] = None,
         partnerStatus: Optional[str] = None,
         internalStatus: Optional[str] = None,
         reconciliationStatus: ReconciliationStatus,
@@ -218,7 +248,7 @@ class DocumentReconciliationExecutor:
         mappingVersion: Optional[str] = None,
         partnerRecordId: Optional[str] = None,
         internalRecordId: Optional[str] = None,
-    ) -> ReconciliationResult | dict:
+    ) -> ReconciliationResult | dict[str, Any]:
         if self.fast_mode:
             from datetime import timezone
 
@@ -247,7 +277,7 @@ class DocumentReconciliationExecutor:
             }
 
         return ReconciliationResult(
-            id=id,
+            _id=id,
             partner=partner,
             date=date,
             partnerTxnId=partnerTxnId,
@@ -265,6 +295,14 @@ class DocumentReconciliationExecutor:
             internalRecordId=internalRecordId,
         )
 
+    @staticmethod
+    def _result_partner_key(
+        result: ReconciliationResult | dict[str, Any],
+    ) -> str | None:
+        if isinstance(result, dict):
+            return cast(str | None, result.get("partnerTxnId"))
+        return result.partner_txn_id
+
     async def execute(
         self,
         *,
@@ -277,7 +315,7 @@ class DocumentReconciliationExecutor:
         reconciliation_run_id: str | None = None,
         mapping_version: str | None = None,
         started_at: float | None = None,
-    ) -> list[ReconciliationResult | dict]:
+    ) -> list[ReconciliationResult | dict[str, Any]]:
         t_start = started_at or time.perf_counter()
         t_scope_start = time.perf_counter()
         partner_query = {
@@ -287,6 +325,7 @@ class DocumentReconciliationExecutor:
                 "$lte": end_of_day,
             },
         }
+        delete_query: dict[str, Any]
         if source_file_id and scope_type in {
             ReconciliationScopeType.FULL_SNAPSHOT,
             ReconciliationScopeType.INCREMENTAL_APPEND,
@@ -319,8 +358,8 @@ class DocumentReconciliationExecutor:
         load_internal_candidates_ms = internal_duration * 0.8
         build_lookup_ms = internal_duration * 0.2
 
-        results: list[ReconciliationResult | dict] = []
-        result_buffer: list[ReconciliationResult | dict] = []
+        results: list[ReconciliationResult | dict[str, Any]] = []
+        result_buffer: list[ReconciliationResult | dict[str, Any]] = []
         matched_internal_keys: set[str] = set()
         replacement_keys = list(scoped_partner_keys)
         if source_file_id and scope_type in {
@@ -589,13 +628,15 @@ class DocumentReconciliationExecutor:
         if partner_records_count > 100 and len(internal_by_key) > 100 and matched_count == 0:
             sample_partner_keys = list(scoped_partner_keys)[:3] if scoped_partner_keys else []
             if not sample_partner_keys:
-                sample_partner_keys = [
-                    doc.get("partnerTxnId")
-                    if isinstance(doc, dict)
-                    else getattr(doc, "partner_txn_id", None)
+                fallback_partner_keys = [
+                    self._result_partner_key(doc)
                     for doc in results[:3]
                 ]
-                sample_partner_keys = [key for key in sample_partner_keys if key]
+                sample_partner_keys = [
+                    key
+                    for key in fallback_partner_keys
+                    if isinstance(key, str) and key
+                ]
             sample_internal_keys = list(internal_by_key.keys())[:3]
             warn_msg = (
                 f"🚨 WARNING: Potential Matching Key Mismatch Detected for partner={partner}! "

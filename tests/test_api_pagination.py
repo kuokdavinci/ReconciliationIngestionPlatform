@@ -38,6 +38,77 @@ def _config(download_dir):
     )
 
 
+def test_build_page_request_preserves_identity_filename_and_empty_cursor(tmp_path):
+    config = _config(tmp_path)
+    reconciliation_date = datetime(2024, 7, 7)
+
+    query_params, local_path, unit = APIFetcher._build_page_request(
+        config=config,
+        reconciliation_date=reconciliation_date,
+        base_query_params={"date": "2024-07-07"},
+        local_dir=tmp_path,
+        page=3,
+        cursor="",
+        config_version="v7",
+    )
+
+    assert query_params == {
+        "date": "2024-07-07",
+        "page": "3",
+        "limit": "2",
+        "cursor": "",
+    }
+    assert local_path == tmp_path / "api_data_20240707_page_0003.json"
+    assert unit.page == 3
+    assert unit.cursor_before == ""
+    assert unit.source_identity == {
+        "endpoint": config.base_url,
+        "method": "GET",
+        "reconciliationDate": "2024-07-07",
+        "page": 3,
+        "cursorBefore": "",
+        "configVersion": "v7",
+    }
+    assert unit.source_unit_key == APIFetcher._source_unit_key(
+        config.base_url,
+        config.method,
+        reconciliation_date,
+        page=3,
+        cursor_before="",
+        config_version="v7",
+    )
+
+
+def test_parse_page_payload_returns_items_and_normalized_cursor():
+    items, next_cursor = APIFetcher._parse_page_payload(
+        json.dumps({"data": {"items": [{"id": 1}], "nextCursor": 42}}).encode("utf-8"),
+        items_path="data.items",
+        next_cursor_path="data.nextCursor",
+    )
+
+    assert items == [{"id": 1}]
+    assert next_cursor == "42"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_message"),
+    [
+        ({"data": {"items": "not-a-list", "nextCursor": None}}, "items path must resolve to a list"),
+        (
+            {"data": {"items": [], "nextCursor": {"cursor": "bad"}}},
+            "next cursor must be a string, integer, null, or absent",
+        ),
+    ],
+)
+def test_parse_page_payload_rejects_invalid_items_and_cursor(payload, expected_message):
+    with pytest.raises(ValueError, match=expected_message):
+        APIFetcher._parse_page_payload(
+            json.dumps(payload).encode("utf-8"),
+            items_path="data.items",
+            next_cursor_path="data.nextCursor",
+        )
+
+
 @pytest.mark.asyncio
 async def test_fetch_pagination_persists_each_page_and_source_identity(tmp_path):
     config = _config(tmp_path)

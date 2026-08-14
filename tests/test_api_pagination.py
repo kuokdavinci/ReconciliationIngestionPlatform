@@ -109,6 +109,20 @@ def test_parse_page_payload_rejects_invalid_items_and_cursor(payload, expected_m
         )
 
 
+def test_write_page_returns_content_type_and_persists_exact_bytes(tmp_path):
+    local_path = tmp_path / "page.json"
+    response = httpx.Response(
+        200,
+        content=b'{"items":[1,2,3]}',
+        headers={"content-type": "application/vnd.api+json"},
+    )
+
+    content_type = APIFetcher._write_page(response, local_path)
+
+    assert content_type == "application/vnd.api+json"
+    assert local_path.read_bytes() == b'{"items":[1,2,3]}'
+
+
 @pytest.mark.asyncio
 async def test_fetch_pagination_persists_each_page_and_source_identity(tmp_path):
     config = _config(tmp_path)

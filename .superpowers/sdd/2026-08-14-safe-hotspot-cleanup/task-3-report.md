@@ -1,5 +1,7 @@
 Status: DONE
 
+Commit: a4631d8c4bc77f0ba7e8862028ca90020e9d934d
+
 Task: Decompose API pagination with pure helpers
 
 Summary:

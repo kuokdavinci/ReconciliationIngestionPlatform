@@ -1,18 +1,12 @@
 """Audit log endpoints."""
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 
+from src.api.dependencies import get_request_db as _get_db
 from src.infrastructure.audit.repository import AuditEventRepository
 
 router = APIRouter(prefix="/api/v1/audit")
 DATE_OPTIONAL_ENTITY_TYPES = {"MAPPING_CONFIG"}
-
-
-def _get_db(request: Request):
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
-    return db
 
 
 def _serialize_event(event) -> dict:

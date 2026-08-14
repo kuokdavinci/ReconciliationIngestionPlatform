@@ -1,7 +1,7 @@
 # Sprint 2.5 — Recovery Hardening (merged from former Sprint 2.6)
 
 **Branch:** `fix/sprint2-airflow-recovery-hardening`  
-**Status:** Part of the merged Sprint 2.5 milestone; implementation and automated verification complete, but Sprint 2.5 acceptance remains partial and live rollout evidence is still environment-dependent
+**Status:** Part of the merged Sprint 2.5 milestone; implementation and automated verification complete, local Compose health verified on 2026-08-14, while Sprint 2.5 business acceptance and live rollout remain partial
 
 > File name giữ `sprint-2.6-recovery-hardening.md` để không làm gãy liên kết lịch sử. Tài liệu này không đại diện cho một sprint độc lập; nó là evidence của Sprint 2.5 cùng với Airflow integration.
 **Owner:** Platform/ingestion team
@@ -23,7 +23,7 @@ traceable.
 | P1 | Internal DB count/evidence loses timezone semantics | Business-day query converts Asia/Ho_Chi_Minh bounds to UTC before SQL and packet stores bounded internal samples | ✅ code/tests |
 | P1 | Airflow selection/config errors can leave runtime queued | Manual runtime becomes `FAILED` with an actionable error code | ✅ code/tests |
 | P2 | Native Airflow retry condition is hard-coded to try 1 | Retry behavior follows configured Airflow retry budget | ✅ code/tests |
-| P2 | Live Airflow service health is not covered by code tests | Runbook contains server-level verification and explicit evidence state | ⏳ |
+| P2 | Live Airflow service health is not covered by code tests | Runbook contains server-level verification and explicit evidence state | ✅ local pilot; production rollout pending |
 
 ## 2026-08-11 review update
 
@@ -344,7 +344,9 @@ Do not introduce a second scheduler owner for the same stream. Rollback requires
 pausing the DAG and deploying the previous application artifact; it does not
 re-enable a removed APScheduler service.
 
-### Live acceptance evidence to collect
+### Live acceptance evidence — current state
+
+The service-health checks were run on 2026-08-14:
 
 ```bash
 curl --fail http://localhost:8080/api/v2/monitor/health
@@ -352,11 +354,18 @@ docker compose exec airflow-api-server airflow dags list-import-errors
 docker compose logs --tail 120 airflow-scheduler airflow-dag-processor
 ```
 
-Then execute one manual ViettelPay run with the page-2 failure fixture and one
-VNPAY ordered backfill. Record: `runtimeRunId`, parent `backfillRunId`, Airflow
+Observed result: Airflow metadata database, scheduler and DAG processor were
+healthy; DAG import errors returned `No data found`; the API OpenAPI endpoint
+returned HTTP 200; and the Compose process list had no legacy scheduler.
+
+The following business-flow evidence is still to collect:
+
+Execute one manual ViettelPay run with the page-2 failure fixture and one VNPAY
+ordered backfill. Record: `runtimeRunId`, parent `backfillRunId`, Airflow
 `dagRunId`, Recovery event timeline, ordered day statuses, review packet count,
 raw-stage `itemCount` total, and PostgreSQL internal-transaction count for the
-same Asia/Ho_Chi_Minh business date.
+same Asia/Ho_Chi_Minh business date. Also record a per-partner rollback without
+resetting checkpoint or runtime data.
 
 ## Verification commands
 

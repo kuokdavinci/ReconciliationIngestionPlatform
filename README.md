@@ -238,6 +238,6 @@ docs/                   architecture, milestone, sprint, CI, runbook
 
 ### Trạng thái Phase 2
 
-Sprint 2.5 là một milestone hợp nhất: **Airflow integration + recovery hardening**. Acceptance hiện **chưa hoàn tất**: runbook ghi nhận 6/11 criteria đạt và 5 criteria pending, cùng live rerun/health evidence còn mở. File `docs/phase-2/sprint-2.6-recovery-hardening.md` được giữ tên để không làm gãy liên kết lịch sử, nhưng không còn là sprint độc lập; xem [Phase 2 index](docs/phase-2/INDEX.md) để đọc theo cấu trúc mới.
+Sprint 2.5 là một milestone hợp nhất: **Airflow integration + recovery hardening**. Acceptance hiện **chưa hoàn tất**: runbook ghi nhận 6/11 criteria đạt và 5 criteria pending. Local Compose service health đã được kiểm chứng ngày 2026-08-14; live business-flow và production rollout evidence vẫn còn mở. File `docs/phase-2/sprint-2.6-recovery-hardening.md` được giữ tên để không làm gãy liên kết lịch sử, nhưng không còn là sprint độc lập; xem [Phase 2 index](docs/phase-2/INDEX.md) để đọc theo cấu trúc mới.
 
 README và docs phải được đối chiếu với codegraph, `src/config/settings.py`, `.env.example`, `src/api/`, `frontend-next/src/app/`, `docker-compose.yml` và `.github/workflows/` sau mỗi thay đổi cấu trúc.

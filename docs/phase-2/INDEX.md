@@ -30,7 +30,7 @@ Phạm vi chính: API pagination, FileDrop/SFTP source units, checkpoint sequenc
 
 ## Sprint 2.5 — Airflow integration và recovery hardening
 
-**Trạng thái:** Acceptance chưa hoàn tất: 6/11 criteria đã đạt; 5 criteria còn pending. Pilot/automated verification đã có, live production acceptance còn phụ thuộc môi trường.
+**Trạng thái:** Acceptance chưa hoàn tất: 6/11 criteria đã đạt; 5 criteria còn pending. Pilot/automated verification và local Compose service health đã có; live business-flow/production acceptance còn phụ thuộc môi trường.
 
 - [Airflow integration, pilot và migration runbook](sprint-2.5-airflow-migration.md)
 - [Recovery hardening evidence — nội dung hợp nhất từ Sprint 2.6](sprint-2.6-recovery-hardening.md)

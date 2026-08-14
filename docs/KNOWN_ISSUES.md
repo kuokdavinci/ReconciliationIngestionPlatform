@@ -16,7 +16,7 @@
 - Live health, DAG import, page failure/resume, same-DAG-run retry và ordered backfill cần evidence từ môi trường Docker thật; unit/architecture tests không thay thế evidence này.
 - Không bật thêm scheduler owner cho cùng stream. Rollback pilot là pause DAG và rollback application artifact.
 - Sprint 2.5 chưa đạt đủ acceptance: còn mở FileDrop/SFTP recovery ordering, bounded retry matrix, `BLOCKED`/resolve/`WAITING_REVIEW` state semantics, scheduled-checkpoint isolation khi backfill và rollback per partner không reset dữ liệu.
-- Recovery hardening còn pending live rerun cho approved API mapping và live Airflow service-health evidence.
+- Recovery hardening còn pending live rerun cho approved API mapping; local Compose Airflow service-health evidence đã được kiểm chứng ngày 2026-08-14, còn production rollout evidence vẫn mở.
 
 ## CI và tài liệu
 

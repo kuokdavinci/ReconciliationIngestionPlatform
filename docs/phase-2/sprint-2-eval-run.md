@@ -54,3 +54,47 @@ evaluation:
 This is deterministic code/UI evidence. It does not replace the live Docker
 acceptance run against MongoDB, PostgreSQL, Airflow, and the mounted
 `mock_data/` directory.
+
+## Current repository verification — 2026-08-14
+
+This section supersedes the older verification snapshot above when assessing
+the current branch. It records what was actually re-run locally; it does not
+promote mock or unit evidence to live business acceptance.
+
+### Automated evidence
+
+- Codegraph: `448` indexed files, `6,738` nodes, `17,221` edges; status is up
+  to date.
+- Sprint 2/2.5 focused regression set: `161 passed` across checkpoint,
+  pagination, FileDrop/SFTP, stream orchestration, Airflow, review and
+  backfill contracts.
+- Sprint 1 index/benchmark checks: `10 passed`.
+- Ruff: passed for `src`, `dags`, `scripts` and `cli`; ingestion-specific Ruff
+  scope also passed.
+- Mypy: passed for `207` source files.
+- Frontend production interaction suite: `7 passed` after making the optional
+  external icon font non-blocking for Playwright.
+
+### Compose pilot evidence
+
+- API image/container: `sha256:64ea31ba215a084001c8e4251fbe77eeeea3fa2164b8d1c403b6f3ea097ff76c`.
+- API container is running and `/openapi.json` returns HTTP 200.
+- Airflow metadata database, scheduler and DAG processor report healthy.
+- Airflow DAG import errors report `No data found`.
+- Runtime configuration is `APP_AUTOMATION_ORCHESTRATOR=airflow`,
+  `AIRFLOW_GLOBAL_SCHEDULE=none` and `AIRFLOW_TASK_RETRIES=0`.
+- No legacy `reconciliation-scheduler` container is running.
+
+### Evidence still not accepted as final DoD
+
+The exact 53-test ingestion workflow invocation was not recorded as a clean
+single-process pass in this review: it stalled during the first integration
+test after collection. The 52-test subset and the Sprint 1 benchmark pass when
+run separately. Keep the ingestion workflow open until the exact command is
+reproduced cleanly in CI-equivalent conditions.
+
+The live business scenarios are also still open: FileDrop/SFTP retention and
+recovery, bounded Airflow/application retry, operator `BLOCKED` resolution,
+scheduled-checkpoint isolation during a real backfill, and per-partner
+rollback. The deterministic 4/4 evaluation above remains valid as mock
+evidence only.

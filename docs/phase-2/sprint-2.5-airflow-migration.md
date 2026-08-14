@@ -1,12 +1,12 @@
 # Phase 2 — Sprint 2.5: Airflow Migration Plan
 
-**Status:** Pilot implemented; production cutover pending evaluation  
+**Status:** Pilot implemented; local Compose health verified on 2026-08-14; business acceptance and production cutover remain pending  
 **Timing:** Sau khi Sprint 2 hoàn tất và có regression evidence đầy đủ  
 **Owner:** Platform/ingestion team
 
 > Sprint 2.5 là milestone hợp nhất của **Airflow integration** và **recovery hardening**. Nội dung hardening trước đây được lưu trong [recovery hardening evidence](sprint-2.6-recovery-hardening.md); tên file cũ chỉ được giữ để bảo toàn liên kết lịch sử, không biểu thị một sprint độc lập.
 
-**Acceptance status:** Chưa hoàn tất. Pilot và automated regression đã có, nhưng hiện còn **5/11 acceptance criteria** chưa được đánh dấu hoàn thành; live rerun/health evidence của hardening cũng còn mở.
+**Acceptance status:** Chưa hoàn tất. Pilot và automated regression đã có, nhưng hiện còn **5/11 acceptance criteria** chưa được đánh dấu hoàn thành. Live Compose health đã được kiểm chứng; live business-flow evidence của hardening vẫn còn mở.
 
 ## Goal
 
@@ -269,6 +269,24 @@ Các tham số tối thiểu của DAG/task:
 - Airflow giữ schedule, pool và operational parameters; không copy toàn bộ partner config vào DAG source.
 - Pilot nhận application credentials qua environment như stack hiện tại; partner credential không hard-code trong DAG và không ghi vào REST `conf`/XCom. Trước production cần chuyển secret distribution sang Docker/Kubernetes secrets hoặc Airflow secrets backend.
 - Airflow metadata database nên là database/schema riêng với application PostgreSQL. Không dùng Airflow metadata tables làm persistence cho ingestion.
+
+### Current local verification — 2026-08-14
+
+The current Compose pilot was checked after rebuilding the API image:
+
+- `reconciliation-api` is running from image
+  `sha256:64ea31ba215a084001c8e4251fbe77eeeea3fa2164b8d1c403b6f3ea097ff76c`.
+- API `/openapi.json` returns HTTP 200.
+- Airflow metadata database, scheduler and DAG processor are healthy.
+- `airflow dags list-import-errors` returns `No data found`.
+- The active owner is Airflow with `AIRFLOW_GLOBAL_SCHEDULE=none` and
+  `AIRFLOW_TASK_RETRIES=0`.
+- The Compose process list contains no legacy `reconciliation-scheduler`.
+
+This closes the local service-health evidence item. It does not close the five
+business acceptance criteria listed below, which still require live
+FileDrop/SFTP recovery, retry/state-transition, backfill-isolation and rollback
+evidence.
 
 ### Scheduling ownership
 

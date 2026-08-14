@@ -6,6 +6,12 @@
 
 **Architecture:** API giữ transport-only; scope/proposal/reprocessing thuộc application. Reconciliation và stream runner giữ public entry point nhưng delegate sang executor/runner nhỏ, nhận dependency rõ ràng. Các adapter reader/repository vẫn giữ interface lặp có chủ ý.
 
+**Review rule:** Line count là tín hiệu triage, không phải Definition of Done.
+Một file hoặc hàm khoảng 200–300 dòng không tự động là hotspot nếu nó có một
+orchestration boundary rõ ràng, ít nesting và có test contract. Chỉ coi là
+hotspot cần tách khi có nhiều workflow độc lập, dependency/failure handling
+đan chéo, hoặc độ phức tạp làm thay đổi hành vi và kiểm thử trở nên khó.
+
 **Tech Stack:** Python 3.12, FastAPI, Pydantic, pytest/pytest-asyncio, Ruff, mypy, MongoDB/Motor, PostgreSQL/SQLAlchemy.
 
 ## Global Constraints
@@ -147,3 +153,25 @@ Expected: FAIL with import errors for the new helper modules.
 - [ ] **Step 4: Refresh the codegraph using the repository's configured tooling and run `rtk codegraph status`.**
 - [ ] **Step 5: Verify oversized public functions have been reduced and no forbidden mock-based backend selection remains.**
 - [ ] **Step 6: Record final status, changed files, tests, and any deferred persistence namespace migration.**
+
+## Current review evidence — 2026-08-14
+
+- The application boundary migration is present: no production imports remain
+  from `src.scheduler`, `src.services` or `src.models`; review packet creation
+  is owned by application review; reconciliation backend selection is explicit;
+  and the stream runner/reprocessing responsibilities are split.
+- Codegraph is current at `448` files, `6,738` nodes and `17,221` edges.
+- The focused Sprint 2/2.5 verification set passed `161` tests; Ruff and mypy
+  passed.
+- The current remaining functions above 300 lines are review candidates, not
+  automatic blockers: `document_executor.execute` (~367),
+  `staged_page_replay.replay_staged_pages` (~348), and
+  `paginated_stream_runner.run_paginated_stream` (~325). Split them only if a
+  concrete independent responsibility or test boundary is found.
+- Functions in the 200–300 line range such as post-approval orchestration,
+  source-unit orchestration and job projection are not classified as hotspots
+  by size alone. Keep them under review and prioritize acceptance evidence
+  over additional abstractions.
+- The persistence namespace split between `infrastructure/persistence` and
+  `infrastructure/postgres` remains an explicit deferred cleanup, not an
+  acceptance blocker for Sprint 2.5.

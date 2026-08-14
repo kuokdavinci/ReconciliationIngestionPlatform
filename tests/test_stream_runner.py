@@ -1,6 +1,7 @@
 import inspect
 
-from src.application.automation.stream_runner import run_source_stream
+from src.application.automation.stream_lifecycle import checkpoint_short_circuit_result
+from src.application.automation.stream_runner import run_source_stream, select_stream_runner
 
 
 def test_stream_runner_keeps_airflow_call_contract():
@@ -39,6 +40,84 @@ from src.domain.ingestion.checkpoints import (
     IngestionMode,
     IngestionCheckpoint,
 )
+
+
+def test_stream_dispatcher_selects_paginated_and_file_runners():
+    paginated = FetchConfig(
+        partner="momo",
+        fetch_method=FetchMethod.API,
+        api=APIConfig(
+            base_url="https://api.example.com/settlement",
+            pagination=APIPaginationConfig(
+                page_param="page",
+                cursor_param="cursor",
+                items_path="data.items",
+                next_cursor_path="data.nextCursor",
+            ),
+        ),
+    )
+    file_source = FetchConfig(
+        partner="VIETTELPAY",
+        fetch_method=FetchMethod.FILEDROP,
+        filedrop=FileDropConfig(directory="/tmp/source-drop"),
+    )
+
+    assert select_stream_runner(paginated).__name__ == "run_paginated_stream"
+    assert select_stream_runner(file_source).__name__ == "run_file_stream"
+
+
+def test_lifecycle_preserves_blocked_and_completed_checkpoint_payloads():
+    blocked = IngestionCheckpoint(
+        partner="VIETTELPAY",
+        fetch_config_id="config-1",
+        source_type="FILEDROP",
+        stream_key="VIETTELPAY:FILEDROP:fixture",
+        status=CheckpointStatus.BLOCKED,
+        current_unit_key="file:blocked.csv",
+        error_code="file_parse_error",
+    )
+    completed = IngestionCheckpoint(
+        partner="VIETTELPAY",
+        fetch_config_id="config-1",
+        source_type="API",
+        stream_key="VIETTELPAY:API:fixture",
+        stream_ended=True,
+    )
+
+    blocked_result = checkpoint_short_circuit_result(blocked)
+    completed_result = checkpoint_short_circuit_result(completed)
+
+    assert blocked_result == {
+        "success": False,
+        "outcome": "BLOCKED",
+        "processed": 0,
+        "failed": 1,
+        "stoppedAt": "file:blocked.csv",
+        "error": "Source stream is BLOCKED and requires operator resolution.",
+        "errorCode": "file_parse_error",
+        "retryable": False,
+        "checkpoint": {
+            "status": "BLOCKED",
+            "currentUnitKey": "file:blocked.csv",
+            "lastCompletedUnitKey": None,
+            "cursorBefore": None,
+            "cursorAfter": None,
+        },
+    }
+    assert completed_result == {
+        "success": True,
+        "processed": 0,
+        "failed": 0,
+        "reconciliationSkipped": True,
+        "streamAlreadyCompleted": True,
+        "checkpoint": {
+            "status": "ABSENT",
+            "currentUnitKey": None,
+            "lastCompletedUnitKey": None,
+            "cursorBefore": None,
+            "cursorAfter": None,
+        },
+    }
 
 
 class _SequentialCheckpointRepository:

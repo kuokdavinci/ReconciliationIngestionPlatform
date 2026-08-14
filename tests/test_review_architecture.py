@@ -11,24 +11,17 @@ import pytest
 from src.config.config_health import _collect_review_sample_rows, _create_mapping_proposal
 from src.config.signature import StructureSignature
 from src.core.enums import FileType
-from src.application.review.actions import (
-    _rebind_replacement_transactions,
-    approve_packet_mapping_and_reprocess,
-)
+from src.application.review.actions import approve_packet_mapping_and_reprocess
+from src.application.review.reprocessing import _rebind_replacement_transactions
 from src.domain.mapping.models import MappingConfigStatus
 
 from src.domain.review.models import (
     CopilotAction,
-    CopilotActionStatus,
-    CopilotActionType,
     PostApprovalRun,
-    PostApprovalRunStage,
-    PostApprovalRunStatus,
     ReconciliationReviewNote,
     ReconciliationReviewRecord,
     ReviewDecisionMode,
     ReviewPacket,
-    ReviewPacketSourceType,
     ReviewPacketStatus,
 )
 from src.infrastructure.review.repository import (
@@ -147,7 +140,7 @@ async def test_replacement_rebinds_duplicate_ingestion_keys_to_new_source_file()
     )
 
     with patch(
-        "src.application.review.actions.DataContainerRepository",
+        "src.application.review.reprocessing.DataContainerRepository",
         return_value=repository,
     ):
         rebound = await _rebind_replacement_transactions(
@@ -164,51 +157,17 @@ async def test_replacement_rebinds_duplicate_ingestion_keys_to_new_source_file()
         ["MOMO_TXN_9000", "MOMO_TXN_9100"],
         "replacement-file",
     )
-from src.models.copilot_action import (
-    CopilotAction as LegacyCopilotAction,
-    CopilotActionRepository as LegacyCopilotActionRepository,
-    CopilotActionStatus as LegacyCopilotActionStatus,
-    CopilotActionType as LegacyCopilotActionType,
-)
-from src.models.post_approval_run import (
-    PostApprovalRun as LegacyPostApprovalRun,
-    PostApprovalRunRepository as LegacyPostApprovalRunRepository,
-    PostApprovalRunStage as LegacyPostApprovalRunStage,
-    PostApprovalRunStatus as LegacyPostApprovalRunStatus,
-)
-from src.models.reconciliation_review_record import (
-    ReconciliationReviewNote as LegacyReconciliationReviewNote,
-    ReconciliationReviewRecord as LegacyReconciliationReviewRecord,
-    ReconciliationReviewRecordRepository as LegacyReconciliationReviewRecordRepository,
-)
-from src.models.review_packet import (
-    ReviewDecisionMode as LegacyReviewDecisionMode,
-    ReviewPacket as LegacyReviewPacket,
-    ReviewPacketRepository as LegacyReviewPacketRepository,
-    ReviewPacketSourceType as LegacyReviewPacketSourceType,
-    ReviewPacketStatus as LegacyReviewPacketStatus,
-)
-
-
-def test_legacy_review_modules_are_compatibility_facades() -> None:
-    """Legacy imports must resolve to domain and infrastructure implementations."""
-
-    assert LegacyPostApprovalRun is PostApprovalRun
-    assert LegacyPostApprovalRunRepository is PostApprovalRunRepository
-    assert LegacyPostApprovalRunStage is PostApprovalRunStage
-    assert LegacyPostApprovalRunStatus is PostApprovalRunStatus
-    assert LegacyReconciliationReviewNote is ReconciliationReviewNote
-    assert LegacyReconciliationReviewRecord is ReconciliationReviewRecord
-    assert LegacyReconciliationReviewRecordRepository is ReconciliationReviewRecordRepository
-    assert LegacyReviewPacket is ReviewPacket
-    assert LegacyReviewPacketRepository is ReviewPacketRepository
-    assert LegacyReviewPacketSourceType is ReviewPacketSourceType
-    assert LegacyReviewPacketStatus is ReviewPacketStatus
-    assert LegacyReviewDecisionMode is ReviewDecisionMode
-    assert LegacyCopilotAction is CopilotAction
-    assert LegacyCopilotActionRepository is CopilotActionRepository
-    assert LegacyCopilotActionStatus is CopilotActionStatus
-    assert LegacyCopilotActionType is CopilotActionType
+def test_review_domain_and_adapter_have_separate_ownership() -> None:
+    assert CopilotAction.__module__ == "src.domain.review.models"
+    assert CopilotActionRepository.__module__ == "src.infrastructure.review.repository"
+    assert PostApprovalRun.__module__ == "src.domain.review.models"
+    assert PostApprovalRunRepository.__module__ == "src.infrastructure.review.repository"
+    assert ReconciliationReviewNote.__module__ == "src.domain.review.models"
+    assert ReconciliationReviewRecord.__module__ == "src.domain.review.models"
+    assert ReconciliationReviewRecordRepository.__module__ == "src.infrastructure.review.repository"
+    assert ReviewPacket.__module__ == "src.domain.review.models"
+    assert ReviewPacketRepository.__module__ == "src.infrastructure.review.repository"
+    assert ReviewDecisionMode.__module__ == "src.domain.review.models"
 
 
 @pytest.mark.asyncio

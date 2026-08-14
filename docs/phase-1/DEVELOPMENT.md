@@ -37,7 +37,7 @@ docker compose up -d mongodb postgres sftp mongo-express
 `mongo-express` is a local/dev helper only.
 Current Compose config disables its basic auth layer with `ME_CONFIG_BASICAUTH: "false"`, so keep it on localhost and do not mirror that posture outside development.
 
-PostgreSQL (`postgres:16`) is used for bulk transactional processing (ingestion + reconciliation). Schema changes are applied through Alembic migrations in `alembic/versions/`; `src/models/postgres.py` provides the startup migration entrypoint.
+PostgreSQL (`postgres:16`) is used for bulk transactional processing (ingestion + reconciliation). Schema changes are applied through Alembic migrations in `alembic/versions/`; `src/infrastructure/persistence/postgres_connection.py` provides the startup migration entrypoint.
 
 ### PostgreSQL Connection
 

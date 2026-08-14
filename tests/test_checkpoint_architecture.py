@@ -7,20 +7,11 @@ from src.domain.ingestion.checkpoints import (
     IngestionMode,
 )
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
-from src.models.ingestion_checkpoint import (
-    CheckpointRepository as LegacyCheckpointRepository,
-    CheckpointStatus as LegacyCheckpointStatus,
-    IngestionCheckpoint as LegacyIngestionCheckpoint,
-    IngestionCheckpointRepository as LegacyIngestionCheckpointRepository,
-    IngestionMode as LegacyIngestionMode,
-)
-
-
-def test_legacy_checkpoint_module_is_a_compatibility_facade() -> None:
-    """Legacy imports must resolve to domain and infrastructure implementations."""
-
-    assert LegacyCheckpointRepository is CheckpointRepository
-    assert LegacyCheckpointStatus is CheckpointStatus
-    assert LegacyIngestionCheckpoint is IngestionCheckpoint
-    assert LegacyIngestionCheckpointRepository is IngestionCheckpointRepository
-    assert LegacyIngestionMode is IngestionMode
+def test_checkpoint_domain_and_adapter_have_separate_ownership() -> None:
+    assert CheckpointRepository.__module__ == "src.domain.ingestion.checkpoints"
+    assert CheckpointStatus.__module__ == "src.domain.ingestion.checkpoints"
+    assert IngestionCheckpoint.__module__ == "src.domain.ingestion.checkpoints"
+    assert IngestionCheckpointRepository.__module__ == (
+        "src.infrastructure.ingestion.checkpoint_repository"
+    )
+    assert IngestionMode.__module__ == "src.domain.ingestion.checkpoints"

@@ -1,11 +1,13 @@
 import pytest
 from decimal import Decimal
 from datetime import datetime, timezone
-from src.models.reconciliation_result import ReconciliationResult, ReconciliationResultRepository
-from src.models.internal_transaction import InternalTransaction, InternalTransactionRepository
+from src.domain.reconciliation.models import ReconciliationResult
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
+from src.domain.internal_transaction.models import InternalTransaction
+from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
 from src.core.enums import TransactionStatus
 from src.core.enums import ReconciliationStatus
-from src.models.postgres import ReconciliationResultTable
+from src.infrastructure.persistence.postgres_schema import ReconciliationResultTable
 
 class SubscriptableDummy:
     def __getitem__(self, item):

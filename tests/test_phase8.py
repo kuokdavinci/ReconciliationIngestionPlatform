@@ -22,14 +22,14 @@ from src.fetchers.base import BaseFetcher
 from src.fetchers.sftp_fetcher import SFTPFetcher
 from src.fetchers.api_fetcher import APIFetcher
 from src.fetchers.filedrop_fetcher import FileDropFetcher
-from src.models.fetch_config import (
+from src.domain.fetch_config.models import (
     FetchConfig,
     FetchMethod,
     SFTPConfig,
     APIConfig,
     FileDropConfig,
-    FetchConfigRepository,
 )
+from src.infrastructure.fetch_config.repository import FetchConfigRepository
 
 
 # ============================================================================

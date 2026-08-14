@@ -147,7 +147,7 @@ async def test_copilot_context_reconciliation_screen():
     
     request = _make_request(db)
     
-    with patch("src.models.reconciliation_result.ReconciliationResultRepository.count_by_status", new_callable=AsyncMock) as mock_count:
+    with patch("src.infrastructure.postgres.reconciliation_result_repository.ReconciliationResultRepository.count_by_status", new_callable=AsyncMock) as mock_count:
         mock_count.return_value = {"MATCHED": 10, "AMOUNT_MISMATCH": 2}
         
         result = await get_context(

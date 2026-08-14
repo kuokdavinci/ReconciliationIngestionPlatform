@@ -71,7 +71,7 @@ class TestListTransactions:
              "requestId": req_id},
         ]
 
-        from src.models.data_container import DataContainer
+        from src.domain.partner_transaction.models import DataContainer
         dc = DataContainer.model_validate(fake_docs[0])
         mock_find_many = AsyncMock(return_value=[dc])
         
@@ -110,7 +110,7 @@ class TestListTransactions:
             for i in range(5)
         ]
 
-        from src.models.data_container import DataContainer
+        from src.domain.partner_transaction.models import DataContainer
         dcs = [DataContainer.model_validate(doc) for doc in fake_docs]
         mock_find_many = AsyncMock(return_value=dcs)
 
@@ -140,7 +140,7 @@ class TestGetTransaction:
             "lastModifiedBy": "system", "lastModifiedDate": "2024-07-07T00:00:00Z",
             "requestId": req_id,
         }
-        from src.models.data_container import DataContainer
+        from src.domain.partner_transaction.models import DataContainer
         dc = DataContainer.model_validate(doc)
         mock_find_by_id = AsyncMock(return_value=dc)
 

@@ -23,13 +23,13 @@ Xác định pipeline đang ở đâu, lỗi ở bước nào, số lượng và
 
 - `src/core/enums.py` — thêm ingestion stage/run outcome enums nếu chưa có abstraction phù hợp.
 - `src/core/types.py` — thêm stage metrics và run counters dùng chung.
-- `src/models/partner_runtime_run.py` — thêm stage history/current stage, attempt, error và ingest metrics.
+- `src/domain/runtime/models.py` và `src/infrastructure/runtime/repository.py` — thêm stage history/current stage, attempt, error và ingest metrics.
 - `src/application/runtime/service.py` — helper update stage/counters/error theo atomic update.
 - `src/pipeline/ingestion_pipeline.py` — emit/persist lifecycle theo stage và partial status; gắn run/source context.
 - `src/application/automation/stream_runner.py` — truyền run context, ghi fetch stage/result và không che khuất lỗi ingest.
 - `src/logging/logger.py` — mở rộng event types/fields cho stage, batch, checkpoint và quarantine.
-- `src/models/reconciliation_file.py` — lưu lifecycle summary ở file-level.
-- `src/models/indexes.py` — index theo partner/stage/status/time cho truy vấn operational.
+- `src/domain/ingestion/models.py` và `src/infrastructure/ingestion/file_repository.py` — lưu lifecycle summary ở file-level.
+- `src/infrastructure/persistence/mongo_indexes.py` — index theo partner/stage/status/time cho truy vấn operational.
 - `tests/test_logger.py`, `tests/test_ingestion_integration.py`, `tests/test_api_automation_run.py`, `tests/test_e2e_100k_records.py` — test event schema, state transition, count reconciliation và performance threshold.
 
 ## File không thuộc scope

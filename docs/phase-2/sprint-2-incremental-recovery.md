@@ -193,7 +193,7 @@ Nếu không thể thực hiện transaction xuyên Mongo và PostgreSQL, phải
 
 ### Task 2 — Checkpoint model/repository/index
 
-- Tạo `src/models/ingestion_checkpoint.py`.
+- Tạo `src/domain/ingestion/checkpoints.py` và `src/infrastructure/ingestion/checkpoint_repository.py`.
 - Tạo unique key cho `(partner, fetch_config_id, source_type, stream_key, mode)`.
 - Thêm index cho pending/failed units và updated time.
 - Định nghĩa create-or-get, claim, mark-failed, mark-completed và advance methods.

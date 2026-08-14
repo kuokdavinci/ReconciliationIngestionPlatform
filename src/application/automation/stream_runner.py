@@ -1,7 +1,6 @@
 """Application runner for one configured source stream."""
 
 import logging
-from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -10,6 +9,16 @@ from src.application.automation.stream_identity import (
     raw_stage_key as build_raw_stage_key,
     stream_identity,
     units_after_checkpoint,
+)
+from src.application.automation.stream_fetching import (
+    checkpoint_result,
+    source_units,
+    unit_high_water_mark,
+)
+from src.application.automation.stream_staging import stage_stream_unit
+from src.application.automation.stream_review_gate import (
+    create_stream_review_packet,
+    evaluate_stream_mapping,
 )
 from src.application.automation.stream_ingestion import (
     build_source_unit_ingestor,
@@ -23,8 +32,6 @@ from src.application.automation.stream_runtime import (
 from src.application.ingestion.source_unit_orchestrator import process_source_units
 from src.config.config_health import (
     ConfigurationApprovalRequiredError,
-    check_and_refresh_config,
-    create_stream_scope_review_packet,
 )
 from src.core.enums import FileType
 from src.core.error_formatting import summarize_runtime_error
@@ -47,32 +54,6 @@ from src.domain.ingestion.retry_policy import RetryPolicy
 
 logger = logging.getLogger("reconciliation.automation.stream_runner")
 
-
-def _checkpoint_result(checkpoint: Any) -> dict[str, Any]:
-    status = getattr(checkpoint.status, "value", checkpoint.status)
-    return {
-        "status": status,
-        "currentUnitKey": checkpoint.current_unit_key,
-        "lastCompletedUnitKey": checkpoint.last_completed_unit_key,
-        "cursorBefore": checkpoint.cursor_before,
-        "cursorAfter": checkpoint.cursor_after,
-    }
-
-
-def source_units(
-    units: Sequence[SourceUnitMetadata | dict[str, Any]],
-) -> list[SourceUnitMetadata]:
-    return [SourceUnitMetadata.from_payload(unit) for unit in units]
-
-
-def unit_high_water_mark(unit: SourceUnitMetadata) -> dict[str, Any]:
-    return {
-        "sourceUnitKey": unit.source_unit_key,
-        "page": unit.page,
-        "cursorAfter": unit.cursor_after,
-        "contentHash": unit.content_hash,
-        "hasMore": unit.has_more,
-    }
 
 async def run_source_stream(
     config: FetchConfig,
@@ -150,7 +131,7 @@ async def run_source_stream(
                 "error": "Source stream is BLOCKED and requires operator resolution.",
                 "errorCode": checkpoint.error_code or "checkpoint_blocked",
                 "retryable": False,
-                "checkpoint": _checkpoint_result(checkpoint),
+                "checkpoint": checkpoint_result(checkpoint),
             },
             stats={"totalRows": 0, "successRows": 0, "duplicateRows": 0, "failedRows": 0, "unitsProcessed": 0},
         )
@@ -165,7 +146,7 @@ async def run_source_stream(
                 "failed": 0,
                 "reconciliationSkipped": True,
                 "streamAlreadyCompleted": True,
-                "checkpoint": _checkpoint_result(checkpoint),
+                "checkpoint": checkpoint_result(checkpoint),
             },
             stats={"totalRows": 0, "successRows": 0, "duplicateRows": 0, "failedRows": 0, "unitsProcessed": 0},
         )
@@ -362,27 +343,16 @@ async def run_source_stream(
                     "rawStageKey": stage_key,
                 }
                 if raw_staging_available:
-                    try:
-                        await raw_page_repo.stage_from_path(
-                            stage_key=stage_key,
-                            partner=identity["partner"],
-                            fetch_config_id=identity["fetchConfigId"],
-                            source_type=identity["sourceType"],
-                            stream_key=identity["streamKey"],
-                            reconciliation_date=reconciliation_date,
-                            unit=unit,
-                        )
-                    except TypeError as exc:
-                        # Test doubles and legacy adapters may not expose a
-                        # Motor database. Keep their existing execution path;
-                        # real deployments fail loudly for storage/network
-                        # errors rather than silently dropping raw pages.
-                        if (
-                            "must be MotorDatabase" not in str(exc)
-                            and "can't be used in 'await' expression" not in str(exc)
-                        ):
-                            raise
-                        raw_staging_available = False
+                    raw_staging_available = await stage_stream_unit(
+                        raw_page_repo,
+                        stage_key=stage_key,
+                        partner=identity["partner"],
+                        fetch_config_id=identity["fetchConfigId"],
+                        source_type=identity["sourceType"],
+                        stream_key=identity["streamKey"],
+                        reconciliation_date=reconciliation_date,
+                        unit=unit,
+                    )
                 staged_units.append(unit)
                 if not raw_staging_available:
                     # Preserve the legacy one-page-at-a-time path for adapters
@@ -444,7 +414,7 @@ async def run_source_stream(
             if first_staged_unit is not None:
                 active_runtime_config = None
                 try:
-                    active_runtime_config = await check_and_refresh_config(
+                    active_runtime_config = await evaluate_stream_mapping(
                         file_path=first_staged_unit.local_path or "",
                         partner=config.partner,
                         workflow_type="UPC",
@@ -507,7 +477,7 @@ async def run_source_stream(
                     )
 
                 if active_runtime_config is not None:
-                    await create_stream_scope_review_packet(
+                    await create_stream_review_packet(
                         database=db,
                         partner=config.partner,
                         file_type=FileType.SETTLEMENT,

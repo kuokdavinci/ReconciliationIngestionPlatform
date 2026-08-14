@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 import inspect
-from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -21,6 +19,13 @@ from src.application.review.errors import (
     ReviewNotFoundError,
     ReviewValidationError,
 )
+from src.application.review.mapping_support import (
+    apply_source_reference_strategy,
+    has_passing_runtime_gate,
+    schedule_in_event_loop,
+    serialize_mapping,
+    serialize_packet,
+)
 from src.core.enums import FileType
 from src.core.types import FieldMapping
 from src.domain.mapping.contract import (
@@ -30,75 +35,6 @@ from src.domain.mapping.contract import (
 )
 from src.domain.mapping.models import MappingConfig, MappingConfigStatus
 from src.domain.review.models import ReviewDecisionMode, ReviewPacketStatus
-
-
-def _column_index(column: object) -> int | None:
-    if isinstance(column, int):
-        return column - 1 if column > 0 else None
-    if not isinstance(column, str):
-        return None
-    value = column.strip().upper()
-    if value.isdigit():
-        number = int(value)
-        return number - 1 if number > 0 else None
-    if not value.isalpha():
-        return None
-    index = 0
-    for character in value:
-        index = index * 26 + ord(character) - ord("A") + 1
-    return index - 1
-
-
-def _apply_source_reference_strategy(
-    mappings: list[dict],
-    *,
-    headers: list[str],
-    source_file_name: str | None,
-) -> list[dict]:
-    """Convert column references to object keys for JSON-like sources."""
-    if Path(source_file_name or "").suffix.lower() not in {".json", ".jsonl", ".ndjson"}:
-        return [dict(mapping) for mapping in mappings]
-
-    normalized: list[dict] = []
-    for mapping in mappings:
-        item = dict(mapping)
-        index = _column_index(item.get("column"))
-        if index is not None and index < len(headers):
-            source_field = str(headers[index]).strip()
-            if source_field:
-                item.pop("column", None)
-                item["sourceField"] = source_field
-        normalized.append(item)
-    return normalized
-
-
-def _serialize_mapping(config: MappingConfig) -> dict[str, Any]:
-    data = config.model_dump(by_alias=True)
-    data["_id"] = str(data["_id"])
-    data["draftMappingId"] = data["_id"]
-    data["draftMappingVersion"] = data.get("configVersion") or data["_id"]
-    if data.get("fileType") is not None:
-        data["fileType"] = str(data["fileType"])
-    return data
-
-
-def _serialize_packet(packet) -> dict[str, Any]:
-    data = packet.model_dump(by_alias=True)
-    data["_id"] = str(data["_id"])
-    data["reviewItemId"] = data["_id"]
-    return data
-
-
-def _has_passing_runtime_gate(packet) -> bool:
-    return any(
-        gate.get("gateKey") == "runtime_validation"
-        and str(gate.get("status", "")).lower() == "pass"
-        for gate in packet.validation_gates or []
-    )
-
-
-def _schedule_in_event_loop(awaitable) -> None:
-    asyncio.create_task(awaitable)
 
 
 class ReviewMappingWorkflow:
@@ -116,9 +52,9 @@ class ReviewMappingWorkflow:
         approve_keep_current_action: Callable[..., Awaitable[dict | None]] = reprocess_packet_with_current_mapping,
         mark_packet: Callable[..., Awaitable[dict]] = mark_packet,
         update_packet_scope: Callable[..., Awaitable[None]] = update_packet_scope,
-        schedule_background: Callable[[Awaitable[Any]], None] = _schedule_in_event_loop,
+        schedule_background: Callable[[Awaitable[Any]], None] = schedule_in_event_loop,
         workflow_gateway: Any | None = None,
-        packet_serializer: Callable[[Any], dict[str, Any]] = _serialize_packet,
+        packet_serializer: Callable[[Any], dict[str, Any]] = serialize_packet,
         next_version: Callable[[str], Awaitable[str]] | None = None,
     ) -> None:
         self.db = db
@@ -141,7 +77,7 @@ class ReviewMappingWorkflow:
         if packet.draft_mapping_id:
             existing = await self.mapping_repo.find_one({"_id": packet.draft_mapping_id})
         if existing is not None and existing.field_mappings and not force:
-            return {"ok": True, "mapping": _serialize_mapping(existing), "warnings": []}
+            return {"ok": True, "mapping": serialize_mapping(existing), "warnings": []}
 
         context = await self.context_resolver(self.db, packet, existing)
         headers = list(context.get("headers") or [])
@@ -169,7 +105,7 @@ class ReviewMappingWorkflow:
         field_mappings, mapping_warnings = canonicalize_field_mappings(
             serialize_field_mappings(config_dict.get("fieldMappings") or [])
         )
-        field_mappings = _apply_source_reference_strategy(
+        field_mappings = apply_source_reference_strategy(
             field_mappings,
             headers=headers,
             source_file_name=packet.source_file_path or packet.file_name,
@@ -248,7 +184,7 @@ class ReviewMappingWorkflow:
             for gate in (packet.validation_gates or [])
             if gate.get("gateKey") != "runtime_validation"
         ]
-        mapping_payload = _serialize_mapping(mapping)
+        mapping_payload = serialize_mapping(mapping)
         await self._update_packet_draft(
             packet_id=packet_id,
             draft_mapping_id=str(mapping.id),
@@ -391,7 +327,7 @@ class ReviewMappingWorkflow:
             and bool(packet.backfill_run_id)
         )
         if already_approved_backfill:
-            if not _has_passing_runtime_gate(packet):
+            if not has_passing_runtime_gate(packet):
                 raise ReviewValidationError("Runtime validation must pass before approval.")
             post_approve_run = await self.approve_activate_action(
                 self.db,
@@ -409,7 +345,7 @@ class ReviewMappingWorkflow:
             return response
         if packet.status != ReviewPacketStatus.PENDING:
             raise ReviewConflictError("Only pending review packets can be processed.")
-        if not _has_passing_runtime_gate(packet):
+        if not has_passing_runtime_gate(packet):
             raise ReviewValidationError("Runtime validation must pass before approval.")
         await self.update_packet_scope(self.db, packet_id, packet, scope_type)
         post_approve_run = await self.approve_activate_action(
@@ -442,7 +378,7 @@ class ReviewMappingWorkflow:
         scope_type: str | None = None,
     ) -> dict[str, Any]:
         packet = await self._get_pending_packet(packet_id)
-        if not _has_passing_runtime_gate(packet):
+        if not has_passing_runtime_gate(packet):
             raise ReviewValidationError("Runtime validation must pass before approval.")
         await self.update_packet_scope(self.db, packet_id, packet, scope_type)
         post_approve_run = await self.approve_keep_current_action(

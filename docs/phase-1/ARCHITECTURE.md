@@ -51,7 +51,7 @@ flowchart TB
 | `src/pipeline/` | File/row processing, claims, normalization, validation, batch write | Global scheduling |
 | `frontend-next/` | Operator views, typed clients, polling và interaction | Source-of-truth business state |
 
-`src/models/` vẫn tồn tại như compatibility/persistence boundary cho các import cũ và model persistence. Code mới ưu tiên `src/domain/`, `src/application/` và repositories trong `src/infrastructure/`.
+Kiến trúc không còn lớp `src/models/` trung gian. Code dùng `src/domain/` cho nghiệp vụ thuần, `src/application/` cho use case/orchestration và repositories trong `src/infrastructure/` cho persistence/adapters.
 
 ## Luồng ingestion
 

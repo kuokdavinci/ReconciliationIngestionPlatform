@@ -287,7 +287,7 @@ def setup_postgres_test_db():
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
     from src.config.settings import settings
-    from src.models.postgres import init_postgres_db
+    from src.infrastructure.persistence.postgres_connection import init_postgres_db
     
     url = settings.postgres_url
     base_url = url.rsplit("/", 1)[0] + "/postgres"
@@ -341,7 +341,7 @@ def setup_postgres_test_db():
     yield
     
     async def clean_db():
-        from src.models.postgres import get_pg_engine
+        from src.infrastructure.persistence.postgres_connection import get_pg_engine
         engine = get_pg_engine()
         await engine.dispose()
         
@@ -351,7 +351,7 @@ def setup_postgres_test_db():
 @pytest.fixture
 async def clean_postgres_tables(setup_postgres_test_db):
     """Wipe all PostgreSQL tables before each test to ensure test isolation."""
-    from src.models.postgres import get_pg_engine
+    from src.infrastructure.persistence.postgres_connection import get_pg_engine
     from sqlalchemy import text
     try:
         engine = get_pg_engine()

@@ -136,7 +136,7 @@ class TestListResults:
 
     def test_limit_and_offset_work(self):
         app, mock_collection = _create_test_app()
-        from src.models.reconciliation_result import ReconciliationResult
+        from src.domain.reconciliation.models import ReconciliationResult
         from uuid import uuid4
         fake_results = [
             ReconciliationResult(
@@ -179,7 +179,7 @@ class TestListResults:
 
     def test_results_include_all_partner_rows_for_business_date(self):
         app, _ = _create_test_app()
-        from src.models.reconciliation_result import ReconciliationResult
+        from src.domain.reconciliation.models import ReconciliationResult
         from uuid import uuid4
 
         legacy_result = ReconciliationResult(
@@ -217,7 +217,7 @@ class TestListResults:
 class TestGetResult:
     def test_existing_id_returns_record(self):
         app, mock_collection = _create_test_app()
-        from src.models.reconciliation_result import ReconciliationResult
+        from src.domain.reconciliation.models import ReconciliationResult
         res_obj = ReconciliationResult(
             id="txn123", partner="MOMO", date="2024-07-07",
             partner_txn_id="txn123", reconciliation_status="MATCHED",

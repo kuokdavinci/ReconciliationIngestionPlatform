@@ -7,7 +7,7 @@
 ## Bối cảnh codebase hiện tại
 
 - `src/pipeline/ingestion_pipeline.py` đã có SHA-256 file hash và early return khi `ReconciliationFile.fileHash` đã tồn tại.
-- `src/models/indexes.py` có unique index cho `reconciliation_file.fileHash`; transaction thực tế được lưu trong PostgreSQL.
+- `src/infrastructure/persistence/mongo_indexes.py` có unique index cho `reconciliation_file.fileHash`; transaction thực tế được lưu trong PostgreSQL.
 - `ingestion_key` đã là field first-class trong canonical model và PostgreSQL schema; batch insert dùng `ON CONFLICT DO NOTHING`.
 - `DataContainerRepository`, `InternalTransactionRepository` và `ReconciliationResultRepository` đều là PostgreSQL-only; MongoDB không lưu dữ liệu giao dịch.
 - `ReconciliationFileRepository` có idempotent create-or-get dựa trên unique file hash/fetch-unit key.
@@ -127,11 +127,11 @@ Viết test trước cho các case sau:
 ## File dự kiến modified
 
 - `src/pipeline/ingestion_pipeline.py` — tạo/truyền `ingestion_key`, xử lý duplicate outcome, atomic file claim, và batch result.
-- `src/models/data_container.py` — thêm `ingestion_key`, cập nhật serialize/deserialize, repository insert conflict-safe.
-- `src/models/postgres.py` — thêm cột và unique constraint/index cho `partner_transaction`.
+- `src/domain/partner_transaction/models.py` và `src/infrastructure/partner_transaction/repository.py` — thêm `ingestion_key`, cập nhật serialize/deserialize, repository insert conflict-safe.
+- `src/infrastructure/persistence/postgres_schema.py` — thêm cột và unique constraint/index cho `partner_transaction`.
 - `alembic/versions/<new>_ingestion_idempotency.py` — migration thêm cột, backfill, kiểm tra an toàn, và tạo index/constraint.
-- `src/models/reconciliation_file.py` — atomic claim/idempotent create-or-get và status transition an toàn.
-- `src/models/indexes.py` — chỉ giữ index Mongo cho file claim, config và workflow metadata.
+- `src/domain/ingestion/models.py` và `src/infrastructure/ingestion/file_repository.py` — atomic claim/idempotent create-or-get và status transition an toàn.
+- `src/infrastructure/persistence/mongo_indexes.py` — chỉ giữ index Mongo cho file claim, config và workflow metadata.
 - `src/core/constants.py` hoặc `src/core/types.py` — định nghĩa helper contract cho key derivation, duplicate codes, và counters nếu cần mở rộng.
 - `tests/test_ingestion_pipeline.py` — test TDD cho replay file, duplicate transaction, partial retry, claim race.
 - `tests/test_ingestion_integration.py` — test end-to-end cho duplicate-safe flow trên batch thật.

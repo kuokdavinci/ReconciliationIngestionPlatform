@@ -53,21 +53,16 @@ async def _rebind_replacement_transactions(
 
 
 def _sync_staged_compatibility_points() -> None:
-    names = [
-        "RawIngestionPageRepository",
-        "ReconciliationFileRepository",
-        "DataContainerRepository",
-        "ReconciliationResultRepository",
-        "build_ingestion_pipeline",
-        "build_config_loader",
-        "build_reconciliation_service",
-        "update_runtime_run",
-        "_update_post_approval_run",
-        "_rebind_replacement_transactions",
-    ]
-    for name in names:
-        if name in globals():
-            setattr(_staged, name, globals()[name])
+    setattr(_staged, "RawIngestionPageRepository", RawIngestionPageRepository)
+    setattr(_staged, "ReconciliationFileRepository", ReconciliationFileRepository)
+    setattr(_staged, "DataContainerRepository", DataContainerRepository)
+    setattr(_staged, "ReconciliationResultRepository", ReconciliationResultRepository)
+    setattr(_staged, "build_ingestion_pipeline", build_ingestion_pipeline)
+    setattr(_staged, "build_config_loader", build_config_loader)
+    setattr(_staged, "build_reconciliation_service", build_reconciliation_service)
+    setattr(_staged, "update_runtime_run", update_runtime_run)
+    setattr(_staged, "_update_post_approval_run", _update_post_approval_run)
+    setattr(_staged, "_rebind_replacement_transactions", _rebind_replacement_transactions)
 
 
 async def reprocess_staged_pages(

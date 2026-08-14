@@ -29,3 +29,9 @@
 - Final focused suite: `82 passed in 0.73s`.
 - Final focused Ruff: pass.
 - Final focused mypy: `Success: no issues found in 6 source files`.
+
+## Review fix
+
+- Commit `0e2faab` synchronizes legacy repository/builder overrides before both staged and file-level post-approval flows, then forwards the facade's current builders into the extracted lifecycle.
+- Added behavioral boundary tests for source metadata preservation and legacy builder override forwarding.
+- Post-fix review/replay/API suite: `47 passed in 0.56s`; Ruff and mypy pass.

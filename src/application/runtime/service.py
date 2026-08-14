@@ -1,4 +1,4 @@
-"""Helpers for unified runtime run visibility."""
+"""Application services for unified runtime run visibility."""
 
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -45,6 +45,11 @@ async def create_runtime_run(
     orchestration: RuntimeOrchestrationContext | dict[str, Any] | None = None,
 ) -> PartnerRuntimeRun:
     repo = PartnerRuntimeRunRepository(db)
+    orchestration_context = (
+        RuntimeOrchestrationContext.model_validate(orchestration)
+        if orchestration is not None
+        else None
+    )
     run = PartnerRuntimeRun(
         partner=partner,
         date=date,
@@ -56,7 +61,7 @@ async def create_runtime_run(
         fileName=file_name,
         mappingVersion=mapping_version,
         validationState=validation_state,
-        orchestration=orchestration,
+        orchestration=orchestration_context,
     )
     await repo.create(run)
     return run
@@ -106,9 +111,8 @@ async def update_runtime_run(
         update["finishedAt"] = finished_at
     elif clear_finished_at:
         update["finishedAt"] = None
-    update_operation: dict[str, Any] = {"$set": update}
-    if attempt_event is not None:
-        update_operation["$push"] = {"attemptHistory": attempt_event}
-    await PartnerRuntimeRunRepository(db).collection.update_one(
-        {"_id": run_id}, update_operation
+    await PartnerRuntimeRunRepository(db).update_fields(
+        run_id,
+        update,
+        attempt_event=attempt_event,
     )

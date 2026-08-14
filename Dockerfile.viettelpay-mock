@@ -1,0 +1,11 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY scripts/ ./scripts
+
+RUN mkdir -p /app/mock_data/viettelpay_sprint2
+
+EXPOSE 8001
+
+CMD ["python", "-m", "scripts.demo.sprint2.mock_api", "--host", "0.0.0.0", "--port", "8001"]

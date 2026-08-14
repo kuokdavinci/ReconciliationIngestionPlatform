@@ -1,153 +1,64 @@
 # Reconciliation Ingestion Platform
 
-Config-driven platform for fetching partner settlement data, ingesting it safely, reconciling it with internal transactions, and operating review workflows.
+Nền tảng cấu hình được để lấy settlement từ partner, chuẩn hóa và kiểm tra dữ liệu, đối soát với giao dịch nội bộ, rồi vận hành các bước review/approval có audit.
 
-The repository contains a FastAPI backend, a Next.js dashboard, PostgreSQL/MongoDB persistence, scheduled partner jobs, and an ingestion-reliability roadmap.
+Trạng thái hiện tại gồm FastAPI backend, dashboard Next.js, MongoDB + PostgreSQL, Airflow control plane và các luồng recovery/backfill có checkpoint.
 
-## What the platform does
+## Tính năng chính
 
-- Fetches CSV, JSON and Excel data from filedrop, API or SFTP.
-- Applies partner-specific mapping, normalization and validation rules.
-- Persists canonical partner transactions in PostgreSQL.
-- Prevents duplicate files, fetch units and transactions from being processed twice.
-- Reconciles partner transactions with internal transactions deterministically.
-- Exposes review packets, mapping approval, runtime status and audit history.
-- Provides AI-assisted insights with provider fallback and guardrails.
-- Serves an operations dashboard through Next.js.
+- Nhận CSV, JSON, Excel từ FileDrop, API hoặc SFTP.
+- Mapping theo partner, normalize, validate và quarantine record lỗi.
+- Idempotency ở file, source unit, transaction và batch write.
+- Pagination, checkpoint, retry/resume, raw-page staging và ordered backfill.
+- Reconciliation theo business key, amount/status và scope (`FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT`, `UNCONFIRMED`).
+- Review packet, mapping approval, runtime validation, audit log và operator recovery.
+- Insight/Copilot có guardrail, cache và provider fallback.
+- Dashboard cho reconciliation, Review Center, Mapping Studio, Schedules và Audit Log.
 
-## Architecture at a glance
+## Kiến trúc runtime
 
 ```mermaid
 flowchart LR
-    S[Partner file / API / SFTP]
-    F[src/fetchers]
-    J[src/scheduler]
-    AF[Airflow DAG/control plane]
-    P[src/pipeline]
-    A[src/application]
-    D[src/domain]
-    I[src/infrastructure]
-    PG[(PostgreSQL)]
-    MG[(MongoDB)]
-    R[src/reconciliation]
-    API[FastAPI]
-    UI[Next.js dashboard]
-
-    S --> F --> J --> P
-    AF --> A
-    P --> A
-    P --> I
-    A --> D
-    I --> PG
-    I --> MG
-    P --> R
+    S[Partner File / API / SFTP] --> F[src/fetchers]
+    F --> O[src/application/automation]
+    AF[Airflow DAG] --> O
+    O --> U[src/application/ingestion]
+    U --> P[src/pipeline]
+    P --> D[src/domain]
+    P --> I[src/infrastructure]
+    I --> M[(MongoDB)]
+    I --> PG[(PostgreSQL)]
+    O --> R[src/application/reconciliation]
     R --> PG
-    API --> A
-    API --> I
-    UI --> API
+    API[src/api FastAPI] --> O
+    API --> R
+    UI[frontend-next] --> API
 ```
 
-### Architectural boundaries
-
-| Boundary | Responsibility | Main locations |
+| Boundary | Trách nhiệm | Vị trí chính |
 |---|---|---|
-| Delivery | HTTP routes, request validation and response contracts | `src/api/` |
-| Application | Use cases and orchestration between domain and adapters | `src/application/` |
-| Domain | Business models, enums, ports and stable contracts | `src/domain/` |
-| Infrastructure | MongoDB/PostgreSQL repositories and composition roots | `src/infrastructure/` |
-| Ingestion pipeline | File claims, row processing, metrics and lifecycle state | `src/pipeline/` |
-| Fetchers | Filedrop, SFTP and API retrieval | `src/fetchers/` |
-| Scheduler/orchestration | Partner jobs, source units and runtime execution | `src/scheduler/`, `src/application/automation/`, `dags/` |
-| Reconciliation | Scope classification, matching and result persistence | `src/reconciliation/` |
-| Dashboard | Review, mapping, schedules and operational views | `frontend-next/src/` |
+| Delivery | FastAPI routes, request/response contracts | `src/api/` |
+| Application | Use case, orchestration, command/query và runtime state | `src/application/` |
+| Domain | Model, enum, port và contract ổn định | `src/domain/` |
+| Infrastructure | MongoDB, PostgreSQL, Airflow gateway và repositories | `src/infrastructure/` |
+| Ingestion | Claim file, đọc row, normalize, validate, batch persistence | `src/pipeline/`, `src/readers/`, `src/normalizer/`, `src/validators/` |
+| Fetcher | FileDrop, SFTP, API và source-unit identity | `src/fetchers/` |
+| Reconciliation | Scope, matching, result và review record | `src/reconciliation/`, `src/application/reconciliation/` |
+| Automation | Stream execution, checkpoint, recovery, backfill | `src/application/automation/`, `dags/` |
+| Dashboard | Operator UI và typed API clients | `frontend-next/` |
 
-`src/models/` remains as a compatibility/persistence boundary for existing imports. New code should depend on domain contracts and infrastructure repositories through the application layer.
-
-## Core runtime flows
-
-### 1. Ingestion
-
-```text
-fetch source
-  -> identify fetch unit
-  -> claim file by fileHash/fetchUnitKey
-  -> load mapping and configuration
-  -> read rows
-  -> normalize
-  -> validate
-  -> derive deterministic ingestion_key
-  -> batch-write PostgreSQL
-  -> persist file/runtime statistics
-  -> trigger downstream reconciliation
-```
-
-The pipeline is intentionally split by responsibility:
-
-- `src/pipeline/ingestion_pipeline.py` coordinates claims, configuration, lifecycle and final status.
-- `src/pipeline/row_pipeline.py` wires readers, normalizers, validators and batch writers.
-- `src/pipeline/row_batch_coordinator.py` coordinates row-level execution.
-- `src/pipeline/file_claim.py` owns duplicate-safe file identity and claim behavior.
-- `src/pipeline/batch_writer.py` performs conflict-safe persistence.
-- `src/pipeline/metrics.py`, `run_state.py` and `observability.py` expose execution state.
-
-### 2. Reconciliation
-
-`src/application/reconciliation/service.py` coordinates the reconciliation use case. The domain/reconciliation layer determines scope, compares amount/status, writes results in batches and returns summary/evidence for the API.
-
-Supported scope decisions include `FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT` and `UNCONFIRMED`.
-
-### 3. Review and approval
-
-Review packets coordinate scope analysis, mapping review, runtime validation and approval decisions. The main route group is `/api/v1/review-packets`.
-
-For an ordered backfill, the packet is linked to the durable parent through
-`backfillRunId` and the current business date. Guided Review can therefore show
-the backfill's daily progress and resume the same Airflow parent after mapping
-approval. The Schedules page also exposes a direct **Open pending review**
-action when a scheduler packet is available.
-
-### 4. Scheduled automation
-
-The default Compose stack uses Airflow as the only application orchestrator.
-The manual pilot keeps `AIRFLOW_GLOBAL_SCHEDULE=none`, so Run Now, Guided Review
-approval, retry and backfill are operator-driven. Job state remains available
-through `/api/v1/automation`.
-
-## Reliability contracts
-
-| Contract | Mechanism |
-|---|---|
-| File replay safety | MongoDB unique `fileHash` claim |
-| Fetch-unit replay safety | MongoDB unique `fetchUnitKey` claim when available |
-| Transaction replay safety | PostgreSQL uniqueness on `(identify, ingestion_key)` |
-| Duplicate batch writes | PostgreSQL `ON CONFLICT DO NOTHING` |
-| Runtime visibility | MongoDB `partner_runtime_run` records |
-| Schema evolution | Alembic migrations in `alembic/versions/` |
-
-## Project status
-
-| Area | Status |
-|---|---|
-| Foundation and deterministic reconciliation | Implemented |
-| Sprint 1 — idempotency | Implemented and benchmarked |
-| Sprint 2 — incremental processing and recovery | Implemented with ongoing hardening and regression verification |
-| Sprint 2.5 — Airflow pilot | Local pilot implemented; scheduled cutover remains controlled by `AIRFLOW_GLOBAL_SCHEDULE` |
-| Sprint 2.6 — recovery hardening | Implemented in the current branch; live deployment evidence remains environment-dependent |
-| Sprint 3 — data quality and quarantine | Documented and partially implemented; outside this branch's primary scope |
-| Sprint 4 — observability | Runtime visibility exists; further hardening is ongoing |
-
-See [docs/INDEX.md](docs/INDEX.md) for the milestone documents and [docs/CI-MAP.md](docs/CI-MAP.md) for CI scope and blast-radius guidance.
+Airflow là workflow owner của Compose pilot. Application giữ business logic, checkpoint và idempotency; Airflow chỉ sở hữu schedule, dependency, task retry/timeout, pool và task log. `LocalWorkflowGateway` còn tồn tại như adapter test/compatibility, không phải scheduler thứ hai.
 
 ## Quick start
 
-### Prerequisites
+### Yêu cầu
 
 - Python 3.11+
 - [`uv`](https://docs.astral.sh/uv/)
-- Node.js 20+
+- Node.js 20+ (CI dùng Node.js 22)
 - Docker Compose
 
-### Backend and services
+### Backend và database
 
 ```bash
 uv sync --all-extras --dev
@@ -157,182 +68,176 @@ uv run alembic upgrade head
 uv run python run.py --serve --port 8000
 ```
 
-Backend API: <http://localhost:8000><br>
-OpenAPI docs: <http://localhost:8000/docs><br>
-Mongo Express: <http://localhost:8082>
+- API: <http://localhost:8000>
+- OpenAPI: <http://localhost:8000/docs>
+- Mongo Express local: <http://localhost:8082>
+
+Nếu test API đồng bộ bị treo trong AnyIO portal, giữ `httpx2>=2.0.0` bên cạnh `httpx` và dùng facade `tests/asgi_test_client.py` hoặc `httpx2.AsyncClient` + `ASGITransport` trong test async. Luôn đặt `base_url` khi dùng `ASGITransport`.
 
 ### Airflow pilot
 
 ```bash
 docker compose build airflow-api-server
 docker compose up -d postgres mongodb sftp airflow-api-server airflow-scheduler airflow-dag-processor api
+docker compose ps
 ```
 
-Airflow UI/API: <http://localhost:8080>. The demo `.env.example` routes the API through Airflow and keeps the DAG manual-only. The former APScheduler control plane has been removed; pause the DAG and roll back the application deployment if the pilot must be stopped. See the [Sprint 2.5 runbook](docs/phase-2/sprint-2.5-airflow-migration.md) for the pilot procedure.
+- Airflow UI/API: <http://localhost:8080>
+- DAG: `reconciliation_ingestion`
+- Manual pilot: `AIRFLOW_GLOBAL_SCHEDULE=none`
+- Mặc định operator retry thủ công: `AIRFLOW_TASK_RETRIES=0`
 
-Compose starts a one-shot `airflow-volume-permissions` service before Airflow
-initialization. It grants the Airflow worker group write access to the bind
-mounted `downloads/` and `sftp_data/` directories used by API/SFTP ingestion.
-
-`Dockerfile.airflow` remains separate from the application image because the
-official Airflow image owns the Airflow dependency constraints and process
-topology. `requirements-airflow.txt` is an Airflow image overlay; the complete
-application runtime remains in `requirements.txt` so FastAPI/Uvicorn
-dependencies are not mixed into the Airflow control plane.
+Compose tạo database metadata Airflow riêng trong cùng PostgreSQL instance, mount `mock_data/`, `sftp_data/`, `downloads/` vào đúng path của API/Airflow, và không chạy APScheduler song song. Cách vận hành, retry, backfill, rollback và live acceptance nằm trong [Sprint 2.5 runbook](docs/phase-2/sprint-2.5-airflow-migration.md).
 
 ### Dashboard
 
 ```bash
-npm --prefix frontend-next install
+npm --prefix frontend-next ci
 npm --prefix frontend-next run dev
 ```
 
-Dashboard: <http://localhost:3000>
+Dashboard: <http://localhost:3000>. `frontend-next/next.config.ts` proxy `/api/*` về `http://localhost:8000`.
 
-The dashboard proxies `/api/*` requests to the backend at `http://localhost:8000`.
-
-The Schedules page ignores late responses from older polling requests, so a
-terminal `WAITING_REVIEW` or `FAILED` state cannot be overwritten by a slower
-`RUNNING` response. Runtime details use amber markers for waiting/processing
-states and reserve red for failed or blocked events.
-
-The Schedules page exposes a compact action grid for each configured partner.
-For FileDrop backfills, an operator selects an inclusive date range, then
-follows one durable parent run in the Backfill progress panel. Dates are
-processed in ascending business-day order through Airflow. If the run reaches
-`WAITING_CONFIG`, Guided Review approves the mapping and resumes that same
-parent run; it does not create a second post-approval ingestion run.
-
-For production builds, use the verified Webpack path:
+Build production dùng Webpack path đã được kiểm chứng:
 
 ```bash
 npm --prefix frontend-next run build
 ```
 
-## Common commands
+## Luồng nghiệp vụ chính
 
-| Command | Purpose |
-|---|---|
-| `uv run python run.py --serve --port 8000` | Start the FastAPI server |
-| `curl -X POST http://localhost:8000/api/v1/automation/jobs/{partner}/run -H 'X-Actor: operator'` | Queue a manual Airflow run |
-| `uv run python run.py --reconcile YYYY-MM-DD --partner MOMO` | Run reconciliation |
-| `make test` | Run the broad local test target |
-| `make ci` | Run tests excluding real LLM E2E and phase-specific E2E |
-| `make momo-e2e-reset` | Reset MOMO demo data |
-| `make momo-e2e-fail` | Prepare a valid XLSX missing `id`/`trace` to exercise ingestion-key failure |
-| `make momo-e2e-phase2` | Prepare the MOMO duplicate/replay demo |
-| `make momo-e2e-run` | Trigger the MOMO automation job |
-| `make momo-e2e-rebuild` | Rebuild API and Airflow containers |
-| `make vnpay-backfill-reset` | Reset the VNPAY FileDrop backfill fixture; use `VNPAY_BACKFILL_FROM`/`VNPAY_BACKFILL_TO` to set the range |
-| `codegraph index` | Rebuild the repository dependency index when structural files change |
+### Ingestion và recovery
 
-The VNPAY demo is intentionally local-only. After changing the fixture, rebuild
-the API image once with `docker compose build api`, then run
-`make vnpay-backfill-reset`. The target recreates `api` from that existing image
-but does not build containers.
-
-The reset creates date-templated `.xlsx` files under `mock_data/`, matching
-internal source-of-truth rows in PostgreSQL, an enabled FileDrop fetch config,
-a draft mapping, and a pending Guided Review packet. The fixture keeps
-scheduled checkpoints isolated by using `mode=BACKFILL` and clears prior VNPAY
-partner/result rows so repeated demos remain deterministic.
-
-## Testing and quality checks
-
-### Backend
-
-```bash
-uv run ruff check src/ tests/
-uv run mypy src/ --show-error-codes
-uv run pytest tests/ \
-  --ignore=tests/test_analysis_e2e.py \
-  --ignore=tests/test_ingestion_integration.py \
-  --ignore=tests/test_ingestion_pipeline.py \
-  --ignore=tests/test_seed_momo_e2e.py \
-  --ignore=tests/test_sprint1_eval_benchmark.py
+```text
+fetch source
+  -> source-unit identity
+  -> claim file/fetch unit
+  -> load + validate mapping
+  -> read / normalize / validate rows
+  -> derive ingestion key
+  -> batch-write PostgreSQL
+  -> persist checkpoint, runtime và metrics
+  -> reconcile hoặc tạo review packet
 ```
 
-### Frontend
+`src/application/automation/stream_runner.py` điều phối stream; `src/application/ingestion/source_unit_orchestrator.py` giữ tuần tự, retry và checkpoint; `src/pipeline/ingestion_pipeline.py` xử lý file-level ingestion.
+
+### Review và backfill
+
+Stream API nhiều trang được stage bền vững trước khi tạo packet. Khi thiếu mapping, runtime chuyển `WAITING_REVIEW`; approval replay toàn bộ raw pages dưới cùng identity. Ordered backfill tạo một parent `backfillRunId`, xử lý ngày tăng dần và resume cùng parent sau approval.
+
+### Reconciliation
+
+`src/application/reconciliation/` điều phối use case; `src/reconciliation/` chứa key normalization, scope classification và matching engine. PostgreSQL lưu canonical partner/internal transactions và reconciliation results; MongoDB lưu config, runtime, review và audit documents.
+
+## Persistence và contract an toàn
+
+| Dữ liệu | Nơi lưu | Cơ chế chính |
+|---|---|---|
+| Mapping, fetch config, review, runtime, audit, raw-page metadata | MongoDB | Index startup, document lifecycle, GridFS cho raw payload lớn |
+| Partner/internal transactions, reconciliation results | PostgreSQL | Alembic, unique/index, batch insert và query theo business date |
+| File replay | MongoDB | `fileHash` claim |
+| Source-unit replay | MongoDB | `fetchUnitKey`/checkpoint |
+| Transaction replay | PostgreSQL | `ingestion_key` + conflict-safe write |
+| Workflow correlation | MongoDB + Airflow | `runtimeRunId`, `dagRunId`, `taskId`, `mapIndex` |
+
+## API và dashboard surface
+
+| Nhóm | Prefix |
+|---|---|
+| Insights/reports | `/api/v1` |
+| Reconciliation | `/api/v1/reconciliation` |
+| Data explorer | `/api/v1/data` |
+| Mapping | `/api/v1/mappings`, `/api/v1/mapping` |
+| Copilot | `/api/v1/copilot` |
+| Operations | `/api/v1/operations` |
+| Review packets | `/api/v1/review-packets` |
+| Automation/backfill/recovery | `/api/v1/automation` |
+| Audit | `/api/v1/audit` |
+
+Dashboard routes: `/`, `/reconciliation`, `/review-center`, `/mapping-studio`, `/schedules`, `/audit-log`.
+
+## Cấu hình
+
+Copy `.env.example` thành `.env`. Nguồn khai báo chính:
+
+| Nhóm | Biến tiêu biểu | Dùng cho |
+|---|---|---|
+| Application | `APP_*` | database URL, timezone, batch size, orchestrator, Airflow client |
+| Database | `MONGO_*`, `APP_MONGODB_URL`, `APP_POSTGRES_URL` | MongoDB/PostgreSQL |
+| Airflow | `AIRFLOW_*`, `APP_AIRFLOW_*` | API server, DAG, retry, timeout, credentials |
+| Source | `SFTP_*` | SFTP fetcher và local Compose SFTP |
+| Analysis | `AI_*` | provider, model, fallback, cache và thresholds |
+
+Các timestamp event của PostgreSQL được lưu UTC-naive; business date được tính theo `APP_BUSINESS_TIMEZONE` (mặc định `Asia/Ho_Chi_Minh`). Không dùng secret mặc định trong production; `AIRFLOW_JWT_SECRET` phải là giá trị ngẫu nhiên đủ dài và đồng nhất giữa các Airflow services.
+
+## Lệnh thường dùng
+
+| Lệnh | Mục đích |
+|---|---|
+| `uv run python run.py --serve --port 8000` | Chạy API |
+| `uv run python run.py --reconcile YYYY-MM-DD --partner MOMO` | Chạy reconciliation CLI |
+| `make ci` | Chạy test backend rộng, loại real LLM E2E |
+| `make momo-e2e-reset` | Reset fixture MOMO |
+| `make momo-e2e-run` | Trigger manual MOMO run |
+| `make viettelpay-sprint2-reset` | Reset ViettelPay recovery mock |
+| `make viettelpay-sprint2-eval` | Chạy evaluation ViettelPay |
+| `make vnpay-backfill-reset` | Reset VNPAY ordered backfill fixture |
+| `codegraph status` | Kiểm tra dependency index |
+| `codegraph sync .` | Đồng bộ index sau thay đổi cấu trúc |
+
+## Kiểm thử và quality gates
 
 ```bash
+uv run ruff check src dags scripts cli
+uv run mypy src/ --show-error-codes
+uv run pytest tests/ --ignore=tests/test_analysis_e2e.py
+
 npm --prefix frontend-next run lint
 npm --prefix frontend-next run typecheck
 npm --prefix frontend-next run build
 npm --prefix frontend-next run test:e2e
 ```
 
-### CI workflows
+Bản đồ workflow và blast radius: [docs/CI-MAP.md](docs/CI-MAP.md).
 
-| Workflow | Scope |
-|---|---|
-| [Backend Quality](.github/workflows/backend-quality.yml) | Migration, Ruff, Mypy and backend tests |
-| [Ingestion Pipeline](.github/workflows/ingestion-pipeline.yml) | Ingestion lint, integration, pipeline and benchmark tests |
-| [Analysis Eval](.github/workflows/eval.yml) | Analysis guardrails, providers and scenario quality |
-| [Frontend CI](.github/workflows/frontend-ci.yml) | Frontend lint, TypeScript, production build and Playwright interaction smoke tests |
-
-See [docs/CI-MAP.md](docs/CI-MAP.md) for the workflow-to-source mapping and change blast radius.
-
-## Configuration
-
-Copy `.env.example` to `.env`. Important settings include:
-
-| Variable group | Purpose |
-|---|---|
-| `APP_MONGODB_URL`, `APP_DB_NAME` | MongoDB connection and database |
-| `APP_POSTGRES_URL` | PostgreSQL connection |
-| `SFTP_HOST`, `SFTP_PORT`, `SFTP_USER`, `SFTP_PASS` | SFTP source configuration |
-| `APP_INGEST_*` | Ingestion batch size and write behavior |
-| `APP_RECON_*` | Reconciliation batch size and write behavior |
-| `APP_AUTOMATION_ORCHESTRATOR`, `APP_AIRFLOW_*`, `AIRFLOW_*` | Airflow ownership and pilot settings |
-| `AI_*` | Analysis provider, model, timeout and fallback settings |
-
-The authoritative configuration model is `src/config/settings.py`; example values are in [.env.example](.env.example). PostgreSQL schema changes are applied through Alembic migrations in `alembic/versions/`.
-
-PostgreSQL event timestamps are persisted as UTC-naive values. Reconciliation
-dates remain business-calendar dates in `APP_BUSINESS_TIMEZONE`; reconciliation
-business keys use `partner_trace`, `partner_metadata.vspTransId`, then
-`partner_id`, ignoring null/blank/whitespace-only values.
-
-## Repository layout
+## Cấu trúc repository
 
 ```text
-src/                 Backend application
-  api/               FastAPI delivery layer
-  application/       Use-case orchestration
-  domain/            Domain models and ports
-  infrastructure/    Database and external adapters
-  pipeline/          Ingestion pipeline stages
-  fetchers/          FileDrop, SFTP and API fetchers
-  reconciliation/    Matching and scope logic
-  scheduler/         Ingestion runner used by Airflow (legacy package name)
-  analysis/          Insights and AI-provider integration
-frontend-next/       Active Next.js dashboard
-tests/               Unit, architecture, integration and E2E tests
-docs/                Architecture, milestone, CI and operational docs
-alembic/             PostgreSQL migrations
-scripts/             Demo, seed and benchmark utilities
-docker/              Compose initialization and service notes
+src/
+  api/                  FastAPI routers
+  application/          use cases và orchestration
+  domain/               models, ports, contracts
+  infrastructure/       repositories và workflow gateways
+  pipeline/             file/row ingestion
+  fetchers/             API, FileDrop, SFTP
+  readers/              CSV, JSON, Excel
+  reconciliation/       matching và scope
+  analysis/             insights và AI providers
+  config/, core/        settings, mapping, shared types
+frontend-next/          Next.js dashboard active
+dags/                   Airflow DAG
+tests/                  unit, architecture, integration, E2E
+alembic/                PostgreSQL migrations
+scripts/                seed, demo, benchmark, tools
+docker/                 Compose bootstrap và service notes
+docs/                   architecture, milestone, sprint, CI, runbook
 ```
 
-## Documentation map
+## Tài liệu
 
 - [Documentation index](docs/INDEX.md)
-- [CI map and blast-radius guide](docs/CI-MAP.md)
-- [Foundation architecture](docs/phase-1/ARCHITECTURE.md)
-- [Foundation data flow](docs/phase-1/DATA_FLOW.md)
+- [Phase 2 sprint index](docs/phase-2/INDEX.md)
+- [Current architecture](docs/phase-1/ARCHITECTURE.md)
 - [Module map](docs/phase-1/MODULES.md)
-- [Sprint 1 core index](docs/phase-2/sprint-1-index.md)
-- [Sprint 1 idempotency](docs/phase-2/sprint-1-idempotency.md)
-- [Sprint 2 incremental recovery](docs/phase-2/sprint-2-incremental-recovery.md)
+- [Configuration reference](docs/phase-1/CONFIGURATION.md)
+- [Milestones](docs/MILESTONES.md)
+- [CI map và blast radius](docs/CI-MAP.md)
 - [Docker services](docker/README.md)
 - [Frontend guide](frontend-next/README.md)
 
-## Documentation contract
+### Trạng thái Phase 2
 
-Code is the source of truth. Keep the README and linked docs aligned with:
+Sprint 2.5 là một milestone hợp nhất: **Airflow integration + recovery hardening**. Acceptance hiện **chưa hoàn tất**: runbook ghi nhận 6/11 criteria đạt và 5 criteria pending, cùng live rerun/health evidence còn mở. File `docs/phase-2/sprint-2.6-recovery-hardening.md` được giữ tên để không làm gãy liên kết lịch sử, nhưng không còn là sprint độc lập; xem [Phase 2 index](docs/phase-2/INDEX.md) để đọc theo cấu trúc mới.
 
-- CLI behavior in `run.py` and `Makefile`;
-- environment variables in `src/config/settings.py` and `.env.example`;
-- API routes in `src/api/`;
-- dashboard routes in `frontend-next/src/app/`; and
-- workflow commands in `.github/workflows/`.
+README và docs phải được đối chiếu với codegraph, `src/config/settings.py`, `.env.example`, `src/api/`, `frontend-next/src/app/`, `docker-compose.yml` và `.github/workflows/` sau mỗi thay đổi cấu trúc.

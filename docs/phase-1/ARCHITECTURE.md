@@ -1,212 +1,153 @@
-# Architecture
+# Architecture hiện tại
 
-**Cập nhật lần cuối:** 2026-08-11
+**Cập nhật:** 2026-08-14
 
 ## Tổng quan
 
-Nền tảng tiếp nhận file đối tác, chuẩn hóa thành các bản giao dịch canonical, so sánh với giao dịch nội bộ, và phơi bày quy trình review/vận hành qua FastAPI. Các thay đổi mapping được định hướng theo approval và persisted trong MongoDB.
+Repository là một ứng dụng Python/FastAPI với application boundaries rõ ràng, dual persistence và dashboard Next.js. Dữ liệu settlement đi qua fetcher → source-unit orchestration → ingestion pipeline → PostgreSQL/MongoDB; Airflow gọi cùng application entrypoint cho scheduled/manual/backfill execution.
 
-## Main Runtime Pieces
+```mermaid
+flowchart TB
+    Partner[Partner: FileDrop / API / SFTP]
+    Fetch[src/fetchers]
+    Airflow[dags/reconciliation_ingestion.py]
+    API[src/api]
+    Automation[src/application/automation]
+    Ingestion[src/application/ingestion]
+    Pipeline[src/pipeline]
+    Domain[src/domain]
+    Infra[src/infrastructure]
+    Review[src/application/review]
+    Recon[src/application/reconciliation + src/reconciliation]
+    Mongo[(MongoDB)]
+    Postgres[(PostgreSQL)]
+    UI[frontend-next]
 
-- `run.py`
-  - CLI entrypoint cho serving API, chạy ingestion, điều khiển scheduler, và chạy reconciliation
-- `src.api:create_app`
-  - FastAPI app factory với MongoDB lifespan management và router registration
-- `frontend-next/`
-  - Active Next.js + TypeScript dashboard that communicates with FastAPI through `/api`
-- `frontend/`
-  - Legacy Vite dashboard retained as reference only
-- `src/scheduler/jobs.py`
-  - Application ingestion runner được Airflow DAG gọi (tên package giữ legacy)
-- `src/application/automation/`
-  - Shared orchestration contracts dùng bởi API và Airflow
-- `dags/reconciliation_ingestion.py`
-  - Airflow control-plane DAG cho stream selection và execution
+    Partner --> Fetch
+    Fetch --> Automation
+    Airflow --> Automation
+    API --> Automation
+    API --> Review
+    API --> Recon
+    UI --> API
+    Automation --> Ingestion --> Pipeline
+    Pipeline --> Domain
+    Pipeline --> Infra
+    Review --> Infra
+    Recon --> Infra
+    Infra --> Mongo
+    Infra --> Postgres
+```
 
-## Backend Subsystems
+## Application boundaries
 
-### Ingestion
-
-- `src/pipeline/ingestion_pipeline.py`
-- `src/readers/`
-- `src/normalizer/`
-- `src/validators/`
-- `src/config/loader.py`
-
-**Responsibilities:**
-
-- compute file hash
-- detect duplicate files
-- load and validate mapping config
-- read source rows
-- normalize and validate canonical transactions
-- persist file metadata and canonical records
-
-### Reconciliation
-
-- `src/reconciliation/engine.py`
-- `src/reconciliation/scope.py`
-- `src/models/internal_transaction.py`
-- `src/models/reconciliation_result.py`
-- `src/models/reconciliation_run.py`
-- `src/models/reconciliation_review_record.py`
-- `src/services/runtime_runs.py`
-
-**Responsibilities:**
-
-- compare partner-side canonical data with internal transactions
-- classify result status (`MATCHED`, `AMOUNT_MISMATCH`, `STATUS_MISMATCH`, `MISSING_INTERNAL`, `MISSING_PARTNER`, etc.)
-- triển khai streaming processing qua async generator (`_iter_partner_record_batches`) với batch size mặc định 5000
-- hỗ trợ batch scope resolution (`FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT`, `UNCONFIRMED`) qua `src/reconciliation/scope.py`
-- tracking reconciliation runs (`reconciliation_run` collection) cho UI-triggered execution
-- hỗ trợ review notes và resolution state qua `reconciliation_review_record` collection
-- persist reconciliation results theo batch write (`RESULT_WRITE_BATCH_SIZE = 5000`)
-
-### Approval and Mapping Lifecycle
-
-- `src/api/mappings.py`
-- `src/api/review_packets.py`
-- `src/models/mapping_config.py`
-- `src/models/review_packet.py`
-- `src/models/copilot_action.py`
-- `src/models/post_approval_run.py`
-- `src/config/config_health.py`
-- `src/services/review_packet_actions.py`
-- `src/services/mapping_contract.py`
-
-**Responsibilities:**
-
-- tạo hoặc review mapping proposals
-- duy trì approved runtime mappings riêng biệt với pending proposals
-- track review packets và Copilot actions
-- hỗ trợ bốn luồng quyết định: **Approve-Activate**, **Approve-Keep-Current**, **Reject**, và **Send to Mapping Studio**
-- **Approve-Activate flow:** dùng `PostApprovalRun` model để tracking long-running reprocess + reconcile flows
-- chạy background task (`asyncio.create_task`) sau approve để thực hiện re-ingestion và re-reconciliation
-- dùng `summarize_runtime_error` từ `src/core/error_formatting.py` để UI-safe error summaries
-- mapping contract normalization và validation qua `src/services/mapping_contract.py`
-
-### Automation
-
-- `src/scheduler/`
-- `src/fetchers/`
-- `src/api/automation.py`
-
-**Responsibilities:**
-
-- load enabled fetch configs
-- fetch partner files via configured method (SFTP, filedrop, API)
-- run ingestion
-- expose automation visibility and run-now control
-- unified runtime run tracking (`partner_runtime_run` collection) cho scheduler-triggered và manual reconciliation
-
-### AI-Assisted Analysis
-
-- `src/analysis/`
-- `src/api/insights.py`
-- `src/api/reconciliation.py`
-- `src/services/copilot_context.py`
-
-**Responsibilities:**
-
-- summarize reconciliation outcomes
-- generate discrepancy views and daily reports
-- provide contextual Copilot guidance cho các dashboard screens (intake, review, reconciliation, automation)
-- response caching và cache invalidation sau post-approval reprocess
-
-### Services
-
-- `src/services/copilot_context.py` — Rule-based Copilot context for the operations dashboard
-- `src/services/mapping_contract.py` — Shared mapping contract normalization, serialization, and validation helpers
-- `src/services/review_packet_actions.py` — Shared review packet approval, reprocessing, and post-approval run orchestration
-- `src/services/runtime_runs.py` — Helpers for unified runtime run visibility (create/update/serialize `PartnerRuntimeRun`)
-
-### Core Utilities
-
-- `src/core/enums.py` — Core enums: `ProcessingStatus`, `TransactionStatus`, `FileType`, `ReconciliationStatus`, `ReconciliationScopeType`
-- `src/core/types.py` — Canonical types: `FieldMapping`, `CanonicalTransaction`, `PartnerData`, `ValidationError`, `ProcessingStats`
-- `src/core/constants.py` — System constants: `DEFAULT_CURRENCY`, `FILE_HASH_KEY`, duplicate key patterns
-- `src/core/error_formatting.py` — UI-safe error summarization helpers (`summarize_runtime_error`) cho status fields và background task error handling
-
-## Request Surface
-
-API hiện đang đăng ký các router groups sau (xem `src/api/__init__.py`):
-
-| Router module | Prefix | Registered as |
+| Boundary | Sở hữu | Không sở hữu |
 |---|---|---|
-| `insights` | `/api/v1` | `insights_router` (insights + reports) |
-| `reconciliation` | `/api/v1/reconciliation` | `reconciliation_router` |
-| `data_explorer` | `/api/v1/data` | `data_explorer_router` |
-| `mappings` | `/api/v1/mappings` | `mappings_router` |
-| `mappings` (v2) | `/api/v1/mapping` | `mappings_v2_router` |
-| `copilot` | `/api/v1/copilot` | `copilot_router` |
-| `operations` | `/api/v1/operations` | `operations_router` |
-| `review_packets` | `/api/v1/review-packets` | `review_packets_router` |
-| `automation` | `/api/v1/automation` | `automation_router` |
-| `audit` | `/api/v1/audit` | `audit_router` |
+| `src/api/` | HTTP route, validation, response mapping | Business workflow dài hạn |
+| `src/application/` | Use case, orchestration, command/query, runtime transitions | FastAPI-specific delivery và DB schema chi tiết |
+| `src/domain/` | Domain models, enums, ports, stable contract | Network, persistence, Airflow SDK |
+| `src/infrastructure/` | Repository, database adapter, Airflow/local workflow gateway | Business decision của use case |
+| `dags/` | Schedule, dependency, mapped task, task retry/timeout/pool, task log | Mapping, checkpoint, ingestion key, business retry |
+| `src/pipeline/` | File/row processing, claims, normalization, validation, batch write | Global scheduling |
+| `frontend-next/` | Operator views, typed clients, polling và interaction | Source-of-truth business state |
 
-**Tổng cộng 11 router groups** (insights/reports chung một router).
+`src/models/` vẫn tồn tại như compatibility/persistence boundary cho các import cũ và model persistence. Code mới ưu tiên `src/domain/`, `src/application/` và repositories trong `src/infrastructure/`.
 
-## Data Stores
+## Luồng ingestion
 
-MongoDB and PostgreSQL are dual persistence stores. MongoDB handles configs, review packets, audit events, and flexible document storage. PostgreSQL (via `asyncpg` + SQLAlchemy) handles bulk transactional data — ingestion uses `COPY` for high-speed writes, and reconciliation uses SQL joins for in-database matching. MongoDB indexes được apply bởi `src/models/indexes.py`; PostgreSQL schema/indexes được quản lý bằng Alembic trong `alembic/versions/` và kiểm tra qua `src/models/postgres.py`.
+1. `src/fetchers/` tạo `FetchResult` và `SourceUnitMetadata` cho API, FileDrop hoặc SFTP.
+2. `src/application/automation/stream_identity.py` xác định stream/source-unit/raw-stage identity.
+3. `src/application/ingestion/source_unit_orchestrator.py` claim/checkpoint từng unit, retry theo policy và chỉ advance sau persistence thành công.
+4. `src/pipeline/ingestion_pipeline.py` claim file, load mapping, đọc row, normalize, validate, tính `ingestion_key` và ghi batch.
+5. `src/application/runtime/service.py` cập nhật `partner_runtime_run`; recovery view dựng timeline cho operator.
+6. Khi cần, review packet giữ raw-page metadata/payload để approval có thể replay dưới cùng identity.
 
-### MongoDB documents
+## Airflow và workflow ownership
 
-| Collection | Purpose | Key models |
-|---|---|---|
-| `reconciliation_file` | File metadata, processing status, scope type | `ReconciliationFile` |
-| `reconciliation_mapping_config` | Field mapping configs (approved + pending) | `MappingConfig` |
-| `review_packet` | Review packets for approval workflows | `ReviewPacket` |
-| `copilot_action` | Copilot action tracking | `CopilotAction` |
-| `fetch_config` | Automation fetch configuration | `FetchConfig` |
-| `reconciliation_run` | Manual reconciliation run tracking | `ReconciliationRun` |
-| `post_approval_run` | Post-approval reprocessing tracking | `PostApprovalRun` |
-| `partner_runtime_run` | Unified runtime visibility (scheduler/manual/post-approval) | `PartnerRuntimeRun` |
-| `reconciliation_review_record` | Review notes and resolution state per record | `ReconciliationReviewRecord` |
+`dags/reconciliation_ingestion.py` có hai task chính: `select_streams` và mapped `run_stream`. DAG gọi `src.application.automation.execute_stream()`; không chứa business ingestion logic.
 
-MongoDB index definitions chi tiết xem tại `src/models/indexes.py`.
+`src/infrastructure/workflows/airflow.py` là gateway gọi Airflow REST API cho Run Now, retry, backfill và task-state lookup. `src/infrastructure/workflows/local.py` là adapter test/compatibility. Compose pilot chỉ bật Airflow control plane, với:
 
-### PostgreSQL tables
+- `AIRFLOW_GLOBAL_SCHEDULE=none` để manual-only.
+- `AIRFLOW_TASK_RETRIES=0` để retry do operator kiểm soát.
+- `ingestion_streams=1`, sequential source-unit boundary và checkpoint là nguồn sự thật.
+- `runtimeRunId`, `dagRunId`, `taskId`, `mapIndex` để correlation giữa UI/API/Airflow.
 
-| Table | Purpose | Main adapter |
-|---|---|---|
-| `partner_transaction` | Canonical partner transactions | `DataContainerRepository` |
-| `internal_transaction` | Internal source-of-truth transactions | `InternalTransactionRepository` |
-| `reconciliation_result` | Reconciliation match/mismatch results | `ReconciliationResultRepository` |
+Sprint 2.5 bao gồm cả Airflow integration và recovery hardening; xem [Phase 2 sprint index](../phase-2/INDEX.md).
 
-PostgreSQL indexes and schema revisions are defined in `alembic/versions/` and
-mirrored by `src/infrastructure/persistence/postgres_schema.py`.
+## Reconciliation và review
 
-## Frontend Shape
+- `src/application/reconciliation/` điều phối manual reconciliation và query context.
+- `src/reconciliation/engine.py` thực hiện matching/batch result; `scope.py` phân loại scope theo business-key evidence.
+- `src/application/review/` quản lý evidence, raw stream, runtime validation, mapping workflow, scope classification và approval actions.
+- `src/api/review_packets.py` phơi bày guided review; approve/reject có thể tạo post-approval reprocess và resume workflow.
 
-The active dashboard is `frontend-next/`.
+## Persistence
 
-Main active views:
+### MongoDB
 
-- Review Center
-- Reconciliation
-- Mapping Studio
-- Automation
+MongoDB lưu các document linh hoạt và runtime control state:
 
-Review Center owns the operator approval workflow:
+| Collection | Mục đích |
+|---|---|
+| `fetch_config` | Cấu hình partner/source |
+| `reconciliation_mapping_config` | Mapping draft/approved |
+| `reconciliation_file` | File metadata, status, scope |
+| `ingestion_checkpoint` / `source_unit` | Checkpoint và source-unit lifecycle |
+| `review_packet` | Review/approval evidence |
+| `partner_runtime_run` | Runtime status, attempts, orchestration IDs |
+| `backfill_run` | Ordered backfill parent và per-day state |
+| `raw_ingestion_page` + GridFS | Durable raw page metadata/payload |
+| `audit_event`, `copilot_action`, review records | Audit và operator actions |
 
-1. Load pending review packets.
-2. Confirm file scope.
-3. Review or adjust draft mapping.
-4. Run runtime validation.
-5. Approve/reject.
-6. Track post-approval ingestion and reconciliation progress.
+Index MongoDB được apply trong application lifespan qua `src/infrastructure/persistence/mongo_indexes.py`.
 
-The old `frontend/` directory is legacy/reference only.
+### PostgreSQL
 
-## Operational Notes
+PostgreSQL lưu dữ liệu transactional và schema được migrate bằng Alembic:
 
-- Root README là canonical startup doc.
-- API-serving behavior nên được document từ `run.py` và `src/api/__init__.py`.
-- Approval-driven mapping behavior là first-class runtime concept.
-- Background tasks tracking dùng `app.state.background_tasks` (set of `asyncio.Task`).
-- Error formatting dùng `summarize_runtime_error` để giữ UI-facing status fields ngắn gọn.
+| Table | Mục đích |
+|---|---|
+| `partner_transaction` | Canonical partner transaction |
+| `internal_transaction` | Internal source-of-truth transaction |
+| `reconciliation_result` | Kết quả matching/mismatch |
 
----
+Event timestamp được lưu UTC-naive; business date được quy đổi theo `APP_BUSINESS_TIMEZONE` trước query/đối soát.
 
-*Architecture analysis: 2026-08-11*
+## API surface
+
+FastAPI app factory nằm ở `src/api/__init__.py::create_app`; các router hiện đăng ký:
+
+| Module | Prefix |
+|---|---|
+| `insights.py` | `/api/v1` |
+| `reconciliation.py` | `/api/v1/reconciliation` |
+| `data_explorer.py` | `/api/v1/data` |
+| `mappings.py` | `/api/v1/mappings`, `/api/v1/mapping` |
+| `copilot.py` | `/api/v1/copilot` |
+| `operations.py` | `/api/v1/operations` |
+| `review_packets.py` | `/api/v1/review-packets` |
+| `automation.py` | `/api/v1/automation` |
+| `audit.py` | `/api/v1/audit` |
+
+Các endpoint chính gồm ingestion/automation status, Run Now/retry/backfill, mapping CRUD/validation, review approval, reconciliation run/results/stats, data explorer, insights, copilot actions và audit events.
+
+## Dashboard
+
+`frontend-next/` là frontend active dùng Next.js App Router, React, TypeScript và Tailwind CSS. Các route hiện tại:
+
+- `/` — overview
+- `/reconciliation` — results, stats, evidence, insights
+- `/review-center` — guided review và approval
+- `/mapping-studio` — mapping wizard
+- `/schedules` — automation, recovery, backfill và pending review
+- `/audit-log` — audit history
+
+Frontend gọi backend qua typed clients trong `frontend-next/src/lib/api/`; production build dùng `next build --webpack`.
+
+## Nguồn tham chiếu
+
+- [Module map](MODULES.md)
+- [Configuration](CONFIGURATION.md)
+- [Phase 2 sprint index](../phase-2/INDEX.md)
+- [CI map](../CI-MAP.md)

@@ -23,7 +23,7 @@ from src.api.review_packets import (
     SaveDraftMappingPayload,
 )
 from src.domain.review.models import ReviewPacket
-from src.services.runtime_validation import run_runtime_validation
+from src.application.review.runtime_validation import run_runtime_validation
 from src.models.mapping_config import MappingConfig
 
 
@@ -475,6 +475,55 @@ async def test_list_review_packets_collapses_duplicate_pending_scheduler_packets
     data = await list_review_packets(request, partner="VIETTELPAY")
 
     assert [packet["_id"] for packet in data["packets"]] == ["pkt-new"]
+
+
+@pytest.mark.asyncio
+async def test_list_review_packets_hides_pending_packet_for_approved_same_structure():
+    review_collection = MagicMock()
+    review_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "pkt-pending-duplicate",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "VNPAY",
+            "fileName": "settlement_VNPAY_20260813.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "structureSignature": {
+                "headers": ["id", "trace", "amount"],
+                "columnCount": 3,
+                "hash": "same-structure",
+            },
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "PENDING",
+            "createdAt": "2026-08-13T03:00:00+00:00",
+        },
+        {
+            "_id": "pkt-approved-start-date",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "VNPAY",
+            "fileName": "settlement_VNPAY_20260810.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "structureSignature": {
+                "headers": ["id", "trace", "amount"],
+                "columnCount": 3,
+            },
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "APPROVED",
+            "createdAt": "2026-08-10T03:00:00+00:00",
+        },
+    ]))
+    request = _make_request(_make_db(review_collection=review_collection))
+
+    data = await list_review_packets(request, partner="VNPAY")
+
+    assert [packet["_id"] for packet in data["packets"]] == ["pkt-approved-start-date"]
 
 
 @pytest.mark.asyncio
@@ -1045,7 +1094,7 @@ async def test_runtime_validation_reads_all_staged_stream_pages(tmp_path):
     review_collection = MagicMock()
     review_collection.update_one = AsyncMock()
     with patch(
-        "src.services.review_raw_stream.RawIngestionPageRepository",
+        "src.application.review.raw_stream.RawIngestionPageRepository",
         return_value=raw_repo,
     ):
         gate = await run_runtime_validation(
@@ -1128,7 +1177,7 @@ async def test_runtime_validation_preserves_object_rows_for_source_field_mapping
         "status": "PENDING_APPROVAL",
     })
 
-    with patch("src.services.review_raw_stream.RawIngestionPageRepository", return_value=raw_repo):
+    with patch("src.application.review.raw_stream.RawIngestionPageRepository", return_value=raw_repo):
         gate = await run_runtime_validation(
             _make_db(review_collection=MagicMock(update_one=AsyncMock())), packet, config
         )

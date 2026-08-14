@@ -1,6 +1,6 @@
 """MongoDB adapter for runtime workflow visibility."""
 
-from typing import Optional
+from typing import Any, Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -14,6 +14,18 @@ class PartnerRuntimeRunRepository(BaseRepository[PartnerRuntimeRun]):
     def __init__(self, db: AsyncIOMotorDatabase):
         super().__init__(collection_name="partner_runtime_run", db=db)
         self._set_model_class(PartnerRuntimeRun)
+
+    async def update_fields(
+        self,
+        run_id: str,
+        fields: dict[str, Any],
+        *,
+        attempt_event: dict[str, Any] | None = None,
+    ) -> None:
+        operation: dict[str, Any] = {"$set": fields}
+        if attempt_event is not None:
+            operation["$push"] = {"attemptHistory": attempt_event}
+        await self.collection.update_one({"_id": run_id}, operation)
 
     async def find_latest_by_partner_and_date(
         self, partner: str, date: str

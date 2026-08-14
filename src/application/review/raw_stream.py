@@ -1,13 +1,14 @@
-"""Read complete raw records for a stream-scoped Review Packet."""
+"""Read bounded raw records for stream-scoped review packets."""
 
 from __future__ import annotations
 
 import json
 import tempfile
+from collections.abc import AsyncIterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Iterator
 
+from src.domain.mapping.models import MappingConfig
 from src.domain.review.models import ReviewPacket
 from src.infrastructure.ingestion.raw_page_repository import RawIngestionPageRepository
 from src.readers import create_reader
@@ -26,8 +27,7 @@ def _iter_page_records(path: Path, start_row: int) -> Iterator[Any]:
     if path.suffix.lower() == ".json":
         yield from _iter_json_records(path)
         return
-
-    reader_config = SimpleNamespace(
+    reader_config = MappingConfig.model_construct(
         start_row=start_row,
         sheet_name=None,
     )
@@ -42,7 +42,7 @@ def _page_sort_key(page: Any) -> tuple[int, str]:
 
 
 def _candidate_source_paths(path: str) -> list[Path]:
-    """Resolve source paths written by either the API or Airflow container."""
+    """Resolve paths written by either the API or Airflow container."""
 
     candidate = Path(path)
     candidates = [candidate]
@@ -56,11 +56,7 @@ def _candidate_source_paths(path: str) -> list[Path]:
                 candidates.append(Path(target_root + text[len(source_root):]))
     else:
         candidates.extend(
-            [
-                Path.cwd() / candidate,
-                Path("/app") / candidate,
-                Path("/opt/airflow/app") / candidate,
-            ]
+            [Path.cwd() / candidate, Path("/app") / candidate, Path("/opt/airflow/app") / candidate]
         )
     return list(dict.fromkeys(candidates))
 
@@ -89,10 +85,7 @@ def _read_file_page(
     )
     rows: list[dict[str, Any]] = []
     total_records = 0
-    for row_index, values in enumerate(
-        _iter_page_records(source_path, start_row),
-        start=1,
-    ):
+    for row_index, values in enumerate(_iter_page_records(source_path, start_row), start=1):
         if offset <= total_records < offset + limit:
             rows.append(
                 {
@@ -129,7 +122,6 @@ async def read_review_stream_page(
         raise ValueError("offset must be non-negative")
     if limit < 1:
         raise ValueError("limit must be positive")
-
     if not packet.raw_stage_key:
         return _read_file_page(packet, resolve_review_source_file(packet), offset, limit)
 
@@ -140,20 +132,17 @@ async def read_review_stream_page(
             "No staged raw pages found for rawStageKey; file-level packets must omit rawStageKey."
         )
     rows: list[dict[str, Any]] = []
-    page_counts = [getattr(page, "item_count", None) for page in pages]
+    page_counts: list[int | None] = [
+        count if isinstance(count := getattr(page, "item_count", None), int) else None
+        for page in pages
+    ]
     known_total = (
-        sum(max(int(count), 0) for count in page_counts)
+        sum(max(count, 0) for count in page_counts if count is not None)
         if page_counts and all(count is not None for count in page_counts)
         else None
     )
     total_records = known_total or 0
-
-    async for record in iter_review_stream_records(
-        db=db,
-        packet=packet,
-        pages=pages,
-        raw_repo=raw_repo,
-    ):
+    async for record in iter_review_stream_records(db=db, packet=packet, pages=pages, raw_repo=raw_repo):
         stream_index = int(record["streamRowIndex"] or total_records + 1) - 1
         if known_total is None:
             total_records += 1
@@ -161,7 +150,6 @@ async def read_review_stream_page(
             rows.append(record)
         if known_total is not None and stream_index >= offset + limit - 1:
             break
-
     return {
         "packetId": str(packet.id),
         "rawStageKey": packet.raw_stage_key,
@@ -180,12 +168,11 @@ async def iter_review_stream_records(
     packet: ReviewPacket,
     pages: list[Any] | None = None,
     raw_repo: RawIngestionPageRepository | None = None,
-):
+) -> AsyncIterator[dict[str, Any]]:
     """Yield every raw record in deterministic stream order."""
 
     if not packet.raw_stage_key:
         raise ValueError("Review packet has no rawStageKey stream scope")
-
     raw_repo = raw_repo or RawIngestionPageRepository(db)
     pages = sorted(
         pages if pages is not None else await raw_repo.find_for_replay(packet.raw_stage_key),
@@ -197,20 +184,15 @@ async def iter_review_stream_records(
         or (packet.parse_strategy or {}).get("startRow")
         or 1
     )
-
     with tempfile.TemporaryDirectory(prefix="review-raw-") as temp_dir:
         stream_row_index = 1
         for page in pages:
             source_path = str(getattr(page, "local_path", "") or "")
             suffix = Path(source_path or packet.file_name).suffix or ".json"
-            destination = str(
-                Path(temp_dir)
-                / f"{getattr(page, 'source_unit_key', 'page')}{suffix}"
-            )
+            destination = str(Path(temp_dir) / f"{getattr(page, 'source_unit_key', 'page')}{suffix}")
             materialized_path = await raw_repo.materialize(page, destination)
             for row_index, values in enumerate(
-                _iter_page_records(Path(materialized_path), start_row),
-                start=1,
+                _iter_page_records(Path(materialized_path), start_row), start=1
             ):
                 yield {
                     "streamRowIndex": stream_row_index,

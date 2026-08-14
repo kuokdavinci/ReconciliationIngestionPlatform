@@ -39,6 +39,7 @@ class ConfigPreparationService:
         config_version: Optional[str],
         source_file_id: str,
         enable_health_check: bool,
+        backfill_run_id: str | None = None,
         mapping_repository: MappingConfigRepositoryPort | None = None,
     ) -> MappingConfig:
         mapping_repository = mapping_repository or self._mapping_repository
@@ -57,6 +58,7 @@ class ConfigPreparationService:
                     source_file_id=source_file_id,
                     source_file_path=file_path,
                     reconciliation_date=reconciliation_date,
+                    backfill_run_id=backfill_run_id,
                 )
                 self._logger.get_logger().info(f"config_health_check_passed for {partner}")
             except ConfigurationApprovalRequiredError:

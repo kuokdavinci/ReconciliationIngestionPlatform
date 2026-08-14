@@ -8,7 +8,12 @@ from typing import Any, Optional
 
 from src.config.loader import ConfigLoader
 from src.config.settings import settings
-from src.config.signature import StructureSignature, compute_signature, read_raw_rows
+from src.config.signature import (
+    StructureSignature,
+    compute_signature,
+    read_raw_rows,
+    structure_signatures_equivalent,
+)
 from src.config.validator import ConfigValidator
 from src.core.enums import FileType
 from src.domain.review.models import (
@@ -25,7 +30,7 @@ from src.domain.review.models import (
 )
 from src.infrastructure.review.repository import ReviewPacketRepository
 from src.reconciliation.scope import classify_scope
-from src.services.review_evidence import build_internal_review_evidence
+from src.application.review.evidence import build_internal_review_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +153,17 @@ async def check_and_refresh_config(
         raw_stage_key=raw_stage_key,
         backfill_run_id=backfill_run_id,
     )
+
+    # Scheduled ingestion may keep using its active config while surfacing a
+    # proposal. A backfill is different: its approved config is pinned for a
+    # range, so a structure drift at any later date must stop that date before
+    # rows are processed and resume only after a new mapping is approved.
+    if backfill_run_id is not None:
+        raise ConfigurationApprovalRequiredError(
+            f"Configuration approval required for {partner}",
+            proposal_id=str(proposal.id),
+            action_id=str(action.id),
+        )
 
     if config is not None or not settings.strict_mapping_approval_enabled:
         return config
@@ -782,7 +798,15 @@ async def _collect_review_sample_rows(
 def _is_config_stale(config: MappingConfig, sig: StructureSignature) -> bool:
     config_sig = getattr(config, "structure_signature", None) or {}
     config_health = getattr(config, "config_health", None) or {}
-    return (
-        config_sig.get("hash") != sig.hash
-        or bool(config_health.get("stale"))
-    )
+    if bool(config_health.get("stale")):
+        return True
+
+    configured_hash = config_sig.get("hash")
+    if configured_hash:
+        return configured_hash != sig.hash
+
+    # Older approved mappings stored the structure shape without the derived
+    # hash (and sometimes without columnCount). Preserve their approval when
+    # the actual headers still match; otherwise every backfill day can create
+    # a fresh proposal for the same file format.
+    return not structure_signatures_equivalent(config_sig, sig)

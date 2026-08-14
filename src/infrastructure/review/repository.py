@@ -1,11 +1,13 @@
 """MongoDB adapters for review and post-approval workflows."""
 
+from datetime import datetime
 from typing import Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from src.domain.review.models import (
     CopilotAction,
+    CopilotActionStatus,
     PostApprovalRun,
     ReconciliationReviewRecord,
     ReviewPacket,
@@ -90,6 +92,75 @@ class ReviewPacketRepository(BaseRepository[ReviewPacket]):
             return None
         return self._from_mongo(raw)
 
+    async def sync_mapping_status(
+        self,
+        config_id: str,
+        status: ReviewPacketStatus,
+        reviewed_at: datetime,
+    ) -> int:
+        result = await self.collection.update_many(
+            {
+                "$or": [
+                    {"draftMappingId": str(config_id)},
+                    {"proposalConfigId": str(config_id)},
+                ],
+                "status": ReviewPacketStatus.PENDING.value,
+                # A backfill packet has a second approval boundary: the
+                # packet decision must resume its waiting run.  Mapping
+                # Studio approval must not close that packet prematurely.
+                "backfillRunId": {"$exists": False},
+            },
+            {
+                "$set": {
+                    "status": status.value,
+                    "reviewedAt": reviewed_at,
+                }
+            },
+        )
+        return result.modified_count
+
+    async def update_mapping_draft(
+        self,
+        *,
+        packet_id: str,
+        draft_mapping_id: str,
+        draft_mapping_version: str,
+        parse_strategy: dict,
+        validation_gates: list[dict],
+    ) -> bool:
+        result = await self.collection.update_one(
+            {"_id": str(packet_id), "status": ReviewPacketStatus.PENDING.value},
+            {
+                "$set": {
+                    "draftMappingId": draft_mapping_id,
+                    "draftMappingVersion": draft_mapping_version,
+                    "parseStrategy": parse_strategy,
+                    "validationGates": validation_gates,
+                }
+            },
+        )
+        modified_count = getattr(result, "modified_count", 0)
+        return modified_count > 0 if isinstance(modified_count, int) else True
+
+    async def update_scope_evidence(
+        self,
+        *,
+        packet_id: str,
+        internal_record_count: int,
+        internal_preview: list[dict],
+    ) -> bool:
+        result = await self.collection.update_one(
+            {"_id": str(packet_id)},
+            {
+                "$set": {
+                    "internalRecordCount": internal_record_count,
+                    "internalPreview": internal_preview,
+                }
+            },
+        )
+        modified_count = getattr(result, "modified_count", 0)
+        return modified_count > 0 if isinstance(modified_count, int) else True
+
 
 class CopilotActionRepository(BaseRepository[CopilotAction]):
     """Repository for copilot approval items."""
@@ -97,3 +168,28 @@ class CopilotActionRepository(BaseRepository[CopilotAction]):
     def __init__(self, db: AsyncIOMotorDatabase):
         super().__init__(collection_name="copilot_action", db=db)
         self._set_model_class(CopilotAction)
+
+    async def sync_mapping_status(
+        self,
+        config_id: str,
+        status: CopilotActionStatus,
+        reviewed_by: str | None,
+        reviewed_at: datetime,
+    ) -> int:
+        result = await self.collection.update_many(
+            {
+                "$or": [
+                    {"draftMappingId": str(config_id)},
+                    {"targetConfigId": str(config_id)},
+                ],
+                "status": CopilotActionStatus.PENDING_APPROVAL.value,
+            },
+            {
+                "$set": {
+                    "status": status.value,
+                    "reviewedAt": reviewed_at,
+                    "reviewedBy": reviewed_by,
+                }
+            },
+        )
+        return result.modified_count

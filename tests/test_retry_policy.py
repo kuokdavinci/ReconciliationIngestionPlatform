@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from src.services.retry_policy import RetryDisposition, RetryPolicy
+from src.domain.ingestion.retry_policy import RetryDisposition, RetryPolicy
 
 
 def test_transient_fetch_errors_are_retryable_with_exponential_backoff():

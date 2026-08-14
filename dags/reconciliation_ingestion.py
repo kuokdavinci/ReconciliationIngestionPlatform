@@ -27,13 +27,13 @@ from src.config.validator import ConfigValidator
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.backfill.repository import BackfillRunRepository
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
-from src.services.runtime_runs import update_runtime_run
+from src.application.runtime.service import update_runtime_run
 from src.domain.runtime.models import (
     PartnerRuntimeRunStatus,
     PartnerRuntimeTriggerType,
     RuntimeOrchestrationContext,
 )
-from src.services.runtime_runs import create_runtime_run
+from src.application.runtime.service import create_runtime_run
 
 SUCCESS_OUTCOMES = {
     ExecuteStreamOutcome.COMPLETED,

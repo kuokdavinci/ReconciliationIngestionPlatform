@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.scheduler.source_unit_orchestrator import process_source_units
-from src.services.retry_policy import RetryPolicy
+from src.application.ingestion.source_unit_orchestrator import process_source_units
+from src.domain.ingestion.retry_policy import RetryPolicy
 
 
 def _unit(number: int, *, cursor_before=None, cursor_after=None):

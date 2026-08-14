@@ -1,17 +1,34 @@
 # Project Milestones
 
-## Milestone 1 — Foundation baseline
+**Cập nhật:** 2026-08-14
 
-Đã hình thành hệ thống nền tảng gồm file ingestion, dynamic mapping, normalization, validation, persistence, logging/tracking và các tài liệu kiến trúc hiện tại.
+## Milestone 1 — Foundation
 
-Tài liệu: [Phase 1](phase-1/PLAN-01-FOUNDATION.md).
+**Trạng thái:** Baseline đã triển khai.
 
-## Milestone 2 — Ingestion reliability scope
+Đã có file ingestion, dynamic mapping, normalization, validation, persistence, deterministic reconciliation, review/audit foundation và dashboard vận hành. Boundary hiện tại được mô tả tại [Architecture](phase-1/ARCHITECTURE.md).
 
-Đánh dấu mốc mới của dự án: chuyển từ foundation baseline sang kế hoạch nâng độ tin cậy pipeline ingestion.
+## Milestone 2 — Phase 2: Ingestion reliability
 
-Phạm vi gồm bốn trụ cột: idempotency; incremental processing và recovery; data quality/quarantine; observability.
+**Trạng thái:** Sprint 1 và 2 đã triển khai; Sprint 2.5 đang ở trạng thái partial acceptance với 5 criteria còn pending; Sprint 3/4 là kế hoạch mở rộng.
 
-Phạm vi loại trừ: reconciliation logic, frontend và AI. Các kế hoạch chi tiết nằm trong [Phase 2](phase-2/sprint-1-idempotency.md).
+| Sprint | Phạm vi | Trạng thái evidence |
+|---|---|---|
+| 1 | Idempotency, duplicate protection, benchmark | Implemented + benchmark |
+| 2 | Incremental processing, checkpoint, recovery, backfill | Implemented + regression/demo |
+| 2.5 | Airflow integration + recovery hardening (gộp nội dung cũ của 2.6) | Partial acceptance: 6/11 đạt, 5 pending; live evidence còn phụ thuộc môi trường |
+| 3 | Data quality và quarantine | Planned |
+| 4 | Observability | Planned |
 
-**Status:** Planning baseline completed; implementation chưa bắt đầu.
+Đọc [Phase 2 Sprint Index](phase-2/INDEX.md) để xem toàn bộ plan, report, evaluation run và runbook của từng sprint.
+
+### Ranh giới Phase 2
+
+Phase 2 ưu tiên fetchers, source units, checkpoint, ingestion pipeline, workflow orchestration, runtime/recovery và các integration contract với review/reconciliation/frontend. Đây không phải là rewrite toàn bộ reconciliation, dashboard hay AI analysis.
+
+## Cách đọc trạng thái
+
+- **Implemented:** code và regression/evaluation tương ứng đã có.
+- **Pilot:** đã chạy local/Docker theo runbook, chưa đồng nghĩa production cutover.
+- **Automated verification:** test code đã pass; live service evidence có thể vẫn cần thu thập.
+- **Planned:** tài liệu thiết kế/plan đã có, chưa coi là acceptance hoàn tất.

@@ -4,6 +4,10 @@
 **Timing:** Sau khi Sprint 2 hoàn tất và có regression evidence đầy đủ  
 **Owner:** Platform/ingestion team
 
+> Sprint 2.5 là milestone hợp nhất của **Airflow integration** và **recovery hardening**. Nội dung hardening trước đây được lưu trong [recovery hardening evidence](sprint-2.6-recovery-hardening.md); tên file cũ chỉ được giữ để bảo toàn liên kết lịch sử, không biểu thị một sprint độc lập.
+
+**Acceptance status:** Chưa hoàn tất. Pilot và automated regression đã có, nhưng hiện còn **5/11 acceptance criteria** chưa được đánh dấu hoàn thành; live rerun/health evidence của hardening cũng còn mở.
+
 ## Goal
 
 Thay thế APScheduler bằng Apache Airflow ở lớp scheduling và workflow control-plane, đồng thời tái sử dụng fetcher, ingestion pipeline, checkpoint và recovery contract đã hoàn tất ở Sprint 2.
@@ -183,7 +187,7 @@ orchestration/configuration error to fix, not a reason to use **Run Now**.
 Đã bổ sung `raw_ingestion_page` cho API pagination:
 
 - Payload đầy đủ nằm trong GridFS bucket `raw_ingestion`; Mongo document chỉ giữ metadata, hash, cursor, bounded `sampleRows`, trạng thái và thời hạn lưu.
-- Scheduler fetch hết các page và stage theo `sourceUnitKey` trước khi chạy ingestion. Review packet chỉ được tạo sau khi page cuối xác nhận `has_more=false`; nếu page giữa stream lỗi thì chỉ giữ raw/checkpoint để retry, chưa tạo packet. Khi thiếu mapping sau khi fetch hoàn tất, stream chuyển `WAITING_REVIEW`, không ghi `partner_transaction`, nhưng raw pages vẫn còn để tạo packet đầy đủ.
+- Application stream runner fetch hết các page và stage theo `sourceUnitKey` trước khi chạy ingestion. Review packet chỉ được tạo sau khi page cuối xác nhận `has_more=false`; nếu page giữa stream lỗi thì chỉ giữ raw/checkpoint để retry, chưa tạo packet. Khi thiếu mapping sau khi fetch hoàn tất, stream chuyển `WAITING_REVIEW`, không ghi `partner_transaction`, nhưng raw pages vẫn còn để tạo packet đầy đủ.
 - Sau approval, post-approval runner materialize từng page từ GridFS, replay qua ingestion/reconciliation hiện có và đánh dấu page `CONSUMED`. Retry upload và replay theo `sourceUnitKey` là idempotent.
 - Retention mặc định là 7 ngày; daily job dọn metadata và GridFS payload hết hạn. Nếu adapter không phải Motor (test double/legacy), hệ thống giữ fallback one-page gate cũ.
 
@@ -191,7 +195,7 @@ orchestration/configuration error to fix, not a reason to use **Run Now**.
 
 Repository hiện có các boundary phù hợp cho migration:
 
-- [Scheduler jobs](../../src/scheduler/jobs.py) đang load config, gọi fetcher, xử lý pagination/file units và kết nối application orchestration.
+- [Application stream runner](../../src/application/automation/stream_runner.py) load config, gọi fetcher, xử lý pagination/file units và kết nối application orchestration.
 - [Source-unit orchestrator](../../src/application/ingestion/source_unit_orchestrator.py) đã giữ checkpoint sequencing, claim, retry, completion và advance boundary.
 - [Fetcher contract](../../src/fetchers/base.py) chuẩn hóa `FetchResult` và `SourceUnitMetadata` cho API, SFTP và FileDrop.
 - [Sprint 2 recovery contract](sprint-2-incremental-recovery.md) yêu cầu xử lý tuần tự, checkpoint chỉ advance sau persistence thành công và backfill không làm thay đổi scheduled stream.
@@ -285,7 +289,7 @@ hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigg
 
 ### Task 1 — Ổn định application entrypoint (implemented)
 
-- Tạo một entrypoint rõ ràng cho Airflow gọi, bọc `run_fetch_config_once()` hoặc application service tương đương.
+- Tạo một entrypoint rõ ràng cho Airflow gọi: `run_source_stream()` trong application automation.
 - Chuẩn hóa kết quả thành `success`, `outcome`, `errorCode`, `retryable`, checkpoint position và runtime run id.
 - Bảo đảm entrypoint không phụ thuộc vào process của APScheduler.
 
@@ -369,6 +373,8 @@ replay-safe claim.
 
 ## Acceptance criteria
 
+Tổng hợp hiện tại: **6/11 đạt**, **5/11 còn pending**. Các mục `[ ]` là điều kiện đóng Sprint 2.5, không chỉ là follow-up tùy chọn.
+
 - [x] Airflow có thể trigger scheduled/manual run và ordered backfill run; VNPAY
   fixture/UI approval flow có regression coverage.
 - [x] API pagination stage toàn bộ raw page ngoài transaction store, sau đó ingestion/replay vẫn xử lý từng page theo thứ tự và checkpoint không advance vượt persistence boundary.
@@ -381,6 +387,16 @@ replay-safe claim.
 - [ ] Scheduled checkpoint không bị thay đổi bởi backfill.
 - [ ] Có rollback per partner và không cần reset dữ liệu để rollback.
 - [x] APScheduler đã được gỡ khỏi manual-pilot deployment sau final verification.
+
+### Acceptance còn mở
+
+| Mục | Bằng chứng cần bổ sung |
+|---|---|
+| FileDrop/SFTP ordering và source retention | Chạy recovery thực tế qua từng fingerprint, chứng minh source còn đủ lâu để resume |
+| Bounded retry giữa Airflow và application | Matrix retry/timeout/error chứng minh không retry vô hạn hoặc retry chồng |
+| `BLOCKED`, operator resolve/skip, `WAITING_REVIEW` | Contract/integration acceptance cho từng state transition và action |
+| Scheduled checkpoint không bị backfill thay đổi | Chạy ordered backfill đồng thời với scheduled checkpoint và đối chiếu trước/sau |
+| Rollback per partner không reset dữ liệu | Thực hiện rollback pilot theo partner, giữ nguyên checkpoint/runtime và audit evidence |
 
 ## Risks and mitigations
 
@@ -400,5 +416,5 @@ replay-safe claim.
 - [Airflow scheduler](https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/scheduler.html)
 - [Airflow production deployment](https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/production-deployment.html)
 - [Airflow pools and task concurrency](https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/pools.html)
-- [Repository scheduler boundary](../../README.md#architectural-boundaries)
+- [Repository application boundaries](../../README.md#architectural-boundaries)
 - [Sprint 2 incremental processing and recovery](sprint-2-incremental-recovery.md)

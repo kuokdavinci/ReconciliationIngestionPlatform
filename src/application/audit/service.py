@@ -1,4 +1,4 @@
-"""Helpers for append-only audit logging."""
+"""Application service for append-only audit logging."""
 
 from typing import Any, Optional
 

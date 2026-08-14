@@ -24,7 +24,7 @@ Sprint 1 đã cung cấp các ranh giới phải được tái sử dụng:
 - `fetchUnitKey` bảo vệ replay page/fetch unit.
 - `(identify, ingestion_key)` là unique contract trên PostgreSQL.
 - `IngestionPipeline.process_file()` nhận `fetch_unit_metadata`.
-- `scheduler.jobs._fetch_unit_metadata()` đã truyền endpoint/page/cursor/window context.
+- `src/application/automation/stream_ingestion.py` đã truyền endpoint/page/cursor/window context.
 - Duplicate là outcome hợp lệ, không phải fatal error.
 
 Khoảng trống hiện tại:
@@ -42,7 +42,7 @@ Khoảng trống hiện tại:
 - Checkpoint model, repository và Mongo indexes.
 - API pagination/cursor, raw response per page và stable source identity.
 - FileDrop/SFTP discovery, fingerprint và retry theo file boundary.
-- Scheduler orchestration cho load/retry/advance checkpoint.
+- Application stream orchestration cho load/retry/advance checkpoint.
 - Pipeline source-unit context, status transition và recovery boundary.
 - Integration/evaluation tests và demo seed ViettelPay.
 - Sequential stream orchestration: một active worker cho mỗi stream; chỉ giữ
@@ -81,7 +81,7 @@ Khoảng trống hiện tại:
 
 - Mỗi `(partner, fetch_config, source_type, stream_key, mode)` chỉ có một
   active orchestration worker.
-- Daily scheduler xử lý các partner/config theo thứ tự; không dùng
+- Airflow-backed stream runner xử lý các partner/config theo thứ tự; không dùng
   `asyncio.gather()` để chạy nhiều stream trong Sprint 2.
 - API cursor được fetch và persist từng page: chỉ request page kế tiếp sau khi
   page hiện tại đã persist và checkpoint đã completed. Không prefetch toàn bộ
@@ -173,9 +173,9 @@ Nếu không thể thực hiện transaction xuyên Mongo và PostgreSQL, phải
 - Task 5 giữ phạm vi nhỏ: deterministic discovery và fingerprint tuần tự cho
   FileDrop/SFTP, không thêm worker pool.
 - Task 6 là control-plane task tiếp theo: định nghĩa retryable/terminal,
-  bounded retry, BLOCKED và operator resolve/skip trước khi scheduler có thể
+  bounded retry, BLOCKED và operator resolve/skip trước khi stream runner có thể
   tự động retry.
-- Task 7 là critical path sau đó: nối scheduler với checkpoint theo từng source
+- Task 7 là critical path sau đó: nối application stream runner với checkpoint theo từng source
   unit cho cả API và file methods.
 - Task 8 chỉ bắt đầu sau khi Task 5–7 chứng minh được restart/resume tuần tự;
   Task 9 luôn là bước cuối.
@@ -185,7 +185,7 @@ Nếu không thể thực hiện transaction xuyên Mongo và PostgreSQL, phải
 
 ### Task 1 — Chốt contract và compatibility
 
-- Kiểm kê `FetchResult`, `ReconciliationFile`, `_derive_fetch_unit_key()` và scheduler call chain.
+- Kiểm kê `FetchResult`, `ReconciliationFile`, `_derive_fetch_unit_key()` và application stream call chain.
 - Viết test contract cho metadata cũ không có checkpoint.
 - Không đổi public behavior của Sprint 1 khi `fetch_unit_metadata` không có pagination.
 
@@ -254,7 +254,7 @@ khi boundary đang blocked; operator resolve/skip có audit và chỉ khi đó m
 được advance; persistence thành công nhưng checkpoint update lỗi vẫn replay an
 toàn nhờ contract Sprint 1.
 
-### Task 7 — Scheduler orchestration
+### Task 7 — Application stream orchestration
 
 - Load checkpoint theo scheduled stream.
 - Retry pending/failed unit trước khi fetch unit mới.
@@ -266,20 +266,20 @@ toàn nhờ contract Sprint 1.
 - Dừng stream ngay tại unit lỗi; unit sau không được claim trước.
 - Hỗ trợ explicit `mode=BACKFILL` và range/stream riêng.
 - Truyền source/checkpoint context vào runtime run và pipeline.
-- Giữ scheduler stream-level concurrency bằng một worker; không thêm worker
+- Giữ Airflow stream-level concurrency bằng một worker; không thêm worker
   pool cho partner/source unit trong task này.
 
-**Verify:** scheduler restart tiếp tục đúng unit; page/file trước đó đã
+**Verify:** Airflow task restart tiếp tục đúng unit; page/file trước đó đã
 completed không bị ingest lại ngoài replay-safe claim; backfill không thay đổi
-scheduled checkpoint; duplicate outcome không làm scheduler failed nếu unit đã
+scheduled checkpoint; duplicate outcome không làm stream failed nếu unit đã
 persist hợp lệ; các batch write nội bộ vẫn dùng cấu hình hiện có.
 
-**Implementation status (2026-08-04):** đã nối `run_fetch_config_once()` vào
+**Implementation status (2026-08-04):** đã nối `run_source_stream()` vào
 checkpoint orchestration tuần tự. API pagination chạy one-page-per-iteration;
 FileDrop/SFTP units được ingest theo thứ tự; claim/complete/advance dừng tại
 unit lỗi; retry policy được áp dụng cho lỗi retryable; `BLOCKED` và operator
 `SKIP` được tôn trọng; `mode=BACKFILL` được truyền qua stream/checkpoint
-identity để cô lập với scheduled stream. Evidence: scheduler integration,
+identity để cô lập với scheduled stream. Evidence: application integration,
 orchestrator và pagination tests pass trong regression suite.
 
 ### Task 8 — ViettelPay demo và evaluation suite
@@ -377,7 +377,7 @@ Runtime/log metadata phải có `partner`, `stream_key`, `source_unit_key`, `cur
 
 - Không triển khai ViettelPay-specific parsing trong generic `APIFetcher`; dùng config-driven paths.
 - Không thêm checkpoint vào reconciliation engine.
-- Không advance checkpoint trong fetcher; fetcher chỉ trả metadata/result. Scheduler/pipeline orchestration quyết định sau persistence.
+- Không advance checkpoint trong fetcher; fetcher chỉ trả metadata/result. Application/pipeline orchestration quyết định sau persistence.
 - Không prefetch hoặc ingest song song các page/file trong cùng stream; cursor tiếp theo chỉ được lấy sau khi unit hiện tại completed.
 - Không retry terminal error vô hạn và không tự động skip boundary khi vượt quá `max_attempts`.
 - Không dùng read-before-write làm ranh giới duplicate duy nhất; vẫn dựa vào Mongo unique claim và PostgreSQL constraint của Sprint 1.

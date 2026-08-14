@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.domain.review.models import ReviewPacket
-from src.services.review_raw_stream import (
+from src.application.review.raw_stream import (
     read_review_stream_page,
     resolve_review_source_file,
 )
@@ -51,7 +51,7 @@ async def test_reads_ordered_rows_across_pages_with_global_pagination(tmp_path: 
         materialize=AsyncMock(side_effect=lambda page, _destination: page.local_path),
     )
 
-    with patch("src.services.review_raw_stream.RawIngestionPageRepository", return_value=raw_repo):
+    with patch("src.application.review.raw_stream.RawIngestionPageRepository", return_value=raw_repo):
         result = await read_review_stream_page(
             db=object(), packet=_packet(), offset=1, limit=2
         )
@@ -74,7 +74,7 @@ async def test_stream_reader_never_reads_pages_from_another_stage(tmp_path: Path
         materialize=AsyncMock(return_value=str(page_path)),
     )
 
-    with patch("src.services.review_raw_stream.RawIngestionPageRepository", return_value=raw_repo):
+    with patch("src.application.review.raw_stream.RawIngestionPageRepository", return_value=raw_repo):
         await read_review_stream_page(
             db=object(), packet=_packet("stream-a"), offset=0, limit=50
         )
@@ -139,7 +139,7 @@ def test_resolves_airflow_source_path_inside_api_container(tmp_path: Path):
     packet = _file_packet(f"/opt/airflow/app{source}")
 
     with patch(
-        "src.services.review_raw_stream._candidate_source_paths",
+        "src.application.review.raw_stream._candidate_source_paths",
         return_value=[Path("/missing/source.xlsx"), source],
     ):
         assert resolve_review_source_file(packet) == source
@@ -153,7 +153,7 @@ async def test_rejects_file_packet_with_metadata_only_raw_stage(tmp_path: Path):
     packet.raw_stage_key = "invalid-file-stage"
     raw_repo = SimpleNamespace(find_for_replay=AsyncMock(return_value=[]))
 
-    with patch("src.services.review_raw_stream.RawIngestionPageRepository", return_value=raw_repo):
+    with patch("src.application.review.raw_stream.RawIngestionPageRepository", return_value=raw_repo):
         with pytest.raises(ValueError, match="file-level packets must omit rawStageKey"):
             await read_review_stream_page(
                 db=object(), packet=packet, offset=0, limit=50

@@ -58,7 +58,7 @@ export function usePostApprovalPolling({
     };
 
     void tick();
-    intervalRef.current = setInterval(() => { void tick(); }, 750);
+    intervalRef.current = setInterval(() => { void tick(); }, 500);
   }, [stopPolling, onCompleted]);
 
   const startEventStream = useCallback((id: string) => {

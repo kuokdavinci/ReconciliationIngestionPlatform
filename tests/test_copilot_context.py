@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from src.services.copilot_context import CopilotContextService
+from src.application.copilot.context import CopilotContextService
 
 
 def _make_mock_repo(find_many_result=None):

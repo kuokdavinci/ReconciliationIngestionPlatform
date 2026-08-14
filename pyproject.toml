@@ -72,7 +72,6 @@ module = [
   "src.analysis.*",
   "src.pipeline.*",
   "src.services.*",
-  "src.scheduler.*",
   "src.config.*",
   "src.normalizer.*",
   "src.readers.*",

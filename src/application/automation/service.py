@@ -10,10 +10,12 @@ from src.application.automation.contracts import (
     ExecuteStreamOutcome,
     ExecuteStreamResult,
 )
+from src.application.automation.stream_identity import stream_identity
+from src.application.automation.stream_runner import run_source_stream
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from src.domain.runtime.models import PartnerRuntimeRunStatus
-from src.services.runtime_runs import update_runtime_run
+from src.application.runtime.service import update_runtime_run
 
 BUSINESS_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 StreamRunner = Callable[..., Awaitable[dict[str, Any]]]
@@ -58,10 +60,7 @@ async def execute_stream(
             )
         raise
 
-    if runner is None:
-        from src.scheduler.jobs import run_fetch_config_once
-
-        runner = run_fetch_config_once
+    selected_runner = runner or run_source_stream
 
     reconciliation_day = command.reconciliation_date
     if reconciliation_day is None:
@@ -72,7 +71,7 @@ async def execute_stream(
         time.min,
         tzinfo=BUSINESS_TIMEZONE,
     )
-    raw_result = await runner(
+    raw_result = await selected_runner(
         config=config,
         db=db,
         config_loader=config_loader,
@@ -106,9 +105,7 @@ def _orchestration_payload(command: ExecuteStreamCommand) -> dict[str, Any] | No
 
 
 async def _find_checkpoint(repository, config, command, reconciliation_date):
-    from src.scheduler.jobs import _stream_identity
-
-    identity = _stream_identity(
+    identity = stream_identity(
         config,
         mode=command.mode,
         reconciliation_date=reconciliation_date,

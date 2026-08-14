@@ -7,6 +7,7 @@ from src.application.automation.contracts import (
     OrchestrationContext,
 )
 from src.application.automation.service import execute_stream
+from src.application.automation.stream_runner import run_source_stream
 
 __all__ = [
     "ExecuteStreamCommand",
@@ -14,4 +15,5 @@ __all__ = [
     "ExecuteStreamResult",
     "OrchestrationContext",
     "execute_stream",
+    "run_source_stream",
 ]

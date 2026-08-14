@@ -1,17 +1,13 @@
 """Shared review packet approval and reprocessing actions."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Request
-
 from src.analysis.insights import invalidate_insight_cache
-from src.config.cache import ConfigCache
-from src.config.loader import ConfigLoader
-from src.config.validator import ConfigValidator
 from src.core.error_formatting import summarize_runtime_error
 from src.core.enums import ProcessingStatus, ReconciliationScopeType
 from src.domain.review.models import CopilotActionStatus
@@ -39,21 +35,19 @@ from src.infrastructure.backfill.repository import BackfillRunRepository
 from src.infrastructure.workflows.airflow import AirflowWorkflowGateway
 from src.application.reconciliation.service import ReconciliationCommand
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
-from src.services.audit import record_audit_event
-from src.services.runtime_runs import create_runtime_run, update_runtime_run
-from src.services.business_day import business_date
-from src.services.review_raw_stream import resolve_review_source_file
-from src.api.background_tasks import track_background_task
+from src.application.audit.service import record_audit_event
+from src.application.runtime.service import create_runtime_run, update_runtime_run
+from src.core.business_day import business_date
+from src.application.review.raw_stream import resolve_review_source_file
+from src.application.review.errors import (
+    ReviewConflictError,
+    ReviewNotFoundError,
+    ReviewUnavailableError,
+)
+from src.infrastructure.mapping.composition import build_config_loader
 from src.domain.runtime.models import PartnerRuntimeRunStatus, PartnerRuntimeTriggerType
 from src.config.settings import settings
-from src.services.backfill_runs import BackfillRunService, serialize_backfill_run
-
-
-def _get_db(request: Request):
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
-    return db
+from src.application.automation.backfill_service import BackfillRunService, serialize_backfill_run
 
 
 async def _rebind_replacement_transactions(
@@ -91,45 +85,28 @@ async def _rebind_replacement_transactions(
     )
 
 
-def _packet_repo(request: Request) -> ReviewPacketRepository:
-    return ReviewPacketRepository(_get_db(request))
-
-
-def build_config_loader(request: Request) -> ConfigLoader:
-    db = _get_db(request)
-    return build_config_loader_from_db(db)
-
-
-def build_config_loader_from_db(db) -> ConfigLoader:
-    return ConfigLoader(
-        MappingConfigRepository(db),
-        ConfigCache(),
-        ConfigValidator(),
-    )
-
-
-async def sync_action_status(request: Request, action_id: Optional[str], status: str) -> None:
+async def sync_action_status(db, action_id: Optional[str], status: str) -> None:
     if not action_id:
         return
-    repo = CopilotActionRepository(_get_db(request))
+    repo = CopilotActionRepository(db)
     update = {"status": status, "reviewedAt": datetime.now(timezone.utc)}
     await repo.collection.update_one({"_id": action_id}, {"$set": update})
 
 
 async def mark_packet(
-    request: Request,
+    db,
     packet_id: str,
     status: ReviewPacketStatus,
     decision_mode: ReviewDecisionMode,
     reviewed_by: Optional[str],
     serializer,
 ):
-    repo = _packet_repo(request)
+    repo = ReviewPacketRepository(db)
     packet = await repo.find_one({"_id": packet_id})
     if packet is None:
-        raise HTTPException(status_code=404, detail="Review packet not found.")
+        raise ReviewNotFoundError("Review packet not found.")
     if packet.status != ReviewPacketStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Only pending review packets can be processed.")
+        raise ReviewConflictError("Only pending review packets can be processed.")
 
     now = datetime.now(timezone.utc)
     set_fields: dict[str, Any] = {
@@ -148,7 +125,7 @@ async def mark_packet(
         {"$set": set_fields},
     )
     await sync_action_status(
-        request,
+        db,
         packet.target_action_id,
         CopilotActionStatus.APPROVED.value
         if status == ReviewPacketStatus.APPROVED
@@ -158,13 +135,14 @@ async def mark_packet(
     packet.decision_mode = decision_mode
     packet.reviewed_at = now
     packet.reviewed_by = reviewed_by
+    reconciliation_date = getattr(packet, "reconciliation_date", None)
     audit_date = (
-        business_date(packet.reconciliation_date).isoformat()
-        if getattr(packet, "reconciliation_date", None)
+        business_date(reconciliation_date).isoformat()
+        if isinstance(reconciliation_date, datetime)
         else None
     )
     await record_audit_event(
-        _get_db(request),
+        db,
         entity_type="REVIEW_PACKET",
         entity_id=packet_id,
         action=decision_mode.value,
@@ -182,14 +160,14 @@ async def mark_packet(
     return {"ok": True, "packet": serializer(packet)}
 
 
-async def update_packet_scope(request: Request, packet_id: str, packet, scope_type: Optional[str]) -> None:
+async def update_packet_scope(db, packet_id: str, packet, scope_type: Optional[str]) -> None:
     if not scope_type:
         return
-    repo = _packet_repo(request)
+    repo = ReviewPacketRepository(db)
     packet.scope_type = scope_type
     await repo.collection.update_one({"_id": packet_id}, {"$set": {"scopeType": scope_type}})
     if packet.source_file_id:
-        file_repo = ReconciliationFileRepository(_get_db(request))
+        file_repo = ReconciliationFileRepository(db)
         await file_repo.update_one({"_id": packet.source_file_id}, {"scopeType": scope_type})
 
 
@@ -242,63 +220,74 @@ async def _update_post_approval_run(
     await PostApprovalRunRepository(db).collection.update_one({"_id": run_id}, {"$set": update})
 
 
-def _track_background_task(app: FastAPI, task: asyncio.Task) -> None:
-    track_background_task(app, task)
+ScheduleBackground = Callable[[Awaitable[None]], None]
 
 
-async def approve_packet_mapping_and_reprocess(request: Request, packet, reviewed_by: Optional[str]) -> dict | None:
+async def approve_packet_mapping_and_reprocess(
+    db,
+    packet,
+    reviewed_by: Optional[str],
+    *,
+    schedule_background: ScheduleBackground,
+    workflow_gateway: Any | None = None,
+) -> dict | None:
     if not packet.draft_mapping_id:
         return None
 
-    db = _get_db(request)
     mapping_repo = MappingConfigRepository(db)
     config = await mapping_repo.find_one({"_id": packet.draft_mapping_id})
-    if config is None or config.status != MappingConfigStatus.PENDING_APPROVAL:
+    if config is None:
         return None
 
-    now = datetime.now(timezone.utc)
-    current_approved = await mapping_repo.find_by_partner_and_type(
-        config.partner, config.workflow_type, config.file_type
-    )
-    if current_approved is not None:
+    if config.status == MappingConfigStatus.PENDING_APPROVAL:
+        now = datetime.now(timezone.utc)
+        current_approved = await mapping_repo.find_by_partner_and_type(
+            config.partner, config.workflow_type, config.file_type
+        )
+        if current_approved is not None:
+            await mapping_repo.collection.update_one(
+                {"_id": str(current_approved.id)},
+                {"$set": {
+                    "status": MappingConfigStatus.SUPERSEDED.value,
+                    "supersededAt": now,
+                    "supersededByConfigId": str(config.id),
+                }},
+            )
+        health = dict(config.config_health or {})
+        health.update(
+            {
+                "stale": False,
+                "status": MappingConfigStatus.APPROVED.value,
+                "approvedAt": now,
+                "reasoning": (health.get("reasoning") or "Approved from review packet."),
+            }
+        )
         await mapping_repo.collection.update_one(
-            {"_id": str(current_approved.id)},
+            {"_id": packet.draft_mapping_id},
             {"$set": {
-                "status": MappingConfigStatus.SUPERSEDED.value,
-                "supersededAt": now,
-                "supersededByConfigId": str(config.id),
+                "status": MappingConfigStatus.APPROVED.value,
+                "approvedAt": now,
+                "approvedBy": reviewed_by,
+                "configHealth": health,
             }},
         )
-    health = dict(config.config_health or {})
-    health.update(
-        {
-            "stale": False,
-            "status": MappingConfigStatus.APPROVED.value,
-            "approvedAt": now,
-            "reasoning": (health.get("reasoning") or "Approved from review packet."),
-        }
-    )
-    await mapping_repo.collection.update_one(
-        {"_id": packet.draft_mapping_id},
-        {"$set": {
-            "status": MappingConfigStatus.APPROVED.value,
-            "approvedAt": now,
-            "approvedBy": reviewed_by,
-            "configHealth": health,
-        }},
-    )
-    config.status = MappingConfigStatus.APPROVED
-    config.approved_at = now
-    config.approved_by = reviewed_by
-    config.config_health = health
+        config.status = MappingConfigStatus.APPROVED
+        config.approved_at = now
+        config.approved_by = reviewed_by
+        config.config_health = health
+    elif config.status != MappingConfigStatus.APPROVED:
+        return None
 
     if getattr(packet, "backfill_run_id", None):
-        gateway = getattr(request.app.state, "workflow_gateway", None)
+        gateway = workflow_gateway
         if gateway is None:
             if settings.automation_orchestrator != "airflow":
-                raise HTTPException(
-                    status_code=503,
-                    detail="Backfill approval requires the Airflow orchestrator.",
+                raise ReviewUnavailableError(
+                    "Backfill approval requires the Airflow orchestrator."
+                )
+            if not settings.airflow_username or not settings.airflow_password:
+                raise ReviewUnavailableError(
+                    "Airflow credentials are required for backfill approval."
                 )
             gateway = AirflowWorkflowGateway(
                 base_url=settings.airflow_base_url,
@@ -319,22 +308,43 @@ async def approve_packet_mapping_and_reprocess(request: Request, packet, reviewe
         )
         return {"backfillRun": serialize_backfill_run(backfill_run)}
 
-    return await _queue_post_approval_reprocess(request, packet, config)
+    return await _queue_post_approval_reprocess(
+        db,
+        packet,
+        config,
+        schedule_background=schedule_background,
+    )
 
 
-async def reprocess_packet_with_current_mapping(request: Request, packet, reviewed_by: Optional[str]) -> dict | None:
+async def reprocess_packet_with_current_mapping(
+    db,
+    packet,
+    reviewed_by: Optional[str],
+    *,
+    schedule_background: ScheduleBackground,
+) -> dict | None:
     """Queue replay for a scope-approved stream that keeps its active mapping."""
     config_id = getattr(packet, "active_runtime_config_id", None)
     if not config_id:
         return None
-    config = await MappingConfigRepository(_get_db(request)).find_one({"_id": config_id})
+    config = await MappingConfigRepository(db).find_one({"_id": config_id})
     if config is None or config.status != MappingConfigStatus.APPROVED:
         return None
-    return await _queue_post_approval_reprocess(request, packet, config)
+    return await _queue_post_approval_reprocess(
+        db,
+        packet,
+        config,
+        schedule_background=schedule_background,
+    )
 
 
-async def _queue_post_approval_reprocess(request: Request, packet, config) -> dict:
-    db = _get_db(request)
+async def _queue_post_approval_reprocess(
+    db,
+    packet,
+    config,
+    *,
+    schedule_background: ScheduleBackground,
+) -> dict:
     run = PostApprovalRun(
         packetId=str(packet.id),
         partner=packet.partner,
@@ -345,22 +355,18 @@ async def _queue_post_approval_reprocess(request: Request, packet, config) -> di
         sourceFileId=getattr(packet, "source_file_id", None),
     )
     await PostApprovalRunRepository(db).create(run)
-    task = asyncio.create_task(
+    schedule_background(
         _run_post_approval_reprocess(
-            request.app,
+            db,
             str(run.id),
             str(packet.id),
             str(config.id),
         )
     )
-    _track_background_task(request.app, task)
     return serialize_post_approval_run(run)
 
 
-async def _run_post_approval_reprocess(app: FastAPI, run_id: str, packet_id: str, config_id: str) -> None:
-    db = getattr(app.state, "db", None)
-    if db is None:
-        return
+async def _run_post_approval_reprocess(db, run_id: str, packet_id: str, config_id: str) -> None:
     packet_repo = ReviewPacketRepository(db)
     mapping_repo = MappingConfigRepository(db)
     packet = await packet_repo.find_one({"_id": packet_id})
@@ -505,13 +511,13 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
     from src.config.settings import settings
     pipeline = build_ingestion_pipeline(
         db=db,
-        config_loader=build_config_loader_from_db(db),
+        config_loader=build_config_loader(db),
         batch_size=settings.ingest_batch_size,
         logger=None,
         fast_mode=True,
     )
     ingestion_result = await pipeline.process_file(
-        file_path=resolved_source_path,
+        file_path=str(resolved_source_path),
         partner=config.partner,
         workflow_type=config.workflow_type,
         file_type=config.file_type,
@@ -528,18 +534,17 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         },
         enable_config_health_check=False,
     )
-    processing_status = getattr(
-        ingestion_result.file_record.processing_status,
-        "value",
-        ingestion_result.file_record.processing_status,
-    )
+    file_record = ingestion_result.file_record
+    if file_record is None:
+        raise RuntimeError("Ingestion did not return a source file record.")
+    processing_status = getattr(file_record.processing_status, "value", file_record.processing_status)
     if processing_status == ProcessingStatus.COMPLETED.value:
         await _rebind_replacement_transactions(
             db=db,
             packet=packet,
             config=config,
             ingestion_result=ingestion_result,
-            source_file_id=str(ingestion_result.file_record.id),
+            source_file_id=str(file_record.id),
         )
     result = {
         "ok": processing_status == ProcessingStatus.COMPLETED.value,
@@ -547,7 +552,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         "partner": config.partner,
         "date": business_date(source_file.reconciliation_date).isoformat(),
         "processingStatus": processing_status,
-        "fileId": str(ingestion_result.file_record.id),
+        "fileId": str(file_record.id),
         "stats": {
             "totalRows": ingestion_result.stats.total_rows,
             "successRows": ingestion_result.stats.success_rows,
@@ -562,7 +567,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
             runtime_run_id,
             status=PartnerRuntimeRunStatus.FAILED,
             message="Ingestion failed after approval.",
-            source_file_id=str(ingestion_result.file_record.id),
+            source_file_id=str(file_record.id),
             stats=result["stats"],
             finished_at=datetime.now(timezone.utc),
         )
@@ -573,7 +578,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
             stage=PostApprovalRunStage.INGESTION,
             message="Ingestion failed after approval.",
             finished_at=datetime.now(timezone.utc),
-            output_file_id=str(ingestion_result.file_record.id),
+            output_file_id=str(file_record.id),
             stats=result["stats"],
             errors=ingestion_result.errors,
         )
@@ -581,7 +586,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
 
     if packet.scope_type:
         await file_repo.update_one(
-            {"_id": str(ingestion_result.file_record.id)},
+            {"_id": str(file_record.id)},
             {"scopeType": packet.scope_type},
         )
 
@@ -591,7 +596,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         status=PostApprovalRunStatus.RECONCILING,
         stage=PostApprovalRunStage.RECONCILIATION,
         message="Reconciling ingested partner rows against internal transactions.",
-        output_file_id=str(ingestion_result.file_record.id),
+        output_file_id=str(file_record.id),
         stats=result["stats"],
         errors=ingestion_result.errors,
     )
@@ -600,7 +605,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         runtime_run_id,
         status=PartnerRuntimeRunStatus.RECONCILING,
         message="Reconciling ingested partner rows against internal transactions.",
-        source_file_id=str(ingestion_result.file_record.id),
+        source_file_id=str(file_record.id),
         stats=result["stats"],
     )
 
@@ -609,7 +614,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         ReconciliationCommand(
             partner=config.partner,
             reconciliation_date=recon_date,
-            source_file_id=str(ingestion_result.file_record.id),
+            source_file_id=str(file_record.id),
             reconciliation_run_id=runtime_run_id,
             mapping_version=getattr(config, "config_version", None) or str(config.id),
         )
@@ -620,7 +625,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         run_id,
         stage=PostApprovalRunStage.CACHE_INVALIDATION,
         message="Invalidating insight cache after reconciliation.",
-        output_file_id=str(ingestion_result.file_record.id),
+        output_file_id=str(file_record.id),
         reconciliation_count=len(recon_results),
         stats={**result["stats"], "resultCount": len(recon_results), "reconciliationCount": len(recon_results)},
     )
@@ -643,7 +648,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         stage=PostApprovalRunStage.CACHE_INVALIDATION,
         message="Post-approval processing completed successfully.",
         finished_at=datetime.now(timezone.utc),
-        output_file_id=str(ingestion_result.file_record.id),
+        output_file_id=str(file_record.id),
         reconciliation_count=len(recon_results),
         stats={**result["stats"], "resultCount": len(recon_results), "reconciliationCount": len(recon_results)},
         errors=ingestion_result.errors,
@@ -653,7 +658,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         runtime_run_id,
         status=PartnerRuntimeRunStatus.COMPLETED,
         message="Reconciliation completed successfully.",
-        source_file_id=str(ingestion_result.file_record.id),
+        source_file_id=str(file_record.id),
         stats={"resultCount": len(recon_results), **result["stats"]},
         reconciliation_count=len(recon_results),
         finished_at=datetime.now(timezone.utc),
@@ -717,7 +722,7 @@ async def _reprocess_staged_pages(
 
     pipeline = build_ingestion_pipeline(
         db=db,
-        config_loader=build_config_loader_from_db(db),
+        config_loader=build_config_loader(db),
         batch_size=settings.ingest_batch_size,
         logger=None,
         fast_mode=True,
@@ -840,6 +845,8 @@ async def _reprocess_staged_pages(
                 "errors": errors,
             }
 
+        if file_record is None:
+            raise RuntimeError("Ingestion did not return a source file record.")
         page_file_id = str(file_record.id)
         if logical_source_file_id is None:
             logical_source_file_id = page_file_id

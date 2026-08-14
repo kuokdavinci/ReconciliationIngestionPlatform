@@ -1,0 +1,162 @@
+"""Runtime persistence for one application-owned source stream."""
+
+from datetime import datetime, timezone
+from typing import Any
+from uuid import uuid4
+
+from src.domain.runtime.models import PartnerRuntimeRunStatus
+from src.application.runtime.service import update_runtime_run
+
+
+
+def runtime_attempt_event(
+    run: Any,
+    status: str,
+    *,
+    result: dict[str, Any] | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    """Build a compact, safe event for one application runtime attempt."""
+
+    orchestration = getattr(run, "orchestration", None)
+    event: dict[str, Any] = {
+        "eventId": str(uuid4()),
+        "status": status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "attempt": getattr(orchestration, "try_number", 1),
+    }
+    if orchestration is not None:
+        event.update(
+            {
+                "dagRunId": orchestration.dag_run_id,
+                "taskId": orchestration.task_id,
+                "mapIndex": orchestration.map_index,
+            }
+        )
+    if result:
+        event.update(
+            {
+                key: result[key]
+                for key in (
+                    "outcome",
+                    "errorCode",
+                    "currentPage",
+                    "stoppedAt",
+                    "fetchedUnitCount",
+                    "totalUnitCount",
+                )
+                if result.get(key) is not None
+            }
+        )
+        if result.get("stoppedAt") is not None:
+            event["unitKey"] = result["stoppedAt"]
+    if message:
+        event["message"] = message
+    return event
+
+
+
+async def finish_source_stream_run(
+    *,
+    db: Any,
+    run: Any,
+    partner: str,
+    result: dict[str, Any],
+    stats: dict[str, int],
+) -> dict[str, Any]:
+    duplicate_messages = {
+        "FILE_DUPLICATE": "File already processed. Ingestion and reconciliation were skipped safely.",
+        "FETCH_UNIT_REPLAY": "Fetch unit already processed. Ingestion and reconciliation were skipped safely.",
+        "NO_NEW_FILE": "No new file was found. Ingestion and reconciliation were skipped.",
+        "SAFE_DUPLICATE": "This source file was already processed. The retry was skipped safely.",
+    }
+    waiting_for_review = (
+        result.get("outcome") == "WAITING_REVIEW"
+        or result.get("waitingForReview") is True
+    )
+    duplicate_source_outcome = result.get("outcome")
+    if result.get("streamAlreadyCompleted"):
+        duplicate_source_outcome = "STREAM_ALREADY_COMPLETED"
+        result = {
+            **result,
+            "outcome": "SAFE_DUPLICATE",
+            "safeDuplicate": True,
+            "duplicateSourceOutcome": duplicate_source_outcome,
+        }
+    elif duplicate_source_outcome in duplicate_messages:
+        result = {
+            **result,
+            "safeDuplicate": True,
+            "duplicateSourceOutcome": duplicate_source_outcome,
+        }
+    persisted_stats = {**stats, **result}
+    if waiting_for_review:
+        terminal_status = PartnerRuntimeRunStatus.WAITING_REVIEW
+        await update_runtime_run(
+            db,
+            str(run.id),
+            status=terminal_status,
+            message=result.get("error")
+            or "A draft mapping is waiting for review before ingestion can continue.",
+            stats=persisted_stats,
+            finished_at=datetime.now(timezone.utc),
+            attempt_event=runtime_attempt_event(
+                run,
+                terminal_status.value,
+                result=result,
+                message=result.get("error"),
+            ),
+        )
+    elif result.get("success"):
+        terminal_status = PartnerRuntimeRunStatus.COMPLETED
+        await update_runtime_run(
+            db,
+            str(run.id),
+            status=terminal_status,
+            message=duplicate_messages.get(
+                str(result.get("outcome") or ""),
+                "Sequential source-unit ingestion completed successfully.",
+            ),
+            stats=persisted_stats,
+            finished_at=datetime.now(timezone.utc),
+            attempt_event=runtime_attempt_event(
+                run,
+                terminal_status.value,
+                result=result,
+                message="Sequential source-unit ingestion completed successfully.",
+            ),
+        )
+    else:
+        terminal_status = PartnerRuntimeRunStatus.FAILED
+        await update_runtime_run(
+            db,
+            str(run.id),
+            status=terminal_status,
+            message=result.get("error") or "Source-unit ingestion failed.",
+            stats=persisted_stats,
+            finished_at=datetime.now(timezone.utc),
+            attempt_event=runtime_attempt_event(
+                run,
+                terminal_status.value,
+                result=result,
+                message=result.get("error"),
+            ),
+        )
+    return {
+        "success": result.get("success", False),
+        "stage": "ingestion" if result.get("processed", 0) else "fetch",
+        "partner": partner,
+        **result,
+        "stats": persisted_stats,
+        "runtimeRun": {
+            "id": str(run.id),
+            "status": (
+                PartnerRuntimeRunStatus.WAITING_REVIEW.value
+                if waiting_for_review
+                else PartnerRuntimeRunStatus.COMPLETED.value
+                if result.get("success")
+                else PartnerRuntimeRunStatus.FAILED.value
+            ),
+            "outcome": result.get("outcome"),
+        },
+    }

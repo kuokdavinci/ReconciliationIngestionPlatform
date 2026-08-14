@@ -18,7 +18,7 @@ from src.models.partner_runtime_run import (
     PartnerRuntimeRunStatus as LegacyPartnerRuntimeRunStatus,
     PartnerRuntimeTriggerType as LegacyPartnerRuntimeTriggerType,
 )
-from src.services.runtime_runs import serialize_partner_runtime_run, update_runtime_run
+from src.application.runtime.service import serialize_partner_runtime_run, update_runtime_run
 
 
 def test_legacy_runtime_module_is_a_compatibility_facade() -> None:

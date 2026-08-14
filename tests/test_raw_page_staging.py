@@ -9,7 +9,7 @@ from src.infrastructure.ingestion.raw_page_repository import RawIngestionPageRep
 from src.domain.fetch_config.models import APIConfig, APIPaginationConfig, FetchConfig, FetchMethod
 from src.domain.ingestion.checkpoints import CheckpointStatus, IngestionCheckpoint
 from src.fetchers.base import FetchResult
-from src.scheduler.jobs import run_fetch_config_once
+from src.application.automation.stream_runner import run_source_stream
 from src.config.config_health import ConfigurationApprovalRequiredError
 
 
@@ -175,18 +175,19 @@ async def test_scheduler_stages_all_pages_before_waiting_for_mapping(tmp_path):
     run_ingestion = AsyncMock()
 
     with (
-        patch("src.scheduler.jobs.RawIngestionPageRepository", return_value=raw_repo),
-        patch("src.scheduler.jobs.create_runtime_run", new=AsyncMock(return_value=run)),
-        patch("src.scheduler.jobs.update_runtime_run", new=AsyncMock()),
-        patch("src.scheduler.jobs.IngestionCheckpointRepository", return_value=Checkpoints()),
-        patch("src.scheduler.jobs.create_fetcher", return_value=Fetcher()),
+        patch("src.application.automation.stream_runner.RawIngestionPageRepository", return_value=raw_repo),
+        patch("src.application.automation.stream_runner.create_runtime_run", new=AsyncMock(return_value=run)),
+        patch("src.application.automation.stream_runtime.update_runtime_run", new=AsyncMock()),
+        patch("src.application.automation.stream_runner.update_runtime_run", new=AsyncMock()),
+        patch("src.application.automation.stream_runner.IngestionCheckpointRepository", return_value=Checkpoints()),
+        patch("src.application.automation.stream_runner.create_fetcher", return_value=Fetcher()),
         patch(
-            "src.scheduler.jobs.check_and_refresh_config",
+            "src.application.automation.stream_runner.check_and_refresh_config",
             new=AsyncMock(side_effect=ConfigurationApprovalRequiredError("mapping required")),
         ) as preflight,
-        patch("src.scheduler.jobs._run_ingestion", new=run_ingestion),
+        patch("src.application.automation.stream_ingestion.run_ingestion", new=run_ingestion),
     ):
-        result = await run_fetch_config_once(
+        result = await run_source_stream(
             config=config, db=MagicMock(), config_loader=MagicMock(),
             reconciliation_date=datetime(2024, 7, 7, tzinfo=UTC),
         )
@@ -259,16 +260,17 @@ async def test_scheduler_sends_complete_paginated_stream_to_scope_review_with_ap
     create_packet = AsyncMock()
 
     with (
-        patch("src.scheduler.jobs.RawIngestionPageRepository", return_value=raw_repo),
-        patch("src.scheduler.jobs.create_runtime_run", new=AsyncMock(return_value=MagicMock(id="runtime"))),
-        patch("src.scheduler.jobs.update_runtime_run", new=AsyncMock()),
-        patch("src.scheduler.jobs.IngestionCheckpointRepository", return_value=Checkpoints()),
-        patch("src.scheduler.jobs.create_fetcher", return_value=Fetcher()),
-        patch("src.scheduler.jobs.check_and_refresh_config", new=AsyncMock(return_value=approved_mapping)),
-        patch("src.scheduler.jobs.create_stream_scope_review_packet", new=create_packet),
-        patch("src.scheduler.jobs._run_ingestion", new=AsyncMock()) as run_ingestion,
+        patch("src.application.automation.stream_runner.RawIngestionPageRepository", return_value=raw_repo),
+        patch("src.application.automation.stream_runner.create_runtime_run", new=AsyncMock(return_value=MagicMock(id="runtime"))),
+        patch("src.application.automation.stream_runtime.update_runtime_run", new=AsyncMock()),
+        patch("src.application.automation.stream_runner.update_runtime_run", new=AsyncMock()),
+        patch("src.application.automation.stream_runner.IngestionCheckpointRepository", return_value=Checkpoints()),
+        patch("src.application.automation.stream_runner.create_fetcher", return_value=Fetcher()),
+        patch("src.application.automation.stream_runner.check_and_refresh_config", new=AsyncMock(return_value=approved_mapping)),
+        patch("src.application.automation.stream_runner.create_stream_scope_review_packet", new=create_packet),
+        patch("src.application.automation.stream_ingestion.run_ingestion", new=AsyncMock()) as run_ingestion,
     ):
-        result = await run_fetch_config_once(
+        result = await run_source_stream(
             config=config, db=MagicMock(), config_loader=MagicMock(),
             reconciliation_date=datetime(2024, 7, 7, tzinfo=UTC),
         )
@@ -350,15 +352,16 @@ async def test_failed_page_does_not_create_review_packet(tmp_path):
             return True
 
     with (
-        patch("src.scheduler.jobs.RawIngestionPageRepository", return_value=raw_repo),
-        patch("src.scheduler.jobs.create_runtime_run", new=AsyncMock(return_value=run)),
-        patch("src.scheduler.jobs.update_runtime_run", new=AsyncMock()),
-        patch("src.scheduler.jobs.IngestionCheckpointRepository", return_value=Checkpoints()) as checkpoint_repo,
-        patch("src.scheduler.jobs.create_fetcher", return_value=FailingFetcher()),
-        patch("src.scheduler.jobs.check_and_refresh_config", new=AsyncMock()) as preflight,
-        patch("src.scheduler.jobs._run_ingestion", new=AsyncMock()) as run_ingestion,
+        patch("src.application.automation.stream_runner.RawIngestionPageRepository", return_value=raw_repo),
+        patch("src.application.automation.stream_runner.create_runtime_run", new=AsyncMock(return_value=run)),
+        patch("src.application.automation.stream_runtime.update_runtime_run", new=AsyncMock()),
+        patch("src.application.automation.stream_runner.update_runtime_run", new=AsyncMock()),
+        patch("src.application.automation.stream_runner.IngestionCheckpointRepository", return_value=Checkpoints()) as checkpoint_repo,
+        patch("src.application.automation.stream_runner.create_fetcher", return_value=FailingFetcher()),
+        patch("src.application.automation.stream_runner.check_and_refresh_config", new=AsyncMock()) as preflight,
+        patch("src.application.automation.stream_ingestion.run_ingestion", new=AsyncMock()) as run_ingestion,
     ):
-        result = await run_fetch_config_once(
+        result = await run_source_stream(
             config=config, db=MagicMock(), config_loader=MagicMock(),
             reconciliation_date=datetime(2024, 7, 7, tzinfo=UTC),
         )

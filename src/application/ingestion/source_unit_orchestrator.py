@@ -6,7 +6,7 @@ from typing import Any
 
 from src.domain.ingestion.checkpoints import CheckpointRepository, IngestionMode
 from src.domain.ingestion.source_units import IngestionOutcome, SourceUnitMetadata
-from src.services.retry_policy import RetryPolicy
+from src.domain.ingestion.retry_policy import RetryPolicy
 
 
 async def process_source_units(

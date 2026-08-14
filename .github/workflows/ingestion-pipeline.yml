@@ -49,8 +49,7 @@ jobs:
           uv run ruff check
           src/fetchers
           src/pipeline
-          src/scheduler
-          src/services
+          src/application/automation
           src/models/fetch_config.py
           src/models/indexes.py
           scripts/demo/scenarios

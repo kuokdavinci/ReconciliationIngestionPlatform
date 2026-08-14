@@ -20,9 +20,36 @@ from src.api.review_packets import (
 )
 from src.domain.review.models import CopilotActionStatus
 from src.infrastructure.review.repository import CopilotActionRepository
-from src.services.copilot_context import CopilotContextService
+from src.application.copilot.context import CopilotContextService
+from src.application.review.errors import (
+    ReviewError,
+    ReviewNotFoundError,
+    ReviewValidationError,
+)
 
 router = APIRouter(prefix="/api/v1/copilot")
+
+
+async def _copilot_context(service: CopilotContextService, **values):
+    try:
+        return await service.context(**values)
+    except ReviewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ReviewValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ReviewError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def _copilot_resolution(service: CopilotContextService, **values):
+    try:
+        return await service.resolve(**values)
+    except ReviewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ReviewValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ReviewError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class CopilotActionPayload(BaseModel):
@@ -59,7 +86,12 @@ async def get_context(
     date: Optional[str] = Query(default=None),
     screen: Optional[str] = Query(default=None),
 ):
-    return await CopilotContextService(_get_db(request)).context(partner=partner, date=date, screen=screen)
+    return await _copilot_context(
+        CopilotContextService(_get_db(request)),
+        partner=partner,
+        date=date,
+        screen=screen,
+    )
 
 
 @router.get("/context/file/{file_id}")
@@ -69,7 +101,12 @@ async def get_file_context(
     partner: str = Query(...),
     screen: Optional[str] = Query(default=None),
 ):
-    return await CopilotContextService(_get_db(request)).context(partner=partner, file_id=file_id, screen=screen)
+    return await _copilot_context(
+        CopilotContextService(_get_db(request)),
+        partner=partner,
+        file_id=file_id,
+        screen=screen,
+    )
 
 
 @router.post("/actions/{action_key}")
@@ -83,7 +120,8 @@ async def execute_copilot_action(
         raise HTTPException(status_code=400, detail="Partner is required for Copilot actions.")
 
     service = CopilotContextService(_get_db(request))
-    resolution = await service.resolve(
+    resolution = await _copilot_resolution(
+        service,
         partner=partner,
         date=payload.date,
         file_id=payload.file_id,
@@ -118,7 +156,12 @@ async def execute_copilot_action(
             review_item_id,
             ReviewDecisionPayload(reviewed_by=payload.reviewed_by, scopeType=payload.scope_type),
         )
-        context = await service.context(partner=partner, date=payload.date, file_id=payload.file_id)
+        context = await _copilot_context(
+            service,
+            partner=partner,
+            date=payload.date,
+            file_id=payload.file_id,
+        )
         return {"ok": True, "result": result, "context": context}
 
     if action_key == "approve_activate_next_runtime":
@@ -137,7 +180,12 @@ async def execute_copilot_action(
             )
         else:
             raise HTTPException(status_code=400, detail="No proposal is available for this action.")
-        context = await service.context(partner=partner, date=payload.date, file_id=payload.file_id)
+        context = await _copilot_context(
+            service,
+            partner=partner,
+            date=payload.date,
+            file_id=payload.file_id,
+        )
         return {"ok": True, "result": result, "context": context}
 
     if action_key == "reject_proposal":
@@ -156,7 +204,12 @@ async def execute_copilot_action(
             )
         else:
             raise HTTPException(status_code=400, detail="No proposal is available for this action.")
-        context = await service.context(partner=partner, date=payload.date, file_id=payload.file_id)
+        context = await _copilot_context(
+            service,
+            partner=partner,
+            date=payload.date,
+            file_id=payload.file_id,
+        )
         return {"ok": True, "result": result, "context": context}
 
     raise HTTPException(status_code=404, detail=f"Unsupported Copilot action: {action_key}")

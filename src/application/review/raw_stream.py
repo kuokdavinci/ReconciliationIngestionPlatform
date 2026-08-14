@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import tempfile
+from collections.abc import AsyncIterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Iterator
 
+from src.domain.mapping.models import MappingConfig
 from src.domain.review.models import ReviewPacket
 from src.infrastructure.ingestion.raw_page_repository import RawIngestionPageRepository
 from src.readers import create_reader
@@ -26,7 +27,10 @@ def _iter_page_records(path: Path, start_row: int) -> Iterator[Any]:
     if path.suffix.lower() == ".json":
         yield from _iter_json_records(path)
         return
-    reader_config = SimpleNamespace(start_row=start_row, sheet_name=None)
+    reader_config = MappingConfig.model_construct(
+        start_row=start_row,
+        sheet_name=None,
+    )
     with create_reader(path, reader_config) as reader:
         yield from reader.iter_rows()
 
@@ -128,9 +132,12 @@ async def read_review_stream_page(
             "No staged raw pages found for rawStageKey; file-level packets must omit rawStageKey."
         )
     rows: list[dict[str, Any]] = []
-    page_counts = [getattr(page, "item_count", None) for page in pages]
+    page_counts: list[int | None] = [
+        count if isinstance(count := getattr(page, "item_count", None), int) else None
+        for page in pages
+    ]
     known_total = (
-        sum(max(int(count), 0) for count in page_counts)
+        sum(max(count, 0) for count in page_counts if count is not None)
         if page_counts and all(count is not None for count in page_counts)
         else None
     )
@@ -161,7 +168,7 @@ async def iter_review_stream_records(
     packet: ReviewPacket,
     pages: list[Any] | None = None,
     raw_repo: RawIngestionPageRepository | None = None,
-):
+) -> AsyncIterator[dict[str, Any]]:
     """Yield every raw record in deterministic stream order."""
 
     if not packet.raw_stage_key:

@@ -135,9 +135,10 @@ async def mark_packet(
     packet.decision_mode = decision_mode
     packet.reviewed_at = now
     packet.reviewed_by = reviewed_by
+    reconciliation_date = getattr(packet, "reconciliation_date", None)
     audit_date = (
-        business_date(packet.reconciliation_date).isoformat()
-        if getattr(packet, "reconciliation_date", None)
+        business_date(reconciliation_date).isoformat()
+        if isinstance(reconciliation_date, datetime)
         else None
     )
     await record_audit_event(
@@ -283,6 +284,10 @@ async def approve_packet_mapping_and_reprocess(
             if settings.automation_orchestrator != "airflow":
                 raise ReviewUnavailableError(
                     "Backfill approval requires the Airflow orchestrator."
+                )
+            if not settings.airflow_username or not settings.airflow_password:
+                raise ReviewUnavailableError(
+                    "Airflow credentials are required for backfill approval."
                 )
             gateway = AirflowWorkflowGateway(
                 base_url=settings.airflow_base_url,
@@ -512,7 +517,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         fast_mode=True,
     )
     ingestion_result = await pipeline.process_file(
-        file_path=resolved_source_path,
+        file_path=str(resolved_source_path),
         partner=config.partner,
         workflow_type=config.workflow_type,
         file_type=config.file_type,
@@ -529,18 +534,17 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         },
         enable_config_health_check=False,
     )
-    processing_status = getattr(
-        ingestion_result.file_record.processing_status,
-        "value",
-        ingestion_result.file_record.processing_status,
-    )
+    file_record = ingestion_result.file_record
+    if file_record is None:
+        raise RuntimeError("Ingestion did not return a source file record.")
+    processing_status = getattr(file_record.processing_status, "value", file_record.processing_status)
     if processing_status == ProcessingStatus.COMPLETED.value:
         await _rebind_replacement_transactions(
             db=db,
             packet=packet,
             config=config,
             ingestion_result=ingestion_result,
-            source_file_id=str(ingestion_result.file_record.id),
+            source_file_id=str(file_record.id),
         )
     result = {
         "ok": processing_status == ProcessingStatus.COMPLETED.value,
@@ -548,7 +552,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         "partner": config.partner,
         "date": business_date(source_file.reconciliation_date).isoformat(),
         "processingStatus": processing_status,
-        "fileId": str(ingestion_result.file_record.id),
+        "fileId": str(file_record.id),
         "stats": {
             "totalRows": ingestion_result.stats.total_rows,
             "successRows": ingestion_result.stats.success_rows,
@@ -563,7 +567,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
             runtime_run_id,
             status=PartnerRuntimeRunStatus.FAILED,
             message="Ingestion failed after approval.",
-            source_file_id=str(ingestion_result.file_record.id),
+            source_file_id=str(file_record.id),
             stats=result["stats"],
             finished_at=datetime.now(timezone.utc),
         )
@@ -574,7 +578,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
             stage=PostApprovalRunStage.INGESTION,
             message="Ingestion failed after approval.",
             finished_at=datetime.now(timezone.utc),
-            output_file_id=str(ingestion_result.file_record.id),
+            output_file_id=str(file_record.id),
             stats=result["stats"],
             errors=ingestion_result.errors,
         )
@@ -582,7 +586,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
 
     if packet.scope_type:
         await file_repo.update_one(
-            {"_id": str(ingestion_result.file_record.id)},
+            {"_id": str(file_record.id)},
             {"scopeType": packet.scope_type},
         )
 
@@ -592,7 +596,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         status=PostApprovalRunStatus.RECONCILING,
         stage=PostApprovalRunStage.RECONCILIATION,
         message="Reconciling ingested partner rows against internal transactions.",
-        output_file_id=str(ingestion_result.file_record.id),
+        output_file_id=str(file_record.id),
         stats=result["stats"],
         errors=ingestion_result.errors,
     )
@@ -601,7 +605,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         runtime_run_id,
         status=PartnerRuntimeRunStatus.RECONCILING,
         message="Reconciling ingested partner rows against internal transactions.",
-        source_file_id=str(ingestion_result.file_record.id),
+        source_file_id=str(file_record.id),
         stats=result["stats"],
     )
 
@@ -610,7 +614,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         ReconciliationCommand(
             partner=config.partner,
             reconciliation_date=recon_date,
-            source_file_id=str(ingestion_result.file_record.id),
+            source_file_id=str(file_record.id),
             reconciliation_run_id=runtime_run_id,
             mapping_version=getattr(config, "config_version", None) or str(config.id),
         )
@@ -621,7 +625,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         run_id,
         stage=PostApprovalRunStage.CACHE_INVALIDATION,
         message="Invalidating insight cache after reconciliation.",
-        output_file_id=str(ingestion_result.file_record.id),
+        output_file_id=str(file_record.id),
         reconciliation_count=len(recon_results),
         stats={**result["stats"], "resultCount": len(recon_results), "reconciliationCount": len(recon_results)},
     )
@@ -644,7 +648,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         stage=PostApprovalRunStage.CACHE_INVALIDATION,
         message="Post-approval processing completed successfully.",
         finished_at=datetime.now(timezone.utc),
-        output_file_id=str(ingestion_result.file_record.id),
+        output_file_id=str(file_record.id),
         reconciliation_count=len(recon_results),
         stats={**result["stats"], "resultCount": len(recon_results), "reconciliationCount": len(recon_results)},
         errors=ingestion_result.errors,
@@ -654,7 +658,7 @@ async def reprocess_and_reconcile(db, packet, config, run_id: str) -> dict | Non
         runtime_run_id,
         status=PartnerRuntimeRunStatus.COMPLETED,
         message="Reconciliation completed successfully.",
-        source_file_id=str(ingestion_result.file_record.id),
+        source_file_id=str(file_record.id),
         stats={"resultCount": len(recon_results), **result["stats"]},
         reconciliation_count=len(recon_results),
         finished_at=datetime.now(timezone.utc),
@@ -841,6 +845,8 @@ async def _reprocess_staged_pages(
                 "errors": errors,
             }
 
+        if file_record is None:
+            raise RuntimeError("Ingestion did not return a source file record.")
         page_file_id = str(file_record.id)
         if logical_source_file_id is None:
             logical_source_file_id = page_file_id

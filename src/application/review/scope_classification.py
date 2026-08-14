@@ -9,7 +9,7 @@ import inspect
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 from uuid import UUID
 
@@ -155,7 +155,7 @@ def _scope_mapping_columns(config: object, structure_signature: dict | None = No
 
 
 def _extract_scope_keys(
-    rows: object,
+    rows: Iterable[Any],
     config: object,
     structure_signature: dict | None = None,
 ) -> tuple[int, set[str]]:

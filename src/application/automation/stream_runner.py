@@ -102,9 +102,10 @@ async def run_source_stream(
             orchestration=orchestration,
         )
     else:
-        run = await PartnerRuntimeRunRepository(db).find_one({"_id": runtime_run_id})
-        if run is None:
+        existing_run = await PartnerRuntimeRunRepository(db).find_one({"_id": runtime_run_id})
+        if existing_run is None:
             raise ValueError(f"Runtime run '{runtime_run_id}' was not found.")
+        run = existing_run
         if orchestration is not None:
             # Build the STARTED event from the current Airflow try number.
             # The persisted runtime still contains the previous try until the
@@ -206,6 +207,8 @@ async def run_source_stream(
     try:
         method_config = config.get_method_config()
         if config.fetch_method == FetchMethod.API and method_config.pagination:
+            if stage_key is None:
+                raise RuntimeError("API source streams require a raw staging key.")
             fetch_metadata: dict[str, Any] = {
                 "singleUnit": True,
                 "configVersion": identity["configVersion"],
@@ -246,7 +249,7 @@ async def run_source_stream(
                             fetch_result.error or failed_unit.error or "-",
                         )
 
-                        async def fetch_failure(_: dict[str, Any]) -> dict[str, Any]:
+                        async def fetch_failure(_: SourceUnitMetadata) -> dict[str, Any]:
                             error_code = failed_unit.error_code or (
                                 "fetch_http_4xx"
                                 if "status 4" in (fetch_result.error or "")
@@ -414,7 +417,7 @@ async def run_source_stream(
                     previous_unit_key = unit.source_unit_key
                     fetch_metadata = {
                         "singleUnit": True,
-                        "page": unit.page + 1,
+                        "page": (unit.page or 0) + 1,
                         "cursor": unit.cursor_after,
                         "configVersion": identity["configVersion"],
                     }
@@ -424,7 +427,7 @@ async def run_source_stream(
                 previous_unit_key = unit.source_unit_key
                 fetch_metadata = {
                     "singleUnit": True,
-                    "page": unit.page + 1,
+                    "page": (unit.page or 0) + 1,
                     "cursor": unit.cursor_after,
                     "configVersion": identity["configVersion"],
                 }

@@ -9,6 +9,7 @@ from typing import Any
 
 from src.application.mapping.errors import MappingValidationError
 from src.core.enums import FileType
+from src.core.types import FieldMapping
 from src.domain.mapping.contract import canonicalize_field_mappings, serialize_field_mappings
 from src.domain.mapping.models import MappingConfig, MappingConfigStatus
 from src.domain.review.models import (
@@ -88,7 +89,7 @@ class MappingProposalService:
             fileType=FileType.SETTLEMENT,
             sheetName=config_dict.get("sheetName") or "Sheet1",
             startRow=config_dict.get("startRow") or 2,
-            fieldMappings=field_mappings,
+            fieldMappings=[FieldMapping.model_validate(item) for item in field_mappings],
             configVersion=version,
             structureSignature=signature.to_dict(),
             status=MappingConfigStatus.PENDING_APPROVAL,

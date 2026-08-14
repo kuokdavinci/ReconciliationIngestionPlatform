@@ -148,6 +148,9 @@ class CopilotContextService:
         )
 
         # Build screen-specific contexts
+        primary_action: dict[str, Any] | None = None
+        secondary_actions: list[dict[str, Any]] = []
+        decision_actions: list[dict[str, Any]] = []
         if screen == "review":
             pending_packet_count = len([p for p in packets if _enum_value(p.status) == ReviewPacketStatus.PENDING.value])
             pending_config_count = len(pending_proposals)

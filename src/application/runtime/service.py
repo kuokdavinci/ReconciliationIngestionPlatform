@@ -45,6 +45,11 @@ async def create_runtime_run(
     orchestration: RuntimeOrchestrationContext | dict[str, Any] | None = None,
 ) -> PartnerRuntimeRun:
     repo = PartnerRuntimeRunRepository(db)
+    orchestration_context = (
+        RuntimeOrchestrationContext.model_validate(orchestration)
+        if orchestration is not None
+        else None
+    )
     run = PartnerRuntimeRun(
         partner=partner,
         date=date,
@@ -56,7 +61,7 @@ async def create_runtime_run(
         fileName=file_name,
         mappingVersion=mapping_version,
         validationState=validation_state,
-        orchestration=orchestration,
+        orchestration=orchestration_context,
     )
     await repo.create(run)
     return run

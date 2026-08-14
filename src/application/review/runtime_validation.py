@@ -164,7 +164,7 @@ async def run_runtime_validation(db, packet, config) -> dict:
         if str(getattr(mapping, "type", "")).upper() != "CONSTANT"
     )
 
-    def _consume_row(row: list, row_number: int) -> None:
+    def _consume_row(row: Any, row_number: int) -> None:
         nonlocal sampled_rows, success_rows, failed_rows, failed_examples, trace_samples
         sampled_rows += 1
         norm_result, field_traces = normalizer.normalize_with_trace(row, row_number)

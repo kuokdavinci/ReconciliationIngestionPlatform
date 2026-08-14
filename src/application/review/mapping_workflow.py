@@ -22,6 +22,7 @@ from src.application.review.errors import (
     ReviewValidationError,
 )
 from src.core.enums import FileType
+from src.core.types import FieldMapping
 from src.domain.mapping.contract import (
     canonicalize_field_mappings,
     serialize_field_mappings,
@@ -230,7 +231,7 @@ class ReviewMappingWorkflow:
                 fileType=file_type,
                 sheetName=sheet_name,
                 startRow=start_row,
-                fieldMappings=field_mappings,
+                fieldMappings=[FieldMapping.model_validate(item) for item in field_mappings],
                 configVersion=(
                     getattr(existing, "config_version", None)
                     if existing is not None
@@ -299,7 +300,7 @@ class ReviewMappingWorkflow:
             fileType=file_type,
             sheetName=sheet_name,
             startRow=start_row,
-            fieldMappings=mappings,
+            fieldMappings=[FieldMapping.model_validate(item) for item in mappings],
             configVersion=getattr(existing, "config_version", None),
             structureSignature=packet.structure_signature
             or getattr(existing, "structure_signature", None),
@@ -534,7 +535,11 @@ class ReviewMappingWorkflow:
 
     @staticmethod
     def _file_type(value: object) -> FileType:
+        if isinstance(value, FileType):
+            return value
+        if not isinstance(value, str):
+            return FileType.SETTLEMENT
         try:
-            return FileType(value or FileType.SETTLEMENT.value)
+            return FileType(value)
         except ValueError:
             return FileType.SETTLEMENT

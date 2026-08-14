@@ -114,7 +114,7 @@ async def finish_source_stream_run(
             str(run.id),
             status=terminal_status,
             message=duplicate_messages.get(
-                result.get("outcome"),
+                str(result.get("outcome") or ""),
                 "Sequential source-unit ingestion completed successfully.",
             ),
             stats=persisted_stats,

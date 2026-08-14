@@ -1,6 +1,7 @@
 """Application use cases for ingesting and reconciling fetched source units."""
 
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any, Optional
 
@@ -117,7 +118,7 @@ def build_source_unit_ingestor(
     mapping_config_version: str | None = None,
     backfill_run_id: str | None = None,
     config_health_check_enabled: bool = True,
-) -> tuple[Any, dict[str, int]]:
+) -> tuple[Callable[[SourceUnitMetadata], Awaitable[dict[str, Any]]], dict[str, int]]:
     stats = {
         "totalRows": 0,
         "successRows": 0,
@@ -132,7 +133,7 @@ def build_source_unit_ingestor(
     )
     config_health_checked = False
 
-    async def ingest_unit(unit: SourceUnitMetadata | dict[str, Any]) -> dict[str, Any]:
+    async def ingest_unit(unit: SourceUnitMetadata) -> dict[str, Any]:
         nonlocal config_health_checked
         unit = SourceUnitMetadata.from_payload(unit)
         file_path = unit.local_path
@@ -168,7 +169,13 @@ def build_source_unit_ingestor(
             ),
             validate_rows=config.validate_rows,
         )
-        if not result or not result.file_record:
+        if not result:
+            return ingestion_error_result(
+                "Ingestion pipeline did not return a file record.",
+                "source_persist_error",
+            )
+        file_record = result.file_record
+        if file_record is None:
             return ingestion_error_result(
                 "Ingestion pipeline did not return a file record.",
                 "source_persist_error",
@@ -192,9 +199,9 @@ def build_source_unit_ingestor(
             config_health_checked = True
 
         processing_status = getattr(
-            result.file_record.processing_status,
+            file_record.processing_status,
             "value",
-            result.file_record.processing_status,
+            file_record.processing_status,
         )
         waiting_for_review = (
             outcome == "WAITING_REVIEW"
@@ -220,7 +227,7 @@ def build_source_unit_ingestor(
             ReconciliationCommand(
                 partner=partner,
                 reconciliation_date=reconciliation_date,
-                source_file_id=str(result.file_record.id),
+                source_file_id=str(file_record.id),
                 reconciliation_run_id=reconciliation_run_id,
             )
         )
@@ -285,11 +292,15 @@ async def run_ingestion(
                 enable_config_health_check=enable_config_health_check,
             )
         )
+        file_record = result.file_record
+        if file_record is None:
+            logger.error("Ingestion completed without a source file record for %s", partner)
+            return None
 
         logger.info(
             "Ingestion completed for %s: status=%s, total=%d, success=%d, failed=%d",
             partner,
-            result.file_record.processing_status,
+            file_record.processing_status,
             result.stats.total_rows,
             result.stats.success_rows,
             result.stats.failed_rows,
@@ -301,7 +312,7 @@ async def run_ingestion(
                 extra={
                     "partner": partner,
                     "file_path": file_path,
-                    "status": result.file_record.processing_status,
+                    "status": file_record.processing_status,
                 },
             )
 

@@ -291,7 +291,7 @@ class AutomationJobQueryService:
                     "FETCH_UNIT_REPLAY": "Fetch unit already processed. Ingestion and reconciliation were skipped safely.",
                     "NO_NEW_FILE": "No new file was found. Ingestion and reconciliation were skipped.",
                     "SAFE_DUPLICATE": "This source file was already processed. The retry was skipped safely.",
-                }.get(duplicate_outcome, "This source file was already processed. The retry was skipped safely.")
+                }.get(str(duplicate_outcome or ""), "This source file was already processed. The retry was skipped safely.")
             elif has_pending_file:
                 status = "PENDING"
                 status_message = "A partner file is available and waiting for reconciliation."

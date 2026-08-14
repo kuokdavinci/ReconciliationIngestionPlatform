@@ -50,7 +50,6 @@ jobs:
           src/fetchers
           src/pipeline
           src/application/automation
-          src/services
           src/models/fetch_config.py
           src/models/indexes.py
           scripts/demo/scenarios

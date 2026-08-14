@@ -95,6 +95,7 @@ async def reprocess_and_reconcile(
     updater: Callable[..., Awaitable[None]] | None = None,
 ) -> dict | None:
     """Compatibility entry point delegating the post-approval lifecycle."""
+    _sync_staged_compatibility_points()
     return await _reconcile_approved_packet(
         db,
         packet,
@@ -108,7 +109,7 @@ async def reprocess_and_reconcile(
         file_repository_factory=ReconciliationFileRepository,
         transaction_repository_factory=DataContainerRepository,
         result_repository_factory=ReconciliationResultRepository,
-        pipeline_builder=_staged.build_ingestion_pipeline,
+        pipeline_builder=build_ingestion_pipeline,
         config_loader_builder=build_config_loader,
         reconciliation_service_builder=build_reconciliation_service,
         replacement_rebinder=_rebind_replacement_transactions,

@@ -1,5 +1,12 @@
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from src.application.review import reprocessing
+from src.application.review.proposal_creation import build_review_packet
+from src.core.enums import FileType
+from src.domain.review.models import ReviewPacketSourceType
 
 ROOT = Path(__file__).resolve().parents[1]
 REVIEW_ROOT = ROOT / "src" / "application" / "review"
@@ -62,3 +69,44 @@ def test_reprocessing_is_a_facade_for_replay_and_post_approval_lifecycle() -> No
     assert "build_reconciliation_service(db" not in source
     assert "async def reprocess_staged_pages" in source
     assert "async def reprocess_and_reconcile" in source
+
+
+def test_review_packet_builder_preserves_source_metadata() -> None:
+    packet = build_review_packet(
+        source_type=ReviewPacketSourceType.SCHEDULER_JOB.value,
+        partner="MOMO",
+        file_name="momo-page-1.json",
+        file_type=FileType.SETTLEMENT,
+        fields={"rawStageKey": "momo:2026-08-14", "sourceFilePath": "/tmp/page.json"},
+    )
+
+    assert packet.file_name == "momo-page-1.json"
+    assert packet.raw_stage_key == "momo:2026-08-14"
+    assert packet.source_file_path == "/tmp/page.json"
+
+
+@pytest.mark.asyncio
+async def test_reprocessing_facade_forwards_legacy_builder_patch_points() -> None:
+    pipeline = object()
+    config_loader = object()
+    reconciliation = object()
+    facade_result = {"ok": True}
+
+    with patch(
+        "src.application.review.reprocessing._reconcile_approved_packet",
+        new=AsyncMock(return_value=facade_result),
+    ) as reconcile:
+        with patch.object(reprocessing, "build_ingestion_pipeline", pipeline), patch.object(
+            reprocessing, "build_config_loader", config_loader
+        ), patch.object(reprocessing, "build_reconciliation_service", reconciliation):
+            result = await reprocessing.reprocess_and_reconcile(
+                object(),
+                object(),
+                object(),
+                "run-001",
+            )
+
+    assert result == facade_result
+    assert reconcile.await_args.kwargs["pipeline_builder"] is pipeline
+    assert reconcile.await_args.kwargs["config_loader_builder"] is config_loader
+    assert reconcile.await_args.kwargs["reconciliation_service_builder"] is reconciliation

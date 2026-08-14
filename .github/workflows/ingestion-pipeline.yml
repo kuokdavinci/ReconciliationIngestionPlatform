@@ -50,8 +50,8 @@ jobs:
           src/fetchers
           src/pipeline
           src/application/automation
-          src/models/fetch_config.py
-          src/models/indexes.py
+          src/domain/fetch_config/models.py
+          src/infrastructure/persistence/mongo_indexes.py
           scripts/demo/scenarios
 
       - name: Run ingestion pipeline tests

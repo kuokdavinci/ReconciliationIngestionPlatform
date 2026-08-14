@@ -12,12 +12,12 @@ from src.application.automation.contracts import (
 )
 from src.application.automation.stream_identity import stream_identity
 from src.application.automation.stream_runner import run_source_stream
+from src.config.settings import settings
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from src.domain.runtime.models import PartnerRuntimeRunStatus
 from src.application.runtime.service import update_runtime_run
 
-BUSINESS_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 StreamRunner = Callable[..., Awaitable[dict[str, Any]]]
 
 
@@ -69,7 +69,7 @@ async def execute_stream(
     reconciliation_date = datetime.combine(
         reconciliation_day,
         time.min,
-        tzinfo=BUSINESS_TIMEZONE,
+        tzinfo=ZoneInfo(settings.business_timezone),
     )
     raw_result = await selected_runner(
         config=config,

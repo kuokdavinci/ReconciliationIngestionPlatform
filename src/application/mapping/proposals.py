@@ -8,14 +8,16 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from src.application.mapping.errors import MappingValidationError
+from src.application.review.proposal_creation import (
+    build_source_file_action,
+    build_source_file_review_packet,
+)
 from src.core.enums import FileType
 from src.core.types import FieldMapping
 from src.domain.mapping.contract import canonicalize_field_mappings, serialize_field_mappings
 from src.domain.mapping.models import MappingConfig, MappingConfigStatus
 from src.domain.review.models import (
     CopilotAction,
-    CopilotActionStatus,
-    CopilotActionType,
     ReviewPacket,
     ReviewPacketSourceType,
 )
@@ -102,23 +104,14 @@ class MappingProposalService:
         )
         await self.mapping_repo.create(proposal)
 
-        action = CopilotAction(
-            type=CopilotActionType.MAPPING_PROPOSAL,
-            status=CopilotActionStatus.PENDING_APPROVAL,
+        action = build_source_file_action(
             partner=command.partner,
-            workflowType="UPC",
-            fileType=FileType.SETTLEMENT,
-            draftMappingId=str(proposal.id),
-            payload={
-                "proposedMappings": field_mappings,
-                "sheetName": proposal.sheet_name,
-                "startRow": proposal.start_row,
-                "confidence": confidence,
-                "reasoning": reasoning,
-                "headers": signature.headers,
-                "sampleRows": signature.sample_rows[:10],
-            },
-            reason="Generated from source file for review",
+            proposal=proposal,
+            field_mappings=field_mappings,
+            confidence=confidence,
+            reasoning=reasoning,
+            headers=signature.headers,
+            sample_rows=signature.sample_rows,
         )
         await self.action_repo.create(action)
 
@@ -168,46 +161,18 @@ class MappingProposalService:
             if active_runtime
             else "No approved runtime config exists, so this draft must be reviewed before ingestion can continue."
         )
-        packet = ReviewPacket(
-            sourceType=ReviewPacketSourceType(command.source_type),
-            partner=command.partner,
-            fileName=command.source_file_path.name,
-            fileTypeDetected=FileType.SETTLEMENT.value,
-            structureSignature=proposal.structure_signature,
-            activeRuntimeConfigId=str(active_runtime.id) if active_runtime else None,
-            draftMappingId=str(proposal.id),
-            targetActionId=str(action.id),
-            sourceFileId=str(command.source_file.id) if command.source_file is not None else None,
-            sourceFilePath=str(command.source_file_path),
-            scopeType=scope_meta["scopeType"],
-            scopeConfidence=scope_meta["scopeConfidence"],
-            scopeReason=scope_meta["scopeReason"],
-            scopeSignals=scope_meta["scopeSignals"],
-            recommendedAction={
-                "actionType": recommended_action_type,
-                "reason": recommended_reason,
-                "confidence": confidence,
-            },
-            parseStrategy={
-                "sheetName": proposal.sheet_name,
-                "startRow": proposal.start_row,
-                "fieldMappingCount": len(field_mappings),
-                "strategy": "AI inferred spreadsheet draft mapping",
-            },
-            validationGates=validation_gates,
-            samplePreview=[
-                {"rowIndex": index + 1, "values": row}
-                for index, row in enumerate(signature.sample_rows[:5])
-            ],
-            riskSummary={
-                "severity": "high" if not active_runtime else "medium",
-                "summary": recommended_reason,
-            },
-            runtimeDecisionHint=(
-                "KEEP_CURRENT_RUNTIME_UNTIL_APPROVED"
-                if active_runtime
-                else "BLOCK_UNTIL_APPROVED"
-            ),
+        packet = build_source_file_review_packet(
+            command=command,
+            proposal=proposal,
+            action=action,
+            active_runtime=active_runtime,
+            scope_meta=scope_meta,
+            field_mappings=field_mappings,
+            signature=signature,
+            confidence=confidence,
+            recommended_action_type=recommended_action_type,
+            recommended_reason=recommended_reason,
+            validation_gates=validation_gates,
         )
         await self.review_packet_repo.create(packet)
 

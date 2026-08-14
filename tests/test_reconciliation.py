@@ -1,5 +1,6 @@
 """Unit and integration tests for the Reconciliation Engine."""
 
+import asyncio
 import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 from src.core.enums import ReconciliationStatus, TransactionStatus
 from src.domain.internal_transaction.models import InternalTransaction
 from src.domain.partner_transaction.models import DataContainer, PartnerData
+from src.reconciliation.document_executor import DocumentReconciliationExecutor
 from src.reconciliation.engine import ReconciliationEngine
 from src.reconciliation.keys import normalize_reconciliation_key
 
@@ -24,6 +26,76 @@ def test_reconciliation_accepts_explicit_document_backend(mock_db):
     engine = ReconciliationEngine(mock_db, backend="document")
 
     assert engine._backend == "document"
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_reraises_document_write_failure(mock_db):
+    engine = ReconciliationEngine(
+        mock_db,
+        backend="document",
+        partner_batch_size=1,
+        result_batch_size=1,
+        write_workers=1,
+    )
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    partner_records = [
+        DataContainer(
+            identify="MOMO",
+            workflowType="UPC",
+            reconciliationDate=recon_date,
+            sourceFileId="00000000-0000-0000-0000-000000000001",
+            partnerData=PartnerData(
+                _id=f"txn_{index}",
+                trace=f"trace_{index}",
+                status="Thành công",
+                amount=Decimal("150000"),
+                currency="VND",
+            ),
+        )
+        for index in range(2)
+    ]
+    engine._data_repo.find_many = AsyncMock(return_value=partner_records)
+    engine._internal_repo.find_many = AsyncMock(return_value=[])
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
+
+    write_calls = 0
+
+    async def write_batch(documents, **_kwargs):
+        nonlocal write_calls
+        write_calls += 1
+        await asyncio.sleep(0)
+        if write_calls == 1:
+            raise RuntimeError("document write failed")
+        return len(documents)
+
+    engine._result_repo.insert_many = AsyncMock(side_effect=write_batch)
+
+    with pytest.raises(RuntimeError, match="document write failed"):
+        await engine.reconcile("MOMO", recon_date)
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_does_not_delete_existing_results_for_empty_input(mock_db):
+    engine = ReconciliationEngine(mock_db, backend="document")
+    recon_date = datetime(2024, 7, 7, tzinfo=timezone.utc)
+    engine._data_repo.find_many = AsyncMock(return_value=[])
+    engine._internal_repo.find_many = AsyncMock(return_value=[])
+    engine._result_repo.delete_by_partner_and_date = AsyncMock()
+    engine._result_repo.insert_many = AsyncMock()
+
+    results = await engine.reconcile("MOMO", recon_date)
+
+    assert results == []
+    engine._result_repo.delete_by_partner_and_date.assert_not_awaited()
+    engine._result_repo.insert_many.assert_not_awaited()
+
+
+def test_document_executor_accepts_cursor_like_anext():
+    class CursorLike:
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    assert DocumentReconciliationExecutor._is_async_iterable(CursorLike())
 
 
 @pytest.mark.asyncio
@@ -316,7 +388,7 @@ async def test_reconciliation_ignores_pending_internal_for_missing_partner(mock_
     results = await engine.reconcile(partner, recon_date)
 
     assert results == []
-    engine._result_repo.delete_by_partner_and_date.assert_called_once()
+    engine._result_repo.delete_by_partner_and_date.assert_not_awaited()
     engine._result_repo.insert_many.assert_not_called()
 
 

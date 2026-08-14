@@ -7,9 +7,15 @@ algorithm's public API.
 """
 
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, TypeAlias
 
 from src.core.enums import ReconciliationScopeType
+from src.domain.reconciliation.models import ReconciliationResult
+
+
+ReconciliationBackend: TypeAlias = Literal["postgres", "document"]
+ReconciliationResultDocument: TypeAlias = dict[str, object]
+ReconciliationOutput: TypeAlias = ReconciliationResult | ReconciliationResultDocument
 
 
 class PartnerTransactionReader(Protocol):
@@ -61,7 +67,7 @@ class ReconciliationExecutor(Protocol):
         reconciliation_run_id: str | None = None,
         mapping_version: str | None = None,
         started_at: float | None = None,
-    ) -> list[Any]:
+    ) -> list[ReconciliationOutput]:
         """Execute reconciliation for the supplied business-day scope."""
 
 

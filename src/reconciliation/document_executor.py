@@ -14,9 +14,11 @@ from src.domain.reconciliation.models import ReconciliationResult
 from src.domain.reconciliation.ports import (
     InternalTransactionReader,
     PartnerTransactionReader,
+    ReconciliationOutput,
     ReconciliationResultWriter,
+    ReconciliationResultDocument,
 )
-from src.logging import get_structured_logger
+from src.logging import StructuredLogger, get_structured_logger
 
 
 class _InternalDocumentRepository(Protocol):
@@ -59,7 +61,7 @@ class DocumentReconciliationExecutor:
         result_batch_size: int = 100000,
         write_workers: int = 1,
         ordered_insert: bool = True,
-        logger: Any | None = None,
+        logger: StructuredLogger | None = None,
     ) -> None:
         self._data_repo = data_repo
         self._internal_repo = internal_repo
@@ -69,11 +71,15 @@ class DocumentReconciliationExecutor:
         self._result_batch_size = result_batch_size
         self._write_workers = write_workers
         self._ordered_insert = ordered_insert
-        self._logger = logger or get_structured_logger()
+        self._logger: StructuredLogger = logger or get_structured_logger()
 
     @staticmethod
     def _is_async_iterable(value: Any) -> bool:
-        return isinstance(value, AsyncIterator) or inspect.isasyncgen(value)
+        return (
+            isinstance(value, AsyncIterator)
+            or inspect.isasyncgen(value)
+            or hasattr(value, "__anext__")
+        )
 
     def _normalize_status(self, status_str: str) -> TransactionStatus:
         status_lower = str(status_str).strip().lower()
@@ -248,11 +254,11 @@ class DocumentReconciliationExecutor:
         mappingVersion: Optional[str] = None,
         partnerRecordId: Optional[str] = None,
         internalRecordId: Optional[str] = None,
-    ) -> ReconciliationResult | dict[str, Any]:
+    ) -> ReconciliationOutput:
         if self.fast_mode:
             from datetime import timezone
 
-            return {
+            document: ReconciliationResultDocument = {
                 "_id": id,
                 "partner": partner,
                 "date": date,
@@ -275,6 +281,7 @@ class DocumentReconciliationExecutor:
                 "internalRecordId": internalRecordId,
                 "createdAt": datetime.now(timezone.utc),
             }
+            return document
 
         return ReconciliationResult(
             _id=id,
@@ -297,7 +304,7 @@ class DocumentReconciliationExecutor:
 
     @staticmethod
     def _result_partner_key(
-        result: ReconciliationResult | dict[str, Any],
+        result: ReconciliationOutput,
     ) -> str | None:
         if isinstance(result, dict):
             return cast(str | None, result.get("partnerTxnId"))
@@ -315,7 +322,7 @@ class DocumentReconciliationExecutor:
         reconciliation_run_id: str | None = None,
         mapping_version: str | None = None,
         started_at: float | None = None,
-    ) -> list[ReconciliationResult | dict[str, Any]]:
+    ) -> list[ReconciliationOutput]:
         t_start = started_at or time.perf_counter()
         t_scope_start = time.perf_counter()
         partner_query = {
@@ -358,8 +365,8 @@ class DocumentReconciliationExecutor:
         load_internal_candidates_ms = internal_duration * 0.8
         build_lookup_ms = internal_duration * 0.2
 
-        results: list[ReconciliationResult | dict[str, Any]] = []
-        result_buffer: list[ReconciliationResult | dict[str, Any]] = []
+        results: list[ReconciliationOutput] = []
+        result_buffer: list[ReconciliationOutput] = []
         matched_internal_keys: set[str] = set()
         replacement_keys = list(scoped_partner_keys)
         if source_file_id and scope_type in {
@@ -383,37 +390,45 @@ class DocumentReconciliationExecutor:
         else:
             delete_query = {"partner": partner, "date": date_str}
 
-        if hasattr(self._result_repo, "delete_by_partner_and_date"):
-            source_file_id_param = delete_query.get("sourceFileId")
-            partner_txn_ids_param = (
-                delete_query.get("partnerTxnId", {}).get("$in")
-                if isinstance(delete_query.get("partnerTxnId"), dict)
-                else None
-            )
+        cleared_existing = False
 
-            if "$or" in delete_query and isinstance(delete_query["$or"], list):
-                for item in delete_query["$or"]:
-                    if isinstance(item, dict):
-                        if "sourceFileId" in item:
-                            source_file_id_param = item["sourceFileId"]
-                        if "partnerTxnId" in item and isinstance(item["partnerTxnId"], dict):
-                            partner_txn_ids_param = item["partnerTxnId"].get("$in")
+        async def _delete_existing_results() -> None:
+            nonlocal cleared_existing
+            if cleared_existing:
+                return
 
-            kwargs = {}
-            if source_file_id_param:
-                kwargs["source_file_id"] = source_file_id_param
-            if partner_txn_ids_param:
-                kwargs["partner_txn_ids"] = partner_txn_ids_param
-            await self._result_repo.delete_by_partner_and_date(
-                partner,
-                date_str,
-                **kwargs,
-            )
-        elif hasattr(self._result_repo, "collection"):
-            await self._result_repo.collection.delete_many(delete_query)
+            if hasattr(self._result_repo, "delete_by_partner_and_date"):
+                source_file_id_param = delete_query.get("sourceFileId")
+                partner_txn_ids_param = (
+                    delete_query.get("partnerTxnId", {}).get("$in")
+                    if isinstance(delete_query.get("partnerTxnId"), dict)
+                    else None
+                )
+
+                if "$or" in delete_query and isinstance(delete_query["$or"], list):
+                    for item in delete_query["$or"]:
+                        if isinstance(item, dict):
+                            if "sourceFileId" in item:
+                                source_file_id_param = item["sourceFileId"]
+                            if "partnerTxnId" in item and isinstance(item["partnerTxnId"], dict):
+                                partner_txn_ids_param = item["partnerTxnId"].get("$in")
+
+                kwargs = {}
+                if source_file_id_param:
+                    kwargs["source_file_id"] = source_file_id_param
+                if partner_txn_ids_param:
+                    kwargs["partner_txn_ids"] = partner_txn_ids_param
+                await self._result_repo.delete_by_partner_and_date(
+                    partner,
+                    date_str,
+                    **kwargs,
+                )
+            elif hasattr(self._result_repo, "collection"):
+                await self._result_repo.collection.delete_many(delete_query)
+            cleared_existing = True
 
         write_semaphore = asyncio.Semaphore(self._write_workers)
-        write_tasks: list[asyncio.Task] = []
+        write_tasks: list[asyncio.Task[int]] = []
         t_db_start_wall = 0.0
         t_db_end_wall = 0.0
         slowest_batch_ms = 0.0
@@ -440,6 +455,21 @@ class DocumentReconciliationExecutor:
         unmatched_partner_count = 0
         unmatched_internal_count = 0
         db_write_count = 0
+
+        def _record_write_task(batch_to_write: list[ReconciliationOutput]) -> None:
+            nonlocal db_write_count
+            write_tasks.append(asyncio.create_task(_worker_flush(batch_to_write)))
+            db_write_count += 1
+
+        async def _flush_result_buffer() -> None:
+            nonlocal result_buffer
+            if not result_buffer:
+                return
+
+            await _delete_existing_results()
+            results.extend(result_buffer)
+            _record_write_task(result_buffer)
+            result_buffer = []
 
         t_exact = 0.0
         t_mismatch = 0.0
@@ -476,12 +506,7 @@ class DocumentReconciliationExecutor:
                         )
                     )
                     if len(result_buffer) >= self._result_batch_size:
-                        results.extend(result_buffer)
-                        task = asyncio.create_task(_worker_flush(result_buffer))
-                        write_tasks.append(task)
-                        db_write_count += 1
-                        result_buffer = []
-                        write_tasks = [task for task in write_tasks if not task.done()]
+                        await _flush_result_buffer()
                     continue
 
                 partner_txn_id = self._resolve_partner_txn_id(partner_record)
@@ -576,12 +601,7 @@ class DocumentReconciliationExecutor:
                     )
 
                 if len(result_buffer) >= self._result_batch_size:
-                    results.extend(result_buffer)
-                    task = asyncio.create_task(_worker_flush(result_buffer))
-                    write_tasks.append(task)
-                    db_write_count += 1
-                    result_buffer = []
-                    write_tasks = [task for task in write_tasks if not task.done()]
+                    await _flush_result_buffer()
 
         t_unmatched_start = time.perf_counter()
         for partner_txn_id, internal_record in internal_by_key.items():
@@ -605,20 +625,10 @@ class DocumentReconciliationExecutor:
                     )
                 )
                 if len(result_buffer) >= self._result_batch_size:
-                    results.extend(result_buffer)
-                    task = asyncio.create_task(_worker_flush(result_buffer))
-                    write_tasks.append(task)
-                    db_write_count += 1
-                    result_buffer = []
-                    write_tasks = [task for task in write_tasks if not task.done()]
+                    await _flush_result_buffer()
         t_unmatched += (time.perf_counter() - t_unmatched_start) * 1000
 
-        if result_buffer:
-            results.extend(result_buffer)
-            task = asyncio.create_task(_worker_flush(result_buffer))
-            write_tasks.append(task)
-            db_write_count += 1
-            result_buffer = []
+        await _flush_result_buffer()
 
         if write_tasks:
             await asyncio.gather(*write_tasks)

@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from src.core.enums import ReconciliationScopeType
-from src.domain.reconciliation.models import ReconciliationResult
+from src.domain.reconciliation.ports import ReconciliationOutput
 from src.infrastructure.postgres.reconciliation_result_repository import (
     row_to_reconciliation_result,
 )
@@ -32,7 +32,7 @@ class PostgresReconciliationExecutor:
         reconciliation_run_id: str | None = None,
         mapping_version: str | None = None,
         started_at: float | None = None,
-    ) -> list[ReconciliationResult]:
+    ) -> list[ReconciliationOutput]:
         """Execute the unchanged SQL reconciliation transaction and map rows."""
         from sqlalchemy import and_, select, text
         from sqlalchemy.ext.asyncio import AsyncSession
@@ -169,7 +169,8 @@ class PostgresReconciliationExecutor:
             stmt = select(ReconciliationResultTable).where(and_(*conditions))
             result = await session.execute(stmt)
             rows = result.scalars().all()
-            results = [row_to_reconciliation_result(row) for row in rows]
+            results: list[ReconciliationOutput] = []
+            results.extend(row_to_reconciliation_result(row) for row in rows)
 
         duration_ms = self._duration_ms(started_at)
         self._logger.get_logger().info(

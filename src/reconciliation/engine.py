@@ -2,16 +2,21 @@
 
 import time
 from datetime import datetime
-from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from src.config.settings import settings
 from src.core.business_day import business_date, utc_business_day_bounds
 from src.core.enums import ReconciliationScopeType
-from src.domain.reconciliation.models import ReconciliationResult
-from src.domain.reconciliation.ports import ReconciliationExecutor
-from src.logging import get_structured_logger
+from src.domain.reconciliation.ports import (
+    InternalTransactionReader,
+    PartnerTransactionReader,
+    ReconciliationBackend,
+    ReconciliationExecutor,
+    ReconciliationOutput,
+    ReconciliationResultWriter,
+)
+from src.logging import StructuredLogger, get_structured_logger
 from src.reconciliation.document_executor import DocumentReconciliationExecutor
 from src.reconciliation.postgres_executor import PostgresReconciliationExecutor
 
@@ -30,11 +35,11 @@ class ReconciliationEngine:
         write_workers: int | None = None,
         ordered_insert: bool | None = None,
         partner_batch_size: int | None = None,
-        data_repo: Any | None = None,
-        internal_repo: Any | None = None,
-        result_repo: Any | None = None,
+        data_repo: PartnerTransactionReader | None = None,
+        internal_repo: InternalTransactionReader | None = None,
+        result_repo: ReconciliationResultWriter | None = None,
         *,
-        backend: str = "postgres",
+        backend: ReconciliationBackend = "postgres",
         executor: ReconciliationExecutor | None = None,
     ) -> None:
         """Initialize the engine with repositories and an explicit executor."""
@@ -59,7 +64,7 @@ class ReconciliationEngine:
         self._data_repo = data_repo
         self._internal_repo = internal_repo
         self._result_repo = result_repo
-        self._logger = get_structured_logger()
+        self._logger: StructuredLogger = get_structured_logger()
         self.fast_mode = fast_mode
         self._partner_batch_size = (
             partner_batch_size
@@ -84,7 +89,7 @@ class ReconciliationEngine:
         self._backend = backend
         self._executor = executor or self._build_executor(backend)
 
-    def _build_executor(self, backend: str) -> ReconciliationExecutor:
+    def _build_executor(self, backend: ReconciliationBackend) -> ReconciliationExecutor:
         if backend == "postgres":
             return PostgresReconciliationExecutor(
                 result_repo=self._result_repo,
@@ -116,7 +121,7 @@ class ReconciliationEngine:
         source_file_id: str | None = None,
         reconciliation_run_id: str | None = None,
         mapping_version: str | None = None,
-    ) -> list[ReconciliationResult]:
+    ) -> list[ReconciliationOutput]:
         """Execute reconciliation matching for a partner and business date."""
         t_start = time.perf_counter()
         self._logger.get_logger().info(

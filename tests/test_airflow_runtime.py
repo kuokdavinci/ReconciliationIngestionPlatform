@@ -32,6 +32,14 @@ def test_business_date_uses_ho_chi_minh_timezone() -> None:
     assert business_date(interval_end).isoformat() == "2026-08-09"
 
 
+def test_business_date_uses_configured_core_timezone(monkeypatch) -> None:
+    from src.config.settings import settings
+
+    monkeypatch.setattr(settings, "business_timezone", "UTC")
+
+    assert business_date(datetime(2026, 8, 8, 17, 0, tzinfo=UTC)) == date(2026, 8, 8)
+
+
 def test_airflow_schedule_can_be_disabled_for_manual_only_pilot() -> None:
     assert resolve_schedule("none") is None
     assert resolve_schedule("  NULL  ") is None

@@ -22,3 +22,10 @@
 - Review packet/action aliases and API response shapes are unchanged.
 - Reprocessing callers continue to import the public facade and retain their injectable repository/builder patch points.
 - No schema, API, domain, or infrastructure adapter was removed.
+
+## Final verification
+
+- Follow-up commit `0f579f0` centralizes the mapping action builder for upload and scheduled proposals and fixes the staged-stream packet compatibility path.
+- Final focused suite: `82 passed in 0.73s`.
+- Final focused Ruff: pass.
+- Final focused mypy: `Success: no issues found in 6 source files`.

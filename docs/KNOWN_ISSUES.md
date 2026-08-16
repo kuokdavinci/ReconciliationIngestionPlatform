@@ -15,13 +15,20 @@
 - `AIRFLOW_TASK_RETRIES=0` để recovery do operator thực hiện và giữ checkpoint semantics rõ ràng.
 - Live health, DAG import, page failure/resume, same-DAG-run retry và ordered backfill cần evidence từ môi trường Docker thật; unit/architecture tests không thay thế evidence này.
 - Không bật thêm scheduler owner cho cùng stream. Rollback pilot là pause DAG và rollback application artifact.
-- Sprint 2.5 chưa đạt đủ acceptance: còn mở FileDrop/SFTP recovery ordering, bounded retry matrix, `BLOCKED`/resolve/`WAITING_REVIEW` state semantics, scheduled-checkpoint isolation khi backfill và rollback per partner không reset dữ liệu.
-- Recovery hardening còn pending live rerun cho approved API mapping và live Airflow service-health evidence.
+- Sprint 2.5 còn 5 business-acceptance mục partial/pending: multi-fingerprint
+  FileDrop/SFTP recovery ordering, full bounded retry matrix,
+  `BLOCKED`/resolve/skip/`WAITING_REVIEW` live state semantics, concurrent
+  scheduled-checkpoint isolation khi backfill và rollback per partner không
+  reset dữ liệu. Contract tests và current-image smoke evidence đã được ghi ở
+  `docs/phase-2/sprint-2.5-airflow-migration.md`.
+- Recovery hardening đã có live ViettelPay retry/recovery và current-image VNPAY
+  approved-mapping backfill smoke evidence; full FileDrop/SFTP, retry/state,
+  concurrent isolation và production rollback evidence vẫn mở.
 
 ## CI và tài liệu
 
 - Codegraph hiện không có `src/scheduler/`, `src/services/` hoặc `frontend/`; một số historical plan/report và workflow cũ còn nhắc tên legacy này. Khi chỉnh CI tiếp theo, cần dọn các path legacy trong `.github/workflows/ingestion-pipeline.yml`.
-- `docs/phase-2/sprint-2.6-recovery-hardening.md` giữ tên file để bảo toàn link lịch sử, nhưng nội dung đã được hợp nhất vào Sprint 2.5 và không phải sprint độc lập.
+- Nội dung recovery hardening đã được hợp nhất vào `docs/phase-2/sprint-2.5-airflow-migration.md`; Sprint 2.6 không còn là sprint độc lập.
 - Sau thay đổi cấu trúc, chạy `codegraph sync .` và cập nhật `README.md`, `docs/INDEX.md`, architecture/module/CI docs nếu cần.
 
 ## Test dependencies

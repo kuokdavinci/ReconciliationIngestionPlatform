@@ -3,7 +3,7 @@
 	momo-e2e-phase2-file momo-e2e-help momo-e2e-reset momo-e2e-phase2 momo-e2e-phase2-full \
 	momo-e2e-missing-partner-demo momo-sprint6-setup momo-sprint6-wave2 \
 	zalopay-e2e-reset viettelpay-sprint2-reset viettelpay-sprint2-phase2 viettelpay-sprint2-eval \
-	vnpay-backfill-reset
+	vnpay-backfill-reset api-quick-build
 
 # ── Test ──────────────────────────────────────────────────────────
 test:
@@ -64,6 +64,12 @@ momo-e2e-job:
 
 momo-e2e-rebuild:
 	docker compose up -d --build api airflow-api-server airflow-scheduler airflow-dag-processor
+
+# ── Fast API image rebuild ───────────────────────────────────────
+# Rebuild and recreate only the API container so UI checks use the current source image.
+api-quick-build:
+	docker compose up -d --build --force-recreate --no-deps api
+	@docker inspect reconciliation-api --format='api image={{.Image}} created={{.Created}}'
 
 momo-e2e-phase2-file:
 	python -c 'import openpyxl, datetime; date_str = datetime.datetime.now().strftime("%Y-%m-%d"); wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Sheet1"; [ws.append([]) for _ in range(6)]; headers = [""] * 30; headers[0], headers[1], headers[4], headers[7], headers[10], headers[17] = "STT", "msTransId", "msTotalAmount", "msNgayHoanThanh", "msMaHDon", "msTrangThaiGd"; ws.append(headers); [ws.append([(str(i + 1) if c == 0 else (f"MOMO_TXN_91{i:02d}" if c in (1, 10) else (str(100000 + i * 5000) if c == 4 else (f"{date_str} 12:00:00" if c == 7 else ("Thành công" if c == 17 else ""))))) for c in range(30)]) for i in range(20)]; filename = f"sftp_data/settlement_MOMO_{date_str.replace(\"-\", \"\")}.xlsx"; wb.save(filename); print(f"Generated Phase 2 Excel sheet: {filename}")'

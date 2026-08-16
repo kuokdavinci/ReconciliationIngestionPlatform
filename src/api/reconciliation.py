@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from functools import partial
 from types import SimpleNamespace
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -9,6 +10,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
+from src.api.dependencies import get_request_db
+from src.api.query_validation import validate_date, validate_partner
 from src.application.reconciliation.manual_runs import (
     ManualReconciliationService,
     QueueManualReconciliationCommand,
@@ -65,24 +68,8 @@ def _track_background_task(request: Request, task: asyncio.Task) -> None:
     track_background_task(request.app, task)
 
 
-def _validate_date(date_str: Optional[str]) -> str:
-    if date_str is None:
-        raise HTTPException(
-            status_code=400, detail="Date parameter is required (YYYY-MM-DD format)."
-        )
-    try:
-        datetime.strptime(date_str, "%Y-%m-%d")
-    except ValueError:
-        raise HTTPException(
-            status_code=400, detail=f"Invalid date format: '{date_str}'. Expected YYYY-MM-DD."
-        )
-    return date_str
-
-
-def _validate_partner(partner: Optional[str]) -> str:
-    if not partner or not partner.strip():
-        raise HTTPException(status_code=400, detail="Partner identifier is required.")
-    return partner.strip()
+_validate_date = validate_date
+_validate_partner = partial(validate_partner, required=True)
 
 
 def _validate_status(status: Optional[str]) -> Optional[str]:
@@ -107,9 +94,7 @@ def _date_bounds(date_str: str) -> tuple[datetime, datetime]:
 
 
 def _get_repo(request: Request) -> ReconciliationResultRepository:
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
+    db = get_request_db(request)
     try:
         return ReconciliationResultRepository(db)
     except Exception as exc:
@@ -118,10 +103,7 @@ def _get_repo(request: Request) -> ReconciliationResultRepository:
 
 
 def _get_review_repo(request: Request) -> ReconciliationReviewRecordRepository:
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
-    return ReconciliationReviewRecordRepository(db)
+    return ReconciliationReviewRecordRepository(get_request_db(request))
 
 
 def _serialize(obj):
@@ -294,21 +276,20 @@ async def add_review_note(request: Request, record_key: str, payload: ReviewNote
         },
         upsert=True,
     )
-    db = getattr(request.app.state, "db", None)
-    if db is not None:
-        await record_audit_event(
-            db,
-            entity_type="DISCREPANCY_REVIEW",
-            entity_id=record_key,
-            action="COMMENTED",
-            metadata={
-                "partner": partner,
-                "date": date,
-                "recordKey": record_key,
-                "note": note,
-                "actor": actor,
-            },
-        )
+    db = get_request_db(request)
+    await record_audit_event(
+        db,
+        entity_type="DISCREPANCY_REVIEW",
+        entity_id=record_key,
+        action="COMMENTED",
+        metadata={
+            "partner": partner,
+            "date": date,
+            "recordKey": record_key,
+            "note": note,
+            "actor": actor,
+        },
+    )
     record = await repo.find_one({"partner": partner, "date": date, "recordKey": record_key})
     return {"ok": True, "record": _serialize_review_record(record)}
 
@@ -351,22 +332,21 @@ async def resolve_review_record(request: Request, record_key: str, payload: Reso
         update_doc,
         upsert=True,
     )
-    db = getattr(request.app.state, "db", None)
-    if db is not None:
-        await record_audit_event(
-            db,
-            entity_type="DISCREPANCY_REVIEW",
-            entity_id=record_key,
-            action="RESOLVED",
-            metadata={
-                "partner": partner,
-                "date": date,
-                "recordKey": record_key,
-                "resolvedStatus": payload.resolved_status,
-                "actor": actor,
-                **({"note": note} if note else {}),
-            },
-        )
+    db = get_request_db(request)
+    await record_audit_event(
+        db,
+        entity_type="DISCREPANCY_REVIEW",
+        entity_id=record_key,
+        action="RESOLVED",
+        metadata={
+            "partner": partner,
+            "date": date,
+            "recordKey": record_key,
+            "resolvedStatus": payload.resolved_status,
+            "actor": actor,
+            **({"note": note} if note else {}),
+        },
+    )
     record = await repo.find_one({"partner": partner, "date": date, "recordKey": record_key})
     return {"ok": True, "record": _serialize_review_record(record)}
 
@@ -475,9 +455,7 @@ async def run_reconciliation_now(request: Request, payload: RunReconciliationPay
         payload_actor=payload.triggered_by,
         payload_field_name="triggeredBy",
     )
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
+    db = get_request_db(request)
 
     context_query = _manual_reconciliation_context_query(db)
     try:
@@ -514,9 +492,7 @@ async def get_reconciliation_run_status(
 ):
     partner = _validate_partner(partner)
     date = _validate_date(date)
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
+    db = get_request_db(request)
     run = await _resolve_display_run(db, partner, date)
     if run is None:
         raise HTTPException(status_code=404, detail="Reconciliation run not found.")
@@ -548,9 +524,7 @@ async def reconciliation_insights(
         )
 
     try:
-        db = getattr(request.app.state, "db", None)
-        if db is None:
-            raise HTTPException(status_code=503, detail="Database connection not available.")
+        db = get_request_db(request)
         repo = ReconciliationResultRepository(db)
 
         from src.analysis.config import AnalysisConfig

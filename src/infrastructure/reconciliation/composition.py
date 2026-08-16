@@ -9,6 +9,7 @@ from src.infrastructure.postgres.internal_transaction_repository import Internal
 from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 from src.domain.reconciliation.ports import ReconciliationRunner
 from src.reconciliation.engine import ReconciliationEngine
+from src.reconciliation.postgres_executor import PostgresReconciliationExecutor
 
 
 def build_reconciliation_service(
@@ -25,11 +26,14 @@ def build_reconciliation_service(
     """
 
     runner_builder = engine_factory or ReconciliationEngine
+    result_repo = ReconciliationResultRepository(db)
     runner = runner_builder(
         db,
         fast_mode=fast_mode,
         data_repo=DataContainerRepository(db),
         internal_repo=InternalTransactionRepository(db),
-        result_repo=ReconciliationResultRepository(db),
+        result_repo=result_repo,
+        backend="postgres",
+        executor=PostgresReconciliationExecutor(result_repo=result_repo),
     )
     return ReconciliationService(runner)

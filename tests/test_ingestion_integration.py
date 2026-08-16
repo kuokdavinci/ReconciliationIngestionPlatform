@@ -35,6 +35,31 @@ from src.domain.partner_transaction.models import DataContainer, PartnerData
 from src.pipeline import IngestionPipeline, IngestionResult
 
 
+@pytest.fixture(autouse=True)
+def mock_scope_classification(monkeypatch):
+    """Keep mocked pipeline integration tests independent of PostgreSQL scope queries."""
+    monkeypatch.setattr(
+        "src.pipeline.file_claim.classify_scope",
+        AsyncMock(
+            return_value={
+                "scopeType": "FULL_SNAPSHOT",
+                "scopeConfidence": 0.82,
+                "scopeReason": [],
+                "scopeSignals": {},
+            }
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def inline_file_hash_executor(monkeypatch):
+    """Keep mocked ingestion tests independent of the host thread executor."""
+    async def run_inline(callback, *args, **kwargs):
+        return callback(*args, **kwargs)
+
+    monkeypatch.setattr("src.pipeline.file_claim.asyncio.to_thread", run_inline)
+
+
 def _build_pipeline(
     mock_db,
     mock_recon_repo,

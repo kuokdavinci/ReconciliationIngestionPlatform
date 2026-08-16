@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
+from src.api.dependencies import get_request_db as _get_db
 from src.application.automation import ExecuteStreamCommand, execute_stream
 from src.application.automation.job_commands import AutomationJobCommandService
 from src.application.automation.job_contracts import (
@@ -192,13 +193,6 @@ def _checkpoint_waiting_for_mapping_review(checkpoint) -> bool:
         or getattr(getattr(unit, "status", None), "value", None) == "WAITING_REVIEW"
         for unit in (checkpoint.unit_timeline or [])
     )
-
-
-def _get_db(request: Request):
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
-    return db
 
 
 def _has_pending_file(

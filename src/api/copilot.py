@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
+from src.api.dependencies import get_request_db as _get_db
 from src.api.mappings import (
     MappingReviewPayload,
     approve_mapping_config_action,
@@ -58,13 +59,6 @@ class CopilotActionPayload(BaseModel):
     file_id: Optional[str] = Field(default=None, alias="fileId")
     reviewed_by: Optional[str] = Field(default=None, alias="reviewedBy")
     scope_type: Optional[str] = Field(default=None, alias="scopeType")
-
-
-def _get_db(request: Request):
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
-    return db
 
 
 def _get_repo(request: Request) -> CopilotActionRepository:

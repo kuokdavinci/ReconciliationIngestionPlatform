@@ -390,6 +390,14 @@ Runtime/log metadata phải có `partner`, `stream_key`, `source_unit_key`, `cur
 
 ## 11. Definition of Done
 
+> **Cập nhật evidence 2026-08-14:** focused contract suite cho Sprint 2/2.5 đã
+> pass `190 tests`; workflow ingestion tương đương CI pass `52/53 tests`
+> (1 skip có điều kiện môi trường); Sprint 1 index/benchmark pass `10 tests`; Ruff và mypy
+> cũng pass. Đây là evidence ở mức implementation contract. Các mục bên dưới
+> chỉ được đánh dấu hoàn thành sau khi chạy đủ scenario S2 và bổ sung live
+> Docker/business-flow evidence; vì vậy không suy diễn từ số test pass để đóng
+> toàn bộ DoD.
+
 - [ ] API pagination/cursor và checkpoint chạy được qua toàn bộ scenario S2-00 đến S2-07.
 - [ ] FileDrop/SFTP recovery đạt S2-08 đến S2-09 hoặc được ghi rõ là deferred với lý do.
 - [x] Backfill isolation đạt S2-10 ở contract và regression tests; live Docker

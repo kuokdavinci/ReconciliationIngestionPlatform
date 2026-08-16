@@ -10,6 +10,7 @@ from src.application.automation import (
     OrchestrationContext,
     execute_stream,
 )
+from src.config.settings import settings
 from src.domain.fetch_config.models import APIConfig, FetchConfig, FetchMethod
 
 
@@ -70,6 +71,40 @@ async def test_execute_stream_loads_config_and_normalizes_no_data_result() -> No
     assert call["config"] is config
     assert call["reconciliation_date"].isoformat() == "2026-08-09T00:00:00+07:00"
     assert call["raise_on_unexpected"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_uses_configured_business_timezone(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "business_timezone", "UTC")
+    config = _fetch_config()
+    repository = MagicMock()
+    repository.find_by_id = AsyncMock(return_value=config)
+    runner = AsyncMock(
+        return_value={
+            "success": True,
+            "outcome": "NO_NEW_FILE",
+            "runtimeRun": {"id": "runtime-configured-timezone", "status": "COMPLETED"},
+            "stats": {},
+        }
+    )
+
+    await execute_stream(
+        ExecuteStreamCommand(
+            fetchConfigId=str(config.id),
+            partner=config.partner,
+            configVersion=str(config.updated_at),
+            reconciliationDate=date(2026, 8, 9),
+        ),
+        db=MagicMock(),
+        config_loader=MagicMock(),
+        fetch_config_repository=repository,
+        checkpoint_repository=_checkpoint_repository(),
+        runner=runner,
+    )
+
+    assert runner.await_args.kwargs["reconciliation_date"].isoformat() == (
+        "2026-08-09T00:00:00+00:00"
+    )
 
 
 @pytest.mark.asyncio

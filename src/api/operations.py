@@ -5,6 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from src.api.dependencies import get_request_db as _get_db
 from src.infrastructure.review.repository import CopilotActionRepository
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
@@ -16,13 +17,6 @@ router = APIRouter(prefix="/api/v1/operations")
 
 def _enum_value(value):
     return getattr(value, "value", value)
-
-
-def _get_db(request: Request):
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
-    return db
 
 
 def _serialize_mapping(config) -> dict:

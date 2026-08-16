@@ -76,9 +76,11 @@ def test_airflow_dag_uses_public_sdk_and_global_schedule() -> None:
     assert "ExecuteStreamOutcome.WAITING_REVIEW" in dag_source
     assert "stream_execution_result payload=" in dag_source
     assert "fetchConfigId" in dag_source
-    runner_source = (ROOT / "src/application/automation/stream_runner.py").read_text()
-    assert "source_unit_fetched" in runner_source
-    assert "sourceUnitKey=" in runner_source
+    paginated_runner_source = (
+        ROOT / "src/application/automation/paginated_stream_runner.py"
+    ).read_text()
+    assert "source_unit_fetched" in paginated_runner_source
+    assert "sourceUnitKey=" in paginated_runner_source
     assert "checkpoint={checkpoint}" in dag_source
     assert "counters={counters}" in dag_source
     assert "stream_execution_exception" in dag_source

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from src.core.enums import ProcessingStatus
+from src.core.file_identity import compute_file_hash
 from src.domain.ingestion.models import ReconciliationFile
 from src.domain.ingestion.ports import IngestionFileRepository
 from src.reconciliation.scope import classify_scope
@@ -28,14 +29,7 @@ class FileClaimService:
         self._repository = repository
 
     async def compute_file_hash(self, file_path: str) -> str:
-        def hash_file() -> str:
-            digest = hashlib.sha256()
-            with open(file_path, "rb") as source:
-                for chunk in iter(lambda: source.read(8192), b""):
-                    digest.update(chunk)
-            return digest.hexdigest()
-
-        return await asyncio.to_thread(hash_file)
+        return await asyncio.to_thread(compute_file_hash, file_path)
 
     def derive_fetch_unit_key(
         self,

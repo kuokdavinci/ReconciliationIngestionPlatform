@@ -11,6 +11,8 @@ from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from src.api.actor import require_actor
+from src.api.dependencies import get_request_db as _get_db
+from src.api.query_validation import validate_partner as _validate_partner
 from src.analysis.insights import invalidate_insight_cache
 from src.config.ai_generator import generate_config_from_samples
 from src.config.settings import settings
@@ -62,19 +64,6 @@ def _get_upload_tmp_dir() -> Path:
     temp_dir = Path(settings.upload_tmp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
     return temp_dir
-
-
-def _validate_partner(partner: Optional[str]) -> Optional[str]:
-    if partner is not None and not partner.strip():
-        raise HTTPException(status_code=400, detail="Partner identifier cannot be empty.")
-    return partner.strip() if partner else None
-
-
-def _get_db(request: Request):
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
-    return db
 
 
 def _get_repo(request: Request) -> MappingConfigRepository:

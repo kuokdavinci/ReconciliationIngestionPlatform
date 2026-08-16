@@ -12,6 +12,11 @@ from src.fetchers.base import BaseFetcher
 from src.domain.fetch_config.models import FileDropConfig, SFTPConfig
 
 
+class _ImmediateExecutorLoop:
+    async def run_in_executor(self, _executor, callback, *args):
+        return callback(*args)
+
+
 def test_relative_local_paths_are_resolved_from_application_root(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
@@ -29,7 +34,7 @@ async def test_filedrop_discovers_ready_files_deterministically_with_stable_fing
     config = FileDropConfig(directory=str(tmp_path), pattern="*.xlsx")
     fetcher = FileDropFetcher()
 
-    with patch.object(fetcher, "_is_file_ready", return_value=True):
+    with patch.object(fetcher, "_is_file_ready_async", return_value=True):
         first = await fetcher.fetch(config, datetime(2024, 7, 7))
         second = await fetcher.fetch(config, datetime(2024, 7, 7))
 
@@ -53,7 +58,7 @@ async def test_filedrop_content_change_creates_new_source_unit_key(tmp_path):
     config = FileDropConfig(directory=str(tmp_path), pattern="*.xlsx")
     fetcher = FileDropFetcher()
 
-    with patch.object(fetcher, "_is_file_ready", return_value=True):
+    with patch.object(fetcher, "_is_file_ready_async", return_value=True):
         before = await fetcher.fetch(config, datetime(2024, 7, 7))
         file_path.write_text("after")
         after = await fetcher.fetch(config, datetime(2024, 7, 7))
@@ -69,7 +74,7 @@ async def test_filedrop_rewrite_with_same_content_keeps_source_unit_key(tmp_path
     config = FileDropConfig(directory=str(tmp_path), pattern="*.xlsx")
     fetcher = FileDropFetcher()
 
-    with patch.object(fetcher, "_is_file_ready", return_value=True):
+    with patch.object(fetcher, "_is_file_ready_async", return_value=True):
         first = await fetcher.fetch(config, datetime(2024, 7, 7))
         file_path.touch()
         second = await fetcher.fetch(config, datetime(2024, 7, 7))
@@ -85,7 +90,7 @@ async def test_filedrop_source_unit_identity_changes_with_config_version(tmp_pat
     config = FileDropConfig(directory=str(tmp_path), pattern="*.xlsx")
     fetcher = FileDropFetcher()
 
-    with patch.object(fetcher, "_is_file_ready", return_value=True):
+    with patch.object(fetcher, "_is_file_ready_async", return_value=True):
         first = await fetcher.fetch(
             config, datetime(2024, 7, 7), fetch_metadata={"configVersion": "v1"}
         )
@@ -106,7 +111,7 @@ async def test_filedrop_date_template_scans_only_requested_backfill_day(tmp_path
     )
     fetcher = FileDropFetcher()
 
-    with patch.object(fetcher, "_is_file_ready", return_value=True):
+    with patch.object(fetcher, "_is_file_ready_async", return_value=True):
         result = await fetcher.fetch(config, datetime(2026, 8, 10))
 
     assert [unit["localPath"] for unit in result.units] == [
@@ -141,6 +146,10 @@ async def test_sftp_wildcard_downloads_sorted_remote_files_sequentially_with_uni
             return_value=["/remote/b.xlsx", "/remote/a.xlsx"],
         ),
         patch.object(fetcher, "_download_via_sftp", side_effect=mock_download),
+        patch(
+            "src.fetchers.sftp_fetcher.asyncio.get_running_loop",
+            return_value=_ImmediateExecutorLoop(),
+        ),
     ):
         result = await fetcher.fetch(config, datetime(2024, 7, 7))
 
@@ -172,7 +181,13 @@ async def test_sftp_replay_of_same_remote_object_keeps_source_unit_key(
     def mock_download(host, port, user, password, remote, local, timeout):
         Path(local).write_text("same remote content")
 
-    with patch.object(fetcher, "_download_via_sftp", side_effect=mock_download):
+    with (
+        patch.object(fetcher, "_download_via_sftp", side_effect=mock_download),
+        patch(
+            "src.fetchers.sftp_fetcher.asyncio.get_running_loop",
+            return_value=_ImmediateExecutorLoop(),
+        ),
+    ):
         first = await fetcher.fetch(config, datetime(2024, 7, 7))
         second = await fetcher.fetch(config, datetime(2024, 7, 7))
 

@@ -201,45 +201,14 @@ class APIFetcher(BaseFetcher):
         final_cursor: Optional[str] = None
 
         for _ in range(pagination.max_pages):
-            query_params = dict(base_query_params)
-            if pagination.page_param:
-                query_params[pagination.page_param] = str(page)
-            if pagination.page_size_param and pagination.page_size is not None:
-                query_params[pagination.page_size_param] = str(pagination.page_size)
-            if pagination.cursor_param and cursor is not None:
-                # An empty cursor is intentional and must not be treated as absent.
-                query_params[pagination.cursor_param] = str(cursor)
-
-            source_identity = {
-                "endpoint": config.base_url,
-                "method": config.method.upper(),
-                "reconciliationDate": reconciliation_date.strftime("%Y-%m-%d"),
-                "page": page,
-                "cursorBefore": cursor,
-                **(
-                    {"configVersion": config_version}
-                    if config_version
-                    else {}
-                ),
-            }
-            local_path = local_dir / (
-                f"api_data_{reconciliation_date.strftime('%Y%m%d')}"
-                f"_page_{page:04d}.json"
-            )
-            source_unit_key = self._source_unit_key(
-                config.base_url,
-                config.method,
-                reconciliation_date,
+            query_params, local_path, unit = self._build_page_request(
+                config=config,
+                reconciliation_date=reconciliation_date,
+                base_query_params=base_query_params,
+                local_dir=local_dir,
                 page=page,
-                cursor_before=cursor,
+                cursor=cursor,
                 config_version=config_version,
-            )
-            unit = SourceUnitMetadata(
-                sourceUnitKey=source_unit_key,
-                sourceIdentity=source_identity,
-                localPath=str(local_path),
-                page=page,
-                cursorBefore=cursor,
             )
 
             try:
@@ -266,9 +235,8 @@ class APIFetcher(BaseFetcher):
                     units=units,
                 )
 
-            content_type = response.headers.get("content-type", "")
             try:
-                local_path.write_bytes(response.content)
+                content_type = self._write_page(response, local_path)
             except PermissionError as exc:
                 unit.status = "FAILED"
                 unit.error = f"API download path is not writable: {local_path.parent}"
@@ -306,19 +274,11 @@ class APIFetcher(BaseFetcher):
                 )
 
             try:
-                payload = json.loads(response.content.decode("utf-8"))
-                page_items = self._extract_pagination_value(
-                    payload, pagination.items_path
+                page_items, next_cursor = self._parse_page_payload(
+                    response.content,
+                    pagination.items_path,
+                    pagination.next_cursor_path,
                 )
-                if not isinstance(page_items, list):
-                    raise ValueError("items path must resolve to a list")
-                next_cursor_value = self._extract_pagination_value(
-                    payload, pagination.next_cursor_path
-                )
-                if next_cursor_value is not None and not isinstance(
-                    next_cursor_value, (str, int)
-                ):
-                    raise ValueError("next cursor must be a string, integer, null, or absent")
             except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
                 unit.status = "FAILED"
                 unit.error = f"pagination response parse failed: {exc}"
@@ -332,11 +292,6 @@ class APIFetcher(BaseFetcher):
                     units=units,
                 )
 
-            next_cursor = (
-                None
-                if next_cursor_value is None
-                else str(next_cursor_value)
-            )
             has_more = next_cursor is not None and next_cursor != ""
             unit.status = "FETCHED"
             unit.item_count = len(page_items)
@@ -431,6 +386,90 @@ class APIFetcher(BaseFetcher):
             metadata={"pagination": {"units": units}},
             units=units,
         )
+
+    @staticmethod
+    def _build_page_request(
+        config: APIConfig,
+        reconciliation_date: datetime,
+        base_query_params: dict[str, str],
+        local_dir: Path,
+        page: int,
+        cursor: Any,
+        config_version: Any,
+    ) -> tuple[dict[str, str], Path, SourceUnitMetadata]:
+        pagination = config.pagination
+        assert pagination is not None
+
+        query_params = dict(base_query_params)
+        if pagination.page_param:
+            query_params[pagination.page_param] = str(page)
+        if pagination.page_size_param and pagination.page_size is not None:
+            query_params[pagination.page_size_param] = str(pagination.page_size)
+        if pagination.cursor_param and cursor is not None:
+            # An empty cursor is intentional and must not be treated as absent.
+            query_params[pagination.cursor_param] = str(cursor)
+
+        local_path = local_dir / (
+            f"api_data_{reconciliation_date.strftime('%Y%m%d')}"
+            f"_page_{page:04d}.json"
+        )
+        return (
+            query_params,
+            local_path,
+            SourceUnitMetadata(
+                sourceUnitKey=APIFetcher._source_unit_key(
+                    config.base_url,
+                    config.method,
+                    reconciliation_date,
+                    page=page,
+                    cursor_before=cursor,
+                    config_version=config_version,
+                ),
+                sourceIdentity={
+                    "endpoint": config.base_url,
+                    "method": config.method.upper(),
+                    "reconciliationDate": reconciliation_date.strftime("%Y-%m-%d"),
+                    "page": page,
+                    "cursorBefore": cursor,
+                    **(
+                        {"configVersion": config_version}
+                        if config_version
+                        else {}
+                    ),
+                },
+                localPath=str(local_path),
+                page=page,
+                cursorBefore=cursor,
+            ),
+        )
+
+    @staticmethod
+    def _parse_page_payload(
+        content: bytes,
+        items_path: str | None,
+        next_cursor_path: str | None,
+    ) -> tuple[list[Any], str | None]:
+        payload = json.loads(content.decode("utf-8"))
+        page_items = APIFetcher._extract_pagination_value(payload, items_path)
+        if not isinstance(page_items, list):
+            raise ValueError("items path must resolve to a list")
+
+        next_cursor_value = APIFetcher._extract_pagination_value(
+            payload, next_cursor_path
+        )
+        if next_cursor_value is not None and not isinstance(next_cursor_value, (str, int)):
+            raise ValueError("next cursor must be a string, integer, null, or absent")
+
+        return (
+            page_items,
+            None if next_cursor_value is None else str(next_cursor_value),
+        )
+
+    @staticmethod
+    def _write_page(response: httpx.Response, local_path: Path) -> str:
+        content_type = response.headers.get("content-type", "")
+        local_path.write_bytes(response.content)
+        return content_type
 
     @staticmethod
     def _starting_page(fetch_metadata: dict[str, Any]) -> int:

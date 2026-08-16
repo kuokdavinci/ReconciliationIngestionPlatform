@@ -64,7 +64,7 @@ class FileDropFetcher(BaseFetcher):
             # Filter out files that are still being written (file lock check)
             ready_files = []
             for file_path in matching_files:
-                if await asyncio.to_thread(self._is_file_ready, file_path):
+                if await self._is_file_ready_async(file_path):
                     ready_files.append(file_path)
 
             if not ready_files:
@@ -135,6 +135,16 @@ class FileDropFetcher(BaseFetcher):
             size2 = os.path.getsize(file_path)
 
             # If sizes match, file is stable
+            return size1 == size2
+        except (OSError, FileNotFoundError):
+            return False
+
+    async def _is_file_ready_async(self, file_path: str) -> bool:
+        """Check file stability without occupying the event-loop thread."""
+        try:
+            size1 = os.path.getsize(file_path)
+            await asyncio.sleep(self.FILE_LOCK_TIMEOUT)
+            size2 = os.path.getsize(file_path)
             return size1 == size2
         except (OSError, FileNotFoundError):
             return False

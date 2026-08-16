@@ -319,7 +319,9 @@ async def reset_fixture(from_date: str, to_date: str, file_dir: str) -> list[Pat
     await internal_repository.insert_many(
         [row for business_date in days for row in build_internal_transactions(business_date)]
     )
-    client = AsyncIOMotorClient(settings.mongodb_url, serverSelectionTimeoutMS=5000)
+    client: AsyncIOMotorClient = AsyncIOMotorClient(
+        settings.mongodb_url, serverSelectionTimeoutMS=5000
+    )
     try:
         db = client[settings.db_name]
         await client.admin.command("ping")

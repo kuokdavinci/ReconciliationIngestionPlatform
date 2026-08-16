@@ -53,32 +53,21 @@ class SFTPFetcher(BaseFetcher):
             local_dir = self.resolve_local_path(download_dir)
             local_dir.mkdir(parents=True, exist_ok=True)
             loop = asyncio.get_running_loop()
-            remote_paths = await loop.run_in_executor(
+            downloaded_files = await loop.run_in_executor(
                 None,
-                self._resolve_remote_paths_via_sftp,
+                self._download_remote_files,
                 config.host,
                 config.port,
                 username,
                 password,
                 remote_path,
+                str(local_dir),
                 config.timeout,
             )
-            remote_paths = sorted(remote_paths)
+            remote_paths = [remote_path for remote_path, _ in downloaded_files]
             units: list[SourceUnitMetadata] = []
-            for resolved_remote_path in remote_paths:
-                local_path = local_dir / Path(resolved_remote_path).name
-                await loop.run_in_executor(
-                    None,
-                    self._download_via_sftp,
-                    config.host,
-                    config.port,
-                    username,
-                    password,
-                    resolved_remote_path,
-                    str(local_path),
-                    config.timeout,
-                )
-                if not self.validate_file(str(local_path)):
+            for resolved_remote_path, local_path in downloaded_files:
+                if not self.validate_file(local_path):
                     return FetchResult(
                         success=False,
                         local_path=str(units[0]["localPath"]) if units else None,
@@ -88,7 +77,7 @@ class SFTPFetcher(BaseFetcher):
 
                 units.append(
                     self.build_file_source_unit(
-                        str(local_path),
+                        local_path,
                         "SFTP",
                         {
                             "host": config.host,
@@ -107,12 +96,12 @@ class SFTPFetcher(BaseFetcher):
                     )
                 )
 
-            local_path = Path(units[0]["localPath"])
+            first_local_path = Path(units[0]["localPath"])
             file_size = units[0]["fileSize"]
 
             return FetchResult(
                 success=True,
-                local_path=str(local_path),
+                local_path=str(first_local_path),
                 file_size=file_size,
                 metadata={
                     "remote_path": str(remote_paths[0]),
@@ -127,6 +116,42 @@ class SFTPFetcher(BaseFetcher):
             return FetchResult(success=False, error=str(exc))
         except Exception as exc:
             return FetchResult(success=False, error=f"SFTP fetch failed: {exc}")
+
+    def _download_remote_files(
+        self,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        remote_path: str,
+        local_dir: str,
+        timeout: int,
+    ) -> list[tuple[str, str]]:
+        """Resolve and download all files in one ordered worker operation."""
+        remote_paths = sorted(
+            self._resolve_remote_paths_via_sftp(
+                host,
+                port,
+                username,
+                password,
+                remote_path,
+                timeout,
+            )
+        )
+        downloaded: list[tuple[str, str]] = []
+        for resolved_remote_path in remote_paths:
+            local_path = str(Path(local_dir) / Path(resolved_remote_path).name)
+            self._download_via_sftp(
+                host,
+                port,
+                username,
+                password,
+                resolved_remote_path,
+                local_path,
+                timeout,
+            )
+            downloaded.append((resolved_remote_path, local_path))
+        return downloaded
 
     @staticmethod
     def _resolve_remote_paths_via_sftp(

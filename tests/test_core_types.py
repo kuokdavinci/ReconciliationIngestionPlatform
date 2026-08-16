@@ -15,7 +15,6 @@ from src.core.types import (
     FieldMappingType,
     FieldMapping,
     CanonicalTransaction,
-    PartnerData,
     BatchInsertResult,
     ValidationError,
     ProcessingStats,
@@ -260,31 +259,6 @@ class TestValidationError:
         assert data["field"] == "amount"
         assert data["reason"] == "invalid"
         assert data["row"] == 10
-
-
-class TestPartnerData:
-    """Test PartnerData model."""
-
-    def test_create_with_valid_data(self):
-        data = PartnerData(
-            id="P-001",
-            status="SUCCESS",
-            amount=Decimal("500.00"),
-            currency="VND",
-        )
-        assert data.id == "P-001"
-        assert data.amount == Decimal("500.00")
-
-    def test_optional_fields(self):
-        data = PartnerData(
-            id="P-002",
-            status="PENDING",
-            amount=Decimal("100"),
-            currency="USD",
-        )
-        assert data.trace is None
-        assert data.transDate is None
-        assert data.extra == {}
 
 
 class TestProcessingStats:

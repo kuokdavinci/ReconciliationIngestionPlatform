@@ -54,3 +54,56 @@ evaluation:
 This is deterministic code/UI evidence. It does not replace the live Docker
 acceptance run against MongoDB, PostgreSQL, Airflow, and the mounted
 `mock_data/` directory.
+
+## Current repository verification — 2026-08-14
+
+This section supersedes the older verification snapshot above when assessing
+the current branch. It records what was actually re-run locally; it does not
+promote mock or unit evidence to live business acceptance.
+
+### Automated evidence
+
+- Codegraph: `448` indexed files, `6,738` nodes, `17,221` edges; status is up
+  to date.
+- Sprint 2/2.5 focused regression set: `190 passed` across checkpoint,
+  pagination, FileDrop/SFTP, stream orchestration, Airflow, review and
+  backfill contracts.
+- Workflow-equivalent ingestion CI command: `52 passed, 1 skipped` across the
+  collected `53` tests. The skipped case is the environment-gated Sprint 1
+  benchmark scenario.
+- Backend-quality selection excluding the two ingestion workflows: `1,116
+  passed, 8 skipped` when PostgreSQL integration cases are excluded. The two
+  PostgreSQL integration tests are still environment-gated locally because the
+  sandbox cannot complete the `localhost:5432` asyncpg probe; GitHub Actions
+  provides the declared PostgreSQL service for these cases.
+- Sprint 1 index/benchmark checks: `10 passed`.
+- Ruff: passed for `src`, `dags`, `scripts` and `cli`; ingestion-specific Ruff
+  scope also passed.
+- Mypy: passed for `207` source files.
+- Frontend production interaction suite: `7 passed` after making the optional
+  external icon font non-blocking for Playwright.
+
+### Compose pilot evidence
+
+- API image/container: `sha256:cb2c9e4197efd6c1b925f510b3cfe43d604f07814285d3811fa5a15887214d13`.
+- API container is running and `/openapi.json` returns HTTP 200.
+- Airflow metadata database, scheduler and DAG processor report healthy.
+- Airflow DAG import errors report `No data found`.
+- Runtime configuration is `APP_AUTOMATION_ORCHESTRATOR=airflow`,
+  `AIRFLOW_GLOBAL_SCHEDULE=none` and `AIRFLOW_TASK_RETRIES=0`.
+- No legacy `reconciliation-scheduler` container is running.
+
+### Evidence still not accepted as final DoD
+
+The exact 53-test ingestion workflow invocation now completes cleanly with
+`52 passed, 1 skipped` in `0.66s` under the local CI-equivalent environment.
+The earlier stall was caused by mocked ingestion tests reaching the real
+PostgreSQL scope classifier and by file hashing using the constrained default
+executor; tests now isolate the scope query and the hash path is deterministic
+for the ingestion boundary.
+
+The live business scenarios remain partial: multi-fingerprint FileDrop/SFTP
+retention and recovery, the full bounded Airflow/application retry and state
+matrix, scheduled-checkpoint isolation during a real scheduled-plus-backfill
+run, and per-partner rollback. The current-image VNPAY smoke run is recorded
+in the Sprint 2.5 evidence matrix.

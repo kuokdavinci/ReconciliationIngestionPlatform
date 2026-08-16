@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
+  // The icon font is decorative; block the external request so offline/CI
+  // runs do not wait for a third-party font before the document is ready.
+  await page.route("https://fonts.googleapis.com/**", (route) => route.abort());
+  await page.route("https://fonts.gstatic.com/**", (route) => route.abort());
+
   // Mapping Studio loads its list before rendering the wizard. Keep that
   // unrelated endpoint deterministic; schedule tests provide their own
   // automation fixtures below.

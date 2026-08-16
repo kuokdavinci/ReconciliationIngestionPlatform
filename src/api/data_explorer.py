@@ -6,6 +6,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from bson import Decimal128
 
+from src.api.dependencies import get_request_db as _get_db
+from src.api.query_validation import (
+    validate_date as _validate_date,
+    validate_partner as _validate_partner,
+)
 from src.api.response_utils import camelize
 from src.domain.partner_transaction.models import DataContainer
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
@@ -15,29 +20,6 @@ from src.infrastructure.postgres.reconciliation_result_repository import Reconci
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/data")
-
-
-def _validate_date(date_str: Optional[str]) -> str:
-    if date_str is None:
-        raise HTTPException(status_code=400, detail="Date parameter is required (YYYY-MM-DD format).")
-    try:
-        datetime.strptime(date_str, "%Y-%m-%d")
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid date format: '{date_str}'. Expected YYYY-MM-DD.")
-    return date_str
-
-
-def _validate_partner(partner: Optional[str]) -> Optional[str]:
-    if partner is not None and not partner.strip():
-        raise HTTPException(status_code=400, detail="Partner identifier cannot be empty.")
-    return partner.strip() if partner else None
-
-
-def _get_db(request: Request):
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database connection not available.")
-    return db
 
 
 def _serialize_dc(obj: DataContainer) -> dict:

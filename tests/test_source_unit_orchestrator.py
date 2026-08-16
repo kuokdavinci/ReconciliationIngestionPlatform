@@ -25,6 +25,7 @@ async def test_processes_units_in_order_and_stops_after_first_failure():
     checkpoint_repo.mark_completed.return_value = True
     checkpoint_repo.advance.return_value = True
     checkpoint_repo.mark_failed.return_value = True
+    on_unit_completed = AsyncMock()
 
     ingest_unit = AsyncMock(
         side_effect=[
@@ -52,6 +53,7 @@ async def test_processes_units_in_order_and_stops_after_first_failure():
             _unit(2, cursor_before="cursor-1", cursor_after="cursor-2"),
             _unit(3, cursor_before="cursor-2"),
         ],
+        on_unit_completed=on_unit_completed,
         ingest_unit=ingest_unit,
     )
 
@@ -84,6 +86,10 @@ async def test_processes_units_in_order_and_stops_after_first_failure():
         max_attempts=None,
         error_metadata={},
     )
+    on_unit_completed.assert_awaited_once()
+    completed_unit = on_unit_completed.await_args.args[0]
+    assert completed_unit.source_unit_key == "unit-1"
+    assert completed_unit.cursor_after == "cursor-1"
 
 
 @pytest.mark.asyncio

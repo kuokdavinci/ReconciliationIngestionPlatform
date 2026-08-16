@@ -2,11 +2,9 @@
 
 from datetime import date, datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from src.application.automation.contracts import ExecuteStreamCommand
-
-BUSINESS_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
+from src.core.business_day import business_date
 
 
 def resolve_schedule(value: str) -> str | None:
@@ -14,10 +12,6 @@ def resolve_schedule(value: str) -> str | None:
     if schedule.lower() in {"", "none", "null"}:
         return None
     return schedule
-
-
-def business_date(interval_end: datetime) -> date:
-    return interval_end.astimezone(BUSINESS_TIMEZONE).date()
 
 
 def resolve_reconciliation_date(

@@ -10,11 +10,14 @@ All endpoints validate request parameters and handle errors gracefully.
 
 import logging
 from datetime import datetime, timezone
+from functools import partial
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 
+from src.api.dependencies import get_request_db
+from src.api.query_validation import validate_date, validate_partner
 from src.api.response_utils import camelize
 from src.analysis.config import AnalysisConfig
 from src.analysis.provider import create_provider
@@ -24,55 +27,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
 
 
-# ---------------------------------------------------------------------------
-# Request validation helpers
-# ---------------------------------------------------------------------------
-
-def _validate_date(date_str: Optional[str]) -> str:
-    """Validate date format (YYYY-MM-DD).
-
-    Args:
-        date_str: Date string to validate.
-
-    Returns:
-        Validated date string.
-
-    Raises:
-        HTTPException: If date is missing or format is invalid.
-    """
-    if date_str is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Date parameter is required (YYYY-MM-DD format).",
-        )
-    try:
-        datetime.strptime(date_str, "%Y-%m-%d")
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid date format: '{date_str}'. Expected YYYY-MM-DD.",
-        )
-    return date_str
-
-
-def _validate_partner(partner: Optional[str]) -> str:
-    """Validate partner identifier.
-
-    Args:
-        partner: Partner identifier to validate.
-
-    Returns:
-        Validated partner string.
-
-    Raises:
-        HTTPException: If partner is empty or missing.
-    """
-    if not partner or not partner.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Partner identifier is required.",
-        )
-    return partner.strip()
+_validate_date = validate_date
+_validate_partner = partial(validate_partner, required=True)
 
 
 def _get_collection(request: Request) -> ReconciliationResultRepository:
@@ -87,13 +43,7 @@ def _get_collection(request: Request) -> ReconciliationResultRepository:
     Raises:
         HTTPException: If database connection is not available.
     """
-    db = getattr(request.app.state, "db", None)
-    if db is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Database connection not available.",
-        )
-    return ReconciliationResultRepository(db)
+    return ReconciliationResultRepository(get_request_db(request))
 
 
 def _get_llm_provider() -> object:

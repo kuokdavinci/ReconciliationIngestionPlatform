@@ -1,4 +1,3 @@
-import threading
 from hashlib import sha256
 
 import pytest
@@ -35,22 +34,24 @@ def test_base_fetcher_compute_file_hash_delegates_to_canonical_helper(
 
 
 @pytest.mark.asyncio
-async def test_file_claim_hashing_delegates_to_canonical_helper_in_worker_thread(
+async def test_file_claim_hashing_delegates_to_canonical_helper(
     tmp_path, monkeypatch
 ) -> None:
     source = tmp_path / "source.csv"
     source.write_bytes(b"canonical-file-content")
-    main_thread = threading.current_thread()
-    worker_threads = []
+    calls = []
 
     def canonical_helper(file_path: str) -> str:
-        worker_threads.append(threading.current_thread())
         return compute_file_hash(file_path)
 
+    async def run_in_executor(callback, *args, **kwargs):
+        calls.append((callback, args, kwargs))
+        return callback(*args, **kwargs)
+
     monkeypatch.setattr(file_claim_module, "compute_file_hash", canonical_helper)
+    monkeypatch.setattr(file_claim_module.asyncio, "to_thread", run_in_executor)
 
     result = await FileClaimService(None, None).compute_file_hash(str(source))
 
     assert result == sha256(b"canonical-file-content").hexdigest()
-    assert worker_threads
-    assert worker_threads[0] is not main_thread
+    assert calls == [(canonical_helper, (str(source),), {})]

@@ -1,12 +1,12 @@
 # Phase 2 — Sprint 2.5: Airflow Migration Plan
 
-**Status:** Pilot implemented; local Compose health verified on 2026-08-14; business acceptance and production cutover remain pending  
+**Status:** Pilot implemented; current API image and local Compose health verified on 2026-08-14; 5 business acceptance criteria remain partial or pending
 **Timing:** Sau khi Sprint 2 hoàn tất và có regression evidence đầy đủ  
 **Owner:** Platform/ingestion team
 
 > Sprint 2.5 là milestone hợp nhất của **Airflow integration** và **recovery hardening**. Nội dung hardening trước đây được lưu trong [recovery hardening evidence](sprint-2.6-recovery-hardening.md); tên file cũ chỉ được giữ để bảo toàn liên kết lịch sử, không biểu thị một sprint độc lập.
 
-**Acceptance status:** Chưa hoàn tất. Pilot và automated regression đã có, nhưng hiện còn **5/11 acceptance criteria** chưa được đánh dấu hoàn thành. Live Compose health đã được kiểm chứng; live business-flow evidence của hardening vẫn còn mở.
+**Acceptance status:** Chưa hoàn tất. Pilot, contract tests và một VNPAY backfill trên image hiện tại đã có, nhưng **5/11 acceptance criteria** vẫn chưa đủ evidence để đóng ở mức business acceptance. Các mục còn lại được phân biệt rõ giữa contract evidence, live smoke evidence và rollout rehearsal.
 
 ## Goal
 
@@ -283,10 +283,24 @@ The current Compose pilot was checked after rebuilding the API image:
   `AIRFLOW_TASK_RETRIES=0`.
 - The Compose process list contains no legacy `reconciliation-scheduler`.
 
-This closes the local service-health evidence item. It does not close the five
-business acceptance criteria listed below, which still require live
-FileDrop/SFTP recovery, retry/state-transition, backfill-isolation and rollback
-evidence.
+This closes the local service-health evidence item. A current-image VNPAY
+FileDrop backfill for `2026-08-14` also completed `1/1` day with `3 MATCHED`
+reconciliation rows. The source file remained in the mounted `mock_data`
+directory after completion. This is smoke evidence, not the full multi-file /
+SFTP recovery acceptance.
+
+### Checklist evidence matrix — 2026-08-14
+
+| Checklist | Current evidence | Status before business acceptance |
+|---|---|---|
+| FileDrop/SFTP ordering and source retention | `65` focused FileDrop/SFTP/ingestion tests pass; current-image VNPAY FileDrop source was retained. Multi-fingerprint recovery and a live SFTP run are still missing. | Partial |
+| Bounded Airflow/application retry | `80` retry/checkpoint/automation/stream tests pass; deployment uses `AIRFLOW_TASK_RETRIES=0`. Full live timeout/exhaustion matrix is still missing. | Partial |
+| `BLOCKED`, resolve/skip, `WAITING_REVIEW` | Contract and API tests cover the transitions; live ViettelPay recovery covers operator retry. A live terminal-blocked resolve/skip and mapping-gated review run are still missing. | Partial |
+| Scheduled checkpoint isolation | Backfill completed on the current image and Mongo contains separate `SCHEDULED` and `BACKFILL` checkpoint records; the scheduled record retained `scheduled-baseline-unit`. The scheduled record was a seeded baseline, not a concurrent scheduled execution. | Partial |
+| Per-partner rollback without reset | Runbook and pause/previous-artifact procedure exist, but no partner-scoped deployment rollback rehearsal was run. | Pending |
+
+The five checkboxes below remain unchecked intentionally: the missing portions
+are environment/rollout evidence, not a reason to weaken the acceptance bar.
 
 ### Scheduling ownership
 

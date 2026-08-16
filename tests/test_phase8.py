@@ -32,6 +32,11 @@ from src.domain.fetch_config.models import (
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 
 
+class _ImmediateExecutorLoop:
+    async def run_in_executor(self, _executor, callback, *args):
+        return callback(*args)
+
+
 # ============================================================================
 # FetchConfig Model Tests
 # ============================================================================
@@ -324,7 +329,13 @@ class TestSFTPFetcher:
                 Path(local).parent.mkdir(parents=True, exist_ok=True)
                 Path(local).write_text("mock content")
 
-            with patch.object(fetcher, "_download_via_sftp", side_effect=mock_download):
+            with (
+                patch.object(fetcher, "_download_via_sftp", side_effect=mock_download),
+                patch(
+                    "src.fetchers.sftp_fetcher.asyncio.get_running_loop",
+                    return_value=_ImmediateExecutorLoop(),
+                ),
+            ):
                 result = await fetcher.fetch(config, datetime(2024, 7, 7))
 
             assert result.success is True
@@ -362,7 +373,13 @@ class TestSFTPFetcher:
 
         fetcher = SFTPFetcher()
 
-        with patch.object(fetcher, "_download_via_sftp", side_effect=Exception("Connection refused")):
+        with (
+            patch.object(fetcher, "_download_via_sftp", side_effect=Exception("Connection refused")),
+            patch(
+                "src.fetchers.sftp_fetcher.asyncio.get_running_loop",
+                return_value=_ImmediateExecutorLoop(),
+            ),
+        ):
             result = await fetcher.fetch(config, datetime(2024, 7, 7))
 
         assert result.success is False
@@ -475,7 +492,7 @@ class TestFileDropFetcher:
             fetcher = FileDropFetcher()
 
             # Mock _is_file_ready to return True immediately
-            with patch.object(fetcher, "_is_file_ready", return_value=True):
+            with patch.object(fetcher, "_is_file_ready_async", return_value=True):
                 result = await fetcher.fetch(config, datetime(2024, 7, 7))
 
             assert result.success is True

@@ -15,8 +15,15 @@
 - `AIRFLOW_TASK_RETRIES=0` để recovery do operator thực hiện và giữ checkpoint semantics rõ ràng.
 - Live health, DAG import, page failure/resume, same-DAG-run retry và ordered backfill cần evidence từ môi trường Docker thật; unit/architecture tests không thay thế evidence này.
 - Không bật thêm scheduler owner cho cùng stream. Rollback pilot là pause DAG và rollback application artifact.
-- Sprint 2.5 chưa đạt đủ acceptance: còn mở FileDrop/SFTP recovery ordering, bounded retry matrix, `BLOCKED`/resolve/`WAITING_REVIEW` state semantics, scheduled-checkpoint isolation khi backfill và rollback per partner không reset dữ liệu.
-- Recovery hardening còn pending live rerun cho approved API mapping; local Compose Airflow service-health evidence đã được kiểm chứng ngày 2026-08-14, còn production rollout evidence vẫn mở.
+- Sprint 2.5 còn 5 business-acceptance mục partial/pending: multi-fingerprint
+  FileDrop/SFTP recovery ordering, full bounded retry matrix,
+  `BLOCKED`/resolve/skip/`WAITING_REVIEW` live state semantics, concurrent
+  scheduled-checkpoint isolation khi backfill và rollback per partner không
+  reset dữ liệu. Contract tests và current-image smoke evidence đã được ghi ở
+  `docs/phase-2/sprint-2.5-airflow-migration.md`.
+- Recovery hardening đã có live ViettelPay retry/recovery và current-image VNPAY
+  approved-mapping backfill smoke evidence; full FileDrop/SFTP, retry/state,
+  concurrent isolation và production rollback evidence vẫn mở.
 
 ## CI và tài liệu
 

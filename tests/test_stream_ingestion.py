@@ -6,9 +6,12 @@ import pytest
 
 from src.application.ingestion.contracts import ProcessFileCommand
 from src.application.automation.stream_ingestion import (
+    cleanup_source_unit,
     failed_ingestion_result,
     run_ingestion,
 )
+from src.domain.fetch_config.models import FetchConfig, FetchMethod, FileDropConfig
+from src.domain.ingestion.source_units import SourceUnitMetadata
 
 
 @pytest.mark.asyncio
@@ -90,3 +93,44 @@ def test_missing_ingestion_identity_is_terminal():
     assert failure["errorCode"] == "ingestion_key_error"
     assert failure["retryable"] is False
     assert "both id and trace are missing" in failure["error"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_source_unit_archives_only_after_checkpoint_completion(tmp_path):
+    source_path = tmp_path / "settlement.xlsx"
+    archive_dir = tmp_path / "archive"
+    source_path.write_text("payload")
+    config = FetchConfig(
+        partner="VNPAY",
+        fetch_method=FetchMethod.FILEDROP,
+        archive_dir=str(archive_dir),
+        cleanup_after_ingest=True,
+        filedrop=FileDropConfig(directory=str(tmp_path)),
+    )
+
+    await cleanup_source_unit(
+        config,
+        SourceUnitMetadata(localPath=str(source_path), sourceUnitKey="unit-1"),
+    )
+
+    assert not source_path.exists()
+    assert (archive_dir / source_path.name).read_text() == "payload"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_source_unit_preserves_source_when_cleanup_is_disabled(tmp_path):
+    source_path = tmp_path / "settlement.xlsx"
+    source_path.write_text("payload")
+    config = FetchConfig(
+        partner="VNPAY",
+        fetch_method=FetchMethod.FILEDROP,
+        cleanup_after_ingest=False,
+        filedrop=FileDropConfig(directory=str(tmp_path)),
+    )
+
+    await cleanup_source_unit(
+        config,
+        SourceUnitMetadata(localPath=str(source_path), sourceUnitKey="unit-1"),
+    )
+
+    assert source_path.read_text() == "payload"

@@ -358,14 +358,23 @@ Observed result: Airflow metadata database, scheduler and DAG processor were
 healthy; DAG import errors returned `No data found`; the API OpenAPI endpoint
 returned HTTP 200; and the Compose process list had no legacy scheduler.
 
-The following business-flow evidence is still to collect:
+Current business-flow evidence is split by acceptance depth:
 
-Execute one manual ViettelPay run with the page-2 failure fixture and one VNPAY
-ordered backfill. Record: `runtimeRunId`, parent `backfillRunId`, Airflow
-`dagRunId`, Recovery event timeline, ordered day statuses, review packet count,
-raw-stage `itemCount` total, and PostgreSQL internal-transaction count for the
-same Asia/Ho_Chi_Minh business date. Also record a per-partner rollback without
-resetting checkpoint or runtime data.
+- ViettelPay page-2 failure/retry/recovery is already accepted live (see the
+  2026-08-10 entry above).
+- On the rebuilt API image
+  `sha256:cb2c9e4197efd6c1b925f510b3cfe43d604f07814285d3811fa5a15887214d13`,
+  the VNPAY FileDrop backfill for `2026-08-14` completed `1/1` day, produced
+  `3 MATCHED` reconciliation rows, and retained the source file.
+- Mongo showed separate VNPAY checkpoint records: `mode=SCHEDULED` with
+  `lastCompletedUnitKey=scheduled-baseline-unit`, and `mode=BACKFILL` with a
+  distinct `streamKey` and completed source-unit key. This proves persistence
+  isolation for the smoke scenario; it is not evidence of a concurrent
+  scheduled execution.
+- Still required for full business acceptance: multi-fingerprint FileDrop and
+  live SFTP recovery, the complete retry/state matrix, a real scheduled plus
+  backfill isolation run, and a partner-scoped rollback rehearsal without
+  resetting checkpoint or runtime data.
 
 ## Verification commands
 

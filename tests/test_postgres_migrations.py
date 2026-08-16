@@ -29,6 +29,7 @@ async def test_existing_revision_0001_is_upgraded_to_head():
     database_url = f"{server_url}/{database_name}"
     admin_connection = None
     database_engine = None
+    database_created = False
 
     try:
         try:
@@ -37,6 +38,7 @@ async def test_existing_revision_0001_is_upgraded_to_head():
             pytest.skip(f"PostgreSQL is not available at {admin_url}: {exc}")
 
         await admin_connection.execute(f"CREATE DATABASE {database_name}")
+        database_created = True
         await admin_connection.close()
         admin_connection = None
 
@@ -79,7 +81,7 @@ async def test_existing_revision_0001_is_upgraded_to_head():
     finally:
         if database_engine is not None:
             await database_engine.dispose()
-        if admin_connection is None:
+        if database_created and admin_connection is None:
             try:
                 admin_connection = await asyncpg.connect(admin_url, timeout=3)
             except Exception:

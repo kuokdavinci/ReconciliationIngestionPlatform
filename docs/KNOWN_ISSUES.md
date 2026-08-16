@@ -28,7 +28,7 @@
 ## CI và tài liệu
 
 - Codegraph hiện không có `src/scheduler/`, `src/services/` hoặc `frontend/`; một số historical plan/report và workflow cũ còn nhắc tên legacy này. Khi chỉnh CI tiếp theo, cần dọn các path legacy trong `.github/workflows/ingestion-pipeline.yml`.
-- `docs/phase-2/sprint-2.6-recovery-hardening.md` giữ tên file để bảo toàn link lịch sử, nhưng nội dung đã được hợp nhất vào Sprint 2.5 và không phải sprint độc lập.
+- Nội dung recovery hardening đã được hợp nhất vào `docs/phase-2/sprint-2.5-airflow-migration.md`; Sprint 2.6 không còn là sprint độc lập.
 - Sau thay đổi cấu trúc, chạy `codegraph sync .` và cập nhật `README.md`, `docs/INDEX.md`, architecture/module/CI docs nếu cần.
 
 ## Test dependencies

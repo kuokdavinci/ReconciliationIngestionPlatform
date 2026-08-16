@@ -1,20 +1,18 @@
-# Phase 2 — Sprint Index
+# Phase 2 — Chỉ mục Sprint
 
 Phase 2 tập trung vào độ tin cậy của fetch/ingestion runtime: idempotency, source-unit checkpoint, recovery, workflow orchestration, data quality và observability. Reconciliation, review và dashboard chỉ được chạm ở các integration contract cần để vận hành các luồng này.
 
-> **Quy ước quan trọng:** Sprint 2.5 là sprint hợp nhất gồm **Airflow integration** và **recovery hardening**. Tài liệu cũ `sprint-2.6-recovery-hardening.md` vẫn giữ tên file để bảo toàn liên kết lịch sử, nhưng không còn được xem là Sprint 2.6 độc lập.
+> **Quy ước quan trọng:** Sprint 2.5 là sprint hợp nhất gồm **Airflow integration** và **recovery hardening**. Sprint 2.6 không còn là sprint độc lập; nội dung đã được đưa vào tài liệu Sprint 2.5.
 
 ## Sprint 1 — Idempotency và duplicate protection
 
 **Trạng thái:** Đã triển khai, có benchmark/evaluation.
 
-- [Core function index](sprint-1-index.md)
-- [Idempotency plan](sprint-1-idempotency.md)
-- [Implementation report](sprint-1-idempotency-report.md)
-- [Evaluation and benchmark spec](sprint-1-eval-benchmark.md)
+- [Chỉ mục hàm core](sprint-1-index.md)
+- [Kế hoạch idempotency](sprint-1-idempotency.md)
+- [Đặc tả evaluation và benchmark](sprint-1-eval-benchmark.md)
 - [Benchmark execution run](sprint-1-eval-benchmark-run.md)
-- [Summary report](sprint-1-summary.md)
-- [MOMO E2E guide](momo-e2e-test-guide.md)
+- [Hướng dẫn MOMO E2E](momo-e2e-test-guide.md)
 
 Phạm vi chính: file claim theo hash, fetch-unit identity, ingestion key, conflict-safe batch write và outcome accounting.
 
@@ -22,9 +20,10 @@ Phạm vi chính: file claim theo hash, fetch-unit identity, ingestion key, conf
 
 **Trạng thái:** Đã triển khai; tiếp tục được harden trong Sprint 2.5 hợp nhất.
 
-- [Incremental processing and recovery plan](sprint-2-incremental-recovery.md)
-- [Evaluation execution run](sprint-2-eval-run.md)
-- [Pagination, replay và failure/resume example](ingestion-pagination-example.md)
+- [Kế hoạch incremental processing và recovery](sprint-2-incremental-recovery.md)
+- [Chỉ mục hàm core — Sprint 2 và Sprint 2.5](sprint-2-index.md)
+- [Biên bản chạy evaluation](sprint-2-eval-run.md)
+- [Ví dụ pagination, replay và failure/resume](ingestion-pagination-example.md)
 
 Phạm vi chính: API pagination, FileDrop/SFTP source units, checkpoint sequencing, retry policy, terminal state, ViettelPay recovery demo và ordered FileDrop backfill.
 
@@ -32,8 +31,8 @@ Phạm vi chính: API pagination, FileDrop/SFTP source units, checkpoint sequenc
 
 **Trạng thái:** Acceptance chưa hoàn tất: 6/11 criteria đã đạt; 5 criteria còn pending. Pilot/automated verification và local Compose service health đã có; live business-flow/production acceptance còn phụ thuộc môi trường.
 
-- [Airflow integration, pilot và migration runbook](sprint-2.5-airflow-migration.md)
-- [Recovery hardening evidence — nội dung hợp nhất từ Sprint 2.6](sprint-2.6-recovery-hardening.md)
+- [Airflow integration, pilot và runbook migration](sprint-2.5-airflow-migration.md)
+- [Chỉ mục hàm core — Sprint 2 và Sprint 2.5](sprint-2-index.md)
 
 Các capability của sprint hợp nhất:
 
@@ -47,7 +46,7 @@ Các capability của sprint hợp nhất:
 
 **Trạng thái:** Kế hoạch mở rộng.
 
-- [Data quality and quarantine plan](sprint-3-data-quality.md)
+- [Kế hoạch data quality và quarantine](sprint-3-data-quality.md)
 
 Phạm vi dự kiến: EDA trước ingestion, quality gates, quarantine contract và operator visibility.
 
@@ -55,7 +54,7 @@ Phạm vi dự kiến: EDA trước ingestion, quality gates, quarantine contrac
 
 **Trạng thái:** Kế hoạch mở rộng; runtime visibility nền tảng đã có trong các sprint trước.
 
-- [Observability plan](sprint-4-observability.md)
+- [Kế hoạch observability](sprint-4-observability.md)
 
 Phạm vi dự kiến: metrics, structured logs, alerting, dashboard operational signals và acceptance evidence.
 
@@ -63,8 +62,8 @@ Phạm vi dự kiến: metrics, structured logs, alerting, dashboard operational
 
 | Sprint | Mục tiêu | Tài liệu chính | Trạng thái |
 |---|---|---|---|
-| 1 | Idempotency | `sprint-1-index.md`, report, benchmark | Implemented |
-| 2 | Incremental/recovery | `sprint-2-incremental-recovery.md` | Implemented |
-| 2.5 | Airflow + recovery hardening | `sprint-2.5-airflow-migration.md` + hardening evidence | Partial acceptance: 5 criteria pending |
-| 3 | Data quality/quarantine | `sprint-3-data-quality.md` | Planned |
-| 4 | Observability | `sprint-4-observability.md` | Planned |
+| 1 | Idempotency | `sprint-1-index.md`, benchmark | Đã triển khai |
+| 2 | Incremental/recovery | `sprint-2-index.md`, `sprint-2-incremental-recovery.md` | Đã triển khai |
+| 2.5 | Airflow + recovery hardening | `sprint-2-index.md`, `sprint-2.5-airflow-migration.md` | Còn 5 tiêu chí acceptance |
+| 3 | Data quality/quarantine | `sprint-3-data-quality.md` | Kế hoạch |
+| 4 | Observability | `sprint-4-observability.md` | Kế hoạch |

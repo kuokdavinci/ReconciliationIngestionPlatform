@@ -1,20 +1,20 @@
-# Phase 2 — Sprint 2.5: Airflow Migration Plan
+# Phase 2 — Sprint 2.5: Airflow và Recovery Hardening
 
-**Status:** Pilot implemented; current API image and local Compose health verified on 2026-08-14; 5 business acceptance criteria remain partial or pending
-**Timing:** Sau khi Sprint 2 hoàn tất và có regression evidence đầy đủ  
+**Trạng thái:** Đã triển khai pilot; image API hiện tại và sức khỏe Compose local được kiểm chứng ngày 2026-08-14; còn 5 tiêu chí business acceptance ở trạng thái partial hoặc pending.
+**Thời điểm:** Sau khi Sprint 2 hoàn tất và có regression evidence đầy đủ
 **Owner:** Platform/ingestion team
 
-> Sprint 2.5 là milestone hợp nhất của **Airflow integration** và **recovery hardening**. Nội dung hardening trước đây được lưu trong [recovery hardening evidence](sprint-2.6-recovery-hardening.md); tên file cũ chỉ được giữ để bảo toàn liên kết lịch sử, không biểu thị một sprint độc lập.
+> Sprint 2.5 là milestone hợp nhất của **Airflow integration** và **recovery hardening**. Sprint 2.6 không còn là sprint độc lập; toàn bộ acceptance, implementation và evidence của phần này nằm trong tài liệu hiện tại.
 
 **Acceptance status:** Chưa hoàn tất. Pilot, contract tests và một VNPAY backfill trên image hiện tại đã có, nhưng **5/11 acceptance criteria** vẫn chưa đủ evidence để đóng ở mức business acceptance. Các mục còn lại được phân biệt rõ giữa contract evidence, live smoke evidence và rollout rehearsal.
 
-## Goal
+## Mục tiêu
 
 Thay thế APScheduler bằng Apache Airflow ở lớp scheduling và workflow control-plane, đồng thời tái sử dụng fetcher, ingestion pipeline, checkpoint và recovery contract đã hoàn tất ở Sprint 2.
 
 Sprint 2.5 không viết lại ingestion flow. Airflow chỉ quyết định khi nào một stream chạy, chạy theo dependency nào, retry ở cấp task ra sao và operator theo dõi workflow thế nào.
 
-## Implemented pilot (2026-08-09)
+## Pilot đã triển khai (2026-08-09)
 
 Phạm vi đầu tiên đã được triển khai với Airflow `3.3.0`, `LocalExecutor` và một DAG generic:
 
@@ -33,7 +33,7 @@ Phạm vi đầu tiên đã được triển khai với Airflow `3.3.0`, `LocalE
   `AIRFLOW_GLOBAL_SCHEDULE=none`; APScheduler control plane đã được decommission
   sau khi VNPAY backfill đạt 3/3 ngày `COMPLETED`.
 
-### Review/schedule hardening hiện tại
+### Hardening review/schedule hiện tại
 
 - Review Step 3 mặc định chỉ hiển thị phần tổng quan; trace samples được mở
   theo yêu cầu để tránh modal bị dài và khó đọc.
@@ -47,7 +47,7 @@ Phạm vi đầu tiên đã được triển khai với Airflow `3.3.0`, `LocalE
 
 Các file vận hành chính: `Dockerfile.airflow`, `requirements-airflow.txt`, `docker-compose.yml`, `dags/reconciliation_ingestion.py` và `docker/bootstrap-airflow-db.sh`.
 
-### ViettelPay live pilot evidence
+### Evidence pilot live ViettelPay
 
 Pilot manual-only đã chạy qua API ứng dụng với mock API ba trang:
 
@@ -61,7 +61,7 @@ Trạng thái local sau pilot: API dùng `APP_AUTOMATION_ORCHESTRATOR=airflow`,
 Nút Run Now/retry/backfill trên UI đi qua Airflow; cron tự động chưa được bật
 cho các partner khác trong manual pilot.
 
-### Local startup
+### Khởi động local
 
 ```bash
 cp .env.example .env
@@ -79,7 +79,7 @@ AIRFLOW_GLOBAL_SCHEDULE=none
 
 `none` giữ DAG ở chế độ manual-only trong pilot, vì vậy unpause DAG không tự chạy tất cả fetch config đang enabled. Chỉ đổi lại cron production sau khi có acceptance decision riêng.
 
-### FileDrop/SFTP path contract in Airflow
+### Contract path FileDrop/SFTP trong Airflow
 
 Airflow task execution uses `/opt/airflow/app` as its working directory. This
 matches the Airflow task mounts in `docker-compose.yml`:
@@ -109,7 +109,7 @@ Rollback pilot là pause DAG và rollback application deployment về artifact t
 cutover nếu cần; không có đường bật lại APScheduler và không reset checkpoint
 hoặc runtime data.
 
-### Submission and outcome contract
+### Contract submit và outcome
 
 - API tạo `runtimeRunId`, dùng DAG run ID xác định `manual__<runtimeRunId>` và submit qua `/api/v2/dags/{dag_id}/dagRuns`.
 - `409` hoặc POST timeout được probe lại bằng GET; chỉ coi là idempotent khi runtime/correlation khớp.
@@ -128,7 +128,7 @@ hoặc runtime data.
   acceptance test riêng vì native retry sẽ tạo thêm attempt trước khi UI cập nhật.
 - Với API pagination, review packet gom các `sampleRows` đã persist của cùng partner/ngày, loại trùng và giữ bounded sample; packet không còn phụ thuộc vào file download còn tồn tại trong volume.
 
-### Airflow failure versus page recovery
+### Phân biệt lỗi Airflow và recovery page
 
 Airflow đánh trạng thái ở cấp `DagRun`/mapped task, còn Schedules UI hiển thị
 checkpoint theo từng source page. Vì vậy một run có thể đồng thời hiển thị
@@ -151,7 +151,7 @@ docker logs reconciliation-airflow-scheduler 2>&1 \
   | rg 'partner=VIETTELPAY|runtimeRunId=<runtime-id>'
 ```
 
-### Deterministic ViettelPay manual-retry demo
+### Demo manual retry ViettelPay có thể tái lập
 
 Use these settings for the UI demo (the values are also present in
 `.env.example`):
@@ -182,7 +182,7 @@ If the state read fails, the API now returns `409` without creating a new DAG
 run and writes the Airflow endpoint details to the API log. This is an
 orchestration/configuration error to fix, not a reason to use **Run Now**.
 
-### Durable raw staging for large API streams
+### Raw staging bền vững cho API stream lớn
 
 Đã bổ sung `raw_ingestion_page` cho API pagination:
 
@@ -191,7 +191,94 @@ orchestration/configuration error to fix, not a reason to use **Run Now**.
 - Sau approval, post-approval runner materialize từng page từ GridFS, replay qua ingestion/reconciliation hiện có và đánh dấu page `CONSUMED`. Retry upload và replay theo `sourceUnitKey` là idempotent.
 - Retention mặc định là 7 ngày; daily job dọn metadata và GridFS payload hết hạn. Nếu adapter không phải Motor (test double/legacy), hệ thống giữ fallback one-page gate cũ.
 
-## Current baseline
+## Phần hợp nhất: recovery hardening
+
+Phần này hợp nhất nội dung hardening trước đây của Sprint 2.6 vào Sprint 2.5.
+Mục tiêu là bảo đảm một workflow owner rõ ràng, recovery có lịch sử đầy đủ và
+không làm mất boundary của checkpoint khi Airflow retry hoặc operator replay.
+
+### Bản đồ ưu tiên và trạng thái
+
+| Ưu tiên | Vấn đề/acceptance | Evidence hiện tại | Trạng thái |
+|---|---|---|---|
+| P0 | Không để APScheduler và Airflow cùng trigger một stream | Compose pilot dùng Airflow; `AIRFLOW_GLOBAL_SCHEDULE=none`; không còn legacy scheduler | Đạt ở local pilot |
+| P0 | Durable staging failure phải xuất hiện trong recovery timeline | Checkpoint event, runtime attempt và raw page giữ lại để retry | Đạt qua test/contract |
+| P0 | Retry phải hiển thị cả attempt cũ và attempt mới | Recovery events hợp nhất theo `eventId`, UI hiển thị `FAILED → RETRY_REQUESTED → STARTED → COMPLETED` | Đạt; ViettelPay đã kiểm chứng live |
+| P1 | Review scope phải đọc toàn bộ API stream, không chỉ page đầu | Raw-stream endpoint và mapping validation đọc bounded pages theo `rawStageKey` | Đạt qua test; live rerun mapping còn mở |
+| P1 | Approved mapping phải replay toàn bộ stream như một logical batch | Một `rawStageKey`, một logical file, các page dùng chung `sourceFileId`, reconcile một lần | Đạt qua regression; live business rerun còn mở |
+| P1 | Evidence nội bộ phải giữ đúng timezone business day | Mốc Asia/Ho_Chi_Minh được đổi sang UTC trước SQL; packet lưu count và preview giới hạn | Đạt qua test/live evidence |
+| P1 | Lỗi chọn Airflow/config không để runtime treo ở QUEUED | Runtime chuyển `FAILED` với error code có thể hành động | Đạt qua test |
+| P2 | Retry native của Airflow không hard-code attempt 1 | `AIRFLOW_TASK_RETRIES=0` trong manual pilot; retry do operator | Đạt ở pilot |
+| P2 | Health Airflow live phải có evidence riêng | Healthcheck, DAG import error và process list đã ghi nhận | Local đạt; production rollout còn mở |
+
+### Flow recovery sau hardening
+
+```text
+Operator/API
+  → một orchestrator được chọn (Airflow hoặc adapter local)
+  → runtime QUEUED + correlation
+  → Airflow chọn stream / mapped run
+  → fetch và raw staging bền vững
+  → attempt event (start/progress/failure/success)
+  → checkpoint + source-unit ingestion khi đủ điều kiện
+  → review packet hoặc reconciliation
+  → terminal runtime status, giữ lại lịch sử attempt
+```
+
+`WAITING_REVIEW` vẫn là business gate hợp lệ. Khi mapping thiếu/cũ hoặc stream
+API đã stage đủ page, packet giữ cùng `rawStageKey`; approval replay toàn bộ
+stream như một logical reconciliation file. Khi một page lỗi giữa stream,
+partial canonical rows bị dọn, raw page và checkpoint vẫn replay được, còn
+reconciliation chỉ chạy sau khi tất cả page hoàn tất.
+
+### Evidence tự động và live hiện có
+
+- Backend quality, Ruff, mypy, dependency check, Compose config, frontend
+  lint/typecheck/build và Playwright smoke đã có trong evidence của pilot.
+- Recovery contract bao phủ retry, blocked/resolve/skip, review gate, timezone,
+  full-stream mapping, logical batch và backfill isolation.
+- Live ViettelPay đã chứng minh page-2 failure → manual retry → 3/3 source
+  units và 6/6 partner rows hoàn tất; current-image VNPAY FileDrop backfill
+  ngày 2026-08-14 hoàn tất `1/1` ngày với `3 MATCHED` rows và giữ source file.
+- Còn thiếu để đóng business acceptance: multi-fingerprint FileDrop và live
+  SFTP recovery, đầy đủ retry/state matrix, scheduled chạy đồng thời với
+  backfill, live mapping-gated review và rollback theo partner không reset dữ liệu.
+
+### Nhật ký hardening được giữ lại trong tài liệu hợp nhất
+
+- Chuẩn hóa business key theo thứ tự `vspTransId` → `partner_id`, đồng thời
+  chuẩn hóa timestamp aware về UTC-naive trước khi ghi PostgreSQL; SQL status,
+  ordering và migration index đã được kiểm chứng.
+- Review Mapping đọc `GET /api/v1/review-packets/{packet_id}/raw-records`
+  theo trang giới hạn, giữ `streamRowIndex`, `rowIndex`, `page` và
+  `sourceUnitKey`; browser không tải toàn bộ payload một lần.
+- Logical batch API giữ ba raw page dưới một `rawStageKey`, một
+  `reconciliation_file`, các transaction dùng chung `sourceFileId` và chỉ
+  reconcile một lần sau khi mọi page thành công. Failed-middle-page dọn rows
+  tạm nhưng để raw page replay được.
+- API pagination có durable staging sẽ luôn đi qua scope Review Packet, kể cả
+  khi mapping đã approved. Hành động **Approve keep current** replay cùng
+  batch sau approval; không còn đường bypass tạo một file cho mỗi page.
+- Fixture `make viettelpay-sprint2-reset` cố ý không tạo approved mapping để
+  tái hiện packet trên UI; fixture recovery approved mapping vẫn dùng để kiểm
+  chứng retry/ingestion mà không tạo packet ngoài mapping gate.
+- Internal evidence dùng business timezone khi query PostgreSQL và lưu
+  `internalRecordCount` cùng `internalPreview` bounded; packet hiển thị ngày
+  theo `Asia/Ho_Chi_Minh` thay vì UTC calendar date.
+- JSON/JSONL/NDJSON mapping giữ `sourceField` theo key/header thực tế; mapping
+  runtime bảo toàn dictionary rows, còn mapping column legacy vẫn dùng list rows.
+- FileDrop/SFTP packet đọc source file theo pagination có giới hạn và xử lý
+  mapping path `/opt/airflow/app` ↔ `/app`; recovery summary không lặp badge
+  của runtime `RUNNING`/`WAITING_REVIEW`.
+- Manual pilot đặt `AIRFLOW_TASK_RETRIES=0`. Operator retry gửi
+  `reset_dag_runs=true` để DagRun terminal không chặn lần chạy lại; attempt
+  history vẫn hiển thị cả retry cùng runtime và fallback runtime mới.
+- Scope classification dựa trên business-key overlap, historical coverage,
+  new-key ratio và changed payload; không suy luận từ token tên file.
+  `INCREMENTAL_APPEND` chỉ reconcile batch hiện tại, `REPLACEMENT` xử lý file
+  thay thế đầy đủ và `FULL_SNAPSHOT` mới thay toàn bộ partner/date slice.
+
+## Baseline hiện tại
 
 Repository hiện có các boundary phù hợp cho migration:
 
@@ -200,9 +287,9 @@ Repository hiện có các boundary phù hợp cho migration:
 - [Fetcher contract](../../src/fetchers/base.py) chuẩn hóa `FetchResult` và `SourceUnitMetadata` cho API, SFTP và FileDrop.
 - [Sprint 2 recovery contract](sprint-2-incremental-recovery.md) yêu cầu xử lý tuần tự, checkpoint chỉ advance sau persistence thành công và backfill không làm thay đổi scheduled stream.
 
-## Architecture decision
+## Quyết định kiến trúc
 
-### Decision
+### Quyết định
 
 Airflow là lớp trigger/orchestration bên ngoài duy nhất. Business logic ingestion vẫn thuộc application/domain/infrastructure của repository.
 
@@ -217,7 +304,7 @@ Airflow DAG
           -> runtime status and reconciliation
 ```
 
-### Responsibility boundary
+### Ranh giới trách nhiệm
 
 | Component | Owns | Does not own |
 |---|---|---|
@@ -229,7 +316,7 @@ Airflow DAG
 
 Airflow retry không thay thế retry policy của source unit. Hai lớp phải được giới hạn rõ để tránh retry storm: application retry xử lý lỗi fetch/persist của unit; Airflow retry xử lý task/process failure hoặc restart ở cấp workflow.
 
-## Why migrate after Sprint 2
+## Vì sao migrate sau Sprint 2
 
 Sau Sprint 2, migration chủ yếu là thay adapter scheduling vì các contract khó nhất đã có:
 
@@ -241,9 +328,9 @@ Sau Sprint 2, migration chủ yếu là thay adapter scheduling vì các contrac
 
 Airflow vẫn không tự fetch dữ liệu. DAG phải gọi application entrypoint để application gọi `APIFetcher`, `SFTPFetcher` hoặc `FileDropFetcher`.
 
-## Target design for the first migration
+## Thiết kế mục tiêu cho migration đầu tiên
 
-### DAG shape
+### Hình dạng DAG
 
 Giai đoạn đầu dùng một DAG generic với task chạy từng source stream tuần tự. Task đó gọi application service hiện tại; không tách mỗi cursor page thành một Airflow task động.
 
@@ -263,33 +350,32 @@ Các tham số tối thiểu của DAG/task:
 - `runtime_run_id` nếu được tạo từ UI/API.
 - `config_version` và correlation/run identifier.
 
-### Configuration and secrets
+### Cấu hình và secrets
 
 - `FetchConfig` vẫn là nguồn cấu hình nghiệp vụ của ứng dụng trong giai đoạn đầu.
 - Airflow giữ schedule, pool và operational parameters; không copy toàn bộ partner config vào DAG source.
 - Pilot nhận application credentials qua environment như stack hiện tại; partner credential không hard-code trong DAG và không ghi vào REST `conf`/XCom. Trước production cần chuyển secret distribution sang Docker/Kubernetes secrets hoặc Airflow secrets backend.
 - Airflow metadata database nên là database/schema riêng với application PostgreSQL. Không dùng Airflow metadata tables làm persistence cho ingestion.
 
-### Current local verification — 2026-08-14
+### Kiểm chứng local hiện tại — 2026-08-14
 
-The current Compose pilot was checked after rebuilding the API image:
+Compose pilot hiện tại được kiểm tra sau khi build lại image API:
 
-- `reconciliation-api` is running from image
-  `sha256:64ea31ba215a084001c8e4251fbe77eeeea3fa2164b8d1c403b6f3ea097ff76c`.
-- API `/openapi.json` returns HTTP 200.
-- Airflow metadata database, scheduler and DAG processor are healthy.
-- `airflow dags list-import-errors` returns `No data found`.
-- The active owner is Airflow with `AIRFLOW_GLOBAL_SCHEDULE=none` and
+- `reconciliation-api` chạy từ image
+  `sha256:cb2c9e4197efd6c1b925f510b3cfe43d604f07814285d3811fa5a15887214d13`.
+- API `/openapi.json` trả HTTP 200.
+- Airflow metadata database, scheduler và DAG processor ở trạng thái healthy.
+- `airflow dags list-import-errors` trả `No data found`.
+- Airflow là owner hiện tại với `AIRFLOW_GLOBAL_SCHEDULE=none` và
   `AIRFLOW_TASK_RETRIES=0`.
-- The Compose process list contains no legacy `reconciliation-scheduler`.
+- Compose không còn process legacy `reconciliation-scheduler`.
 
-This closes the local service-health evidence item. A current-image VNPAY
-FileDrop backfill for `2026-08-14` also completed `1/1` day with `3 MATCHED`
-reconciliation rows. The source file remained in the mounted `mock_data`
-directory after completion. This is smoke evidence, not the full multi-file /
-SFTP recovery acceptance.
+Mục evidence về local service health đã đạt. VNPAY FileDrop backfill trên image
+hiện tại cho ngày `2026-08-14` cũng hoàn tất `1/1` ngày với `3 MATCHED` rows;
+source file vẫn còn trong thư mục `mock_data` được mount. Đây là smoke evidence,
+chưa phải acceptance đầy đủ cho multi-file/SFTP recovery.
 
-### Checklist evidence matrix — 2026-08-14
+### Ma trận evidence checklist — 2026-08-14
 
 | Checklist | Current evidence | Status before business acceptance |
 |---|---|---|
@@ -308,7 +394,7 @@ Trong manual pilot, Airflow là owner duy nhất cho các stream được operat
 hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigger tự
 động và không có dual-run với scheduler khác.
 
-## Migration tasks
+## Các đầu việc migration
 
 ### Task 0 — Chốt ADR và inventory
 
@@ -319,7 +405,7 @@ hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigg
 
 **Verify:** ADR được review; không còn hai thành phần cùng sở hữu production schedule.
 
-### Task 1 — Ổn định application entrypoint (implemented)
+### Task 1 — Ổn định application entrypoint (đã triển khai)
 
 - Tạo một entrypoint rõ ràng cho Airflow gọi: `run_source_stream()` trong application automation.
 - Chuẩn hóa kết quả thành `success`, `outcome`, `errorCode`, `retryable`, checkpoint position và runtime run id.
@@ -327,7 +413,7 @@ hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigg
 
 **Verify:** gọi trực tiếp bằng CLI/test runner vẫn chạy được API pagination, FileDrop/SFTP, replay, retry và backfill isolation.
 
-### Task 2 — Dựng Airflow development stack (implemented for local pilot)
+### Task 2 — Dựng Airflow development stack (đã triển khai cho local pilot)
 
 - Thêm Airflow scheduler, API server/web UI, DAG processor/worker theo executor đã chọn và metadata PostgreSQL riêng.
 - Thiết lập healthcheck, migration command, timezone, log retention và DAG deployment.
@@ -335,7 +421,7 @@ hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigg
 
 **Verify:** `airflow db check`, Airflow UI/API healthy, DAG parse không lỗi và application database không bị thay đổi schema ngoài migration đã duyệt.
 
-### Task 3 — Viết pilot DAG (implemented)
+### Task 3 — Viết pilot DAG (đã triển khai)
 
 - Tạo DAG generic gọi application entrypoint cho một partner/config có fixture recovery, ưu tiên ViettelPay.
 - Cấu hình schedule, `execution_timeout`, bounded Airflow retries và pool slot cho từng stream.
@@ -343,7 +429,7 @@ hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigg
 
 **Verify:** manual run và scheduled run tạo đúng một runtime run; page/file failure dừng đúng boundary; retry tiếp tục từ checkpoint và không tạo duplicate.
 
-### Task 4 — Contract and recovery testing (ViettelPay live pilot passed; broader matrix pending)
+### Task 4 — Contract và recovery testing (ViettelPay live pilot đạt; matrix rộng hơn còn mở)
 
 - Test DAG import/serialization và task parameter validation.
 - Giữ regression của Sprint 1–2: failure giữa page, restart/resume, replay, duplicate invariant, FileDrop/SFTP retry và backfill isolation.
@@ -352,7 +438,7 @@ hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigg
 
 **Verify:** Airflow task retry không advance checkpoint sai, không tạo duplicate ingestion key và không chạy vượt blocked boundary.
 
-### Task 5 — Dual-run và cutover theo partner (superseded)
+### Task 5 — Dual-run và cutover theo partner (đã thay thế bằng manual pilot)
 
 - Chạy Airflow pilot ở manual/shadow mode.
 - So sánh runtime status, checkpoint, row counts, duplicate count, latency và error classification giữa scheduler cũ và pilot.
@@ -361,7 +447,7 @@ hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigg
 
 **Verify:** mỗi partner có một scheduler owner duy nhất; cutover/revert không làm mất checkpoint hoặc tạo double run.
 
-### Task 6 — Decommission APScheduler (completed for manual pilot)
+### Task 6 — Gỡ APScheduler (đã hoàn tất cho manual pilot)
 
 - Đã xóa registration/startup path, Compose service/profile, implementation,
   dependency và Mongo `apscheduler_jobs` control-plane dependency.
@@ -371,7 +457,7 @@ hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigg
 
 **Verify:** production stack không còn process APScheduler; Airflow là nguồn schedule duy nhất; manual run và operator recovery vẫn hoạt động.
 
-### Task 7 — Final verification (live pilot passed; outage matrix pending)
+### Task 7 — Kiểm chứng cuối (live pilot đạt; outage matrix còn mở)
 
 - Chạy full backend quality/regression suite.
 - Chạy deterministic Sprint 2 evaluation và pilot Airflow evaluation.
@@ -381,7 +467,7 @@ hoạt. DAG giữ `AIRFLOW_GLOBAL_SCHEDULE=none`, do đó không có daily trigg
 **Exit criterion:** manual pilot có evidence về manual run, retry, restart và
   ordered backfill; daily cron production là follow-up riêng.
 
-## Cutover and rollback
+## Cutover và rollback
 
 ### Cutover
 
@@ -403,7 +489,7 @@ replay-safe claim.
 - Không sửa hoặc lùi checkpoint bằng tay trừ khi có operator action/audit theo recovery contract.
 - Kiểm tra task failure sau persistence: replay phải trả duplicate/replay outcome an toàn.
 
-## Acceptance criteria
+## Tiêu chí acceptance
 
 Tổng hợp hiện tại: **6/11 đạt**, **5/11 còn pending**. Các mục `[ ]` là điều kiện đóng Sprint 2.5, không chỉ là follow-up tùy chọn.
 
@@ -430,7 +516,7 @@ Tổng hợp hiện tại: **6/11 đạt**, **5/11 còn pending**. Các mục `[
 | Scheduled checkpoint không bị backfill thay đổi | Chạy ordered backfill đồng thời với scheduled checkpoint và đối chiếu trước/sau |
 | Rollback per partner không reset dữ liệu | Thực hiện rollback pilot theo partner, giữ nguyên checkpoint/runtime và audit evidence |
 
-## Risks and mitigations
+## Rủi ro và biện pháp giảm thiểu
 
 | Risk | Mitigation |
 |---|---|
@@ -442,7 +528,7 @@ Tổng hợp hiện tại: **6/11 đạt**, **5/11 còn pending**. Các mục `[
 | Tách page thành task làm sai sequential recovery | Giai đoạn đầu giữ một task gọi sequential source-unit service |
 | Airflow deployment trở thành bottleneck mới | Healthcheck, pool limit, worker restart test và operational runbook |
 
-## References
+## Tài liệu tham chiếu
 
 - [Apache Airflow overview and distributed architecture](https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/overview.html)
 - [Airflow scheduler](https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/scheduler.html)

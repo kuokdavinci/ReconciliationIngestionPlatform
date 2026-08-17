@@ -1,0 +1,26 @@
+dataset:
+  name: IBM Transactions for Anti Money Laundering (AML)
+  provider: Kaggle
+  owner: ealtman2019
+  source_url: https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml/data
+  subset: LI Small
+  purpose: EDA and data-quality profiling
+  license_verified: false
+
+storage:
+  raw_dir: raw
+  interim_dir: interim
+  profiles_dir: profiles
+
+acquisition:
+  status: local_present
+  file_name: LI-Small_Trans.csv
+  size_bytes: 650422357
+  dataset_version: null
+  downloaded_at: null
+  sha256: f7a9940339c78b5d1476071505b5867c0f5319640b9c4279d13f531bf965319d
+
+notes:
+  - Verify Kaggle license and redistribution terms before sharing the dataset.
+  - Keep raw and interim data local and untracked.
+  - Do not use this dataset as a production settlement source.

@@ -20,49 +20,20 @@ Trạng thái hiện tại gồm FastAPI backend, dashboard Next.js, MongoDB + P
 
 ```mermaid
 flowchart LR
-    subgraph OUT[External systems]
-        UI[Next.js dashboard]
-        SRC[Partner API / FileDrop / SFTP]
-        DB[(MongoDB + PostgreSQL)]
-        AF[Airflow]
-    end
+    EXT[External systems\nDashboard • Partner sources • Airflow]
+    ADAPTER[Adapters\nAPI • fetchers/readers • persistence • DAG gateway]
+    APP[Application use cases\nAutomation • Ingestion • Review • Reconciliation]
+    CORE[Domain & core\nModels • contracts • identity • policies]
+    DATA[(MongoDB + PostgreSQL)]
 
-    subgraph ADAPTER[Interface & infrastructure adapters]
-        API[src/api]
-        FETCH[src/fetchers + readers]
-        REPO[src/infrastructure]
-        DAG[dags + workflow gateway]
-    end
-
-    subgraph APP[Application use cases]
-        AUTO[automation\ncheckpoint / recovery / backfill]
-        ING[ingestion\npipeline / validation]
-        REV[review\napproval / replay]
-        REC[reconciliation\nscope / matching / results]
-    end
-
-    subgraph CORE[Domain core]
-        DOMAIN[src/domain + src/core]
-        PORTS[ports / contracts / stable identities]
-    end
-
-    UI --> API
-    API --> APP
-    SRC --> FETCH --> AUTO
-    AF --> DAG --> AUTO
-    AUTO --> ING
-    AUTO --> REV
-    AUTO --> REC
-    APP --> DOMAIN
-    APP -. uses .-> PORTS
-    REPO -. implements .-> PORTS
-    REPO --> DB
-    DAG --> AF
+    EXT --> ADAPTER --> APP --> CORE
+    ADAPTER --> DATA
 ```
 
 - **Domain** chỉ chứa business model, enum, port và contract; không phụ thuộc FastAPI, MongoDB, PostgreSQL hay Airflow.
 - **Application** sở hữu use case và trạng thái nghiệp vụ: ingestion, automation, review, reconciliation, checkpoint và idempotency.
 - **Adapters** chuyển đổi request/source/workflow/persistence vào application ports: `src/api/`, `src/fetchers/`, `src/infrastructure/` và `dags/`.
+- Application phụ thuộc vào domain ports; adapters là nơi triển khai các ports đó và kết nối database/workflow bên ngoài.
 - **Airflow** sở hữu schedule, dependency, retry/timeout, pool và task log; business logic vẫn nằm trong application.
 
 Luồng chính: `partner source → fetcher → automation → ingestion/reconciliation → persistence`; khi cần operator action, application tạo review packet và chờ replay sau approval.

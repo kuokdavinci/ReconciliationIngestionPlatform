@@ -272,6 +272,71 @@ def test_list_automation_jobs_hides_equivalent_pending_backfill_packet():
     assert [packet["_id"] for packet in job["recentPackets"]] == ["pkt-vnpay-start-date"]
 
 
+def test_list_automation_jobs_shows_pending_packet_for_new_source_file():
+    app, fetch_collection, packet_collection, _, _, _, backfill_collection, _ = _create_test_app()
+    fetch_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "123e4567-e89b-12d3-a456-426614174000",
+            "partner": "MOMO",
+            "fetchMethod": "FILEDROP",
+            "schedule": "none",
+            "enabled": True,
+            "localDownloadDir": "./downloads",
+            "methodConfig": {"directory": "mock_data"},
+            "updatedAt": "2026-08-17T09:30:59.048000",
+        }
+    ]))
+    same_structure = {
+        "headers": ["id", "trace", "amount"],
+        "columnCount": 3,
+        "hash": "same-structure",
+    }
+    packet_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "pkt-momo-phase2",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "MOMO",
+            "fileName": "settlement_MOMO_20260817_phase2.xlsx",
+            "sourceFileId": "file-phase2",
+            "sourceFilePath": "/mock_data/settlement_MOMO_20260817_phase2.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "structureSignature": same_structure,
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "PENDING",
+            "createdAt": "2026-08-17T03:00:00+00:00",
+        },
+        {
+            "_id": "pkt-momo-phase1",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "MOMO",
+            "fileName": "settlement_MOMO_20260817.xlsx",
+            "sourceFileId": "file-phase1",
+            "sourceFilePath": "/mock_data/settlement_MOMO_20260817.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "structureSignature": same_structure,
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "APPROVED",
+            "createdAt": "2026-08-17T02:00:00+00:00",
+        },
+    ]))
+    backfill_collection.find_one = AsyncMock(return_value=None)
+
+    response = TestClient(app).get("/api/v1/automation/jobs")
+
+    assert response.status_code == 200
+    job = response.json()["jobs"][0]
+    assert job["pendingReviewPackets"] == 1
+    assert job["recentPackets"][0]["_id"] == "pkt-momo-phase2"
+
+
 @pytest.mark.asyncio
 async def test_backfill_review_packet_attachment_is_scoped_to_current_business_date():
     from src.api.automation import _attach_pending_backfill_review_packet

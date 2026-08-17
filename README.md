@@ -15,39 +15,56 @@ Trạng thái hiện tại gồm FastAPI backend, dashboard Next.js, MongoDB + P
 - Insight/Copilot có guardrail, cache và provider fallback.
 - Dashboard cho reconciliation, Review Center, Mapping Studio, Schedules và Audit Log.
 
-## Kiến trúc runtime
+## Kiến trúc Clean Architecture
 
 ```mermaid
 flowchart LR
-    S[Partner File / API / SFTP] --> F[src/fetchers]
-    F --> O[src/application/automation]
-    AF[Airflow DAG] --> O
-    O --> U[src/application/ingestion]
-    U --> P[src/pipeline]
-    P --> D[src/domain]
-    P --> I[src/infrastructure]
-    I --> M[(MongoDB)]
-    I --> PG[(PostgreSQL)]
-    O --> R[src/application/reconciliation]
-    R --> PG
-    API[src/api FastAPI] --> O
-    API --> R
-    UI[frontend-next] --> API
+    subgraph OUT[External systems]
+        UI[Next.js dashboard]
+        SRC[Partner API / FileDrop / SFTP]
+        DB[(MongoDB + PostgreSQL)]
+        AF[Airflow]
+    end
+
+    subgraph ADAPTER[Interface & infrastructure adapters]
+        API[src/api]
+        FETCH[src/fetchers + readers]
+        REPO[src/infrastructure]
+        DAG[dags + workflow gateway]
+    end
+
+    subgraph APP[Application use cases]
+        AUTO[automation\ncheckpoint / recovery / backfill]
+        ING[ingestion\npipeline / validation]
+        REV[review\napproval / replay]
+        REC[reconciliation\nscope / matching / results]
+    end
+
+    subgraph CORE[Domain core]
+        DOMAIN[src/domain + src/core]
+        PORTS[ports / contracts / stable identities]
+    end
+
+    UI --> API
+    API --> APP
+    SRC --> FETCH --> AUTO
+    AF --> DAG --> AUTO
+    AUTO --> ING
+    AUTO --> REV
+    AUTO --> REC
+    APP --> DOMAIN
+    APP -. uses .-> PORTS
+    REPO -. implements .-> PORTS
+    REPO --> DB
+    DAG --> AF
 ```
 
-| Boundary | Trách nhiệm | Vị trí chính |
-|---|---|---|
-| Delivery | FastAPI routes, request/response contracts | `src/api/` |
-| Application | Use case, orchestration, command/query và runtime state | `src/application/` |
-| Domain | Model, enum, port và contract ổn định | `src/domain/` |
-| Infrastructure | MongoDB, PostgreSQL, Airflow gateway và repositories | `src/infrastructure/` |
-| Ingestion | Claim file, đọc row, normalize, validate, batch persistence | `src/pipeline/`, `src/readers/`, `src/normalizer/`, `src/validators/` |
-| Fetcher | FileDrop, SFTP, API và source-unit identity | `src/fetchers/` |
-| Reconciliation | Scope, matching, result và review record | `src/reconciliation/`, `src/application/reconciliation/` |
-| Automation | Stream execution, checkpoint, recovery, backfill | `src/application/automation/`, `dags/` |
-| Dashboard | Operator UI và typed API clients | `frontend-next/` |
+- **Domain** chỉ chứa business model, enum, port và contract; không phụ thuộc FastAPI, MongoDB, PostgreSQL hay Airflow.
+- **Application** sở hữu use case và trạng thái nghiệp vụ: ingestion, automation, review, reconciliation, checkpoint và idempotency.
+- **Adapters** chuyển đổi request/source/workflow/persistence vào application ports: `src/api/`, `src/fetchers/`, `src/infrastructure/` và `dags/`.
+- **Airflow** sở hữu schedule, dependency, retry/timeout, pool và task log; business logic vẫn nằm trong application.
 
-Airflow là workflow owner của Compose pilot. Application giữ business logic, checkpoint và idempotency; Airflow chỉ sở hữu schedule, dependency, task retry/timeout, pool và task log. `LocalWorkflowGateway` còn tồn tại như adapter test/compatibility, không phải scheduler thứ hai.
+Luồng chính: `partner source → fetcher → automation → ingestion/reconciliation → persistence`; khi cần operator action, application tạo review packet và chờ replay sau approval.
 
 ## Quick start
 

@@ -27,7 +27,7 @@ from src.infrastructure.postgres.internal_transaction_repository import Internal
 
 DEFAULT_PARTNER = "VNPAY"
 DEFAULT_FILE_DIR = Path("./mock_data")
-DEFAULT_FROM_DAYS_AGO = 3
+DEFAULT_BUSINESS_DAYS = 4
 SEED_PREFIX = "seed-vnpay-filedrop-backfill"
 SEED_BACKFILL_RUN_ID = f"{SEED_PREFIX}-run"
 VNPAY_HEADERS = ["id", "trace", "amount", "status", "transDate"]
@@ -39,6 +39,23 @@ def build_backfill_dates(from_date: str, to_date: str) -> list[date]:
     if start > end:
         raise ValueError("from date must be on or before to date")
     return [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+
+
+def default_backfill_range(
+    today: date,
+    business_days: int = DEFAULT_BUSINESS_DAYS,
+) -> tuple[str, str]:
+    if business_days < 1:
+        raise ValueError("business_days must be positive")
+
+    values: list[date] = []
+    cursor = today
+    while len(values) < business_days:
+        if cursor.weekday() < 5:
+            values.append(cursor)
+        cursor -= timedelta(days=1)
+
+    return values[-1].isoformat(), values[0].isoformat()
 
 
 def build_source_filename(day: date) -> str:
@@ -296,10 +313,7 @@ def _parse_args() -> argparse.Namespace:
 
 def _default_dates() -> tuple[str, str]:
     today = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date()
-    return (
-        (today - timedelta(days=DEFAULT_FROM_DAYS_AGO)).isoformat(),
-        today.isoformat(),
-    )
+    return default_backfill_range(today)
 
 
 async def reset_fixture(from_date: str, to_date: str, file_dir: str) -> list[Path]:

@@ -8,7 +8,12 @@ import asyncio
 
 from cli.ingest import run_ingestion
 from cli.reconcile import run_reconciliation
-from api.server import run_server
+
+
+def run_server(port: int = 8000) -> None:
+    """Start the FastAPI server."""
+    import uvicorn
+    uvicorn.run("src.api:create_app", host="0.0.0.0", port=port, factory=True)
 
 
 def main():

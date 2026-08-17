@@ -2,7 +2,9 @@
 
 import inspect
 
+import pytest
 from pymongo import IndexModel
+from pymongo.errors import OperationFailure
 
 
 class TestIndexesDefinition:
@@ -147,3 +149,74 @@ class TestApplyIndexes:
         sig = inspect.signature(apply_indexes)
         params = list(sig.parameters.keys())
         assert "db" in params, "apply_indexes must have 'db' parameter"
+
+
+class _IndexCursor:
+    def __init__(self, documents):
+        self._documents = documents
+
+    async def to_list(self, length=None):
+        return self._documents
+
+
+class _IndexCollection:
+    def __init__(self, indexes):
+        self.indexes = indexes
+        self.dropped = []
+        self.created = []
+
+    def list_indexes(self):
+        return _IndexCursor(self.indexes)
+
+    async def drop_index(self, name):
+        self.dropped.append(name)
+        self.indexes = [index for index in self.indexes if index.get("name") != name]
+
+    async def create_indexes(self, indexes):
+        self.created.extend(indexes)
+
+
+class _MissingIndexCollection(_IndexCollection):
+    def list_indexes(self):
+        raise OperationFailure("ns does not exist", code=26)
+
+
+@pytest.mark.asyncio
+async def test_legacy_sparse_fetch_unit_index_is_replaced_by_partial_index():
+    from src.infrastructure.persistence.mongo_indexes import (
+        INDEXES,
+        _ensure_collection_indexes,
+    )
+
+    collection = _IndexCollection(
+        [
+            {
+                "key": {"fetchUnitKey": 1},
+                "name": "idx_fetch_unit_key_unique",
+                "unique": True,
+                "sparse": True,
+            }
+        ]
+    )
+
+    await _ensure_collection_indexes(collection, [INDEXES["reconciliation_file"][1]])
+
+    assert collection.dropped == ["idx_fetch_unit_key_unique"]
+    assert collection.created[0].document["partialFilterExpression"] == {
+        "fetchUnitKey": {"$type": "string"}
+    }
+
+
+@pytest.mark.asyncio
+async def test_missing_collection_is_created_with_desired_indexes():
+    from src.infrastructure.persistence.mongo_indexes import (
+        INDEXES,
+        _ensure_collection_indexes,
+    )
+
+    collection = _MissingIndexCollection([])
+
+    await _ensure_collection_indexes(collection, [INDEXES["reconciliation_file"][1]])
+
+    assert len(collection.created) == 1
+    assert collection.created[0].document["name"] == "idx_fetch_unit_key_unique"

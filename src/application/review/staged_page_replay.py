@@ -11,11 +11,13 @@ from src.config.settings import settings
 from src.core.business_day import business_date
 from src.core.error_formatting import summarize_runtime_error
 from src.core.enums import ProcessingStatus
+from src.domain.ingestion.checkpoints import IngestionMode
 from src.domain.review.models import PostApprovalRunStage, PostApprovalRunStatus
 from src.domain.runtime.models import PartnerRuntimeRunStatus
 from src.infrastructure.ingestion.composition import build_ingestion_pipeline
 from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 from src.infrastructure.ingestion.raw_page_repository import RawIngestionPageRepository
+from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from src.infrastructure.mapping.composition import build_config_loader
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
 from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
@@ -24,6 +26,55 @@ from src.application.review.post_approval_reconciliation import (
     rebind_replacement_transactions as _rebind_replacement_transactions,
     update_post_approval_run as _update_post_approval_run,
 )
+
+
+async def _finalize_scheduled_checkpoint_after_replay(db: Any, pages: list[Any]) -> None:
+    if not pages:
+        return
+
+    final_page = pages[-1]
+    fetch_config_id = getattr(final_page, "fetch_config_id", None)
+    source_type = getattr(final_page, "source_type", None)
+    stream_key = getattr(final_page, "stream_key", None)
+    unit_key = getattr(final_page, "source_unit_key", None)
+    if not isinstance(fetch_config_id, str) or not fetch_config_id:
+        return
+    if not isinstance(source_type, str) or not source_type:
+        return
+    if not isinstance(stream_key, str) or not stream_key:
+        return
+    if not isinstance(unit_key, str) or not unit_key:
+        return
+
+    try:
+        checkpoint_repo = IngestionCheckpointRepository(db)
+        checkpoint = await checkpoint_repo.find_by_stream(
+            partner=final_page.partner,
+            fetch_config_id=fetch_config_id,
+            source_type=source_type,
+            stream_key=stream_key,
+            mode=IngestionMode.SCHEDULED,
+        )
+    except (AttributeError, TypeError):
+        # Compatibility doubles and legacy adapters may not expose the
+        # checkpoint collection. The completed source file remains the
+        # fallback duplicate guard for those environments.
+        return
+    if checkpoint is None:
+        return
+
+    await checkpoint_repo.mark_stream_completed_after_review(
+        checkpoint,
+        unit_key=unit_key,
+        cursor_after=getattr(final_page, "cursor_after", None),
+        high_water_mark={
+            "sourceUnitKey": unit_key,
+            "page": getattr(final_page, "page", None),
+            "cursorAfter": getattr(final_page, "cursor_after", None),
+            "contentHash": getattr(final_page, "content_hash", None),
+            "hasMore": getattr(final_page, "has_more", None),
+        },
+    )
 
 async def replay_staged_pages(
     *,
@@ -340,6 +391,7 @@ async def replay_staged_pages(
         **stats_payload,
         "resultCount": reconciliation_count,
     }
+    await _finalize_scheduled_checkpoint_after_replay(db, pages)
     await updater(
         db,
         run_id,

@@ -51,6 +51,7 @@ def _service(
     queue_run=None,
     gateway=None,
     checkpoint_repo=None,
+    completed_stream_finder=None,
 ) -> AutomationJobCommandService:
     return AutomationJobCommandService(
         fetch_repo=SimpleNamespace(find_by_partner=AsyncMock(return_value=_config())),
@@ -75,6 +76,7 @@ def _service(
         checkpoint_finder=AsyncMock(return_value=checkpoint),
         task_state_resolver=AsyncMock(return_value=task_state),
         queue_run=queue_run,
+        completed_stream_finder=completed_stream_finder,
     )
 
 
@@ -132,6 +134,52 @@ async def test_run_now_rejects_blocked_review_and_terminal_checkpoint(
 
     with pytest.raises(AutomationConflictError, match=message):
         await service.run_now(RunAutomationJobCommand(partner="VNPAY", actor="operator"))
+
+
+@pytest.mark.asyncio
+async def test_run_now_allows_completed_api_stream_with_legacy_review_checkpoint() -> None:
+    queue_run = AsyncMock(
+        return_value={"ok": True, "queued": True, "runtimeRunId": "runtime-1"}
+    )
+    completed_stream_finder = AsyncMock(return_value=True)
+    service = _service(
+        checkpoint=_checkpoint(
+            "DISCOVERED",
+            error_code="configuration_approval_required",
+        ),
+        queue_run=queue_run,
+        completed_stream_finder=completed_stream_finder,
+    )
+
+    result = await service.run_now(
+        RunAutomationJobCommand(partner="VNPAY", actor="operator")
+    )
+
+    assert result["queued"] is True
+    completed_stream_finder.assert_awaited_once()
+    queue_run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_now_allows_completed_api_stream_after_stale_waiting_runtime() -> None:
+    queue_run = AsyncMock(
+        return_value={"ok": True, "queued": True, "runtimeRunId": "runtime-2"}
+    )
+    completed_stream_finder = AsyncMock(return_value=True)
+    service = _service(
+        latest_run=SimpleNamespace(status="WAITING_REVIEW"),
+        checkpoint=_checkpoint("DISCOVERED"),
+        queue_run=queue_run,
+        completed_stream_finder=completed_stream_finder,
+    )
+
+    result = await service.run_now(
+        RunAutomationJobCommand(partner="VNPAY", actor="operator")
+    )
+
+    assert result["queued"] is True
+    completed_stream_finder.assert_awaited_once()
+    queue_run.assert_awaited_once()
 
 
 @pytest.mark.asyncio

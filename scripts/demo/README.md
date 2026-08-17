@@ -29,7 +29,7 @@ Reset the deterministic fixture, optionally overriding the inclusive business
 date range:
 
 ```bash
-VNPAY_BACKFILL_FROM=2026-08-09 \
+VNPAY_BACKFILL_FROM=2026-08-07 \
 VNPAY_BACKFILL_TO=2026-08-12 \
 make vnpay-backfill-reset
 ```

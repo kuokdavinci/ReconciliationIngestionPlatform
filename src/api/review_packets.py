@@ -49,6 +49,7 @@ from src.application.review.scope_classification import (
     ScopeClassificationCommand,
     ScopeClassificationService,
 )
+from src.application.review.packet_visibility import same_review_source_scope
 from src.application.review.errors import (
     ReviewConflictError,
     ReviewError,
@@ -264,12 +265,12 @@ async def list_review_packets(
         query["partner"] = partner
     packets = await _repo(request).find_many(query)
     packets.sort(key=lambda item: item.created_at, reverse=True)
-    approved_shapes: dict[tuple[str, str, str], list[dict]] = {}
+    approved_packets: dict[tuple[str, str, str], list[ReviewPacket]] = {}
     for packet in packets:
         if packet.status != ReviewPacketStatus.APPROVED:
             continue
         key = (packet.partner, packet.source_type.value, packet.file_type_detected)
-        approved_shapes.setdefault(key, []).append(packet.structure_signature or {})
+        approved_packets.setdefault(key, []).append(packet)
 
     seen_pending_scheduler_keys: set[tuple[str, str, str]] = set()
     visible_packets = []
@@ -279,8 +280,12 @@ async def list_review_packets(
             packet.status == ReviewPacketStatus.PENDING
             and packet.source_type == ReviewPacketSourceType.SCHEDULER_JOB
             and any(
-                structure_signatures_equivalent(packet.structure_signature, approved_shape)
-                for approved_shape in approved_shapes.get(packet_key, [])
+                structure_signatures_equivalent(
+                    packet.structure_signature,
+                    approved_packet.structure_signature,
+                )
+                and same_review_source_scope(packet, approved_packet)
+                for approved_packet in approved_packets.get(packet_key, [])
             )
         ):
             # A backfill approval covers the same structure for the full

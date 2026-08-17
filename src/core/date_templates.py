@@ -1,13 +1,8 @@
-"""Pure date-template helpers shared by ingestion and fetch adapters."""
+"""Pure date-template helpers.
 
-from datetime import datetime
-import re
+Re-exports from src.core.utils for backwards compatibility.
+"""
 
+from src.core.utils import interpolate_date
 
-def interpolate_date(template: str, date: datetime) -> str:
-    """Replace ``{date:<format>}`` placeholders with formatted date values."""
-
-    def replace(match: re.Match[str]) -> str:
-        return date.strftime(match.group(1) or "%Y%m%d")
-
-    return re.sub(r"\{date:(.*?)\}", replace, template)
+__all__ = ["interpolate_date"]

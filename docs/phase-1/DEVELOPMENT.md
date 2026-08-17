@@ -103,13 +103,13 @@ Dự án có `Makefile` với nhiều target tiện ích:
 
 | Target | Mô tả |
 |---|---|
-| `make test` | Chạy all tests (trừ E2E và phase8) |
+| `make test` | Chạy toàn bộ Python tests, chỉ loại real analysis E2E |
 | `make test-quick` | Chạy nhanh, dừng ở lỗi đầu tiên (`-x --tb=short`) |
 | `make test-analysis` | Chỉ chạy analysis tests |
 | `make test-guardrails` | Chạy guardrail validation tests |
 | `make test-eval` | Chạy eval scenarios (fallback, mixed_statuses) |
 | `make eval-all` | Chạy toàn bộ eval suite (scenarios + guardrails + providers) |
-| `make ci` | CI pipeline — tất cả tests trừ E2E |
+| `make ci` | CI pipeline — toàn bộ Python tests, chỉ loại real analysis E2E |
 | `make clean` | Dọn cache Python |
 
 **MOMO E2E targets:**

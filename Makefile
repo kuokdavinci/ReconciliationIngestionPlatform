@@ -94,10 +94,10 @@ zalopay-e2e-reset:
 	PYTHONPATH=. uv run python scripts/seeding/seed_zalopay_100k.py reset
 
 momo-e2e-help:
-	@echo "MOMO E2E — start here (2 main commands):"
+	@echo "MOMO E2E — main modes:"
 	@echo "  make momo-e2e-reset               # clean Phase 1 (20 internal rows 9000-9019 + partner file)"
 	@echo "  make momo-e2e-fail                # Docker-native fixture; missing id/trace; next Run Now must show FAILED"
-	@echo "  make momo-e2e-phase2              # partial duplicate demo (20 old + 10 new rows)"
+	@echo "  make momo-e2e-phase2              # partial duplicate/review demo (20 old + 10 new rows, new delivery)"
 	@echo "  make momo-e2e-phase2-full         # standard happy path Wave 2 file (20 new rows, approved mapping reused)"
 	@echo ""
 	@echo "Optional:"

@@ -40,6 +40,29 @@ Luồng chính: `partner source → fetcher → automation → ingestion/reconci
 
 Entrypoint runtime là `run.py → src.api:create_app`; các wrapper root cũ (`api/`, `backend/`) đã được loại bỏ. `src/core/utils.py` là nơi canonical cho business-day bounds, date templates, file hash và runtime error formatting; các module core cũ vẫn tồn tại dưới dạng re-export để giữ tương thích import.
 
+## Cấu trúc repository
+
+```text
+src/
+  api/                  FastAPI routers
+  application/          use cases và orchestration
+  domain/               models, ports, contracts
+  infrastructure/       repositories và workflow gateways
+  pipeline/             file/row ingestion
+  fetchers/             API, FileDrop, SFTP
+  readers/              CSV, JSON, Excel
+  reconciliation/       matching và scope
+  analysis/             insights và AI providers
+  config/, core/        settings, mapping, shared types và canonical utility functions
+frontend-next/          Next.js dashboard active
+dags/                   Airflow DAG
+tests/                  unit, runtime/API contract, integration, E2E
+alembic/                PostgreSQL migrations
+scripts/                seed, demo, benchmark, tools
+docker/                 Compose bootstrap và service notes
+docs/                   architecture, milestone, sprint, CI, runbook
+```
+
 ## Quick start
 
 ### Yêu cầu
@@ -170,7 +193,10 @@ Các timestamp event của PostgreSQL được lưu UTC-naive; business date đ�
 |---|---|
 | `uv run python run.py --serve --port 8000` | Chạy API |
 | `uv run python run.py --reconcile YYYY-MM-DD --partner MOMO` | Chạy reconciliation CLI |
-| `make ci` | Chạy test backend rộng, loại real LLM E2E |
+| `make ci` | Chạy toàn bộ Python test suite, loại real analysis E2E |
+| `make test-quick` | Chạy regression nhanh và dừng ở lỗi đầu tiên |
+| `make api-quick-build` | Rebuild riêng API container sau thay đổi backend |
+| `make momo-e2e-help` | Liệt kê các target MOMO E2E hiện có |
 | `make momo-e2e-reset` | Reset fixture MOMO |
 | `make momo-e2e-run` | Trigger manual MOMO run |
 | `make momo-e2e-phase2` | Chuẩn bị partial-duplicate/review demo: 20 wave1 + 10 wave2, tạo delivery file mới |
@@ -195,29 +221,6 @@ npm --prefix frontend-next run test:e2e
 ```
 
 Bản đồ workflow và blast radius: [docs/CI-MAP.md](docs/CI-MAP.md).
-
-## Cấu trúc repository
-
-```text
-src/
-  api/                  FastAPI routers
-  application/          use cases và orchestration
-  domain/               models, ports, contracts
-  infrastructure/       repositories và workflow gateways
-  pipeline/             file/row ingestion
-  fetchers/             API, FileDrop, SFTP
-  readers/              CSV, JSON, Excel
-  reconciliation/       matching và scope
-  analysis/             insights và AI providers
-  config/, core/        settings, mapping, shared types và canonical utility functions
-frontend-next/          Next.js dashboard active
-dags/                   Airflow DAG
-tests/                  unit, runtime/API contract, integration, E2E
-alembic/                PostgreSQL migrations
-scripts/                seed, demo, benchmark, tools
-docker/                 Compose bootstrap và service notes
-docs/                   architecture, milestone, sprint, CI, runbook
-```
 
 ## Tài liệu
 

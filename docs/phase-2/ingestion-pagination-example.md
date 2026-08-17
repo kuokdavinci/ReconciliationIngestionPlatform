@@ -20,7 +20,7 @@ lại một page đã hoàn thành.
 
 Ví dụ deterministic nằm trong
 [`scripts/demo/sprint2/fixture.py`](../../scripts/demo/sprint2/fixture.py) và
-được chạy bởi [`tests/test_viettelpay_sprint2_demo.py`](../../tests/test_viettelpay_sprint2_demo.py):
+được kiểm tra bởi các stream/pagination regression tests hiện tại:
 
 1. Page 1 hoàn thành, checkpoint lưu `lastCompletedUnitKey=page:1` và
    `cursorAfter=cursor-1`.
@@ -34,8 +34,8 @@ Ví dụ deterministic nằm trong
 Chạy trace:
 
 ```bash
-python scripts/demo/sprint2/run.py
-pytest -q tests/test_api_pagination.py tests/test_viettelpay_sprint2_demo.py
+uv run python scripts/demo/sprint2/run.py
+uv run pytest -q tests/test_api_pagination.py tests/test_stream_runner.py
 ```
 
 Contract HTTP pagination được kiểm tra riêng trong

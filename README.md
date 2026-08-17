@@ -10,6 +10,7 @@ Trạng thái hiện tại gồm FastAPI backend, dashboard Next.js, MongoDB + P
 - Mapping theo partner, normalize, validate và quarantine record lỗi.
 - Idempotency ở file, source unit, transaction và batch write.
 - Pagination, checkpoint, retry/resume, raw-page staging và ordered backfill.
+- Safe duplicate cho API stream đã hoàn tất và source identity ổn định cho retry/replay.
 - Reconciliation theo business key, amount/status và scope (`FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT`, `UNCONFIRMED`).
 - Review packet, mapping approval, runtime validation, audit log và operator recovery.
 - Insight/Copilot có guardrail, cache và provider fallback.
@@ -65,6 +66,8 @@ flowchart LR
 - **Airflow** sở hữu schedule, dependency, retry/timeout, pool và task log; business logic vẫn nằm trong application.
 
 Luồng chính: `partner source → fetcher → automation → ingestion/reconciliation → persistence`; khi cần operator action, application tạo review packet và chờ replay sau approval.
+
+Entrypoint runtime là `run.py → src.api:create_app`; các wrapper root cũ (`api/`, `backend/`) đã được loại bỏ. `src/core/utils.py` là nơi canonical cho business-day bounds, date templates, file hash và runtime error formatting; các module core cũ vẫn tồn tại dưới dạng re-export để giữ tương thích import.
 
 ## Quick start
 
@@ -143,6 +146,8 @@ fetch source
 
 Stream API nhiều trang được stage bền vững trước khi tạo packet. Khi thiếu mapping, runtime chuyển `WAITING_REVIEW`; approval replay toàn bộ raw pages dưới cùng identity. Ordered backfill tạo một parent `backfillRunId`, xử lý ngày tăng dần và resume cùng parent sau approval.
 
+`sourceUnitKey` explicit từ API metadata được ưu tiên làm identity canonical; nếu không có, runtime dùng hash từ metadata fetch. Khi raw stage của API đã `COMPLETED`, lần chạy lại trả `SAFE_DUPLICATE`/`streamAlreadyCompleted` trước khi gọi fetcher hoặc tạo review packet. Review queue chỉ collapse packet có cùng source scope (`rawStageKey`, `backfillRunId` hoặc file identity), nên cùng schema nhưng là delivery mới vẫn có thể tạo packet riêng.
+
 ### Reconciliation
 
 `src/application/reconciliation/` điều phối use case; `src/reconciliation/` chứa key normalization, scope classification và matching engine. PostgreSQL lưu canonical partner/internal transactions và reconciliation results; MongoDB lưu config, runtime, review và audit documents.
@@ -197,9 +202,11 @@ Các timestamp event của PostgreSQL được lưu UTC-naive; business date đ�
 | `make ci` | Chạy test backend rộng, loại real LLM E2E |
 | `make momo-e2e-reset` | Reset fixture MOMO |
 | `make momo-e2e-run` | Trigger manual MOMO run |
+| `make momo-e2e-phase2` | Chuẩn bị partial-duplicate/review demo: 20 wave1 + 10 wave2, tạo delivery file mới |
+| `make momo-e2e-phase2-full` | Chuẩn bị happy path Wave 2: 20 rows mới, giữ approved mapping |
 | `make viettelpay-sprint2-reset` | Reset ViettelPay recovery mock |
 | `make viettelpay-sprint2-eval` | Chạy evaluation ViettelPay |
-| `make vnpay-backfill-reset` | Reset VNPAY ordered backfill fixture |
+| `make vnpay-backfill-reset` | Reset VNPAY ordered backfill fixture; mặc định tạo 4 business days, có thể override bằng `VNPAY_BACKFILL_FROM/TO` |
 | `codegraph status` | Kiểm tra dependency index |
 | `codegraph sync .` | Đồng bộ index sau thay đổi cấu trúc |
 
@@ -231,10 +238,10 @@ src/
   readers/              CSV, JSON, Excel
   reconciliation/       matching và scope
   analysis/             insights và AI providers
-  config/, core/        settings, mapping, shared types
+  config/, core/        settings, mapping, shared types và canonical utility functions
 frontend-next/          Next.js dashboard active
 dags/                   Airflow DAG
-tests/                  unit, architecture, integration, E2E
+tests/                  unit, runtime/API contract, integration, E2E
 alembic/                PostgreSQL migrations
 scripts/                seed, demo, benchmark, tools
 docker/                 Compose bootstrap và service notes

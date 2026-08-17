@@ -98,7 +98,7 @@ momo-e2e-help:
 	@echo "  make momo-e2e-reset               # clean Phase 1 (20 internal rows 9000-9019 + partner file)"
 	@echo "  make momo-e2e-fail                # Docker-native fixture; missing id/trace; next Run Now must show FAILED"
 	@echo "  make momo-e2e-phase2              # partial duplicate demo (20 old + 10 new rows)"
-	@echo "  make momo-e2e-phase2-full         # legacy full Wave 2 file (20 new rows)"
+	@echo "  make momo-e2e-phase2-full         # standard happy path Wave 2 file (20 new rows, approved mapping reused)"
 	@echo ""
 	@echo "Optional:"
 	@echo "  make momo-e2e-missing-partner-demo  # inject MOMO_TXN_90_MISSING_PARTNER for engine demo"

@@ -1,6 +1,6 @@
 # Module Map
 
-**Cập nhật:** 2026-08-14
+**Cập nhật:** 2026-08-17
 
 Bản đồ dưới đây phản ánh package hiện có trong `src/`, `dags/` và `frontend-next/src/`. Không còn `src/scheduler/`, `src/services/` hoặc dashboard `frontend/` trong codegraph hiện tại.
 
@@ -25,7 +25,7 @@ Bản đồ dưới đây phản ánh package hiện có trong `src/`, `dags/` v
 | `src/reconciliation/` | Key normalization, scope classification, matching engine | `keys.py`, `scope.py`, `engine.py` |
 | `src/analysis/` | Insights, metrics, reports, alerts, guardrails, provider fallback | `provider.py`, `insights.py`, `services.py`, `guardrails.py` |
 | `src/config/` | Settings, mapping loader/cache/validator, config health, AI mapping | `settings.py`, `loader.py`, `validator.py`, `config_health.py` |
-| `src/core/` | Shared enums, constants, business date, canonical types | `enums.py`, `types.py`, `business_day.py` |
+| `src/core/` | Shared enums, constants, canonical types và utility functions | `__init__.py`, `utils.py`, `enums.py`, `types.py` |
 | `src/infrastructure/persistence/` | Mongo index definitions, PostgreSQL schema/connection và persistence bootstrap | `mongo_indexes.py`, `postgres_schema.py`, `postgres_connection.py` |
 | `src/logging/` | Structured logging helpers | `logger.py` |
 
@@ -33,12 +33,12 @@ Bản đồ dưới đây phản ánh package hiện có trong `src/`, `dags/` v
 
 | File | Vai trò |
 |---|---|
-| `run.py` | CLI dispatch cho `--serve`, ingestion và reconciliation |
-| `api/server.py` | Uvicorn server wrapper |
-| `backend/app.py` | Compatibility export của `create_app` |
+| `run.py` | CLI dispatch cho `--serve`, ingestion và reconciliation; `--serve` khởi chạy trực tiếp `src.api:create_app` qua Uvicorn |
 | `dags/reconciliation_ingestion.py` | Airflow DAG `reconciliation_ingestion`, select streams và mapped run |
 | `src/infrastructure/workflows/airflow.py` | Airflow REST gateway |
 | `src/application/automation/contracts.py` | `ExecuteStreamCommand`, `ExecuteStreamResult`, outcome contract |
+
+`api/` và `backend/` không còn là runtime entrypoint. Các module core nhỏ như `business_day.py`, `date_templates.py`, `file_identity.py` và `error_formatting.py` chỉ re-export từ `src/core/utils.py` để giữ tương thích ngược.
 
 ## API router map
 

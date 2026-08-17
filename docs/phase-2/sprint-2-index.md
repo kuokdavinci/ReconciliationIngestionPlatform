@@ -3,6 +3,12 @@
 > Index các hàm core của Sprint 2 và Sprint 2.5 hợp nhất: source stream,
 > checkpoint, retry/recovery, raw staging, review gate, Airflow và backfill.
 
+Các helper runtime nhỏ đã được gom về `stream_runtime.py`; các module cũ
+`stream_staging.py`, `stream_review_gate.py` và `stream_fetching.py` chỉ còn
+re-export để giữ import tương thích. Tương tự, `src/core/utils.py` là nguồn
+canonical cho utility dùng chung, còn các module utility cũ là compatibility
+facade.
+
 ## 1. Entry point và orchestration
 
 | Hàm | Vị trí | Trách nhiệm chính | Handoff |
@@ -50,9 +56,9 @@
 |---|---|---|---|
 | `run_paginated_stream` | [`paginated_stream_runner.py:20`](../../src/application/automation/paginated_stream_runner.py#L20) | Fetch hết page, stage bền vững, dừng đúng lỗi giữa stream và mở review gate khi cần | Raw page hoặc ingestion |
 | `run_file_stream` | [`file_stream_runner.py:14`](../../src/application/automation/file_stream_runner.py#L14) | Fetch file units, lọc theo checkpoint và đưa vào orchestrator | `process_source_units` |
-| `stage_stream_unit` | [`stream_staging.py:6`](../../src/application/automation/stream_staging.py#L6) | Ghi raw page vào GridFS/metadata theo `sourceUnitKey` | Raw replay |
-| `evaluate_stream_mapping` | [`stream_review_gate.py:11`](../../src/application/automation/stream_review_gate.py#L11) | Đánh giá mapping/config health trước ingestion | Mapping decision |
-| `create_stream_review_packet` | [`stream_review_gate.py:16`](../../src/application/automation/stream_review_gate.py#L16) | Tạo packet scope cho stream đã stage đủ page | Guided Review |
+| `stage_stream_unit` | [`stream_runtime.py:29`](../../src/application/automation/stream_runtime.py#L29) | Ghi raw page vào GridFS/metadata theo `sourceUnitKey` | Raw replay |
+| `evaluate_stream_mapping` | [`stream_runtime.py:18`](../../src/application/automation/stream_runtime.py#L18) | Đánh giá mapping/config health trước ingestion | Mapping decision |
+| `create_stream_review_packet` | [`stream_runtime.py:23`](../../src/application/automation/stream_runtime.py#L23) | Tạo packet scope cho stream đã stage đủ page | Guided Review |
 | `create_stream_scope_review_packet` | [`proposal_creation.py:239`](../../src/application/review/proposal_creation.py#L239) | Persist review packet, mapping action và bounded evidence | `WAITING_REVIEW` |
 | `run_ingestion` | [`stream_ingestion.py:245`](../../src/application/automation/stream_ingestion.py#L245) | Gọi ingestion pipeline cho một source file/page sau khi qua gate | Ingestion/reconciliation |
 
@@ -107,3 +113,14 @@ Airflow chỉ là workflow/control-plane adapter; checkpoint, raw staging,
 mapping gate, ingestion và reconciliation vẫn thuộc application/domain/
 infrastructure. File này là index của core flow, không thay thế acceptance
 evidence trong [Sprint 2](sprint-2-incremental-recovery.md) và [Sprint 2.5](sprint-2.5-airflow-migration.md).
+
+## 8. Post-refactor invariants
+
+| Invariant | Canonical implementation | Hành vi cần giữ |
+|---|---|---|
+| API source identity | [`FileClaimService.derive_fetch_unit_key`](../../src/pipeline/file_claim.py#L34) | Ưu tiên `metadata.sourceUnitKey`; chỉ dùng SHA-256 metadata hash khi caller không cung cấp key explicit |
+| Completed API replay | [`run_source_stream`](../../src/application/automation/stream_runner.py#L117) | Raw stage đã `COMPLETED` trả `streamAlreadyCompleted`; runtime serialize thành `SAFE_DUPLICATE` trước fetch/review |
+| Review packet visibility | [`same_review_source_scope`](../../src/application/review/packet_visibility.py#L14) | Cùng source scope mới collapse; cùng structure nhưng delivery/file identity mới vẫn hiển thị packet mới |
+| Post-approval checkpoint | [`mark_stream_completed_after_review`](../../src/infrastructure/ingestion/checkpoint_repository.py#L559) | Replay staged pages chốt checkpoint và high-water mark sau khi ingestion hoàn tất |
+| Fetch-unit unique index | [`idx_fetch_unit_key_unique`](../../src/infrastructure/persistence/mongo_indexes.py#L27) | Chỉ enforce uniqueness khi `fetchUnitKey` là string, không làm null/missing document va chạm |
+| Reconciliation domain model | [`models.py`](../../src/domain/reconciliation/models.py#L15) | `ReconciliationRun` và status nằm cùng module với `ReconciliationResult`; `run.py` chỉ re-export |

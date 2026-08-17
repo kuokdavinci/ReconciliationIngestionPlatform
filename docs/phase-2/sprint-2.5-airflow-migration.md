@@ -31,7 +31,7 @@ Phạm vi đầu tiên đã được triển khai với Airflow `3.3.0`, `LocalE
   polling parent run; VNPAY FileDrop là fixture reproducible cho flow này.
 - Compose dùng Airflow làm application orchestrator duy nhất. Manual pilot giữ
   `AIRFLOW_GLOBAL_SCHEDULE=none`; APScheduler control plane đã được decommission
-  sau khi VNPAY backfill đạt 3/3 ngày `COMPLETED`.
+  sau khi VNPAY backfill hoàn tất trên range business-day của fixture.
 
 ### Hardening review/schedule hiện tại
 
@@ -44,6 +44,26 @@ Phạm vi đầu tiên đã được triển khai với Airflow `3.3.0`, `LocalE
   để response cũ không ghi đè state mới khi run chuyển sang `WAITING_REVIEW`.
 - Runtime timeline phân biệt completed (xanh), waiting/processing (amber) và
   failed/blocked (đỏ); màu đỏ chỉ dùng cho lỗi.
+
+### Post-refactor runtime hardening
+
+Các thay đổi Phase 2 sau đây là một phần của runtime contract hiện tại:
+
+- `run.py` khởi chạy trực tiếp `src.api:create_app`; root wrappers `api/` và
+  `backend/` không còn được dùng.
+- `src/core/utils.py` là nguồn canonical cho business-day bounds, date
+  templates, SHA-256 file identity và runtime error formatting. Các module
+  utility cũ chỉ re-export để không phá import legacy.
+- API fetch unit giữ `metadata.sourceUnitKey` explicit làm identity canonical.
+  Nếu raw stage đã hoàn tất, Run Now kết thúc an toàn với
+  `SAFE_DUPLICATE`/`streamAlreadyCompleted` trước fetcher và review gate.
+- Review packet visibility được xác định theo source scope (`rawStageKey`,
+  `backfillRunId` hoặc source-file identity), không theo structure mapping đơn
+  thuần. Vì vậy delivery mới cùng schema vẫn tạo được pending packet độc lập.
+- Sau staged post-approval replay, checkpoint được chốt completed cùng
+  high-water mark; không để runtime quay lại trạng thái chờ review cũ.
+- Unique Mongo index `idx_fetch_unit_key_unique` chỉ áp dụng khi
+  `fetchUnitKey` có kiểu string, nên document null/missing không va chạm.
 
 Các file vận hành chính: `Dockerfile.airflow`, `requirements-airflow.txt`, `docker-compose.yml`, `dags/reconciliation_ingestion.py` và `docker/bootstrap-airflow-db.sh`.
 

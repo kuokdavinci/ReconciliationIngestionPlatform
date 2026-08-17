@@ -117,8 +117,8 @@ Dự án có `Makefile` với nhiều target tiện ích:
 | Target | Mô tả |
 |---|---|
 | `make momo-e2e-reset` | Reset seed data Phase 1 (20 rows) |
-| `make momo-e2e-phase2` | Chuẩn bị partial-duplicate demo Phase 2 (20 rows cũ + 10 rows mới) |
-| `make momo-e2e-phase2-full` | Legacy Phase 2: ghi file Wave 2 gồm 20 rows mới |
+| `make momo-e2e-phase2` | Partial-duplicate/review demo: 20 rows cũ + 10 rows mới trong delivery file mới; cố ý bỏ runtime mapping đã approved |
+| `make momo-e2e-phase2-full` | Happy path Phase 2: ghi Wave 2 gồm 20 rows mới và giữ approved mapping để chạy không tạo review mới |
 | `make momo-e2e-run` | Trigger MOMO automation job qua API |
 | `make momo-e2e-job` | Kiểm tra trạng thái MOMO job |
 | `make momo-e2e-rebuild` | Rebuild api + Airflow containers |
@@ -248,7 +248,7 @@ Hoặc dùng Makefile shortcuts:
 
 ```bash
 make momo-e2e-reset
-make momo-e2e-phase2
+make momo-e2e-phase2-full
 make momo-e2e-run
 make zalopay-e2e-reset
 ```

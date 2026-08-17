@@ -1,18 +1,11 @@
-"""Review-gate orchestration for completed source streams."""
+"""Review-gate orchestration for completed source streams.
 
-from typing import Any
+Re-exports from stream_runtime.py for backwards compatibility.
+"""
 
-from src.config.config_health import (
-    check_and_refresh_config,
-    create_stream_scope_review_packet,
+from src.application.automation.stream_runtime import (
+    create_stream_review_packet,
+    evaluate_stream_mapping,
 )
 
-
-async def evaluate_stream_mapping(**kwargs: Any):
-    """Evaluate mapping health before a staged stream enters ingestion."""
-    return await check_and_refresh_config(**kwargs)
-
-
-async def create_stream_review_packet(**kwargs: Any):
-    """Create the review item for a stream with an active mapping."""
-    return await create_stream_scope_review_packet(**kwargs)
+__all__ = ["evaluate_stream_mapping", "create_stream_review_packet"]

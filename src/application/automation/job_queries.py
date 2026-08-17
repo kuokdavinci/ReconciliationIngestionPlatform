@@ -8,6 +8,7 @@ from src.application.automation.stream_identity import source_stream_key
 from src.application.automation.backfill_service import serialize_backfill_run
 from src.application.ingestion.recovery_view import build_recovery_view
 from src.application.runtime.service import serialize_partner_runtime_run
+from src.application.review.packet_visibility import same_review_source_scope
 from src.config.signature import structure_signatures_equivalent
 from src.domain.fetch_config.models import FetchMethod
 from src.domain.ingestion.checkpoints import IngestionMode
@@ -142,7 +143,7 @@ class AutomationJobQueryService:
         pending_by_partner: dict[str, int] = {}
         recent_packet_docs: dict[str, list[dict[str, Any]]] = {}
         pending_packet_keys: set[tuple[str, str, str]] = set()
-        approved_shapes: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        approved_packets: dict[tuple[str, str, str], list[Any]] = {}
         for packet in packets:
             if packet.source_type.value != "SCHEDULER_JOB" or packet.status.value != "APPROVED":
                 continue
@@ -151,9 +152,7 @@ class AutomationJobQueryService:
                 packet.source_type.value,
                 packet.file_type_detected,
             )
-            approved_shapes.setdefault(packet_key, []).append(
-                packet.structure_signature or {}
-            )
+            approved_packets.setdefault(packet_key, []).append(packet)
         for packet in packets:
             if packet.source_type.value != "SCHEDULER_JOB":
                 continue
@@ -167,9 +166,10 @@ class AutomationJobQueryService:
                 and any(
                     structure_signatures_equivalent(
                         packet.structure_signature,
-                        approved_shape,
+                        approved_packet.structure_signature,
                     )
-                    for approved_shape in approved_shapes.get(packet_key, [])
+                    and same_review_source_scope(packet, approved_packet)
+                    for approved_packet in approved_packets.get(packet_key, [])
                 )
             ):
                 # Keep the duplicate packet for audit, but do not expose it

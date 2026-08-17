@@ -556,6 +556,66 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
         result = await self.collection.update_one(query, {"$set": {"status": CheckpointStatus.DISCOVERED.value, "currentUnitKey": None, "updatedAt": datetime.now(UTC)}})
         return result.modified_count == 1
 
+    async def mark_stream_completed_after_review(
+        self,
+        checkpoint: IngestionCheckpoint,
+        *,
+        unit_key: str,
+        cursor_after: Optional[str] = None,
+        high_water_mark: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        """Close a staged stream after its scope review has been reconciled."""
+
+        query = {
+            **self._stream_filter(
+                partner=checkpoint.partner,
+                fetch_config_id=checkpoint.fetch_config_id,
+                source_type=checkpoint.source_type,
+                stream_key=checkpoint.stream_key,
+                mode=checkpoint.mode,
+            ),
+            "status": CheckpointStatus.DISCOVERED.value,
+            "streamEnded": {"$ne": True},
+        }
+        now = datetime.now(UTC)
+        update = {
+            "$set": {
+                "status": CheckpointStatus.DISCOVERED.value,
+                "currentUnitKey": None,
+                "lastCompletedUnitKey": unit_key,
+                "cursorAfter": cursor_after,
+                "highWaterMark": high_water_mark,
+                "streamEnded": True,
+                "lastError": None,
+                "errorCode": None,
+                "retryable": None,
+                "nextRetryAt": None,
+                "resolutionMetadata": {},
+                "completedAt": now,
+                "updatedAt": now,
+                "lastErrorMetadata": {},
+                "unitTimeline": self._unit_timeline_update(
+                    checkpoint,
+                    unit_key,
+                    status=SourceUnitStatus.COMPLETED,
+                    cursor_after=cursor_after,
+                    clear_error=True,
+                    completed_at=now,
+                ),
+            },
+            "$push": {
+                "recoveryEvents": self._recovery_event_update(
+                    checkpoint,
+                    unit_key=unit_key,
+                    status=SourceUnitStatus.COMPLETED.value,
+                    timestamp=now,
+                    reason="Post-approval staged stream reconciliation completed.",
+                )
+            },
+        }
+        result = await self.collection.update_one(query, update)
+        return result.modified_count == 1
+
     async def find_pending_or_failed(self, *, mode: Optional[IngestionMode] = None) -> list[IngestionCheckpoint]:
         now = datetime.now(UTC)
         query: dict[str, Any] = {"$or": [{"status": {"$in": [CheckpointStatus.ABSENT.value, CheckpointStatus.DISCOVERED.value]}}, {"status": CheckpointStatus.FAILED.value, "retryable": {"$ne": False}, "$or": [{"nextRetryAt": None}, {"nextRetryAt": {"$lte": now}}]}]}

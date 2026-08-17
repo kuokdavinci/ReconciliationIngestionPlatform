@@ -5,6 +5,7 @@ import inspect
 import logging
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -24,7 +25,7 @@ from src.application.automation.job_contracts import (
     RunAutomationJobCommand,
 )
 from src.application.automation.job_queries import AutomationJobQueryService
-from src.application.automation.stream_identity import source_stream_key
+from src.application.automation.stream_identity import raw_stage_key, source_stream_key
 from src.application.automation.workflows import (
     WorkflowGateway,
     WorkflowSubmission,
@@ -36,6 +37,7 @@ from src.domain.ingestion.checkpoints import IngestionMode
 from src.infrastructure.backfill.repository import BackfillRunRepository
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
+from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 from src.domain.runtime.models import (
     PartnerRuntimeRunStatus,
 )
@@ -440,6 +442,16 @@ def _job_command_service(request: Request, db) -> AutomationJobCommandService:
         )
         return pending_review is not None
 
+    async def completed_stream_finder(config) -> bool:
+        if config.fetch_method != FetchMethod.API:
+            return False
+        reconciliation_date = datetime.now(ZoneInfo(settings.business_timezone))
+        stage_key = raw_stage_key(config, reconciliation_date)
+        completed_file = await ReconciliationFileRepository(
+            db
+        ).find_completed_by_raw_stage_key(stage_key)
+        return completed_file is not None
+
     async def audit_recorder(*, config, action, actor, metadata):
         await record_audit_event(
             db,
@@ -462,6 +474,7 @@ def _job_command_service(request: Request, db) -> AutomationJobCommandService:
         checkpoint_finder=checkpoint_finder,
         task_state_resolver=task_state_resolver,
         pending_review_finder=pending_review_finder,
+        completed_stream_finder=completed_stream_finder,
         audit_recorder=audit_recorder,
     )
 

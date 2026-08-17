@@ -18,6 +18,13 @@ def _pages():
             local_path=f"page-{index}.json",
             source_unit_key=f"unit-{index}",
             cursor_before=f"cursor-{index - 1}",
+            cursor_after=f"cursor-{index}" if index < 3 else None,
+            content_hash=f"hash-{index}",
+            has_more=index < 3,
+            partner="VIETTELPAY",
+            fetch_config_id="config-viettelpay",
+            source_type="API",
+            stream_key="VIETTELPAY:API:https://partner.example/settlement",
             reconciliation_date=datetime(2026, 8, 11, tzinfo=timezone.utc),
             sample_rows=[],
         )
@@ -138,6 +145,54 @@ async def test_three_pages_share_one_file_and_reconcile_once():
     assert command.source_file_id == "page-file-1"
     assert transaction_repo.rebind_source_file.await_count == 2
     assert file_repo.delete_one.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_successful_staged_replay_finalizes_scheduled_checkpoint():
+    harness = _harness(
+        [
+            _ingestion_result("page-file-1"),
+            _ingestion_result("page-file-2"),
+            _ingestion_result("page-file-3"),
+        ]
+    )
+    raw_repo, file_repo, transaction_repo, result_repo, pipeline, reconciliation = harness
+    checkpoint_repo = MagicMock()
+    checkpoint_repo.find_by_stream = AsyncMock(return_value=SimpleNamespace(id="checkpoint-1"))
+    checkpoint_repo.mark_stream_completed_after_review = AsyncMock(return_value=True)
+
+    with (
+        patch("src.application.review.reprocessing.RawIngestionPageRepository", return_value=raw_repo),
+        patch("src.application.review.reprocessing.ReconciliationFileRepository", return_value=file_repo),
+        patch("src.application.review.reprocessing.DataContainerRepository", return_value=transaction_repo),
+        patch("src.application.review.reprocessing.ReconciliationResultRepository", return_value=result_repo),
+        patch("src.application.review.reprocessing.build_ingestion_pipeline", return_value=pipeline),
+        patch("src.application.review.reprocessing.build_reconciliation_service", return_value=reconciliation),
+        patch("src.application.review.reprocessing.build_config_loader", return_value=MagicMock()),
+        patch("src.application.review.reprocessing.update_runtime_run", new=AsyncMock()),
+        patch("src.application.review.reprocessing._update_post_approval_run", new=AsyncMock()),
+        patch("src.application.review.staged_page_replay.IngestionCheckpointRepository", return_value=checkpoint_repo),
+    ):
+        result = await reprocess_staged_pages(
+            db=MagicMock(),
+            packet=_packet(),
+            config=_config(),
+            run_id="post-approval-1",
+            runtime_run_id="runtime-1",
+            raw_stage_key="stream-1",
+        )
+
+    assert result["ok"] is True
+    checkpoint_repo.mark_stream_completed_after_review.assert_awaited_once()
+    kwargs = checkpoint_repo.mark_stream_completed_after_review.await_args.kwargs
+    assert kwargs["unit_key"] == "unit-3"
+    assert kwargs["high_water_mark"] == {
+        "sourceUnitKey": "unit-3",
+        "page": 3,
+        "cursorAfter": None,
+        "contentHash": "hash-3",
+        "hasMore": False,
+    }
 
 
 @pytest.mark.asyncio

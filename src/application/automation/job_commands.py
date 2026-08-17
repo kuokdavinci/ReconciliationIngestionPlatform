@@ -61,6 +61,7 @@ class AutomationJobCommandService:
         | None = None,
         queue_run: Callable[[Any, str, str], Awaitable[dict[str, Any]]] | None = None,
         pending_review_finder: Callable[[str], Awaitable[bool]] | None = None,
+        completed_stream_finder: Callable[[Any], Awaitable[bool]] | None = None,
         audit_recorder: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self.fetch_repo = fetch_repo
@@ -73,6 +74,7 @@ class AutomationJobCommandService:
         self.task_state_resolver = task_state_resolver
         self.queue_run = queue_run
         self.pending_review_finder = pending_review_finder
+        self.completed_stream_finder = completed_stream_finder
         self.audit_recorder = audit_recorder
 
     async def _config_for_partner(self, partner: str):
@@ -290,7 +292,21 @@ class AutomationJobCommandService:
             raise AutomationConflictError(
                 "Airflow is already retrying this run; wait for the native retry to finish before running again."
             )
-        if latest_run_data and latest_run_data.get("status") in self._ACTIVE_RUNTIME_STATUSES:
+        completed_stream = False
+        latest_status = latest_run_data.get("status") if latest_run_data else None
+        if (
+            latest_status == PartnerRuntimeRunStatus.WAITING_REVIEW.value
+            and self.completed_stream_finder is not None
+        ):
+            completed_stream = await self.completed_stream_finder(config)
+        if (
+            latest_run_data
+            and latest_status in self._ACTIVE_RUNTIME_STATUSES
+            and not (
+                latest_status == PartnerRuntimeRunStatus.WAITING_REVIEW.value
+                and completed_stream
+            )
+        ):
             raise AutomationConflictError(
                 "An Airflow/runtime attempt is already active; wait for it to finish or retry."
             )
@@ -305,6 +321,10 @@ class AutomationJobCommandService:
                     "Checkpoint is BLOCKED and requires operator resolution before starting a new run."
                 )
             waiting_for_review = self._waiting_for_review(checkpoint)
+            if waiting_for_review and self.completed_stream_finder is not None:
+                if not completed_stream:
+                    completed_stream = await self.completed_stream_finder(config)
+                waiting_for_review = not completed_stream
             if waiting_for_review and self.pending_review_finder is not None:
                 waiting_for_review = await self.pending_review_finder(command.partner)
             if waiting_for_review:

@@ -527,6 +527,62 @@ async def test_list_review_packets_hides_pending_packet_for_approved_same_struct
 
 
 @pytest.mark.asyncio
+async def test_list_review_packets_shows_same_structure_from_new_source_file():
+    review_collection = MagicMock()
+    review_collection.find = MagicMock(return_value=_AsyncCursor([
+        {
+            "_id": "pkt-momo-phase2",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "MOMO",
+            "fileName": "settlement_MOMO_20260817_phase2.xlsx",
+            "sourceFileId": "file-phase2",
+            "sourceFilePath": "/mock_data/settlement_MOMO_20260817_phase2.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "structureSignature": {
+                "headers": ["id", "trace", "amount"],
+                "columnCount": 3,
+                "hash": "same-structure",
+            },
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "PENDING",
+            "createdAt": "2026-08-17T03:00:00+00:00",
+        },
+        {
+            "_id": "pkt-momo-phase1",
+            "sourceType": "SCHEDULER_JOB",
+            "partner": "MOMO",
+            "fileName": "settlement_MOMO_20260817.xlsx",
+            "sourceFileId": "file-phase1",
+            "sourceFilePath": "/mock_data/settlement_MOMO_20260817.xlsx",
+            "fileTypeDetected": "SETTLEMENT",
+            "structureSignature": {
+                "headers": ["id", "trace", "amount"],
+                "columnCount": 3,
+            },
+            "recommendedAction": {},
+            "parseStrategy": {},
+            "validationGates": [],
+            "samplePreview": [],
+            "riskSummary": {},
+            "status": "APPROVED",
+            "createdAt": "2026-08-17T02:00:00+00:00",
+        },
+    ]))
+    request = _make_request(_make_db(review_collection=review_collection))
+
+    data = await list_review_packets(request, partner="MOMO")
+
+    assert [packet["_id"] for packet in data["packets"]] == [
+        "pkt-momo-phase2",
+        "pkt-momo-phase1",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_approve_keep_current_packet():
     review_collection = MagicMock()
     action_collection = MagicMock()

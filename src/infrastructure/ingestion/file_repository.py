@@ -51,6 +51,17 @@ class ReconciliationFileRepository(BaseRepository[ReconciliationFile]):
     ) -> Optional[ReconciliationFile]:
         return await self.find_one({"fetchUnitKey": fetch_unit_key})
 
+    async def find_completed_by_raw_stage_key(
+        self,
+        raw_stage_key: str,
+    ) -> Optional[ReconciliationFile]:
+        return await self.find_one(
+            {
+                "fetchUnitMetadata.rawStageKey": raw_stage_key,
+                "processingStatus": ProcessingStatus.COMPLETED.value,
+            }
+        )
+
     async def create_or_get_by_file_hash(
         self, doc: ReconciliationFile
     ) -> tuple[ReconciliationFile, bool]:

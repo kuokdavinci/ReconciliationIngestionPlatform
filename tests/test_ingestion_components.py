@@ -150,6 +150,25 @@ def test_file_claim_service_derives_stable_fetch_unit_key():
     assert service.derive_fetch_unit_key(**kwargs) == service.derive_fetch_unit_key(**kwargs)
 
 
+def test_file_claim_service_preserves_explicit_api_source_unit_key():
+    service = FileClaimService(None, MagicMock())
+
+    key = service.derive_fetch_unit_key(
+        partner="VIETTELPAY",
+        workflow_type="UPC",
+        file_type=FileType.SETTLEMENT,
+        reconciliation_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
+        config_version="v1",
+        metadata={
+            "sourceEndpoint": "/transactions",
+            "page": 1,
+            "sourceUnitKey": "api-page-1",
+        },
+    )
+
+    assert key == "api-page-1"
+
+
 @pytest.mark.asyncio
 async def test_file_claim_reopens_failed_file_for_idempotent_retry(monkeypatch):
     failed = ReconciliationFile(

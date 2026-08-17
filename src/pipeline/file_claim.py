@@ -44,6 +44,10 @@ class FileClaimService:
         if not metadata:
             return None
 
+        explicit_source_unit_key = metadata.get("sourceUnitKey")
+        if isinstance(explicit_source_unit_key, str) and explicit_source_unit_key.strip():
+            return explicit_source_unit_key.strip()
+
         identity = {
             "partner": partner,
             "workflowType": workflow_type,

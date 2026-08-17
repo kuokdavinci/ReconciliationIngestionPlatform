@@ -7,6 +7,7 @@ from typing import Any, Optional
 from src.application.automation.file_stream_runner import run_file_stream
 from src.application.automation.paginated_stream_runner import run_paginated_stream
 from src.application.automation.stream_failure import unexpected_failure_result
+from src.application.automation.stream_fetching import checkpoint_result
 from src.application.automation.stream_identity import (
     raw_stage_key as build_raw_stage_key,
     stream_identity,
@@ -42,6 +43,7 @@ from src.domain.ingestion.retry_policy import RetryPolicy
 from src.domain.ingestion.source_units import SourceUnitMetadata
 from src.fetchers import create_fetcher
 from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
+from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 from src.infrastructure.ingestion.raw_page_repository import RawIngestionPageRepository
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
@@ -106,6 +108,35 @@ async def run_source_stream(
     if short_circuit is not None:
         return await lifecycle.finish(short_circuit, empty_stream_stats())
 
+    stage_key = (
+        build_raw_stage_key(config, reconciliation_date)
+        if config.fetch_method == FetchMethod.API
+        else None
+    )
+    if stage_key is not None:
+        try:
+            completed_file = await ReconciliationFileRepository(
+                db
+            ).find_completed_by_raw_stage_key(stage_key)
+        except (AttributeError, TypeError):
+            # Lightweight test doubles and legacy adapters may not expose an
+            # awaitable Mongo collection. The normal stream path remains safe.
+            completed_file = None
+        if completed_file is not None:
+            return await lifecycle.finish(
+                {
+                    "success": True,
+                    "processed": 0,
+                    "failed": 0,
+                    "reconciliationSkipped": True,
+                    "streamAlreadyCompleted": True,
+                    "checkpoint": checkpoint_result(checkpoint)
+                    if checkpoint is not None
+                    else None,
+                },
+                empty_stream_stats(),
+            )
+
     fetcher = create_fetcher(config)
 
     async def cleanup_unit(unit: SourceUnitMetadata) -> None:
@@ -129,11 +160,6 @@ async def run_source_stream(
     )
     retry_policy = RetryPolicy()
     raw_page_repo = RawIngestionPageRepository(db)
-    stage_key = (
-        build_raw_stage_key(config, reconciliation_date)
-        if config.fetch_method == FetchMethod.API
-        else None
-    )
     await lifecycle.mark_ingesting()
 
     context = StreamRunContext(

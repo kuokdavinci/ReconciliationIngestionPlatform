@@ -111,6 +111,41 @@ class TestIngestionCheckpointModel:
 
 class TestIngestionCheckpointRepository:
     @pytest.mark.asyncio
+    async def test_mark_stream_completed_after_review(self):
+        collection = AsyncMock()
+        collection.update_one.return_value = MagicMock(modified_count=1)
+        repo = _repo(collection)
+        checkpoint = _checkpoint(
+            status=CheckpointStatus.DISCOVERED,
+            unit_timeline=[
+                SourceUnitSummary(
+                    unitKey="page-1",
+                    page=1,
+                    status=SourceUnitStatus.WAITING_REVIEW,
+                )
+            ],
+        )
+
+        result = await repo.mark_stream_completed_after_review(
+            checkpoint,
+            unit_key="page-3",
+            cursor_after=None,
+            high_water_mark={
+                "sourceUnitKey": "page-3",
+                "page": 3,
+                "hasMore": False,
+            },
+        )
+
+        assert result is True
+        query, update = collection.update_one.await_args.args
+        assert query["status"] == CheckpointStatus.DISCOVERED.value
+        assert update["$set"]["lastCompletedUnitKey"] == "page-3"
+        assert update["$set"]["streamEnded"] is True
+        assert update["$set"]["highWaterMark"]["page"] == 3
+        assert update["$push"]["recoveryEvents"]["status"] == "COMPLETED"
+
+    @pytest.mark.asyncio
     async def test_create_or_get_resolves_unique_stream_race(self):
         collection = AsyncMock()
         collection.insert_one.side_effect = DuplicateKeyError("duplicate stream")

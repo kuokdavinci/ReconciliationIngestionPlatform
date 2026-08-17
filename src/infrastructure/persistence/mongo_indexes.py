@@ -2,6 +2,7 @@
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import ASCENDING, DESCENDING, IndexModel
+from pymongo.errors import OperationFailure
 
 
 INDEXES: dict[str, list[IndexModel]] = {
@@ -22,7 +23,12 @@ INDEXES: dict[str, list[IndexModel]] = {
     ],
     "reconciliation_file": [
         IndexModel("fileHash", unique=True, name="idx_file_hash_unique"),
-        IndexModel("fetchUnitKey", unique=True, sparse=True, name="idx_fetch_unit_key_unique"),
+        IndexModel(
+            "fetchUnitKey",
+            unique=True,
+            partialFilterExpression={"fetchUnitKey": {"$type": "string"}},
+            name="idx_fetch_unit_key_unique",
+        ),
         IndexModel(
             [("partner", ASCENDING), ("reconciliationDate", ASCENDING)],
             name="idx_partner_date",
@@ -146,11 +152,51 @@ INDEXES: dict[str, list[IndexModel]] = {
 }
 
 
+def _index_signature(document: dict) -> dict:
+    """Return the key and options that determine MongoDB index identity."""
+    return {
+        "key": list(document.get("key", {}).items()),
+        "unique": document.get("unique", False),
+        "sparse": document.get("sparse", False),
+        "partialFilterExpression": document.get("partialFilterExpression"),
+        "expireAfterSeconds": document.get("expireAfterSeconds"),
+        "collation": document.get("collation"),
+        "weights": document.get("weights"),
+        "default_language": document.get("default_language"),
+        "language_override": document.get("language_override"),
+        "hidden": document.get("hidden", False),
+    }
+
+
+async def _ensure_collection_indexes(collection, indexes: list[IndexModel]) -> None:
+    """Create indexes and replace same-name definitions whose options changed."""
+    try:
+        existing_indexes = await collection.list_indexes().to_list(length=None)
+    except OperationFailure as exc:
+        if exc.code == 26:
+            await collection.create_indexes(indexes)
+            return
+        raise
+    existing_by_name = {
+        index.get("name"): index
+        for index in existing_indexes
+        if index.get("name")
+    }
+
+    for index in indexes:
+        name = index.document.get("name")
+        existing = existing_by_name.get(name)
+        if existing and _index_signature(existing) != _index_signature(index.document):
+            await collection.drop_index(name)
+
+    await collection.create_indexes(indexes)
+
+
 async def apply_indexes(db: AsyncIOMotorDatabase) -> None:
     """Create all MongoDB indexes and normalize legacy mapping documents."""
 
     for collection_name, indexes in INDEXES.items():
-        await db[collection_name].create_indexes(indexes)
+        await _ensure_collection_indexes(db[collection_name], indexes)
 
     await db["reconciliation_mapping_config"].update_many(
         {"status": {"$exists": False}},

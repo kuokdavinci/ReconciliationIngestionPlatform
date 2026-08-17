@@ -434,6 +434,57 @@ async def test_stream_runner_does_not_fetch_after_completed_api_stream_on_next_r
 
 
 @pytest.mark.asyncio
+async def test_stream_runner_returns_safe_duplicate_for_completed_legacy_api_stage(tmp_path):
+    config = FetchConfig(
+        partner="VIETTELPAY",
+        fetch_method=FetchMethod.API,
+        cleanup_after_ingest=False,
+        api=APIConfig(
+            base_url="https://api.example.com/settlement",
+            pagination=APIPaginationConfig(
+                page_param="page",
+                cursor_param="cursor",
+                items_path="data.items",
+                next_cursor_path="data.nextCursor",
+            ),
+        ),
+    )
+    checkpoint_repo = _SequentialCheckpointRepository()
+    checkpoint_repo.checkpoint = IngestionCheckpoint(
+        partner=config.partner,
+        fetchConfigId=str(config.id),
+        sourceType="API",
+        streamKey="VIETTELPAY:API:https://api.example.com/settlement",
+        status=CheckpointStatus.DISCOVERED,
+    )
+    completed_file = SimpleNamespace(processing_status=ProcessingStatus.COMPLETED)
+    fetcher = _PagedFetcher(tmp_path)
+    run = SimpleNamespace(id="run-legacy-duplicate")
+
+    with (
+        patch("src.application.automation.stream_runner.create_runtime_run", new=AsyncMock(return_value=run)),
+        patch("src.application.automation.stream_runtime.update_runtime_run", new=AsyncMock()),
+        patch("src.application.automation.stream_runner.update_runtime_run", new=AsyncMock()),
+        patch("src.application.automation.stream_runner.IngestionCheckpointRepository", return_value=checkpoint_repo),
+        patch("src.application.automation.stream_runner.ReconciliationFileRepository") as file_repo,
+        patch("src.application.automation.stream_runner.create_fetcher", return_value=fetcher) as create_fetcher,
+    ):
+        file_repo.return_value.find_completed_by_raw_stage_key = AsyncMock(
+            return_value=completed_file
+        )
+        result = await run_source_stream(
+            config=config,
+            db=MagicMock(),
+            config_loader=MagicMock(),
+            reconciliation_date=datetime(2024, 7, 7, tzinfo=UTC),
+        )
+
+    assert result["outcome"] == "SAFE_DUPLICATE"
+    assert result["safeDuplicate"] is True
+    create_fetcher.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_stream_runner_keeps_run_waiting_for_configuration_review(tmp_path):
     config = FetchConfig(
         partner="momo",

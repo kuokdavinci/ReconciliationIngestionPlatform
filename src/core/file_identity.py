@@ -1,13 +1,8 @@
-"""Canonical file identity helpers shared by ingestion adapters."""
+"""Canonical file identity helpers.
 
-import hashlib
+Re-exports from src.core.utils for backwards compatibility.
+"""
 
+from src.core.utils import compute_file_hash
 
-def compute_file_hash(file_path: str) -> str:
-    """Return a stable SHA-256 fingerprint for a local source file."""
-
-    digest = hashlib.sha256()
-    with open(file_path, "rb") as source_file:
-        for chunk in iter(lambda: source_file.read(8192), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+__all__ = ["compute_file_hash"]

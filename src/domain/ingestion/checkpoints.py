@@ -151,6 +151,15 @@ class CheckpointRepository(Protocol):
 
     async def advance(self, checkpoint: IngestionCheckpoint, *, unit_key: str) -> bool: ...
 
+    async def mark_stream_completed_after_review(
+        self,
+        checkpoint: IngestionCheckpoint,
+        *,
+        unit_key: str,
+        cursor_after: Optional[str] = None,
+        high_water_mark: Optional[dict[str, Any]] = None,
+    ) -> bool: ...
+
     async def find_by_streams(
         self,
         identities: list[dict[str, Any]],

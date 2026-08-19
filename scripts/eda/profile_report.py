@@ -96,7 +96,13 @@ def write_profile(
     json_path = output_dir / "quality_profile.json"
     markdown_path = output_dir / "quality_profile.md"
     json_path.write_text(
-        json.dumps(profile, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            profile,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     markdown_path.write_text(render_markdown(profile), encoding="utf-8")

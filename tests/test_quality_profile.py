@@ -255,10 +255,12 @@ def test_profile_writes_json_and_markdown_without_dataset_specific_copy(
 
     json_path, markdown_path = write_profile(source, tmp_path / "profiles", SPEC)
 
-    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    json_text = json_path.read_text(encoding="utf-8")
+    payload = json.loads(json_text)
     markdown = markdown_path.read_text(encoding="utf-8")
     assert payload["profile_version"] == 3
     assert "SCHEMA_DRIFT" in {rule["rule_code"] for rule in payload["rule_results"]}
+    assert "\n" not in json_text.rstrip("\n")
     assert "TIMESTAMP_TIMEZONE_REQUIRED" in markdown
     assert "## Rule Results" in markdown
     assert "Fraud Detection" not in render_markdown(payload)

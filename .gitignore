@@ -51,8 +51,8 @@ frontend/.vite/
 .agents/
 test_data/
 
-# IBM AML-LI EDA raw and derived data
-data/eda/ibm_aml_li/raw/*
-!data/eda/ibm_aml_li/raw/.gitkeep
-data/eda/ibm_aml_li/interim/*
-!data/eda/ibm_aml_li/interim/.gitkeep
+# Fraud Detection EDA raw and derived data
+data/eda/fraud_detection/raw/*
+!data/eda/fraud_detection/raw/.gitkeep
+data/eda/fraud_detection/interim/*
+!data/eda/fraud_detection/interim/.gitkeep

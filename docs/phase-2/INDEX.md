@@ -44,11 +44,17 @@ Các capability của sprint hợp nhất:
 
 ## Sprint 3 — Data quality và quarantine
 
-**Trạng thái:** Kế hoạch mở rộng.
+**Trạng thái:** Workstream A đã hoàn tất riêng phần EDA/profile, provenance,
+frozen ingestion baseline, controlled mutation và coverage handoff cho Fraud
+Detection Dataset. Production approval và Workstream B–F vẫn còn trong phạm
+vi kế hoạch.
 
 - [Kế hoạch data quality và quarantine](sprint-3-data-quality.md)
+- [Review EDA và rule candidates](sprint-3-eda-review.md)
+- [Mentor summary: Workstream A decisions và rule coverage](sprint-3-workstream-a-mentor-summary.md)
 
-Phạm vi dự kiến: EDA trước ingestion, quality gates, quarantine contract và operator visibility.
+Phạm vi còn lại: quality gate/contract, quarantine lifecycle, operator flow và
+observability. Notebook EDA vẫn không thay đổi và chỉ chạy trên Kaggle.
 
 ## Sprint 4 — Observability
 
@@ -65,5 +71,5 @@ Phạm vi dự kiến: metrics, structured logs, alerting, dashboard operational
 | 1 | Idempotency | `sprint-1-index.md`, benchmark | Đã triển khai |
 | 2 | Incremental/recovery | `sprint-2-index.md`, `sprint-2-incremental-recovery.md` | Đã triển khai |
 | 2.5 | Airflow + recovery hardening | `sprint-2-index.md`, `sprint-2.5-airflow-migration.md` | Còn 5 tiêu chí acceptance |
-| 3 | Data quality/quarantine | `sprint-3-data-quality.md` | Kế hoạch |
+| 3 | Data quality/quarantine | `sprint-3-data-quality.md` | A complete; B–F planned |
 | 4 | Observability | `sprint-4-observability.md` | Kế hoạch |

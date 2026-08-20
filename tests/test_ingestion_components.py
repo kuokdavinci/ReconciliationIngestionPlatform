@@ -6,9 +6,13 @@ import pytest
 
 from src.config.loader import ConfigLoader
 from src.core.enums import FileType, ProcessingStatus
-from src.core.types import BatchInsertResult
 from src.core.types import FieldMapping, FieldMappingType
 from src.domain.ingestion.models import ReconciliationFile
+from src.domain.ingestion.quality import QualityEvaluation, QualityRuleCode
+from src.domain.partner_transaction.duplicates import (
+    BatchWriteResult,
+    DuplicateDetail,
+)
 from src.domain.mapping.models import MappingConfig
 from src.normalizer.normalizer import NormalizationResult
 from src.pipeline.batch_writer import BatchWriteCoordinator
@@ -23,7 +27,19 @@ from src.pipeline.row_processor import RowProcessor
 from src.pipeline.row_batch_coordinator import flush_quarantine_records
 from src.pipeline.row_pipeline import RowPipelineExecutor, RowPipelineRequest
 from src.pipeline.run_state import IngestionRunState
-from src.validators.validator import ValidationResult
+
+
+def _equivalent_duplicate_detail(
+    ingestion_key: str = "duplicate-key",
+) -> DuplicateDetail:
+    return DuplicateDetail(
+        identify="MOMO",
+        ingestion_key=ingestion_key,
+        duplicate_type=QualityRuleCode.EQUIVALENT_DUPLICATE,
+        incoming_index=0,
+        incoming_fingerprint="same",
+        existing_fingerprint="same",
+    )
 
 
 def test_run_state_tracks_rows_keys_errors_and_batch_outcomes():
@@ -34,7 +50,13 @@ def test_run_state_tracks_rows_keys_errors_and_batch_outcomes():
     state.record_row()
     state.record_invalid_row([{"field": "amount", "reason": "invalid"}])
     state.record_batch_result(
-        BatchInsertResult(inserted=2, duplicates=1, failed=1)
+        BatchWriteResult(
+            inserted=2,
+            duplicates=1,
+            equivalent_duplicates=1,
+            failed=1,
+            duplicate_details=[_equivalent_duplicate_detail()],
+        )
     )
 
     assert state.stats.total_rows == 2
@@ -47,7 +69,9 @@ def test_run_state_tracks_rows_keys_errors_and_batch_outcomes():
         "rejectedRows": 1,
         "duplicateRows": 1,
         "failedRows": 1,
+        "persistenceFailedRows": 1,
         "quarantinedRows": 0,
+        "equivalentDuplicateRows": 1,
     }
     assert state.ingestion_keys == ["txn-1"]
     assert [error["field"] for error in state.errors] == [
@@ -57,12 +81,14 @@ def test_run_state_tracks_rows_keys_errors_and_batch_outcomes():
     ]
 
 
-def test_run_state_accepts_legacy_integer_batch_result():
-    state = IngestionRunState()
+def test_run_state_records_one_explicit_persistence_failure_consistently():
+    state = IngestionRunState(total_rows=1)
 
-    state.record_batch_result(3)
+    state.record_persistence_failure()
 
-    assert state.stats.success_rows == 3
+    assert state.failed_rows == 1
+    assert state.persistence_failed_rows == 1
+    assert state.stats.failed_rows == 1
 
 
 def test_quarantine_sanitizes_sensitive_raw_values():
@@ -84,9 +110,7 @@ def test_row_pipeline_keeps_validation_side_effect_free():
     request = RowPipelineRequest(
         file_path="transactions.xlsx",
         config=MagicMock(
-            field_mappings=[
-                FieldMapping(path="id", column="A", type=FieldMappingType.STRING)
-            ]
+            field_mappings=[FieldMapping(path="id", column="A", type=FieldMappingType.STRING)]
         ),
         partner="MOMO",
         workflow_type="UPC",
@@ -101,8 +125,9 @@ def test_row_pipeline_keeps_validation_side_effect_free():
 
     processor = executor._build_row_processor(request)
 
-    assert processor._validator._data_container_repo is None
-    assert processor._validator._reconciliation_file_repo is None
+    assert not hasattr(processor._validator, "_data_container_repo")
+    assert not hasattr(processor._validator, "_reconciliation_file_repo")
+    assert not hasattr(processor._validator, "validate_with_duplicates")
 
 
 @pytest.mark.asyncio
@@ -179,9 +204,7 @@ async def test_file_claim_reopens_failed_file_for_idempotent_retry(monkeypatch):
         reconciliation_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
         processing_status=ProcessingStatus.FAILED,
     )
-    reopened = failed.model_copy(
-        update={"processing_status": ProcessingStatus.PROCESSING}
-    )
+    reopened = failed.model_copy(update={"processing_status": ProcessingStatus.PROCESSING})
     repository = MagicMock()
     repository.find_by_file_hash = AsyncMock(return_value=failed)
     repository.reclaim_failed_by_file_hash = AsyncMock(return_value=reopened)
@@ -287,7 +310,15 @@ async def test_pipeline_retry_after_persistence_failure_reuses_file_claim(
 
     data_repository = MagicMock()
     data_repository.insert_many = AsyncMock(
-        side_effect=[RuntimeError("temporary database outage"), BatchInsertResult(inserted=0, duplicates=1)]
+        side_effect=[
+            RuntimeError("temporary database outage"),
+            BatchWriteResult(
+                inserted=0,
+                duplicates=1,
+                equivalent_duplicates=1,
+                duplicate_details=[_equivalent_duplicate_detail()],
+            ),
+        ]
     )
     config_loader = MagicMock(spec=ConfigLoader)
     config_loader.load_by_partner_type = AsyncMock(return_value=config)
@@ -388,7 +419,7 @@ def test_row_processor_builds_canonical_transaction():
         }
     )
     validator = MagicMock()
-    validator.validate.return_value = ValidationResult()
+    validator.validate.return_value = QualityEvaluation()
     processor = RowProcessor(
         normalizer=normalizer,
         validator=validator,
@@ -441,15 +472,13 @@ def test_row_processor_fast_mode_builds_repository_ready_container():
 @pytest.mark.asyncio
 async def test_batch_writer_respects_repository_contract():
     repository = MagicMock()
-    repository.insert_many = AsyncMock(return_value=BatchInsertResult(inserted=1))
+    repository.insert_many = AsyncMock(return_value=BatchWriteResult(inserted=1))
     writer = BatchWriteCoordinator(repository, workers=1, ordered=False)
 
     result = await writer.submit([{"id": "txn-1"}])
 
-    assert result == [BatchInsertResult(inserted=1)]
-    repository.insert_many.assert_awaited_once_with(
-        [{"id": "txn-1"}], ordered=False, detailed=True
-    )
+    assert result == [BatchWriteResult(inserted=1)]
+    repository.insert_many.assert_awaited_once_with([{"id": "txn-1"}], ordered=False)
 
 
 @pytest.mark.asyncio

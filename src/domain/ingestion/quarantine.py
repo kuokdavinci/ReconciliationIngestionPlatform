@@ -38,15 +38,15 @@ class IngestionQuarantineRecord(BaseModel):
     reconciliation_date: datetime = Field(alias="reconciliationDate")
     row_number: int | None = Field(default=None, alias="rowNumber")
     raw_row: Any = Field(default_factory=dict, alias="rawRow")
+    incoming_fingerprint: str | None = Field(default=None, alias="incomingFingerprint")
+    existing_fingerprint: str | None = Field(default=None, alias="existingFingerprint")
     errors: list[dict[str, Any]] = Field(default_factory=list)
     phase: QuarantinePhase = QuarantinePhase.VALIDATION
     severity: QuarantineSeverity = QuarantineSeverity.RECORD
     config_version: str | None = Field(default=None, alias="configVersion")
     status: QuarantineStatus = QuarantineStatus.PENDING
     attempt_count: int = Field(default=1, alias="attemptCount", ge=1)
-    resolution_metadata: dict[str, Any] = Field(
-        default_factory=dict, alias="resolutionMetadata"
-    )
+    resolution_metadata: dict[str, Any] = Field(default_factory=dict, alias="resolutionMetadata")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), alias="createdAt")
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC), alias="updatedAt")
 
@@ -57,7 +57,9 @@ def sanitize_raw_row(value: Any, *, max_length: int = 512) -> Any:
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            if any(token in key_text.lower() for token in ("password", "secret", "token", "api_key")):
+            if any(
+                token in key_text.lower() for token in ("password", "secret", "token", "api_key")
+            ):
                 sanitized[key_text] = "[REDACTED]"
             else:
                 sanitized[key_text] = sanitize_raw_row(item, max_length=max_length)

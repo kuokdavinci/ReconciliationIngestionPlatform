@@ -34,7 +34,11 @@ def runtime_error_code(field: Optional[str], reason: Optional[str]) -> str:
         return "COLUMN_OUT_OF_RANGE"
     if "required field '" in text and "not found in normalized data" in text:
         return "MISSING_REQUIRED_FIELD"
-    if "value is none" in text or "source field value is none" in text or "cannot map empty/null value" in text:
+    if (
+        "value is none" in text
+        or "source field value is none" in text
+        or "cannot map empty/null value" in text
+    ):
         return "VALUE_IS_NULL"
     if "invalid decimal value" in text or "float not allowed for monetary values" in text:
         return "INVALID_DECIMAL"
@@ -42,7 +46,11 @@ def runtime_error_code(field: Optional[str], reason: Optional[str]) -> str:
         return "INVALID_DATE"
     if "unmapped value" in text:
         return "UNMAPPED_VALUE"
-    if "mapping dict not configured" in text or "constant value is not configured" in text or "no column configured" in text:
+    if (
+        "mapping dict not configured" in text
+        or "constant value is not configured" in text
+        or "no column configured" in text
+    ):
         return "MAPPING_RULE_MISSING"
     if "invalid status value" in text:
         return "INVALID_CANONICAL_STATUS"
@@ -62,13 +70,14 @@ def runtime_trace_status(error_code: Optional[str]) -> str:
     return "ok"
 
 
-def serialize_runtime_trace(row_number: int, traces: list, normalized_data: dict, build_errors: Optional[list] = None) -> dict:
+def serialize_runtime_trace(
+    row_number: int, traces: list, normalized_data: dict, build_errors: Optional[list] = None
+) -> dict:
     """Format row traces and normalization errors for endpoint consumption."""
     return {
         "row": row_number,
         "normalizedData": {
-            key: serialize_runtime_value(val)
-            for key, val in normalized_data.items()
+            key: serialize_runtime_value(val) for key, val in normalized_data.items()
         },
         "fieldTraces": [
             {
@@ -79,19 +88,23 @@ def serialize_runtime_trace(row_number: int, traces: list, normalized_data: dict
                 "sourceValue": serialize_runtime_value(trace.source_value),
                 "outputValue": serialize_runtime_value(trace.output_value),
                 "status": runtime_trace_status(
-                    runtime_error_code(trace.error.field, trace.error.reason) if trace.error else None
+                    runtime_error_code(trace.error.field, trace.error.message)
+                    if trace.error
+                    else None
                 ),
-                "errorCode": runtime_error_code(trace.error.field, trace.error.reason) if trace.error else None,
-                "errorMessage": trace.error.reason if trace.error else None,
+                "errorCode": runtime_error_code(trace.error.field, trace.error.message)
+                if trace.error
+                else None,
+                "errorMessage": trace.error.message if trace.error else None,
             }
             for trace in traces
         ],
         "buildErrors": [
             {
                 "field": err.field,
-                "reason": err.reason,
+                "reason": err.message,
                 "row": err.row,
-                "errorCode": runtime_error_code(err.field, err.reason),
+                "errorCode": runtime_error_code(err.field, err.message),
             }
             for err in (build_errors or [])
         ],
@@ -100,7 +113,11 @@ def serialize_runtime_trace(row_number: int, traces: list, normalized_data: dict
 
 def upsert_validation_gate(packet, gate: dict) -> list[dict]:
     """Upsert a validation gate to the packet's gate list, replacing any old one with the same key."""
-    gates = [dict(item) for item in (packet.validation_gates or []) if item.get("gateKey") != gate["gateKey"]]
+    gates = [
+        dict(item)
+        for item in (packet.validation_gates or [])
+        if item.get("gateKey") != gate["gateKey"]
+    ]
     gates.append(gate)
     return gates
 
@@ -130,7 +147,9 @@ async def run_runtime_validation(db, packet, config) -> dict:
     """Execute dry-run runtime validation using Excel file or sample previews."""
     source_file_path = getattr(packet, "source_file_path", None)
     validated_at = datetime.now(timezone.utc)
-    validated_mapping_version = getattr(config, "config_version", None) or str(getattr(config, "id", ""))
+    validated_mapping_version = getattr(config, "config_version", None) or str(
+        getattr(config, "id", "")
+    )
     current_mapping_version = validated_mapping_version
     sampled_rows = 0
     success_rows = 0
@@ -151,7 +170,13 @@ async def run_runtime_validation(db, packet, config) -> dict:
                 "failedRows": 0,
                 "successRate": 0.0,
                 "failedExamples": [{"error": "Empty field mappings"}],
-                "topIssues": [{"code": "EMPTY_MAPPINGS", "count": 1, "message": "Draft mapping configuration has no field mappings defined."}],
+                "topIssues": [
+                    {
+                        "code": "EMPTY_MAPPINGS",
+                        "count": 1,
+                        "message": "Draft mapping configuration has no field mappings defined.",
+                    }
+                ],
                 "fieldResults": [],
                 "traceSamples": [],
             },
@@ -170,29 +195,33 @@ async def run_runtime_validation(db, packet, config) -> dict:
         norm_result, field_traces = normalizer.normalize_with_trace(row, row_number)
         if norm_result.errors:
             failed_rows += 1
-            failed_examples.append({
-                "row": row_number,
-                "reason": norm_result.errors[0].reason,
-                "field": norm_result.errors[0].field,
-            })
+            failed_examples.append(
+                {
+                    "row": row_number,
+                    "reason": norm_result.errors[0].message,
+                    "field": norm_result.errors[0].field,
+                }
+            )
             if len(trace_samples) < 5:
                 trace_samples.append(
                     serialize_runtime_trace(row_number, field_traces, norm_result.data)
                 )
             return
-        txn, build_errors = TransactionNormalizer.build_canonical(
-            norm_result.data, [], row_number
-        )
+        txn, build_errors = TransactionNormalizer.build_canonical(norm_result.data, [], row_number)
         if txn is None:
             failed_rows += 1
-            failed_examples.append({
-                "row": row_number,
-                "reason": build_errors[0].reason,
-                "field": build_errors[0].field,
-            })
+            failed_examples.append(
+                {
+                    "row": row_number,
+                    "reason": build_errors[0].message,
+                    "field": build_errors[0].field,
+                }
+            )
             if len(trace_samples) < 5:
                 trace_samples.append(
-                    serialize_runtime_trace(row_number, field_traces, norm_result.data, build_errors)
+                    serialize_runtime_trace(
+                        row_number, field_traces, norm_result.data, build_errors
+                    )
                 )
         else:
             success_rows += 1
@@ -243,7 +272,11 @@ async def run_runtime_validation(db, packet, config) -> dict:
             row = sample.get("values") if isinstance(sample, dict) else None
             if not isinstance(row, list):
                 continue
-            row_number = int(sample.get("rowIndex") or (config.start_row + idx)) if isinstance(sample, dict) else (config.start_row + idx)
+            row_number = (
+                int(sample.get("rowIndex") or (config.start_row + idx))
+                if isinstance(sample, dict)
+                else (config.start_row + idx)
+            )
             _consume_row(row, row_number)
 
         if sampled_rows == 0:

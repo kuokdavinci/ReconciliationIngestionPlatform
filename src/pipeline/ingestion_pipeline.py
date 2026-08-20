@@ -6,14 +6,26 @@ import string
 import time
 from typing import Any, Literal, Optional
 
-from src.application.ingestion.contracts import IngestionResult, ProcessFileCommand
+from src.application.ingestion.contracts import (
+    IngestionResult,
+    ProcessFileCommand,
+    serialize_quality_violation,
+)
 from src.application.ingestion.error_classification import is_missing_ingestion_key_failure
 from src.config.config_health import (
     ConfigurationApprovalRequiredError,
     record_config_run_health,
 )
-from src.config.loader import ConfigLoader
+from src.config.loader import ConfigLoader, ConfigLoadError
 from src.core.enums import ProcessingStatus
+from src.domain.ingestion.quality import (
+    QualityEvaluation,
+    QualityOutcome,
+    QualityPhase,
+    QualityRuleCode,
+    QualitySeverity,
+    quality_violation,
+)
 from src.domain.ingestion.ports import (
     IngestionFileRepository,
     IngestionQuarantineWriter,
@@ -33,6 +45,11 @@ from src.pipeline.row_pipeline import (
     RowPipelineExecutor,
     RowPipelineRequest,
     RowPipelineResult,
+)
+from src.pipeline.quality_gate import (
+    FileQualityGate,
+    QualityGateFailure,
+    SourceStructureUnreadableError,
 )
 from src.pipeline.run_state import IngestionRunState
 
@@ -94,13 +111,18 @@ class IngestionPipeline:
             ordered_insert: Whether inserts must be ordered.
         """
         from src.config.settings import settings
+
         self._db = db
         self._config_loader = config_loader
         self._batch_size = batch_size if batch_size is not None else settings.ingest_batch_size
-        self._write_workers = write_workers if write_workers is not None else settings.ingest_write_workers
+        self._write_workers = (
+            write_workers if write_workers is not None else settings.ingest_write_workers
+        )
         if self._write_workers < 1:
             raise ValueError("write_workers must be at least 1")
-        self._ordered_insert = ordered_insert if ordered_insert is not None else settings.ingest_ordered_insert
+        self._ordered_insert = (
+            ordered_insert if ordered_insert is not None else settings.ingest_ordered_insert
+        )
         self._recon_repo = file_repo
         self._data_repo = partner_repo
         self._mapping_repo = mapping_repo
@@ -168,10 +190,7 @@ class IngestionPipeline:
         Returns:
             Dict mapping column letters to cell values.
         """
-        return {
-            string.ascii_uppercase[i]: value
-            for i, value in enumerate(row_tuple)
-        }
+        return {string.ascii_uppercase[i]: value for i, value in enumerate(row_tuple)}
 
     def _derive_ingestion_key(self, txn: Any) -> str:
         """Derive a stable transaction key from normalized transaction data."""
@@ -219,7 +238,48 @@ class IngestionPipeline:
             quality_counters=state.quality_counters,
             outcome=outcome,
             duplicate_code=duplicate_code,
+            quality_decision=state.quality_decision,
+            quality_summary=state.quality_summary,
+            orchestration_action=state.orchestration_action,
         )
+
+    def _evaluate_file_quality_gate(
+        self,
+        *,
+        file_path: str,
+        config: MappingConfig,
+        state: IngestionRunState,
+    ) -> QualityEvaluation:
+        try:
+            evaluation = FileQualityGate().evaluate(
+                config,
+                file_path=file_path if Path(file_path).exists() else None,
+            )
+        except SourceStructureUnreadableError as exc:
+            violation = quality_violation(
+                code=QualityRuleCode.SOURCE_STRUCTURE_UNREADABLE,
+                phase=QualityPhase.FILE,
+                severity=QualitySeverity.FATAL,
+                outcome=QualityOutcome.BATCH_FATAL,
+                field="_file",
+                message=f"Unable to inspect source structure: {exc}",
+                actual=str(exc),
+            )
+            evaluation = QualityEvaluation(
+                outcome=QualityOutcome.BATCH_FATAL,
+                violations=[violation],
+            )
+        self._record_quality_evaluation(state, evaluation)
+        return evaluation
+
+    @staticmethod
+    def _record_quality_evaluation(
+        state: IngestionRunState,
+        evaluation: QualityEvaluation,
+    ) -> None:
+        state.record_quality_evaluation(evaluation)
+        for violation in evaluation.violations:
+            state.add_error(serialize_quality_violation(violation))
 
     def _log_performance(
         self,
@@ -401,12 +461,38 @@ class IngestionPipeline:
                 f"proposal_id={approval_exc.proposal_id or 'unknown'}; "
                 f"action_id={approval_exc.action_id or 'unknown'}"
             )
-            await self._recon_repo.update_status(
-                claimed.file_record.id, ProcessingStatus.PENDING
-            )
+            await self._recon_repo.update_status(claimed.file_record.id, ProcessingStatus.PENDING)
             claimed.file_record.processing_status = ProcessingStatus.PENDING
             state.add_error({"field": "configApproval", "reason": approval_reason})
             return None
+        except ConfigLoadError as config_exc:
+            violations = [
+                violation.model_copy(
+                    update={
+                        "phase": QualityPhase.CONFIGURATION,
+                        "severity": QualitySeverity.FATAL,
+                        "outcome": QualityOutcome.BATCH_FATAL,
+                    }
+                )
+                for violation in config_exc.validation_errors
+            ]
+            if not violations:
+                violations = [
+                    quality_violation(
+                        code=QualityRuleCode.CONFIG_VALIDATION,
+                        phase=QualityPhase.CONFIGURATION,
+                        severity=QualitySeverity.FATAL,
+                        outcome=QualityOutcome.BATCH_FATAL,
+                        field="_config",
+                        message=config_exc.message,
+                    )
+                ]
+            evaluation = QualityEvaluation(
+                outcome=QualityOutcome.BATCH_FATAL,
+                violations=violations,
+            )
+            self._record_quality_evaluation(state, evaluation)
+            raise QualityGateFailure(violations) from config_exc
 
     async def _run_row_phase(
         self,
@@ -441,7 +527,7 @@ class IngestionPipeline:
                 source_file_id=claimed.file_record.id,
                 file_id=claimed.source_file_id,
                 fetch_unit_key=claimed.fetch_unit_key,
-                config_version=command.config_version,
+                config_version=config.config_version or command.config_version,
                 state=state,
                 emit_stage=lambda stage: self._emit_stage(
                     stage,
@@ -561,12 +647,30 @@ class IngestionPipeline:
             if duplicate_result is not None:
                 return duplicate_result
 
-            self._logger.emit_file_started(
-                claimed.run_id, claimed.file_name, command.partner
-            )
+            self._logger.emit_file_started(claimed.run_id, claimed.file_name, command.partner)
             config = await self._prepare_mapping(command, claimed, state)
             if config is None:
                 return self._build_result(file_record, state, outcome="WAITING_REVIEW")
+            file_quality = self._evaluate_file_quality_gate(
+                file_path=command.file_path,
+                config=config,
+                state=state,
+            )
+            if file_quality.decision.value == "FAIL":
+                self._emit_stage(
+                    IngestionStage.FINALIZING,
+                    run_id=claimed.run_id,
+                    source_file_id=claimed.source_file_id,
+                    error_code=QualityOutcome.BATCH_FATAL.value,
+                    state=state,
+                )
+                await self._finalizer.fail(
+                    self._recon_repo,
+                    claimed.file_record,
+                    state,
+                    QualityGateFailure(file_quality.violations),
+                )
+                return self._build_result(file_record, state, outcome="FAILED")
             row_result = await self._run_row_phase(command, config, claimed, state)
             if _is_missing_ingestion_key_failure(state):
                 error = ValueError(
@@ -590,16 +694,12 @@ class IngestionPipeline:
                     state,
                     outcome="FAILED",
                 )
-            await self._finalize_success(
-                command, claimed, state, row_result, started_at
-            )
+            await self._finalize_success(command, claimed, state, row_result, started_at)
             return self._build_result(file_record, state)
         except Exception as exc:
             claimed_context = locals().get("claimed")
             run_id = (
-                claimed_context.run_id
-                if isinstance(claimed_context, _ClaimedFile)
-                else "unknown"
+                claimed_context.run_id if isinstance(claimed_context, _ClaimedFile) else "unknown"
             )
             source_file_id = (
                 claimed_context.source_file_id

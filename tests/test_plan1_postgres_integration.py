@@ -19,7 +19,12 @@ from src.infrastructure.persistence.postgres_schema import PartnerTransactionTab
 pytestmark = pytest.mark.integration
 
 
-def _transaction(identify: str, key: str) -> DataContainer:
+def _transaction(
+    identify: str,
+    key: str,
+    *,
+    amount: Decimal = Decimal("100.00"),
+) -> DataContainer:
     return DataContainer(
         identify=identify,
         workflowType="UPC",
@@ -30,7 +35,7 @@ def _transaction(identify: str, key: str) -> DataContainer:
             _id=key,
             trace=f"TRACE-{key}",
             status="SUCCESS",
-            amount=Decimal("100.00"),
+            amount=amount,
             currency="VND",
         ),
     )
@@ -57,16 +62,18 @@ async def test_plan1_postgres_transaction_idempotency_matrix():
     distinct = _transaction(identify, "KEY-3")
 
     try:
-        initial = await repo.insert_many(first, detailed=True)
+        initial = await repo.insert_many(first)
         assert (initial.inserted, initial.duplicates, initial.failed) == (2, 0, 0)
 
-        partial = await repo.insert_many(mixed, detailed=True)
+        partial = await repo.insert_many(mixed)
         assert (partial.inserted, partial.duplicates, partial.failed) == (1, 1, 0)
+        assert (partial.equivalent_duplicates, partial.conflicting_duplicates) == (1, 0)
 
-        replay = await repo.insert_many(full_replay, detailed=True)
+        replay = await repo.insert_many(full_replay)
         assert (replay.inserted, replay.duplicates, replay.failed) == (0, 3, 0)
+        assert (replay.equivalent_duplicates, replay.conflicting_duplicates) == (3, 0)
 
-        separate = await repo.insert_many([distinct], detailed=True)
+        separate = await repo.insert_many([distinct])
         assert (separate.inserted, separate.duplicates, separate.failed) == (1, 0, 0)
 
         async with engine.connect() as connection:
@@ -79,8 +86,119 @@ async def test_plan1_postgres_transaction_idempotency_matrix():
     finally:
         async with engine.begin() as connection:
             await connection.execute(
-                delete(PartnerTransactionTable).where(
-                    PartnerTransactionTable.identify == identify
+                delete(PartnerTransactionTable).where(PartnerTransactionTable.identify == identify)
+            )
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_same_payload_insert_is_classified_without_a_race():
+    """One atomic winner and one equivalent duplicate are observed under contention."""
+    try:
+        connection = await asyncio.wait_for(
+            asyncpg.connect(settings.postgres_url.replace("+asyncpg", "")),
+            timeout=3,
+        )
+        await connection.close()
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}: {exc}")
+
+    engine = create_async_engine(settings.postgres_url)
+    identify = f"QUALITY_RACE_{uuid4().hex}"
+    key = "SAME-KEY"
+    repository = DataContainerRepository(engine=engine)
+
+    try:
+        first, second = await asyncio.gather(
+            repository.insert_many([_transaction(identify, key)]),
+            repository.insert_many([_transaction(identify, key)]),
+        )
+
+        assert first.inserted + second.inserted == 1
+        assert first.duplicates + second.duplicates == 1
+        assert first.equivalent_duplicates + second.equivalent_duplicates == 1
+        assert first.conflicting_duplicates + second.conflicting_duplicates == 0
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                delete(PartnerTransactionTable).where(PartnerTransactionTable.identify == identify)
+            )
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_intra_batch_conflict_preserves_the_incoming_row_ordinal():
+    try:
+        connection = await asyncio.wait_for(
+            asyncpg.connect(settings.postgres_url.replace("+asyncpg", "")),
+            timeout=3,
+        )
+        await connection.close()
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}: {exc}")
+
+    engine = create_async_engine(settings.postgres_url)
+    identify = f"QUALITY_ORDINAL_{uuid4().hex}"
+    key = "SAME-KEY"
+    repository = DataContainerRepository(engine=engine)
+
+    try:
+        result = await repository.insert_many(
+            [
+                _transaction(identify, key, amount=Decimal("100")),
+                _transaction(identify, key, amount=Decimal("200")),
+            ]
+        )
+
+        assert result.inserted == 1
+        assert result.conflicting_duplicates == 1
+        assert result.duplicate_details[0].incoming_index == 1
+        async with engine.connect() as connection:
+            stored_amount = await connection.scalar(
+                select(PartnerTransactionTable.partner_amount).where(
+                    PartnerTransactionTable.identify == identify,
+                    PartnerTransactionTable.ingestion_key == key,
                 )
+            )
+        assert stored_amount == Decimal("100")
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                delete(PartnerTransactionTable).where(PartnerTransactionTable.identify == identify)
+            )
+        await engine.dispose()
+
+
+async def test_large_equivalent_duplicate_batch_uses_scalable_conflict_lookup():
+    """Bulk conflict lookup must not expand into a stack-depth-sized IN expression."""
+    try:
+        connection = await asyncio.wait_for(
+            asyncpg.connect(settings.postgres_url.replace("+asyncpg", "")),
+            timeout=3,
+        )
+        await connection.close()
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}: {exc}")
+
+    engine = create_async_engine(settings.postgres_url)
+    identify = f"QUALITY_LARGE_REPLAY_{uuid4().hex}"
+    repository = DataContainerRepository(engine=engine)
+    initial = [_transaction(identify, f"KEY-{index}") for index in range(10_000)]
+    replay = [_transaction(identify, f"KEY-{index}") for index in range(10_000)]
+
+    try:
+        inserted = await repository.insert_many(initial)
+        assert inserted.inserted == 10_000
+
+        result = await repository.insert_many(replay)
+
+        assert result.inserted == 0
+        assert result.duplicates == 10_000
+        assert result.equivalent_duplicates == 10_000
+        assert result.conflicting_duplicates == 0
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                delete(PartnerTransactionTable).where(PartnerTransactionTable.identify == identify)
             )
         await engine.dispose()

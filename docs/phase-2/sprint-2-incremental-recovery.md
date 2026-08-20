@@ -356,7 +356,7 @@ initiated FileDrop replay:
   pending draft mapping without changing production-like source data.
 
 Automated evidence is covered by `tests/test_backfill_runs.py`,
-`tests/test_airflow_backfill.py`, `tests/test_vnpay_filedrop_backfill_demo.py`,
+`tests/test_airflow_backfill.py`, `tests/test_vnpay_backfill_scenario.py`,
 and the Schedules Playwright scenario. A live Docker/Airflow run remains an
 environment-level acceptance step, not a claim made by these unit tests.
 

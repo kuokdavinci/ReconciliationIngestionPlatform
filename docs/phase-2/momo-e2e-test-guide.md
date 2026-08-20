@@ -42,8 +42,11 @@ make momo-e2e-run
 5. Prepare Phase 2 data:
 
 ```bash
-make momo-e2e-phase2
+make momo-e2e-phase2-full
 ```
+
+`momo-e2e-phase2-full` is the standard incremental happy path: it keeps the
+approved runtime mapping and publishes only the 20 Wave 2 keys.
 
 6. Trigger automation again:
 
@@ -59,6 +62,12 @@ make momo-e2e-run
    * current run reconciles only wave2 keys `MOMO_TXN_9100..MOMO_TXN_9119`
    * `20 MATCHED`
    * `0 MISSING_PARTNER`
+
+For the separate duplicate/review-visibility demo, use
+`make momo-e2e-phase2` instead. That target publishes a new delivery file with
+20 Wave 1 + 10 Wave 2 rows and deliberately removes the approved runtime
+mapping, so the next Run Now is expected to become `WAITING_REVIEW` and create
+a new pending packet.
 
 Use this to inspect the job after each run if needed:
 
@@ -282,9 +291,10 @@ This is the single source of truth for MOMO E2E seed data. It supports three exp
 
 * `reset` — wipe MOMO internal rows, seed the 20 wave1 rows (`MOMO_TXN_9000`..`MOMO_TXN_9019`), and write a partner xlsx with the same 20 keys. Use this for a clean Phase 1 baseline.
 * `phase2` — add the 20 wave2 internal rows (`MOMO_TXN_9100`..`MOMO_TXN_9119`) and **overwrite** the partner file with the wave2 keys. Combined with `reset`, this is the 2-command happy path described in the Quick Start.
+* `phase2_duplicate` — add 10 new wave2 internal rows, publish a distinct `*_phase2.xlsx` delivery containing 20 existing wave1 + 10 new wave2 rows, and remove the approved runtime mapping so the next run exercises the review gate.
 * `missing_partner_demo` — insert a single `MOMO_TXN_90_MISSING_PARTNER` internal row (50000 VND, `SUCCESS`, same day) and write a wave1-only partner xlsx. A subsequent `FULL_SNAPSHOT` ingestion produces exactly `20 MATCHED + 1 MISSING_PARTNER`.
 
-The corresponding `make` targets (`momo-e2e-reset`, `momo-e2e-phase2`, `momo-e2e-missing-partner-demo`) wrap each mode and are the recommended entry points — see the Quick Start above.
+The corresponding `make` targets (`momo-e2e-reset`, `momo-e2e-phase2-full`, `momo-e2e-phase2`, `momo-e2e-missing-partner-demo`) wrap each mode and are the recommended entry points — see the Quick Start above.
 
 ### Legacy script — do not use
 
@@ -334,6 +344,26 @@ Plan:
 Recommended verification:
 
 * check key overlap explicitly, not just counts
+
+### Scenario 2b: New delivery with the same layout
+
+Goal:
+
+* verify that a new source delivery is not hidden just because its mapping
+  structure matches an older approved packet
+
+Plan:
+
+1. Complete Scenario 1 first.
+2. Run `make momo-e2e-phase2`.
+3. Trigger `make momo-e2e-run`.
+4. Verify the runtime is `WAITING_REVIEW` and Review Queue contains a new
+   pending packet for the `*_phase2.xlsx` delivery.
+
+This is intentionally different from the safe-duplicate path. A packet is
+collapsed only when its source scope matches (`rawStageKey`, `backfillRunId`
+or file identity); matching spreadsheet structure alone is not the source
+identity.
 
 ### Scenario 3: Intentional Missing Partner
 
@@ -394,7 +424,8 @@ If the dashboard shows more records than expected, the first thing to check is n
 ```bash
 make momo-e2e-help                # list all MOMO E2E targets (Quick Start at the top)
 make momo-e2e-reset               # clean Phase 1 (20 internal rows 9000-9019 + partner file)
-make momo-e2e-phase2              # add Phase 2 (20 internal rows 9100-9119 + new partner file)
+make momo-e2e-phase2              # partial-duplicate/review demo (20 old + 10 new rows, new delivery)
+make momo-e2e-phase2-full         # standard Wave 2 happy path (20 new rows, approved mapping reused)
 make momo-e2e-missing-partner-demo  # inject MOMO_TXN_90_MISSING_PARTNER for engine demo
 make momo-e2e-run                 # trigger MOMO automation run
 make momo-e2e-job                 # inspect MOMO automation job

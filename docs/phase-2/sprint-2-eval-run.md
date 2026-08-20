@@ -40,7 +40,9 @@ evaluation:
 1. `make vnpay-backfill-reset` clears prior VNPAY partner/result rows, then
    creates deterministic business-date files, matching PostgreSQL internal
    rows, an enabled FileDrop config, a draft mapping, and a pending review
-   packet with bounded internal evidence.
+   packet with bounded internal evidence. Without `VNPAY_BACKFILL_FROM` and
+   `VNPAY_BACKFILL_TO`, the fixture covers the latest four business days; the
+   environment variables can narrow it for a focused smoke run.
 2. Schedules starts one parent backfill and displays each business date in the
    progress panel.
 3. The parent remains `WAITING_CONFIG` until Guided Review approves the draft
@@ -48,8 +50,8 @@ evaluation:
    an unrelated post-approval replay.
 4. Backend tests verify date expansion, ordered execution, first-failure stop,
    scheduled-checkpoint isolation, and parent resumption after approval.
-5. The live Docker acceptance path should finish `COMPLETED` for every business
-   day and produce three `MATCHED` results per seeded day.
+5. The live Docker acceptance path should finish `COMPLETED` for every seeded
+   business day and produce three `MATCHED` results per seeded day.
 
 This is deterministic code/UI evidence. It does not replace the live Docker
 acceptance run against MongoDB, PostgreSQL, Airflow, and the mounted

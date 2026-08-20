@@ -10,6 +10,7 @@ Trạng thái hiện tại gồm FastAPI backend, dashboard Next.js, MongoDB + P
 - Mapping theo partner, normalize, validate và quarantine record lỗi.
 - Idempotency ở file, source unit, transaction và batch write.
 - Pagination, checkpoint, retry/resume, raw-page staging và ordered backfill.
+- Safe duplicate cho API stream đã hoàn tất và source identity ổn định cho retry/replay.
 - Reconciliation theo business key, amount/status và scope (`FULL_SNAPSHOT`, `INCREMENTAL_APPEND`, `REPLACEMENT`, `UNCONFIRMED`).
 - Review packet, mapping approval, runtime validation, audit log và operator recovery.
 - Insight/Copilot có guardrail, cache và provider fallback.
@@ -19,52 +20,48 @@ Trạng thái hiện tại gồm FastAPI backend, dashboard Next.js, MongoDB + P
 
 ```mermaid
 flowchart LR
-    subgraph OUT[External systems]
-        UI[Next.js dashboard]
-        SRC[Partner API / FileDrop / SFTP]
-        DB[(MongoDB + PostgreSQL)]
-        AF[Airflow]
-    end
+    EXT[External systems\nDashboard • Partner sources • Airflow]
+    ADAPTER[Adapters\nAPI • fetchers/readers • persistence • DAG gateway]
+    APP[Application use cases\nAutomation • Ingestion • Review • Reconciliation]
+    CORE[Domain & core\nModels • contracts • identity • policies]
+    DATA[(MongoDB + PostgreSQL)]
 
-    subgraph ADAPTER[Interface & infrastructure adapters]
-        API[src/api]
-        FETCH[src/fetchers + readers]
-        REPO[src/infrastructure]
-        DAG[dags + workflow gateway]
-    end
-
-    subgraph APP[Application use cases]
-        AUTO[automation\ncheckpoint / recovery / backfill]
-        ING[ingestion\npipeline / validation]
-        REV[review\napproval / replay]
-        REC[reconciliation\nscope / matching / results]
-    end
-
-    subgraph CORE[Domain core]
-        DOMAIN[src/domain + src/core]
-        PORTS[ports / contracts / stable identities]
-    end
-
-    UI --> API
-    API --> APP
-    SRC --> FETCH --> AUTO
-    AF --> DAG --> AUTO
-    AUTO --> ING
-    AUTO --> REV
-    AUTO --> REC
-    APP --> DOMAIN
-    APP -. uses .-> PORTS
-    REPO -. implements .-> PORTS
-    REPO --> DB
-    DAG --> AF
+    EXT --> ADAPTER --> APP --> CORE
+    ADAPTER --> DATA
 ```
 
 - **Domain** chỉ chứa business model, enum, port và contract; không phụ thuộc FastAPI, MongoDB, PostgreSQL hay Airflow.
 - **Application** sở hữu use case và trạng thái nghiệp vụ: ingestion, automation, review, reconciliation, checkpoint và idempotency.
 - **Adapters** chuyển đổi request/source/workflow/persistence vào application ports: `src/api/`, `src/fetchers/`, `src/infrastructure/` và `dags/`.
+- Application phụ thuộc vào domain ports; adapters là nơi triển khai các ports đó và kết nối database/workflow bên ngoài.
 - **Airflow** sở hữu schedule, dependency, retry/timeout, pool và task log; business logic vẫn nằm trong application.
 
 Luồng chính: `partner source → fetcher → automation → ingestion/reconciliation → persistence`; khi cần operator action, application tạo review packet và chờ replay sau approval.
+
+Entrypoint runtime là `run.py → src.api:create_app`; các wrapper root cũ (`api/`, `backend/`) đã được loại bỏ. `src/core/utils.py` là nơi canonical cho business-day bounds, date templates, file hash và runtime error formatting; các module core cũ vẫn tồn tại dưới dạng re-export để giữ tương thích import.
+
+## Cấu trúc repository
+
+```text
+src/
+  api/                  FastAPI routers
+  application/          use cases và orchestration
+  domain/               models, ports, contracts
+  infrastructure/       repositories và workflow gateways
+  pipeline/             file/row ingestion
+  fetchers/             API, FileDrop, SFTP
+  readers/              CSV, JSON, Excel
+  reconciliation/       matching và scope
+  analysis/             insights và AI providers
+  config/, core/        settings, mapping, shared types và canonical utility functions
+frontend-next/          Next.js dashboard active
+dags/                   Airflow DAG
+tests/                  unit, runtime/API contract, integration, E2E
+alembic/                PostgreSQL migrations
+scripts/                seed, demo, benchmark, tools
+docker/                 Compose bootstrap và service notes
+docs/                   architecture, milestone, sprint, CI, runbook
+```
 
 ## Quick start
 
@@ -143,6 +140,8 @@ fetch source
 
 Stream API nhiều trang được stage bền vững trước khi tạo packet. Khi thiếu mapping, runtime chuyển `WAITING_REVIEW`; approval replay toàn bộ raw pages dưới cùng identity. Ordered backfill tạo một parent `backfillRunId`, xử lý ngày tăng dần và resume cùng parent sau approval.
 
+`sourceUnitKey` explicit từ API metadata được ưu tiên làm identity canonical; nếu không có, runtime dùng hash từ metadata fetch. Khi raw stage của API đã `COMPLETED`, lần chạy lại trả `SAFE_DUPLICATE`/`streamAlreadyCompleted` trước khi gọi fetcher hoặc tạo review packet. Review queue chỉ collapse packet có cùng source scope (`rawStageKey`, `backfillRunId` hoặc file identity), nên cùng schema nhưng là delivery mới vẫn có thể tạo packet riêng.
+
 ### Reconciliation
 
 `src/application/reconciliation/` điều phối use case; `src/reconciliation/` chứa key normalization, scope classification và matching engine. PostgreSQL lưu canonical partner/internal transactions và reconciliation results; MongoDB lưu config, runtime, review và audit documents.
@@ -194,12 +193,17 @@ Các timestamp event của PostgreSQL được lưu UTC-naive; business date đ�
 |---|---|
 | `uv run python run.py --serve --port 8000` | Chạy API |
 | `uv run python run.py --reconcile YYYY-MM-DD --partner MOMO` | Chạy reconciliation CLI |
-| `make ci` | Chạy test backend rộng, loại real LLM E2E |
+| `make ci` | Chạy toàn bộ Python test suite, loại real analysis E2E |
+| `make test-quick` | Chạy regression nhanh và dừng ở lỗi đầu tiên |
+| `make api-quick-build` | Rebuild riêng API container sau thay đổi backend |
+| `make momo-e2e-help` | Liệt kê các target MOMO E2E hiện có |
 | `make momo-e2e-reset` | Reset fixture MOMO |
 | `make momo-e2e-run` | Trigger manual MOMO run |
+| `make momo-e2e-phase2` | Chuẩn bị partial-duplicate/review demo: 20 wave1 + 10 wave2, tạo delivery file mới |
+| `make momo-e2e-phase2-full` | Chuẩn bị happy path Wave 2: 20 rows mới, giữ approved mapping |
 | `make viettelpay-sprint2-reset` | Reset ViettelPay recovery mock |
 | `make viettelpay-sprint2-eval` | Chạy evaluation ViettelPay |
-| `make vnpay-backfill-reset` | Reset VNPAY ordered backfill fixture |
+| `make vnpay-backfill-reset` | Reset VNPAY ordered backfill fixture; mặc định tạo 4 business days, có thể override bằng `VNPAY_BACKFILL_FROM/TO` |
 | `codegraph status` | Kiểm tra dependency index |
 | `codegraph sync .` | Đồng bộ index sau thay đổi cấu trúc |
 
@@ -218,29 +222,6 @@ npm --prefix frontend-next run test:e2e
 
 Bản đồ workflow và blast radius: [docs/CI-MAP.md](docs/CI-MAP.md).
 
-## Cấu trúc repository
-
-```text
-src/
-  api/                  FastAPI routers
-  application/          use cases và orchestration
-  domain/               models, ports, contracts
-  infrastructure/       repositories và workflow gateways
-  pipeline/             file/row ingestion
-  fetchers/             API, FileDrop, SFTP
-  readers/              CSV, JSON, Excel
-  reconciliation/       matching và scope
-  analysis/             insights và AI providers
-  config/, core/        settings, mapping, shared types
-frontend-next/          Next.js dashboard active
-dags/                   Airflow DAG
-tests/                  unit, architecture, integration, E2E
-alembic/                PostgreSQL migrations
-scripts/                seed, demo, benchmark, tools
-docker/                 Compose bootstrap và service notes
-docs/                   architecture, milestone, sprint, CI, runbook
-```
-
 ## Tài liệu
 
 - [Documentation index](docs/INDEX.md)
@@ -252,9 +233,5 @@ docs/                   architecture, milestone, sprint, CI, runbook
 - [CI map và blast radius](docs/CI-MAP.md)
 - [Docker services](docker/README.md)
 - [Frontend guide](frontend-next/README.md)
-
-### Trạng thái Phase 2
-
-Sprint 2.5 là một milestone hợp nhất: **Airflow integration + recovery hardening**. Acceptance hiện **chưa hoàn tất**: runbook ghi nhận 6/11 criteria đạt và 5 criteria pending. Local Compose service health đã được kiểm chứng ngày 2026-08-14; live business-flow và production rollout evidence vẫn còn mở. Sprint 2.6 không còn là sprint độc lập; xem [Phase 2 index](docs/phase-2/INDEX.md) và [Sprint 2 core function index](docs/phase-2/sprint-2-index.md) để đọc cấu trúc và luồng hiện tại.
 
 README và docs phải được đối chiếu với codegraph, `src/config/settings.py`, `.env.example`, `src/api/`, `frontend-next/src/app/`, `docker-compose.yml` và `.github/workflows/` sau mỗi thay đổi cấu trúc.

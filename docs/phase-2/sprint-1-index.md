@@ -1,9 +1,10 @@
-# Sprint 1 — Core Function Index
+# Sprint 1 — Core Idempotency Index
 
-> Chỉ mục các hàm xử lý trực tiếp core logic của Sprint 1: claim idempotency,
-> row processing, transaction duplicate protection và outcome accounting.
+Sprint 1 thiết lập nền tảng chống trùng cho ingestion: claim file/fetch unit,
+derive transaction key, ghi batch conflict-safe và thống kê outcome ổn định khi
+retry hoặc replay.
 
-## 1. Ingestion orchestration
+## 1. Luồng xử lý cốt lõi
 
 | Function | Location | Handles | Handoff |
 |---|---|---|---|
@@ -11,19 +12,17 @@
 | `IngestionPipeline.execute` | [`ingestion_pipeline.py:296`](../../src/pipeline/ingestion_pipeline.py#L296) | Application command entry point | `_process_file` |
 | `IngestionPipeline._process_file` | [`ingestion_pipeline.py:588`](../../src/pipeline/ingestion_pipeline.py#L588) | Điều phối claim → config → quality gate → row phase → finalize | `FileClaimService`, `ConfigPreparationService`, `FileQualityGate`, `RowPipelineExecutor`, `IngestionRunFinalizer` |
 
-## 2. File và fetch-unit idempotency
+File replay được chặn trước row ingestion. Transaction duplicate được xử lý ở
+database boundary để retry không phụ thuộc vào read-before-write.
 
-| Function | Location | Core behavior | Result |
-|---|---|---|---|
-| `FileClaimService.compute_file_hash` | [`file_claim.py:30`](../../src/pipeline/file_claim.py#L30) | Hash bytes của file bằng SHA-256 theo chunk | `fileHash` |
-| `FileClaimService.derive_fetch_unit_key` | [`file_claim.py:40`](../../src/pipeline/file_claim.py#L40) | Canonicalize partner/workflow/date/source/page/cursor rồi hash | `fetchUnitKey` hoặc `ValueError` |
-| `FileClaimService.claim` | [`file_claim.py:73`](../../src/pipeline/file_claim.py#L73) | Claim atomically, phân biệt file replay và fetch-unit replay | `FileClaimResult` |
-| `find_by_file_hash` | [`file_repository.py:23`](../../src/infrastructure/ingestion/file_repository.py#L23) | Fast lookup file đã ingest | Existing claim |
-| `find_by_fetch_unit_key` | [`file_repository.py:48`](../../src/infrastructure/ingestion/file_repository.py#L48) | Lookup API fetch-unit đã tồn tại | Existing fetch-unit |
-| `reclaim_failed_by_file_hash` | [`file_repository.py:26`](../../src/infrastructure/ingestion/file_repository.py#L26) | Mở lại claim `FAILED` một cách atomic | `PROCESSING` claim |
-| `create_or_get_by_file_hash` | [`file_repository.py:54`](../../src/infrastructure/ingestion/file_repository.py#L54) | Create claim hoặc resolve race qua unique index | `(record, created)` |
+## 2. Bốn lớp idempotency
 
-## 3. Mapping, normalize và transaction key
+| Lớp | Identity | Bảo vệ |
+|---|---|---|
+| File | `sha256(content)` → `fileHash` | Cùng nội dung không tạo file claim hoặc transaction mới |
+| Fetch unit | `sourceUnitKey` explicit hoặc hash metadata fetch | Cùng API page/cursor/window không bị ingest lại |
+| Transaction | `identify + ingestion_key` | Cùng transaction contract key chỉ có một bản ghi PostgreSQL |
+| Batch/outcome | inserted / duplicate / failed counters | Retry một phần không làm mất thống kê hoặc fail cả batch hợp lệ |
 
 | Function | Location | Core behavior | Handoff |
 |---|---|---|---|
@@ -37,7 +36,20 @@
 | `RowProcessor.derive_ingestion_key` | [`row_processor.py:76`](../../src/pipeline/row_processor.py#L76) | Ưu tiên `id`, fallback `trace`; thiếu cả hai thì reject | `ingestion_key` |
 | `RowProcessor.process` | [`row_processor.py:87`](../../src/pipeline/row_processor.py#L87) | Normalize → build → validate → derive key → build container; fast mode trả `FastDataContainer` | `RowOutcome` |
 
-## 4. Batch và transaction duplicate protection
+- File claim và fetch-unit claim phải atomic; race chỉ cho phép một canonical
+  claim thành công.
+- `ingestion_key` phải deterministic: ưu tiên identifier ổn định từ partner,
+  fallback theo contract rõ ràng, không sinh key ngẫu nhiên.
+- PostgreSQL là transaction store duy nhất; unique constraint trên
+  `(identify, ingestion_key)` là duplicate authority.
+- Batch write dùng conflict-safe persistence (`ON CONFLICT DO NOTHING`) và
+  trả số lượng inserted/duplicate/failed thực tế.
+- Duplicate là outcome hợp lệ, không phải lỗi fatal; file duplicate,
+  fetch-unit replay, transaction duplicate và persistence error phải phân biệt.
+- Retry sau partial failure phải cho cùng kết quả cuối như chạy thành công từ
+  đầu.
+- Mapping/reader/validator chỉ chuẩn hóa và kiểm tra dữ liệu; duplicate
+  authority không bị đẩy lên fuzzy matching hoặc UI.
 
 | Function | Location | Core behavior | Handoff |
 |---|---|---|---|
@@ -51,7 +63,13 @@
 | `PartnerTransactionTable` | [`postgres_schema.py:12`](../../src/infrastructure/persistence/postgres_schema.py#L12) | Enforce `NOT NULL ingestion_key` và unique `(identify, ingestion_key)` | Database invariant |
 | `upgrade` migration `0002` | [`0002_ingestion_idempotency.py:19`](../../alembic/versions/0002_ingestion_idempotency.py#L19) | Backfill key lịch sử, reject duplicate và bật constraint | Safe schema |
 
-## 5. Outcome accounting và lifecycle
+| Outcome | Ý nghĩa vận hành |
+|---|---|
+| `COMPLETED` | Pipeline kết thúc; có thể kèm duplicate counters |
+| `FILE_DUPLICATE` | File hash đã được claim/xử lý trước đó |
+| `FETCH_UNIT_REPLAY` | API fetch unit đã tồn tại hoặc đã hoàn tất |
+| `transaction_duplicate` / `batch_conflict` | Database bỏ qua row conflict-safe và ghi nhận trong stats |
+| `FAILED` | Lỗi non-duplicate hoặc lỗi pipeline cần recovery |
 
 | Function | Location | Core behavior | Output |
 |---|---|---|---|
@@ -60,7 +78,14 @@
 | `IngestionRunFinalizer.complete` | [`finalizer.py:16`](../../src/pipeline/finalizer.py#L16) | Persist stats, stage summary và status `COMPLETED` | Completed outcome |
 | `IngestionRunFinalizer.fail` | [`finalizer.py:42`](../../src/pipeline/finalizer.py#L42) | Best-effort persist lỗi, stats và status `FAILED`; generic exception dùng `ingestion_error` | Failed outcome |
 
-## 6. Core trace order
+| Capability | Module chính |
+|---|---|
+| Pipeline orchestration | [`src/pipeline/ingestion_pipeline.py`](../../src/pipeline/ingestion_pipeline.py) |
+| File/fetch-unit claim | [`src/pipeline/file_claim.py`](../../src/pipeline/file_claim.py) và [`src/infrastructure/ingestion/file_repository.py`](../../src/infrastructure/ingestion/file_repository.py) |
+| Row processing | [`src/pipeline/row_pipeline.py`](../../src/pipeline/row_pipeline.py), [`row_processor.py`](../../src/pipeline/row_processor.py), [`src/normalizer/`](../../src/normalizer/) và [`src/validators/`](../../src/validators/) |
+| Batch persistence | [`src/pipeline/batch_writer.py`](../../src/pipeline/batch_writer.py) và [`src/infrastructure/partner_transaction/repository.py`](../../src/infrastructure/partner_transaction/repository.py) |
+| Database invariant | [`src/infrastructure/persistence/postgres_schema.py`](../../src/infrastructure/persistence/postgres_schema.py) và [`alembic/versions/0002_ingestion_idempotency.py`](../../alembic/versions/0002_ingestion_idempotency.py) |
+| Outcome accounting | [`src/pipeline/run_state.py`](../../src/pipeline/run_state.py) và [`src/pipeline/finalizer.py`](../../src/pipeline/finalizer.py) |
 
 ```text
 IngestionPipeline._process_file
@@ -77,5 +102,8 @@ IngestionPipeline._process_file
   → IngestionRunFinalizer.complete / fail
 ```
 
-Đây là index của các hàm core; các phần reconciliation, frontend, scheduler
-downstream và test scenario không nằm trong file này.
+Sprint 1 không sở hữu reconciliation engine, frontend, AI hay workflow
+orchestration. Các scenario schema, file replay, fetch-unit claim, partial
+batch, migration và PostgreSQL-only storage được ghi trong
+[Sprint 1 evaluation](sprint-1-eval-benchmark.md) và
+[benchmark run](sprint-1-eval-benchmark-run.md).

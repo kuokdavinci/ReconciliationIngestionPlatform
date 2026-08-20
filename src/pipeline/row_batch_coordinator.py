@@ -11,6 +11,8 @@ from src.domain.ingestion.quarantine import (
     QuarantinePhase,
     sanitize_raw_row,
 )
+from src.domain.ingestion.quality import QualityRuleCode
+from src.domain.partner_transaction.duplicates import BatchWriteResult
 from src.pipeline.batch_writer import BatchWriteCoordinator
 from src.pipeline.observability import IngestionStage
 from src.pipeline.row_processor import RowProcessor
@@ -88,6 +90,7 @@ class RowBatchCoordinator:
         metrics = RowBatchMetrics()
         quarantine_buffer: list[IngestionQuarantineRecord] = []
         batch_buffer: list[Any] = []
+        batch_context_buffer: list[dict[str, Any]] = []
         db_start_wall = 0.0
         db_end_wall = 0.0
 
@@ -105,10 +108,12 @@ class RowBatchCoordinator:
             metrics.normalize_ms += row_result.normalize_ms
             metrics.validate_ms += row_result.validate_ms
 
+            self._state.record_row_outcome(row_result)
             if not row_result.is_valid:
-                self._state.record_invalid_row(row_result.errors)
                 if self._quarantine_repo is not None:
-                    quarantine_buffer.append(self._quarantine_record(row_tuple, row_number, row_result.errors))
+                    quarantine_buffer.append(
+                        self._quarantine_record(row_tuple, row_number, row_result.errors)
+                    )
                     if len(quarantine_buffer) >= self._batch_size:
                         await self._flush_quarantine(quarantine_buffer)
                         quarantine_buffer = []
@@ -120,17 +125,31 @@ class RowBatchCoordinator:
                 )
                 continue
 
-            self._state.record_valid_row(row_result.ingestion_key)
             batch_buffer.append(row_result.data_container)
+            batch_context_buffer.append(
+                {
+                    "rowNumber": row_number,
+                    "rawRow": row_tuple,
+                }
+            )
             if len(batch_buffer) >= self._batch_size:
                 db_start_wall, db_end_wall = await self._flush_batch(
-                    batch_buffer, metrics, db_start_wall, db_end_wall
+                    batch_buffer,
+                    batch_context_buffer,
+                    metrics,
+                    db_start_wall,
+                    db_end_wall,
                 )
                 batch_buffer = []
+                batch_context_buffer = []
 
         if batch_buffer:
             db_start_wall, db_end_wall = await self._flush_batch(
-                batch_buffer, metrics, db_start_wall, db_end_wall
+                batch_buffer,
+                batch_context_buffer,
+                metrics,
+                db_start_wall,
+                db_end_wall,
             )
 
         pending_results = await self._batch_writer.drain()
@@ -138,6 +157,7 @@ class RowBatchCoordinator:
             db_end_wall = time.perf_counter()
         for result in pending_results:
             self._state.record_batch_result(result)
+            await self._quarantine_conflicts(result)
         if quarantine_buffer:
             await self._flush_quarantine(quarantine_buffer)
         if db_start_wall > 0.0:
@@ -147,6 +167,7 @@ class RowBatchCoordinator:
     async def _flush_batch(
         self,
         batch: list[Any],
+        row_contexts: list[dict[str, Any]],
         metrics: RowBatchMetrics,
         db_start_wall: float,
         db_end_wall: float,
@@ -155,7 +176,7 @@ class RowBatchCoordinator:
         if db_start_wall == 0.0:
             db_start_wall = started
         self._emit_stage(IngestionStage.PERSISTING)
-        results = await self._batch_writer.submit(batch)
+        results = await self._batch_writer.submit(batch, row_contexts=row_contexts)
         duration_ms = (time.perf_counter() - started) * 1000
         metrics.slowest_batch_ms = max(metrics.slowest_batch_ms, duration_ms)
         metrics.db_write_count += 1
@@ -163,7 +184,54 @@ class RowBatchCoordinator:
             db_end_wall = time.perf_counter()
             for result in results:
                 self._state.record_batch_result(result)
+                await self._quarantine_conflicts(result)
         return db_start_wall, db_end_wall
+
+    async def _quarantine_conflicts(self, result: BatchWriteResult) -> None:
+        if self._quarantine_repo is None or not result.duplicate_details:
+            return
+        records: list[IngestionQuarantineRecord] = []
+        for detail in result.duplicate_details:
+            if detail.duplicate_type is not QualityRuleCode.CONFLICTING_DUPLICATE:
+                continue
+            context = detail.row_context
+            row_number = context.get("rowNumber")
+            incoming = detail.incoming_fingerprint
+            existing = detail.existing_fingerprint
+            raw_row = sanitize_raw_row(context.get("rawRow", {}))
+            records.append(
+                IngestionQuarantineRecord(
+                    source_file_id=self._context.file_id,
+                    source_unit_key=self._context.fetch_unit_key,
+                    partner=self._context.partner,
+                    reconciliation_date=self._context.reconciliation_date,
+                    row_number=row_number,
+                    raw_row=raw_row,
+                    errors=[
+                        {
+                            "field": "ingestion_key",
+                            "reason": "Duplicate key has a conflicting payload.",
+                            "errorCode": QualityRuleCode.CONFLICTING_DUPLICATE.value,
+                            "phase": "PERSISTENCE",
+                            "severity": "ERROR",
+                            "outcome": QualityRuleCode.CONFLICTING_DUPLICATE.value,
+                            "incomingFingerprint": incoming,
+                            "existingFingerprint": existing,
+                            "sourceFileId": self._context.file_id,
+                            "sourceUnitKey": self._context.fetch_unit_key,
+                            "rowNumber": row_number,
+                            "rawRow": raw_row,
+                            "configVersion": self._context.config_version,
+                        }
+                    ],
+                    phase=QuarantinePhase.BATCH,
+                    config_version=self._context.config_version,
+                    incoming_fingerprint=incoming,
+                    existing_fingerprint=existing,
+                )
+            )
+        if records:
+            await self._flush_quarantine(records)
 
     async def _flush_quarantine(self, records: list[IngestionQuarantineRecord]) -> None:
         await flush_quarantine_records(

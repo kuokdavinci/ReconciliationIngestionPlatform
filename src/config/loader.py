@@ -11,8 +11,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from src.config.cache import ConfigCache
-from src.config.validator import ConfigValidationError, ConfigValidator
+from src.config.validator import ConfigValidator
 from src.core.enums import FileType
+from src.domain.ingestion.quality import QualityViolation
 from src.domain.mapping.models import MappingConfig
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
 
@@ -27,7 +28,7 @@ class ConfigLoadError(Exception):
     """
 
     message: str
-    validation_errors: list[ConfigValidationError] = field(default_factory=list)
+    validation_errors: list[QualityViolation] = field(default_factory=list)
 
 
 class ConfigLoader:
@@ -57,9 +58,7 @@ class ConfigLoader:
         self._validator = validator
         self._default_ttl = default_ttl
 
-    def _cache_key_partner_type(
-        self, partner: str, workflow_type: str, file_type: FileType
-    ) -> str:
+    def _cache_key_partner_type(self, partner: str, workflow_type: str, file_type: FileType) -> str:
         """Build cache key for partner/workflow/file_type lookup.
 
         Format: "{partner}:{workflow_type}:{file_type.value}:latest"
@@ -109,8 +108,10 @@ class ConfigLoader:
         if cached is not None:
             # Skip DB check in tests if repository/collection is mocked
             from unittest.mock import Mock
+
             is_mocked = isinstance(self._repository, Mock) or (
-                hasattr(self._repository, "collection") and isinstance(self._repository.collection, Mock)
+                hasattr(self._repository, "collection")
+                and isinstance(self._repository.collection, Mock)
             )
             if is_mocked:
                 return cached
@@ -123,7 +124,7 @@ class ConfigLoader:
                     "fileType": file_type.value,
                     "status": "APPROVED",
                 },
-                projection={"_id": 1}
+                projection={"_id": 1},
             )
             if latest_approved_doc:
                 approved_id = str(latest_approved_doc["_id"])
@@ -136,9 +137,7 @@ class ConfigLoader:
                 self._cache.invalidate(cache_key)
 
         # Query repository
-        config = await self._repository.find_by_partner_and_type(
-            partner, workflow_type, file_type
-        )
+        config = await self._repository.find_by_partner_and_type(partner, workflow_type, file_type)
         if config is None:
             raise ConfigLoadError(
                 message=f"Config not found for partner={partner}, workflow={workflow_type}, file_type={file_type.value}"
@@ -179,16 +178,17 @@ class ConfigLoader:
         if cached is not None:
             # Skip DB check in tests if repository/collection is mocked
             from unittest.mock import Mock
+
             is_mocked = isinstance(self._repository, Mock) or (
-                hasattr(self._repository, "collection") and isinstance(self._repository.collection, Mock)
+                hasattr(self._repository, "collection")
+                and isinstance(self._repository.collection, Mock)
             )
             if is_mocked:
                 return cached
 
             # Check if this config's status is still APPROVED in the database
             db_doc = await self._repository.collection.find_one(
-                {"_id": str(cached.id)},
-                projection={"status": 1}
+                {"_id": str(cached.id)}, projection={"status": 1}
             )
             if db_doc:
                 cached_status = getattr(cached.status, "value", cached.status)
@@ -238,9 +238,7 @@ class ConfigLoader:
 
         # Run required coverage validation if paths specified
         if required_paths:
-            coverage_errors = self._validator.validate_required_coverage(
-                config, required_paths
-            )
+            coverage_errors = self._validator.validate_required_coverage(config, required_paths)
             if coverage_errors:
                 raise ConfigLoadError(
                     message="Required path coverage validation failed",

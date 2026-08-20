@@ -76,9 +76,9 @@ def validate_mapping_contract(
     config: MappingConfig,
     required_paths: set[str] = REQUIRED_MAPPING_PATHS,
 ) -> MappingContractValidation:
-    errors = [err.reason for err in ConfigValidator.validate(config)]
+    errors = [err.message for err in ConfigValidator.validate(config)]
     errors.extend(
-        err.reason for err in ConfigValidator.validate_required_coverage(config, required_paths)
+        err.message for err in ConfigValidator.validate_required_coverage(config, required_paths)
     )
 
     warnings: list[str] = []

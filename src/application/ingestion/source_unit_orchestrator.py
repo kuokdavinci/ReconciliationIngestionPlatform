@@ -95,9 +95,7 @@ async def process_source_units(
                 cursor_after=unit.cursor_after,
                 high_water_mark=unit.high_water_mark,
             )
-            advanced = completed and await checkpoint_repo.advance(
-                checkpoint, unit_key=unit_key
-            )
+            advanced = completed and await checkpoint_repo.advance(checkpoint, unit_key=unit_key)
             if not advanced:
                 return {
                     "success": False,
@@ -153,7 +151,7 @@ async def process_source_units(
                     "stoppedAt": unit_key,
                     "error": "Checkpoint release for review failed",
                 }
-            return {
+            result = {
                 "success": True,
                 "processed": processed,
                 "failed": failed,
@@ -162,11 +160,26 @@ async def process_source_units(
                 "waitingForReview": True,
                 "error": outcome.error,
             }
+            if outcome.quality_decision is not None:
+                result.update(
+                    {
+                        "qualityDecision": outcome.quality_decision,
+                        "orchestrationAction": outcome.orchestration_action,
+                        "qualityCounters": dict(outcome.quality_counters),
+                        "topRuleCodes": list(outcome.top_rule_codes[:10]),
+                    }
+                )
+            return result
         if not outcome.success:
+            quality_failure = outcome.orchestration_action == "FAIL"
             failure_max_attempts = max_attempts
             failure_next_retry_at = outcome.next_retry_at
             failure_retryable = outcome.retryable
-            if retry_policy is not None and outcome.retryable:
+            if quality_failure:
+                failure_retryable = False
+                failure_next_retry_at = None
+                failure_max_attempts = None
+            if retry_policy is not None and outcome.retryable and not quality_failure:
                 if retry_policy.classify(outcome.error_code).value == "TERMINAL":
                     failure_retryable = False
                     failure_next_retry_at = None
@@ -187,13 +200,23 @@ async def process_source_units(
                 max_attempts=failure_max_attempts,
                 error_metadata=outcome.error_metadata,
             )
-            return {
+            result = {
                 "success": False,
                 "processed": processed,
                 "failed": failed + 1,
                 "stoppedAt": unit_key,
                 "error": outcome.error,
             }
+            if outcome.quality_decision is not None:
+                result.update(
+                    {
+                        "qualityDecision": outcome.quality_decision,
+                        "orchestrationAction": outcome.orchestration_action,
+                        "qualityCounters": dict(outcome.quality_counters),
+                        "topRuleCodes": list(outcome.top_rule_codes[:10]),
+                    }
+                )
+            return result
 
         completed = await checkpoint_repo.mark_completed(
             checkpoint,
@@ -235,20 +258,18 @@ async def process_source_units(
         previous_unit_key = unit_key
         processed += 1
 
-    result: dict[str, Any] = {
+    summary_result: dict[str, Any] = {
         "success": failed == 0,
         "processed": processed,
         "failed": failed,
     }
     if replayed:
-        result["replayed"] = replayed
+        summary_result["replayed"] = replayed
     if skipped:
-        result["skipped"] = skipped
+        summary_result["skipped"] = skipped
     if duplicate_outcomes and len(duplicate_outcomes) == processed:
-        result["outcome"] = (
-            duplicate_outcomes[0]
-            if len(set(duplicate_outcomes)) == 1
-            else "FETCH_UNIT_REPLAY"
+        summary_result["outcome"] = (
+            duplicate_outcomes[0] if len(set(duplicate_outcomes)) == 1 else "FETCH_UNIT_REPLAY"
         )
-        result["reconciliationSkipped"] = True
-    return result
+        summary_result["reconciliationSkipped"] = True
+    return summary_result

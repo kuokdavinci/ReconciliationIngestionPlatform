@@ -11,7 +11,42 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 from src.core.enums import TransactionStatus
-from src.core.types import FieldMapping, FieldMappingType, ValidationError, CanonicalTransaction
+from src.core.types import CanonicalTransaction, FieldMapping, FieldMappingType
+from src.domain.ingestion.quality import (
+    QualityOutcome,
+    QualityPhase,
+    QualityRuleCode,
+    QualitySeverity,
+    QualityViolation,
+    quality_violation,
+)
+
+
+_REQUIRED_CANONICAL_FIELDS = frozenset({"id", "amount", "currency", "status"})
+
+
+def _normalization_violation(
+    *,
+    code: QualityRuleCode,
+    field: str,
+    message: str,
+    row: int | None = None,
+) -> QualityViolation:
+    return quality_violation(
+        code=code,
+        phase=QualityPhase.NORMALIZATION,
+        severity=QualitySeverity.ERROR,
+        outcome=QualityOutcome.REJECT,
+        field=field,
+        message=message,
+        row=row,
+    )
+
+
+def _missing_value_code(mapping: FieldMapping) -> QualityRuleCode:
+    if mapping.required or mapping.path in _REQUIRED_CANONICAL_FIELDS:
+        return QualityRuleCode.MISSING_REQUIRED_FIELD
+    return QualityRuleCode.MALFORMED_ROW
 
 
 @dataclass
@@ -24,7 +59,7 @@ class NormalizationResult:
     """
 
     data: dict[str, Any] = field(default_factory=dict)
-    errors: list[ValidationError] = field(default_factory=list)
+    errors: list[QualityViolation] = field(default_factory=list)
 
 
 @dataclass
@@ -37,7 +72,7 @@ class FieldNormalizationTrace:
     source_field: Optional[str] = None
     source_value: Any = None
     output_value: Any = None
-    error: Optional[ValidationError] = None
+    error: Optional[QualityViolation] = None
 
 
 class TransactionNormalizer:
@@ -45,7 +80,7 @@ class TransactionNormalizer:
 
     Performs type conversions (STRING, DECIMAL, DATE, CONSTANT) and
     collects validation errors. Never raises exceptions — all errors
-    are collected as ValidationError objects.
+    are collected as QualityViolation objects.
     """
 
     _DATE_FORMATS = (
@@ -86,21 +121,22 @@ class TransactionNormalizer:
 
         for fm in self._field_mappings:
             value: Any = None
-            error: Optional[ValidationError] = None
+            error: Optional[QualityViolation] = None
 
             # Resolve source value from row (skip for CONSTANT)
             if fm.type == FieldMappingType.CONSTANT:
                 value, error = self._convert_constant(fm, row_number)
             else:
-                source_value = self._resolve_source(row, fm)
-                if isinstance(source_value, ValidationError):
+                source_value = self._resolve_source(row, fm, row_number)
+                if isinstance(source_value, QualityViolation):
                     result.errors.append(source_value)
                     continue
                 if source_value is None:
                     # Value is None/empty — produce error
-                    error = ValidationError(
+                    error = _normalization_violation(
+                        code=_missing_value_code(fm),
                         field=fm.path,
-                        reason="source field value is None",
+                        message="source field value is None",
                         row=row_number,
                     )
                     result.errors.append(error)
@@ -115,18 +151,20 @@ class TransactionNormalizer:
                     value, error = self._convert_date(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.MAPPING:
                     if fm.mapping is None:
-                        error = ValidationError(
+                        error = _normalization_violation(
+                            code=QualityRuleCode.MALFORMED_ROW,
                             field=fm.path,
-                            reason=f"mapping dict not configured for {fm.path}",
+                            message=f"mapping dict not configured for {fm.path}",
                             row=row_number,
                         )
                     else:
                         value, error = self._convert_mapping(source_value, fm, row_number)
                 else:
                     # Unknown field mapping type
-                    error = ValidationError(
+                    error = _normalization_violation(
+                        code=QualityRuleCode.MALFORMED_ROW,
                         field=fm.path,
-                        reason=f"unknown mapping type '{fm.type}' for path '{fm.path}'",
+                        message=f"unknown mapping type '{fm.type}' for path '{fm.path}'",
                         row=row_number,
                     )
 
@@ -148,21 +186,22 @@ class TransactionNormalizer:
 
         for fm in self._field_mappings:
             value: Any = None
-            error: Optional[ValidationError] = None
+            error: Optional[QualityViolation] = None
             source_value: Any = None
 
             if fm.type == FieldMappingType.CONSTANT:
                 source_value = fm.constant
                 value, error = self._convert_constant(fm, row_number)
             else:
-                source_value = self._resolve_source(row, fm)
-                if isinstance(source_value, ValidationError):
+                source_value = self._resolve_source(row, fm, row_number)
+                if isinstance(source_value, QualityViolation):
                     error = source_value
                     source_value = None
                 elif source_value is None:
-                    error = ValidationError(
+                    error = _normalization_violation(
+                        code=_missing_value_code(fm),
                         field=fm.path,
-                        reason="source field value is None",
+                        message="source field value is None",
                         row=row_number,
                     )
                 elif fm.type == FieldMappingType.STRING:
@@ -173,17 +212,19 @@ class TransactionNormalizer:
                     value, error = self._convert_date(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.MAPPING:
                     if fm.mapping is None:
-                        error = ValidationError(
+                        error = _normalization_violation(
+                            code=QualityRuleCode.MALFORMED_ROW,
                             field=fm.path,
-                            reason=f"mapping dict not configured for {fm.path}",
+                            message=f"mapping dict not configured for {fm.path}",
                             row=row_number,
                         )
                     else:
                         value, error = self._convert_mapping(source_value, fm, row_number)
                 else:
-                    error = ValidationError(
+                    error = _normalization_violation(
+                        code=QualityRuleCode.MALFORMED_ROW,
                         field=fm.path,
-                        reason=f"unknown mapping type '{fm.type}' for path '{fm.path}'",
+                        message=f"unknown mapping type '{fm.type}' for path '{fm.path}'",
                         row=row_number,
                     )
 
@@ -209,11 +250,12 @@ class TransactionNormalizer:
         self,
         row: Any,
         fm: FieldMapping,
-    ) -> Any | ValidationError | None:
+        row_number: int | None = None,
+    ) -> Any | QualityViolation | None:
         """Resolve the source value from the row using column number/letter or sourceField.
 
         Returns:
-            The resolved value, a ValidationError if resolution fails, or None
+            The resolved value, a QualityViolation if resolution fails, or None
             if the value itself is None/empty (caller should produce error).
         """
         if fm.column is not None:
@@ -223,6 +265,7 @@ class TransactionNormalizer:
                 # If column is an int but row has string keys (e.g. "A")
                 if isinstance(fm.column, int):
                     from openpyxl.utils import get_column_letter
+
                     col_letter = get_column_letter(fm.column)
                     if col_letter in row:
                         return row[col_letter]
@@ -231,9 +274,11 @@ class TransactionNormalizer:
                     col_int = int(fm.column)
                     if col_int in row:
                         return row[col_int]
-                return ValidationError(
+                return _normalization_violation(
+                    code=QualityRuleCode.MALFORMED_ROW,
                     field=fm.path,
-                    reason=f"column {fm.column} not found in row keys: {list(row.keys())}",
+                    message=f"column {fm.column} not found in row keys: {list(row.keys())}",
+                    row=row_number,
                 )
 
             elif isinstance(row, (tuple, list)):
@@ -246,19 +291,24 @@ class TransactionNormalizer:
                     else:
                         try:
                             from openpyxl.utils import column_index_from_string
+
                             col_int = column_index_from_string(fm.column)
                         except ValueError:
-                            return ValidationError(
+                            return _normalization_violation(
+                                code=QualityRuleCode.MALFORMED_ROW,
                                 field=fm.path,
-                                reason=f"invalid column letter '{fm.column}'",
+                                message=f"invalid column letter '{fm.column}'",
+                                row=row_number,
                             )
-                
+
                 if col_int is not None:
                     idx = col_int - 1
                     if idx < 0 or idx >= len(row):
-                        return ValidationError(
+                        return _normalization_violation(
+                            code=QualityRuleCode.MALFORMED_ROW,
                             field=fm.path,
-                            reason=f"column {fm.column} (index {idx}) out of range (row has {len(row)} columns)",
+                            message=f"column {fm.column} (index {idx}) out of range (row has {len(row)} columns)",
+                            row=row_number,
                         )
                     return row[idx]
 
@@ -266,19 +316,25 @@ class TransactionNormalizer:
             if isinstance(row, dict):
                 if fm.sourceField in row:
                     return row[fm.sourceField]
-                return ValidationError(
+                return _normalization_violation(
+                    code=QualityRuleCode.MALFORMED_ROW,
                     field=fm.path,
-                    reason=f"sourceField '{fm.sourceField}' not found in row keys: {list(row.keys())}",
+                    message=f"sourceField '{fm.sourceField}' not found in row keys: {list(row.keys())}",
+                    row=row_number,
                 )
-            return ValidationError(
+            return _normalization_violation(
+                code=QualityRuleCode.MALFORMED_ROW,
                 field=fm.path,
-                reason="sourceField lookup requires dict — use column number instead",
+                message="sourceField lookup requires dict — use column number instead",
+                row=row_number,
             )
 
         # No column configured for non-CONSTANT mapping
-        return ValidationError(
+        return _normalization_violation(
+            code=QualityRuleCode.MALFORMED_ROW,
             field=fm.path,
-            reason="no column configured",
+            message="no column configured",
+            row=row_number,
         )
 
     @staticmethod
@@ -286,23 +342,25 @@ class TransactionNormalizer:
         value: Any,
         fm: FieldMapping,
         row_number: Optional[int],
-    ) -> tuple[str | None, ValidationError | None]:
+    ) -> tuple[str | None, QualityViolation | None]:
         """Convert value to string.
 
-        None or empty string values produce a ValidationError.
+        None or empty string values produce a QualityViolation.
         """
         if value is None:
-            return None, ValidationError(
+            return None, _normalization_violation(
+                code=_missing_value_code(fm),
                 field=fm.path,
-                reason="value is None",
+                message="value is None",
                 row=row_number,
             )
 
         str_value = str(value)
         if str_value == "":
-            return None, ValidationError(
+            return None, _normalization_violation(
+                code=_missing_value_code(fm),
                 field=fm.path,
-                reason="value is empty string",
+                message="value is empty string",
                 row=row_number,
             )
 
@@ -313,32 +371,35 @@ class TransactionNormalizer:
         value: Any,
         fm: FieldMapping,
         row_number: Optional[int],
-    ) -> tuple[Decimal | None, ValidationError | None]:
+    ) -> tuple[Decimal | None, QualityViolation | None]:
         """Convert value to Decimal.
 
         Float input is explicitly rejected. Invalid strings produce
-        ValidationError with description of the failure.
+        QualityViolation with a stable rule code and failure description.
         """
         if value is None:
-            return None, ValidationError(
+            return None, _normalization_violation(
+                code=_missing_value_code(fm),
                 field=fm.path,
-                reason="value is None",
+                message="value is None",
                 row=row_number,
             )
 
         if isinstance(value, float):
-            return None, ValidationError(
+            return None, _normalization_violation(
+                code=QualityRuleCode.INVALID_AMOUNT,
                 field=fm.path,
-                reason="float not allowed for monetary values",
+                message="float not allowed for monetary values",
                 row=row_number,
             )
 
         try:
             return Decimal(str(value)), None
         except InvalidOperation:
-            return None, ValidationError(
+            return None, _normalization_violation(
+                code=QualityRuleCode.INVALID_AMOUNT,
                 field=fm.path,
-                reason=f"invalid decimal value: {value!r}",
+                message=f"invalid decimal value: {value!r}",
                 row=row_number,
             )
 
@@ -347,17 +408,18 @@ class TransactionNormalizer:
         value: Any,
         fm: FieldMapping,
         row_number: Optional[int],
-    ) -> tuple[datetime | None, ValidationError | None]:
+    ) -> tuple[datetime | None, QualityViolation | None]:
         """Convert value to datetime.
 
         Already datetime objects are returned as-is. String values are
         parsed against a whitelist of 4 date formats. Unmatched formats
-        produce ValidationError.
+        produce a QualityViolation.
         """
         if value is None:
-            return None, ValidationError(
+            return None, _normalization_violation(
+                code=_missing_value_code(fm),
                 field=fm.path,
-                reason="value is None",
+                message="value is None",
                 row=row_number,
             )
 
@@ -365,9 +427,10 @@ class TransactionNormalizer:
             return value, None
 
         if not isinstance(value, str):
-            return None, ValidationError(
+            return None, _normalization_violation(
+                code=QualityRuleCode.INVALID_TIMESTAMP,
                 field=fm.path,
-                reason=f"expected string or datetime, got {type(value).__name__}",
+                message=f"expected string or datetime, got {type(value).__name__}",
                 row=row_number,
             )
 
@@ -377,9 +440,10 @@ class TransactionNormalizer:
             except ValueError:
                 continue
 
-        return None, ValidationError(
+        return None, _normalization_violation(
+            code=QualityRuleCode.INVALID_TIMESTAMP,
             field=fm.path,
-            reason=f"invalid date value: {value!r} (tried formats: {', '.join(self._DATE_FORMATS)})",
+            message=f"invalid date value: {value!r} (tried formats: {', '.join(self._DATE_FORMATS)})",
             row=row_number,
         )
 
@@ -388,21 +452,22 @@ class TransactionNormalizer:
         value: Any,
         fm: FieldMapping,
         row_number: Optional[int] = None,
-    ) -> tuple[str | None, ValidationError | None]:
+    ) -> tuple[str | None, QualityViolation | None]:
         """Convert a row value using a configured mapping dictionary.
 
         Looks up the string representation of *value* in ``fm.mapping``.
         If the value is not found, falls back to the ``"others"`` key if
-        present.  Missing ``"others"`` produces an explicit ValidationError
+        present. Missing ``"others"`` produces an explicit QualityViolation
         rather than silently defaulting.
 
         Returns the mapped string value (not a TransactionStatus enum —
         the caller converts to enum in build_canonical).
         """
         if value is None or value == "":
-            return None, ValidationError(
+            return None, _normalization_violation(
+                code=_missing_value_code(fm),
                 field=fm.path,
-                reason=f"cannot map empty/null value for path '{fm.path}'",
+                message=f"cannot map empty/null value for path '{fm.path}'",
                 row=row_number,
             )
 
@@ -414,9 +479,14 @@ class TransactionNormalizer:
         if "others" in fm.mapping:
             return fm.mapping["others"], None
 
-        return None, ValidationError(
+        return None, _normalization_violation(
+            code=(
+                QualityRuleCode.INVALID_STATUS
+                if fm.path == "status"
+                else QualityRuleCode.MALFORMED_ROW
+            ),
             field=fm.path,
-            reason=f"unmapped value '{str_value}' for path '{fm.path}' — no 'others' fallback configured",
+            message=f"unmapped value '{str_value}' for path '{fm.path}' — no 'others' fallback configured",
             row=row_number,
         )
 
@@ -424,15 +494,16 @@ class TransactionNormalizer:
     def _convert_constant(
         fm: FieldMapping,
         row_number: Optional[int],
-    ) -> tuple[str | None, ValidationError | None]:
+    ) -> tuple[str | None, QualityViolation | None]:
         """Return the configured constant value.
 
-        None or empty constant produces ValidationError.
+        None or empty constant produces a QualityViolation.
         """
         if fm.constant is None or fm.constant == "":
-            return None, ValidationError(
+            return None, _normalization_violation(
+                code=_missing_value_code(fm),
                 field=fm.path,
-                reason="constant value is not configured",
+                message="constant value is not configured",
                 row=row_number,
             )
 
@@ -468,9 +539,9 @@ class TransactionNormalizer:
     @staticmethod
     def build_fast_dict(
         data: dict[str, Any],
-        errors: list[ValidationError],
+        errors: list[QualityViolation],
         row_number: Optional[int] = None,
-    ) -> tuple[dict[str, Any] | None, list[ValidationError]]:
+    ) -> tuple[dict[str, Any] | None, list[QualityViolation]]:
         """Build a lightweight dict from normalized data, skipping Pydantic.
 
         Validates required fields are present.  Returns a plain dict with
@@ -487,15 +558,18 @@ class TransactionNormalizer:
             Tuple of (dict or None, updated error list).
         """
         required_fields = ("id", "amount", "currency", "status")
-        new_errors: list[ValidationError] = []
+        new_errors: list[QualityViolation] = []
 
         for field_name in required_fields:
             if field_name not in data:
-                new_errors.append(ValidationError(
-                    field=field_name,
-                    reason=f"required field '{field_name}' not found in normalized data",
-                    row=row_number,
-                ))
+                new_errors.append(
+                    _normalization_violation(
+                        code=QualityRuleCode.MISSING_REQUIRED_FIELD,
+                        field=field_name,
+                        message=(f"required field '{field_name}' not found in normalized data"),
+                        row=row_number,
+                    )
+                )
 
         if new_errors:
             return None, errors + new_errors
@@ -504,11 +578,17 @@ class TransactionNormalizer:
         try:
             TransactionStatus(data["status"])
         except (ValueError, TypeError):
-            new_errors.append(ValidationError(
-                field="status",
-                reason=f"invalid status value '{data['status']}' — must be one of SUCCESS, FAILED, PENDING, REVERSED",
-                row=row_number,
-            ))
+            new_errors.append(
+                _normalization_violation(
+                    code=QualityRuleCode.INVALID_STATUS,
+                    field="status",
+                    message=(
+                        f"invalid status value '{data['status']}' — must be one of "
+                        "SUCCESS, FAILED, PENDING, REVERSED"
+                    ),
+                    row=row_number,
+                )
+            )
             return None, errors + new_errors
 
         extra = TransactionNormalizer._extract_extra(data)
@@ -528,13 +608,13 @@ class TransactionNormalizer:
     @staticmethod
     def build_canonical(
         data: dict[str, Any],
-        errors: list[ValidationError],
+        errors: list[QualityViolation],
         row_number: Optional[int] = None,
-    ) -> tuple[CanonicalTransaction | None, list[ValidationError]]:
+    ) -> tuple[CanonicalTransaction | None, list[QualityViolation]]:
         """Build a CanonicalTransaction from normalized data.
 
         Validates that all required fields (id, amount, currency, status)
-        are present and valid.  Missing fields produce ValidationError
+        are present and valid. Missing fields produce QualityViolation
         objects appended to the *errors* list.  Extra fields not in the
         CanonicalTransaction schema are collected into the ``extra`` dict.
 
@@ -547,15 +627,18 @@ class TransactionNormalizer:
             Tuple of (CanonicalTransaction or None, updated error list).
         """
         required_fields = ("id", "amount", "currency", "status")
-        new_errors: list[ValidationError] = []
+        new_errors: list[QualityViolation] = []
 
         for field_name in required_fields:
             if field_name not in data:
-                new_errors.append(ValidationError(
-                    field=field_name,
-                    reason=f"required field '{field_name}' not found in normalized data",
-                    row=row_number,
-                ))
+                new_errors.append(
+                    _normalization_violation(
+                        code=QualityRuleCode.MISSING_REQUIRED_FIELD,
+                        field=field_name,
+                        message=(f"required field '{field_name}' not found in normalized data"),
+                        row=row_number,
+                    )
+                )
 
         if new_errors:
             return None, errors + new_errors
@@ -563,11 +646,17 @@ class TransactionNormalizer:
         try:
             status_enum = TransactionStatus(data["status"])
         except (ValueError, TypeError):
-            new_errors.append(ValidationError(
-                field="status",
-                reason=f"invalid status value '{data['status']}' — must be one of SUCCESS, FAILED, PENDING, REVERSED",
-                row=row_number,
-            ))
+            new_errors.append(
+                _normalization_violation(
+                    code=QualityRuleCode.INVALID_STATUS,
+                    field="status",
+                    message=(
+                        f"invalid status value '{data['status']}' — must be one of "
+                        "SUCCESS, FAILED, PENDING, REVERSED"
+                    ),
+                    row=row_number,
+                )
+            )
             return None, errors + new_errors
 
         extra = TransactionNormalizer._extract_extra(data)

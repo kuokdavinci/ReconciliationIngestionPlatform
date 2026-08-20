@@ -8,8 +8,8 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from src.core.enums import ProcessingStatus
-from src.core.types import BatchInsertResult
 from src.domain.ingestion.quarantine import IngestionQuarantineRecord
+from src.domain.partner_transaction.duplicates import BatchWriteResult
 
 
 class IngestionFileRepository(Protocol):
@@ -56,9 +56,8 @@ class PartnerTransactionWriter(Protocol):
         self,
         documents: list[Any],
         ordered: bool = True,
-        detailed: bool = False,
-    ) -> int | BatchInsertResult:
-        """Insert a batch and optionally return duplicate/failure counts."""
+    ) -> BatchWriteResult:
+        """Insert a batch and return typed duplicate/failure counts."""
 
     async def rebind_source_file_by_ingestion_keys(
         self,

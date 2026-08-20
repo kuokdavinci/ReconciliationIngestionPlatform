@@ -1,16 +1,17 @@
 """Tests for Validator core validation — required field validation."""
 
-import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock
-
-import pytest
 
 from src.core.enums import TransactionStatus
-from src.core.types import CanonicalTransaction, ValidationError
-from src.validators import Validator, ValidationResult
+from src.core.types import CanonicalTransaction
+from src.domain.ingestion.quality import (
+    QualityEvaluation,
+    QualityOutcome,
+    QualityViolation,
+)
+from src.validators import Validator
 
 
 def _make_valid_txn(**overrides: Any) -> CanonicalTransaction:
@@ -28,32 +29,41 @@ def _make_valid_txn(**overrides: Any) -> CanonicalTransaction:
 class TestRequiredFieldValidation:
     """Test that required fields are validated and errors collected."""
 
+    def test_hot_path_can_skip_row_context_for_valid_evaluation(self):
+        validator = Validator()
+        txn = _make_valid_txn()
+
+        result = validator.validate(txn, row_number=42, trace="TRACE-42", include_context=False)
+
+        assert result.is_valid is True
+        assert result.row_context == {}
+
     def test_valid_transaction_passes(self):
-        """Valid CanonicalTransaction with all fields → ValidationResult(is_valid=True, errors=[])."""
+        """Valid CanonicalTransaction with all fields → QualityEvaluation(outcome=QualityOutcome.VALID, violations=[])."""
         validator = Validator()
         txn = _make_valid_txn()
         result = validator.validate(txn)
         assert result.is_valid is True
-        assert result.errors == []
+        assert result.violations == []
 
     def test_missing_id_produces_error(self):
-        """CanonicalTransaction with empty id → ValidationError(field='id')."""
+        """CanonicalTransaction with empty id → QualityViolation(field='id')."""
         validator = Validator()
         txn = _make_valid_txn(id="")
         result = validator.validate(txn)
         assert result.is_valid is False
-        assert len(result.errors) == 1
-        assert result.errors[0].field == "id"
-        assert "id" in result.errors[0].reason.lower()
+        assert len(result.violations) == 1
+        assert result.violations[0].field == "id"
+        assert "id" in result.violations[0].message.lower()
 
     def test_empty_id_produces_error(self):
-        """CanonicalTransaction with whitespace-only id → ValidationError(field='id')."""
+        """CanonicalTransaction with whitespace-only id → QualityViolation(field='id')."""
         validator = Validator()
         txn = _make_valid_txn(id="   ")
         result = validator.validate(txn)
         assert result.is_valid is False
-        assert len(result.errors) == 1
-        assert result.errors[0].field == "id"
+        assert len(result.violations) == 1
+        assert result.violations[0].field == "id"
 
     def test_valid_amount_present_no_error(self):
         """CanonicalTransaction with valid amount → no validation error."""
@@ -63,13 +73,13 @@ class TestRequiredFieldValidation:
         assert result.is_valid is True
 
     def test_missing_currency_produces_error(self):
-        """CanonicalTransaction with empty currency → ValidationError(field='currency')."""
+        """CanonicalTransaction with empty currency → QualityViolation(field='currency')."""
         validator = Validator()
         txn = _make_valid_txn(currency="")
         result = validator.validate(txn)
         assert result.is_valid is False
-        assert len(result.errors) == 1
-        assert result.errors[0].field == "currency"
+        assert len(result.violations) == 1
+        assert result.violations[0].field == "currency"
 
     def test_multiple_missing_fields_produce_multiple_errors(self):
         """Transaction with empty id AND empty currency → 2 ValidationErrors (not fail-fast)."""
@@ -77,46 +87,46 @@ class TestRequiredFieldValidation:
         txn = _make_valid_txn(id="", currency="")
         result = validator.validate(txn)
         assert result.is_valid is False
-        assert len(result.errors) == 2
-        fields = {e.field for e in result.errors}
+        assert len(result.violations) == 2
+        fields = {e.field for e in result.violations}
         assert "id" in fields
         assert "currency" in fields
 
     def test_row_number_propagated_to_errors(self):
-        """row_number parameter included in ValidationError objects."""
+        """row_number parameter included in QualityViolation objects."""
         validator = Validator()
         txn = _make_valid_txn(id="")
         result = validator.validate(txn, row_number=42)
-        assert len(result.errors) >= 1
-        assert result.errors[0].row == 42
+        assert len(result.violations) >= 1
+        assert result.violations[0].row == 42
 
     def test_trace_propagated_to_errors(self):
-        """trace parameter included in ValidationError objects."""
+        """trace parameter included in QualityViolation objects."""
         validator = Validator()
         txn = _make_valid_txn(id="")
         result = validator.validate(txn, trace="REF123")
-        assert len(result.errors) >= 1
-        assert result.errors[0].trace == "REF123"
+        assert len(result.violations) >= 1
+        assert result.violations[0].trace == "REF123"
 
     def test_row_number_and_trace_both_propagated(self):
-        """Both row_number and trace included in ValidationError objects."""
+        """Both row_number and trace included in QualityViolation objects."""
         validator = Validator()
         txn = _make_valid_txn(id="", currency="")
         result = validator.validate(txn, row_number=7, trace="REF456")
-        for err in result.errors:
+        for err in result.violations:
             assert err.row == 7
             assert err.trace == "REF456"
 
     def test_validation_result_structure(self):
-        """ValidationResult has is_valid bool and errors list."""
-        result = ValidationResult(is_valid=True, errors=[])
+        """QualityEvaluation has is_valid bool and errors list."""
+        result = QualityEvaluation(outcome=QualityOutcome.VALID, violations=[])
         assert isinstance(result.is_valid, bool)
-        assert isinstance(result.errors, list)
+        assert isinstance(result.violations, list)
 
-        err = ValidationError(field="id", reason="test")
-        result2 = ValidationResult(is_valid=False, errors=[err])
+        err = QualityViolation(field="id", message="test")
+        result2 = QualityEvaluation(outcome=QualityOutcome.REJECT, violations=[err])
         assert result2.is_valid is False
-        assert len(result2.errors) == 1
+        assert len(result2.violations) == 1
 
     def test_empty_trace_does_not_fail(self):
         """Empty trace (optional field) does NOT produce validation errors."""
@@ -124,7 +134,7 @@ class TestRequiredFieldValidation:
         txn = _make_valid_txn(trace="")
         result = validator.validate(txn)
         assert result.is_valid is True
-        assert result.errors == []
+        assert result.violations == []
 
     def test_all_fields_empty_produces_all_errors(self):
         """CanonicalTransaction with empty required fields produces errors for each."""
@@ -132,8 +142,8 @@ class TestRequiredFieldValidation:
         txn = _make_valid_txn(id="", currency="")
         result = validator.validate(txn)
         assert result.is_valid is False
-        assert len(result.errors) >= 2
-        fields = {e.field for e in result.errors}
+        assert len(result.violations) >= 2
+        fields = {e.field for e in result.violations}
         assert "id" in fields
         assert "currency" in fields
 
@@ -147,7 +157,7 @@ class TestDecimalValidation:
         txn = _make_valid_txn(amount=Decimal("100000"))
         result = validator.validate(txn)
         assert result.is_valid is True
-        assert result.errors == []
+        assert result.violations == []
 
     def test_zero_amount_passes(self):
         """Zero amount → no error (zero-value transactions are valid)."""
@@ -155,25 +165,25 @@ class TestDecimalValidation:
         txn = _make_valid_txn(amount=Decimal("0"))
         result = validator.validate(txn)
         assert result.is_valid is True
-        assert result.errors == []
+        assert result.violations == []
 
     def test_negative_amount_fails(self):
-        """Negative amount → ValidationError(field='amount')."""
+        """Negative amount → QualityViolation(field='amount')."""
         validator = Validator()
         txn = _make_valid_txn(amount=Decimal("-500"))
         result = validator.validate(txn)
         assert result.is_valid is False
-        assert len(result.errors) == 1
-        assert result.errors[0].field == "amount"
-        assert "non-negative" in result.errors[0].reason.lower()
+        assert len(result.violations) == 1
+        assert result.violations[0].field == "amount"
+        assert "non-negative" in result.violations[0].message.lower()
 
     def test_negative_amount_error_includes_value(self):
         """Negative amount error message includes the actual value."""
         validator = Validator()
         txn = _make_valid_txn(amount=Decimal("-123.45"))
         result = validator.validate(txn)
-        assert len(result.errors) == 1
-        assert "-123.45" in result.errors[0].reason
+        assert len(result.violations) == 1
+        assert "-123.45" in result.violations[0].message
 
 
 class TestDateValidation:
@@ -185,7 +195,7 @@ class TestDateValidation:
         txn = _make_valid_txn(transDate=None)
         result = validator.validate(txn)
         assert result.is_valid is True
-        assert result.errors == []
+        assert result.violations == []
 
     def test_valid_datetime_passes(self):
         """Valid datetime transDate → no error."""
@@ -194,10 +204,10 @@ class TestDateValidation:
         txn = _make_valid_txn(transDate=dt)
         result = validator.validate(txn)
         assert result.is_valid is True
-        assert result.errors == []
+        assert result.violations == []
 
     def test_invalid_type_fails(self):
-        """Non-datetime transDate → ValidationError(field='transDate')."""
+        """Non-datetime transDate → QualityViolation(field='transDate')."""
         # We can't construct CanonicalTransaction with non-datetime transDate
         # because pydantic enforces it. So we test the validator's internal
         # method directly.
@@ -220,7 +230,7 @@ class TestStatusValidation:
         txn = _make_valid_txn(status=TransactionStatus.SUCCESS)
         result = validator.validate(txn)
         assert result.is_valid is True
-        assert result.errors == []
+        assert result.violations == []
 
     def test_failed_status_passes(self):
         """TransactionStatus.FAILED → no error."""
@@ -248,7 +258,7 @@ class TestFullValidation:
     """Integration tests combining all validation rules."""
 
     def test_fully_valid_transaction(self):
-        """Transaction with all fields correct → is_valid=True, 0 errors."""
+        """Transaction with all fields correct → outcome=QualityOutcome.VALID, 0 errors."""
         validator = Validator()
         txn = CanonicalTransaction(
             id="TXN20240115001",
@@ -260,7 +270,7 @@ class TestFullValidation:
         )
         result = validator.validate(txn)
         assert result.is_valid is True
-        assert len(result.errors) == 0
+        assert len(result.violations) == 0
 
     def test_multiple_errors_collected(self):
         """Transaction with empty id + negative amount → multiple errors."""
@@ -268,8 +278,8 @@ class TestFullValidation:
         txn = _make_valid_txn(id="", amount=Decimal("-500"))
         result = validator.validate(txn)
         assert result.is_valid is False
-        assert len(result.errors) == 2
-        fields = {e.field for e in result.errors}
+        assert len(result.violations) == 2
+        fields = {e.field for e in result.violations}
         assert "id" in fields
         assert "amount" in fields
 
@@ -279,14 +289,14 @@ class TestFullValidation:
         txn = _make_valid_txn(id="", currency="", amount=Decimal("-100"))
         result = validator.validate(txn)
         assert result.is_valid is False
-        assert len(result.errors) == 3
+        assert len(result.violations) == 3
 
     def test_all_errors_have_context(self):
         """All errors include row_number and trace when provided."""
         validator = Validator()
         txn = _make_valid_txn(id="", amount=Decimal("-500"))
         result = validator.validate(txn, row_number=15, trace="BATCH001")
-        for err in result.errors:
+        for err in result.violations:
             assert err.row == 15
             assert err.trace == "BATCH001"
 
@@ -304,514 +314,47 @@ class TestFullValidation:
         )
         result = validator.validate(txn)
         assert result.is_valid is True
-        assert result.errors == []
+        assert result.violations == []
 
 
-class TestDuplicateDetection:
-    """Test duplicate detection with mocked repositories."""
-
-    def _make_valid_txn(self, **overrides: Any) -> CanonicalTransaction:
-        """Helper to create a valid CanonicalTransaction with optional overrides."""
-        defaults: dict[str, Any] = {
-            "id": "TXN001",
-            "amount": Decimal("100000"),
-            "currency": "VND",
-            "status": TransactionStatus.SUCCESS,
-        }
-        defaults.update(overrides)
-        return CanonicalTransaction(**defaults)
-
-    @pytest.mark.asyncio
-    async def test_transaction_duplicate_detected(self):
-        """Transaction duplicate detected when repo returns match."""
-        from src.domain.partner_transaction.models import DataContainer, PartnerData
-
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        partner = PartnerData(
-            id="61838642196",
-            trace="TRACE001",
-            status="SUCCESS",
-            amount=Decimal("100000"),
-            currency="VND",
-        )
-        existing = DataContainer(
-            identify="MOMO",
-            workflow_type="UPC",
-            reconciliation_date=rec_date,
-            source_file_id=uuid.uuid4(),
-            partner_data=partner,
-        )
-
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = existing
-        mock_file_repo = AsyncMock()
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn()
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            row_number=5,
-            trace="TRACE001",
-        )
-
-        assert result.is_valid is False
-        assert len(result.errors) == 1
-        assert result.errors[0].field == "duplicate"
-        assert "already exists" in result.errors[0].reason
-        assert result.errors[0].row == 5
-        assert result.errors[0].trace == "TRACE001"
-
-    @pytest.mark.asyncio
-    async def test_no_transaction_duplicate_when_repo_returns_none(self):
-        """No transaction duplicate when repo returns None."""
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = None
-        mock_file_repo = AsyncMock()
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn()
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            trace="TRACE001",
-        )
-
-        assert result.is_valid is True
-        assert result.errors == []
-
-    @pytest.mark.asyncio
-    async def test_file_duplicate_detected(self):
-        """File duplicate detected when repo returns match."""
-        from src.domain.ingestion.models import ReconciliationFile
-
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        existing_file = ReconciliationFile(
-            partner="MOMO",
-            file_name="test.xlsx",
-            file_hash="abc123def456789012345678901234567890",
-            file_type="SETTLEMENT",
-            reconciliation_date=rec_date,
-        )
-
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = None
-        mock_file_repo = AsyncMock()
-        mock_file_repo.find_by_file_hash.return_value = existing_file
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn()
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            file_hash="abc123def456789012345678901234567890",
-        )
-
-        assert result.is_valid is False
-        assert len(result.errors) == 1
-        assert result.errors[0].field == "file_duplicate"
-        assert "already processed" in result.errors[0].reason
-        assert "abc123def4567890" in result.errors[0].reason
-
-    @pytest.mark.asyncio
-    async def test_no_file_duplicate_when_repo_returns_none(self):
-        """No file duplicate when repo returns None."""
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = None
-        mock_file_repo = AsyncMock()
-        mock_file_repo.find_by_file_hash.return_value = None
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn()
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            file_hash="abc123",
-        )
-
-        assert result.is_valid is True
-        assert result.errors == []
-
-    @pytest.mark.asyncio
-    async def test_both_transaction_and_file_duplicates(self):
-        """Both transaction + file duplicates detected simultaneously."""
-        from src.domain.partner_transaction.models import DataContainer, PartnerData
-        from src.domain.ingestion.models import ReconciliationFile
-
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        partner = PartnerData(
-            id="61838642196",
-            trace="TRACE001",
-            status="SUCCESS",
-            amount=Decimal("100000"),
-            currency="VND",
-        )
-        existing_txn = DataContainer(
-            identify="MOMO",
-            workflow_type="UPC",
-            reconciliation_date=rec_date,
-            source_file_id=uuid.uuid4(),
-            partner_data=partner,
-        )
-        existing_file = ReconciliationFile(
-            partner="MOMO",
-            file_name="test.xlsx",
-            file_hash="abc123def456789012345678901234567890",
-            file_type="SETTLEMENT",
-            reconciliation_date=rec_date,
-        )
-
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = existing_txn
-        mock_file_repo = AsyncMock()
-        mock_file_repo.find_by_file_hash.return_value = existing_file
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn()
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            file_hash="abc123def456789012345678901234567890",
-            trace="TRACE001",
-        )
-
-        assert result.is_valid is False
-        assert len(result.errors) == 2
-        fields = {e.field for e in result.errors}
-        assert "duplicate" in fields
-        assert "file_duplicate" in fields
-
-    @pytest.mark.asyncio
-    async def test_duplicate_checks_skipped_when_repos_not_provided(self):
-        """Duplicate checks skipped when repos not provided."""
-        validator = Validator()
-        txn = self._make_valid_txn()
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            file_hash="abc123",
-            trace="TRACE001",
-        )
-
-        assert result.is_valid is True
-        assert result.errors == []
-
-    @pytest.mark.asyncio
-    async def test_duplicate_errors_collected_with_other_validation_errors(self):
-        """Duplicate errors collected alongside other validation errors."""
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = True  # truthy = duplicate found
-        mock_file_repo = AsyncMock()
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn(id="", amount=Decimal("-500"))
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            trace="TRACE001",
-        )
-
-        assert result.is_valid is False
-        assert len(result.errors) == 3
-        fields = {e.field for e in result.errors}
-        assert "id" in fields
-        assert "amount" in fields
-        assert "duplicate" in fields
-
-
-class TestFullValidationPipeline:
-    """End-to-end integration tests: all validation rules + duplicate detection combined."""
-
-    def _make_valid_txn(self, **overrides: Any) -> CanonicalTransaction:
-        """Helper to create a valid CanonicalTransaction with optional overrides."""
-        defaults: dict[str, Any] = {
-            "id": "TXN001",
-            "amount": Decimal("100000"),
-            "currency": "VND",
-            "status": TransactionStatus.SUCCESS,
-        }
-        defaults.update(overrides)
-        return CanonicalTransaction(**defaults)
-
-    @pytest.mark.asyncio
-    async def test_valid_transaction_no_duplicates_passes(self):
-        """Valid transaction with no duplicates → is_valid=True, 0 errors."""
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = None
-        mock_file_repo = AsyncMock()
-        mock_file_repo.find_by_file_hash.return_value = None
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn()
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            file_hash="unique_hash_123",
-            trace="TRACE001",
-        )
-
-        assert result.is_valid is True
-        assert len(result.errors) == 0
-
-    @pytest.mark.asyncio
-    async def test_valid_transaction_with_transaction_duplicate(self):
-        """Valid transaction with transaction duplicate → is_valid=False, 1 error."""
-        from src.domain.partner_transaction.models import DataContainer, PartnerData
-
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        partner = PartnerData(
-            id="61838642196",
-            trace="TRACE001",
-            status="SUCCESS",
-            amount=Decimal("100000"),
-            currency="VND",
-        )
-        existing = DataContainer(
-            identify="MOMO",
-            workflow_type="UPC",
-            reconciliation_date=rec_date,
-            source_file_id=uuid.uuid4(),
-            partner_data=partner,
-        )
-
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = existing
-        mock_file_repo = AsyncMock()
-        mock_file_repo.find_by_file_hash.return_value = None
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn()
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            trace="TRACE001",
-        )
-
-        assert result.is_valid is False
-        assert len(result.errors) == 1
-        assert result.errors[0].field == "duplicate"
-
-    @pytest.mark.asyncio
-    async def test_valid_transaction_with_file_duplicate(self):
-        """Valid transaction with file duplicate → is_valid=False, 1 error."""
-        from src.domain.ingestion.models import ReconciliationFile
-
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        existing_file = ReconciliationFile(
-            partner="MOMO",
-            file_name="test.xlsx",
-            file_hash="abc123def456789012345678901234567890",
-            file_type="SETTLEMENT",
-            reconciliation_date=rec_date,
-        )
-
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = None
-        mock_file_repo = AsyncMock()
-        mock_file_repo.find_by_file_hash.return_value = existing_file
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn()
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            file_hash="abc123def456789012345678901234567890",
-        )
-
-        assert result.is_valid is False
-        assert len(result.errors) == 1
-        assert result.errors[0].field == "file_duplicate"
-
-    @pytest.mark.asyncio
-    async def test_invalid_transaction_with_negative_amount_and_duplicate(self):
-        """Invalid transaction (negative amount) with transaction duplicate → 2 errors."""
-        from src.domain.partner_transaction.models import DataContainer, PartnerData
-
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        partner = PartnerData(
-            id="61838642196",
-            trace="TRACE001",
-            status="SUCCESS",
-            amount=Decimal("100000"),
-            currency="VND",
-        )
-        existing = DataContainer(
-            identify="MOMO",
-            workflow_type="UPC",
-            reconciliation_date=rec_date,
-            source_file_id=uuid.uuid4(),
-            partner_data=partner,
-        )
-
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = existing
-        mock_file_repo = AsyncMock()
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn(amount=Decimal("-500"))
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            trace="TRACE001",
-        )
-
-        assert result.is_valid is False
-        assert len(result.errors) == 2
-        fields = {e.field for e in result.errors}
-        assert "amount" in fields
-        assert "duplicate" in fields
-
-    @pytest.mark.asyncio
-    async def test_invalid_transaction_with_missing_id_and_both_duplicates(self):
-        """Invalid transaction (missing id) with both duplicates → 3 errors."""
-        from src.domain.partner_transaction.models import DataContainer, PartnerData
-        from src.domain.ingestion.models import ReconciliationFile
-
-        rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        partner = PartnerData(
-            id="61838642196",
-            trace="TRACE001",
-            status="SUCCESS",
-            amount=Decimal("100000"),
-            currency="VND",
-        )
-        existing_txn = DataContainer(
-            identify="MOMO",
-            workflow_type="UPC",
-            reconciliation_date=rec_date,
-            source_file_id=uuid.uuid4(),
-            partner_data=partner,
-        )
-        existing_file = ReconciliationFile(
-            partner="MOMO",
-            file_name="test.xlsx",
-            file_hash="abc123def456789012345678901234567890",
-            file_type="SETTLEMENT",
-            reconciliation_date=rec_date,
-        )
-
-        mock_data_repo = AsyncMock()
-        mock_data_repo.find_by_duplicate_key.return_value = existing_txn
-        mock_file_repo = AsyncMock()
-        mock_file_repo.find_by_file_hash.return_value = existing_file
-
-        validator = Validator(
-            data_container_repo=mock_data_repo,
-            reconciliation_file_repo=mock_file_repo,
-        )
-        txn = self._make_valid_txn(id="")
-
-        result = await validator.validate_with_duplicates(
-            txn,
-            identify="MOMO",
-            reconciliation_date=rec_date,
-            file_hash="abc123def456789012345678901234567890",
-            trace="TRACE001",
-        )
-
-        assert result.is_valid is False
-        assert len(result.errors) == 3
-        fields = {e.field for e in result.errors}
-        assert "id" in fields
-        assert "duplicate" in fields
-        assert "file_duplicate" in fields
-
-
-class TestValidationResult:
-    """Test ValidationResult structure and behavior."""
+class TestQualityEvaluation:
+    """Test QualityEvaluation structure and behavior."""
 
     def test_is_valid_true_when_no_errors(self):
-        """ValidationResult.is_valid = True when errors list is empty."""
-        result = ValidationResult(is_valid=True, errors=[])
+        """QualityEvaluation.is_valid = True when errors list is empty."""
+        result = QualityEvaluation(outcome=QualityOutcome.VALID, violations=[])
         assert result.is_valid is True
-        assert len(result.errors) == 0
+        assert len(result.violations) == 0
 
     def test_is_valid_false_when_errors_present(self):
-        """ValidationResult.is_valid = False when errors list has items."""
-        err = ValidationError(field="id", reason="missing")
-        result = ValidationResult(is_valid=False, errors=[err])
+        """QualityEvaluation.is_valid = False when errors list has items."""
+        err = QualityViolation(field="id", message="missing")
+        result = QualityEvaluation(outcome=QualityOutcome.REJECT, violations=[err])
         assert result.is_valid is False
-        assert len(result.errors) == 1
+        assert len(result.violations) == 1
 
     def test_errors_contains_all_collected_errors(self):
-        """ValidationResult.errors contains all collected errors."""
+        """QualityEvaluation.violations contains all collected errors."""
         errors = [
-            ValidationError(field="id", reason="missing", row=1, trace="T1"),
-            ValidationError(field="amount", reason="negative", row=1, trace="T1"),
-            ValidationError(field="duplicate", reason="exists", row=1, trace="T1"),
+            QualityViolation(field="id", message="missing", row=1, trace="T1"),
+            QualityViolation(field="amount", message="negative", row=1, trace="T1"),
+            QualityViolation(field="duplicate", message="exists", row=1, trace="T1"),
         ]
-        result = ValidationResult(is_valid=False, errors=errors)
-        assert len(result.errors) == 3
-        assert result.errors[0].field == "id"
-        assert result.errors[1].field == "amount"
-        assert result.errors[2].field == "duplicate"
+        result = QualityEvaluation(outcome=QualityOutcome.REJECT, violations=errors)
+        assert len(result.violations) == 3
+        assert result.violations[0].field == "id"
+        assert result.violations[1].field == "amount"
+        assert result.violations[2].field == "duplicate"
 
     def test_error_objects_have_correct_context_values(self):
         """Error objects have correct field, reason, row, trace values."""
-        err = ValidationError(
+        err = QualityViolation(
             field="duplicate",
-            reason="transaction already exists",
+            message="transaction already exists",
             row=42,
             trace="REF123",
         )
         assert err.field == "duplicate"
-        assert err.reason == "transaction already exists"
+        assert err.message == "transaction already exists"
         assert err.row == 42
         assert err.trace == "REF123"

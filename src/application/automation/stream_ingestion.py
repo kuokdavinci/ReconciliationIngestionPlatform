@@ -20,6 +20,29 @@ from src.logging import StructuredLogger
 
 logger = logging.getLogger("reconciliation.automation.stream_ingestion")
 
+
+def bounded_source_unit_result(result: Any) -> dict[str, Any]:
+    """Serialize both the current result and legacy lightweight test doubles."""
+
+    serializer = getattr(result, "bounded_source_unit_result", None)
+    if callable(serializer):
+        return serializer()
+    quality_decision = getattr(result, "quality_decision", "PASS")
+    quality_decision = getattr(quality_decision, "value", quality_decision)
+    orchestration_action = getattr(result, "orchestration_action", "CONTINUE")
+    orchestration_action = getattr(orchestration_action, "value", orchestration_action)
+    quality_summary = getattr(result, "quality_summary", None)
+    top_rule_codes = list(getattr(quality_summary, "top_rule_codes", []) or [])
+    return {
+        "success": getattr(result, "outcome", "INGESTED") != "FAILED",
+        "outcome": getattr(result, "outcome", "INGESTED"),
+        "qualityDecision": quality_decision,
+        "orchestrationAction": orchestration_action,
+        "qualityCounters": dict(getattr(result, "quality_counters", {}) or {}),
+        "topRuleCodes": top_rule_codes[:10],
+    }
+
+
 def fetch_unit_metadata(
     config: FetchConfig,
     fetch_metadata: dict[str, Any],
@@ -104,7 +127,6 @@ async def cleanup_source_unit(config: FetchConfig, unit: SourceUnitMetadata) -> 
     BaseFetcher.cleanup_file(unit.local_path)
 
 
-
 def build_source_unit_ingestor(
     *,
     config: FetchConfig,
@@ -128,8 +150,7 @@ def build_source_unit_ingestor(
         "reconciliationCount": 0,
     }
     is_paginated_api = (
-        config.fetch_method == FetchMethod.API
-        and config.get_method_config().pagination is not None
+        config.fetch_method == FetchMethod.API and config.get_method_config().pagination is not None
     )
     config_health_checked = False
 
@@ -164,8 +185,7 @@ def build_source_unit_ingestor(
             config_version=mapping_config_version,
             backfill_run_id=backfill_run_id,
             enable_config_health_check=(
-                config_health_check_enabled
-                and (not config_health_checked or not is_paginated_api)
+                config_health_check_enabled and (not config_health_checked or not is_paginated_api)
             ),
             validate_rows=config.validate_rows,
         )
@@ -189,7 +209,9 @@ def build_source_unit_ingestor(
 
         outcome = getattr(result, "outcome", "INGESTED")
         if outcome in {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY"}:
+            bounded = bounded_source_unit_result(result)
             return {
+                **bounded,
                 "success": True,
                 "outcome": outcome,
                 "duplicateCode": getattr(result, "duplicate_code", None),
@@ -202,6 +224,11 @@ def build_source_unit_ingestor(
             file_record.processing_status,
             "value",
             file_record.processing_status,
+        )
+        orchestration_action = getattr(
+            getattr(result, "orchestration_action", "CONTINUE"),
+            "value",
+            getattr(result, "orchestration_action", "CONTINUE"),
         )
         waiting_for_review = (
             outcome == "WAITING_REVIEW"
@@ -221,7 +248,24 @@ def build_source_unit_ingestor(
                     "errorCode": "configuration_approval_required",
                     "retryable": False,
                 }
-            return failed_ingestion_result(result)
+            failure = failed_ingestion_result(result)
+            if orchestration_action == "FAIL":
+                return {
+                    **failure,
+                    **bounded_source_unit_result(result),
+                    "success": False,
+                    "outcome": "FAILED",
+                }
+            return failure
+
+        bounded = bounded_source_unit_result(result)
+        if orchestration_action == "HOLD_FOR_REVIEW":
+            return {
+                **bounded,
+                "success": True,
+                "outcome": "INGESTED",
+                "reconciliationSkipped": True,
+            }
 
         reconciliation_results = await build_reconciliation_service(db, fast_mode=True).execute(
             ReconciliationCommand(
@@ -233,13 +277,13 @@ def build_source_unit_ingestor(
         )
         stats["reconciliationCount"] += len(reconciliation_results)
         return {
+            **bounded,
             "success": True,
             "outcome": "INGESTED",
             "reconciliationCount": len(reconciliation_results),
         }
 
     return ingest_unit, stats
-
 
 
 async def run_ingestion(

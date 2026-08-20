@@ -20,11 +20,28 @@ import pytest
 
 from src.core.enums import FileType, ProcessingStatus
 from src.core.types import (
-    BatchInsertResult,
     FieldMapping,
     FieldMappingType,
     ProcessingStats,
 )
+from src.domain.ingestion.quality import QualityRuleCode
+from src.domain.partner_transaction.duplicates import (
+    BatchWriteResult,
+    DuplicateDetail,
+)
+
+
+def _equivalent_duplicate_detail(
+    ingestion_key: str = "duplicate-key",
+) -> DuplicateDetail:
+    return DuplicateDetail(
+        identify="MOMO",
+        ingestion_key=ingestion_key,
+        duplicate_type=QualityRuleCode.EQUIVALENT_DUPLICATE,
+        incoming_index=0,
+        incoming_fingerprint="same",
+        existing_fingerprint="same",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +63,7 @@ def mock_scope_classification(monkeypatch):
 @pytest.fixture(autouse=True)
 def inline_file_hash_executor(monkeypatch):
     """Keep mocked ingestion tests independent of the host thread executor."""
+
     async def run_inline(callback, *args, **kwargs):
         return callback(*args, **kwargs)
 
@@ -59,19 +77,39 @@ class MockStructuredLogger:
         self.events = []
 
     def emit_file_started(self, file_id, file_name, partner):
-        self.events.append(("FILE_STARTED", {"file_id": file_id, "file_name": file_name, "partner": partner}))
+        self.events.append(
+            ("FILE_STARTED", {"file_id": file_id, "file_name": file_name, "partner": partner})
+        )
 
     def emit_file_completed(self, file_id, total, success, failed, duration_ms):
-        self.events.append(("FILE_COMPLETED", {"file_id": file_id, "total": total, "success": success, "failed": failed, "duration_ms": duration_ms}))
+        self.events.append(
+            (
+                "FILE_COMPLETED",
+                {
+                    "file_id": file_id,
+                    "total": total,
+                    "success": success,
+                    "failed": failed,
+                    "duration_ms": duration_ms,
+                },
+            )
+        )
 
     def emit_file_failed(self, file_id, error):
         self.events.append(("FILE_FAILED", {"file_id": file_id, "error": error}))
 
     def emit_row_success(self, file_id, row_number, trace):
-        self.events.append(("ROW_SUCCESS", {"file_id": file_id, "row_number": row_number, "trace": trace}))
+        self.events.append(
+            ("ROW_SUCCESS", {"file_id": file_id, "row_number": row_number, "trace": trace})
+        )
 
     def emit_row_failed(self, file_id, row_number, trace, reason):
-        self.events.append(("ROW_FAILED", {"file_id": file_id, "row_number": row_number, "trace": trace, "reason": reason}))
+        self.events.append(
+            (
+                "ROW_FAILED",
+                {"file_id": file_id, "row_number": row_number, "trace": trace, "reason": reason},
+            )
+        )
 
 
 def _make_mock_db():
@@ -101,9 +139,7 @@ class TestIngestionResult:
         stats = ProcessingStats(total_rows=10, success_rows=8, failed_rows=2)
         errors = [{"row": 3, "field": "amount", "reason": "invalid"}]
 
-        result = IngestionResult(
-            file_record=file_record, stats=stats, errors=errors
-        )
+        result = IngestionResult(file_record=file_record, stats=stats, errors=errors)
 
         assert result.file_record is file_record
         assert result.stats == stats
@@ -279,9 +315,9 @@ class TestIngestionKey:
 
         pipeline = object.__new__(IngestionPipeline)
 
-        assert pipeline._derive_ingestion_key({"id": "TXN-1", "amount": 100}) != pipeline._derive_ingestion_key(
-            {"id": "TXN-2", "amount": 100}
-        )
+        assert pipeline._derive_ingestion_key(
+            {"id": "TXN-1", "amount": 100}
+        ) != pipeline._derive_ingestion_key({"id": "TXN-2", "amount": 100})
 
 
 class TestIngestionKeyPropagation:
@@ -294,19 +330,36 @@ class TestIngestionKeyPropagation:
         from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
         from src.infrastructure.partner_transaction.repository import DataContainerRepository
         from src.pipeline import IngestionPipeline
-        field_mappings = [FieldMapping(path="id", column="A", type=FieldMappingType.STRING, required=True), FieldMapping(path="trace", column="B", type=FieldMappingType.STRING), FieldMapping(path="amount", column="C", type=FieldMappingType.DECIMAL, required=True), FieldMapping(path="currency", constant="VND", type=FieldMappingType.CONSTANT), FieldMapping(path="status", column="D", type=FieldMappingType.MAPPING, mapping={"Thành công": "SUCCESS"})]
-        mock_config = MappingConfig(partner="MOMO", workflow_type="UPC", file_type=FileType.SETTLEMENT, sheet_name="Sheet1", start_row=2, field_mappings=field_mappings)
+
+        field_mappings = [
+            FieldMapping(path="id", column="A", type=FieldMappingType.STRING, required=True),
+            FieldMapping(path="trace", column="B", type=FieldMappingType.STRING),
+            FieldMapping(path="amount", column="C", type=FieldMappingType.DECIMAL, required=True),
+            FieldMapping(path="currency", constant="VND", type=FieldMappingType.CONSTANT),
+            FieldMapping(
+                path="status",
+                column="D",
+                type=FieldMappingType.MAPPING,
+                mapping={"Thành công": "SUCCESS"},
+            ),
+        ]
+        mock_config = MappingConfig(
+            partner="MOMO",
+            workflow_type="UPC",
+            file_type=FileType.SETTLEMENT,
+            sheet_name="Sheet1",
+            start_row=2,
+            field_mappings=field_mappings,
+        )
         mock_config_loader = MagicMock(spec=ConfigLoader)
         mock_config_loader.load_by_partner_type = AsyncMock(return_value=mock_config)
         mock_db = _make_mock_db()
         mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
-        mock_recon_repo.create_or_get_by_file_hash = AsyncMock(
-            side_effect=lambda doc: (doc, True)
-        )
+        mock_recon_repo.create_or_get_by_file_hash = AsyncMock(side_effect=lambda doc: (doc, True))
         mock_recon_repo.update_processing_stats = AsyncMock(return_value=True)
         mock_recon_repo.update_status = AsyncMock(return_value=True)
         mock_data_repo = MagicMock(spec=DataContainerRepository)
-        mock_data_repo.insert_many = AsyncMock(return_value=1)
+        mock_data_repo.insert_many = AsyncMock(return_value=BatchWriteResult(inserted=1))
         pipeline = IngestionPipeline(
             db=mock_db,
             config_loader=mock_config_loader,
@@ -358,9 +411,7 @@ class TestFileClaimAtomic:
             file_type=FileType.SETTLEMENT,
             reconciliation_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
         )
-        mock_recon_repo.create_or_get_by_file_hash = AsyncMock(
-            return_value=(existing_file, False)
-        )
+        mock_recon_repo.create_or_get_by_file_hash = AsyncMock(return_value=(existing_file, False))
         mock_recon_repo.create = AsyncMock()
         mock_recon_repo.update_processing_stats = AsyncMock(return_value=True)
         mock_recon_repo.update_status = AsyncMock(return_value=True)
@@ -428,15 +479,18 @@ class TestBatchInsertAccounting:
 
         mock_db = _make_mock_db()
         mock_recon_repo = MagicMock(spec=ReconciliationFileRepository)
-        mock_recon_repo.create_or_get_by_file_hash = AsyncMock(
-            side_effect=lambda doc: (doc, True)
-        )
+        mock_recon_repo.create_or_get_by_file_hash = AsyncMock(side_effect=lambda doc: (doc, True))
         mock_recon_repo.update_processing_stats = AsyncMock(return_value=True)
         mock_recon_repo.update_status = AsyncMock(return_value=True)
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
         mock_data_repo.insert_many = AsyncMock(
-            return_value=BatchInsertResult(inserted=1, duplicates=1, failed=0)
+            return_value=BatchWriteResult(
+                inserted=1,
+                duplicates=1,
+                equivalent_duplicates=1,
+                duplicate_details=[_equivalent_duplicate_detail()],
+            )
         )
 
         pipeline = IngestionPipeline(
@@ -510,15 +564,13 @@ class TestBatchInsertAccounting:
         config_loader.load_by_partner_type = AsyncMock(return_value=config)
 
         recon_repo = MagicMock(spec=ReconciliationFileRepository)
-        recon_repo.create_or_get_by_file_hash = AsyncMock(
-            side_effect=lambda doc: (doc, True)
-        )
+        recon_repo.create_or_get_by_file_hash = AsyncMock(side_effect=lambda doc: (doc, True))
         recon_repo.update_processing_stats = AsyncMock(return_value=True)
         recon_repo.update_status = AsyncMock(return_value=True)
 
         data_repo = MagicMock(spec=DataContainerRepository)
         data_repo.insert_many = AsyncMock(
-            return_value=BatchInsertResult(inserted=1, duplicates=0, failed=1)
+            return_value=BatchWriteResult(inserted=1, duplicates=0, failed=1)
         )
 
         pipeline = IngestionPipeline(
@@ -606,11 +658,9 @@ class TestProcessFileHappyPath:
         mock_recon_repo.update_status = AsyncMock(return_value=True)
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
-        mock_data_repo.insert_many = AsyncMock(return_value=3)
+        mock_data_repo.insert_many = AsyncMock(return_value=BatchWriteResult(inserted=3))
 
-        pipeline = IngestionPipeline(
-            db=mock_db, config_loader=mock_config_loader, batch_size=100
-        )
+        pipeline = IngestionPipeline(db=mock_db, config_loader=mock_config_loader, batch_size=100)
         # Override repos with our mocks
         pipeline._recon_repo = mock_recon_repo
         pipeline._data_repo = mock_data_repo
@@ -701,11 +751,9 @@ class TestProcessFileMixedRows:
         mock_recon_repo.update_status = AsyncMock(return_value=True)
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
-        mock_data_repo.insert_many = AsyncMock(return_value=2)
+        mock_data_repo.insert_many = AsyncMock(return_value=BatchWriteResult(inserted=2))
 
-        pipeline = IngestionPipeline(
-            db=mock_db, config_loader=mock_config_loader, batch_size=100
-        )
+        pipeline = IngestionPipeline(db=mock_db, config_loader=mock_config_loader, batch_size=100)
         pipeline._recon_repo = mock_recon_repo
         pipeline._data_repo = mock_data_repo
 
@@ -770,9 +818,7 @@ class TestProcessFileDuplicate:
 
         mock_config_loader = MagicMock(spec=ConfigLoader)
 
-        pipeline = IngestionPipeline(
-            db=mock_db, config_loader=mock_config_loader, batch_size=100
-        )
+        pipeline = IngestionPipeline(db=mock_db, config_loader=mock_config_loader, batch_size=100)
         pipeline._recon_repo = mock_recon_repo
 
         rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
@@ -818,9 +864,7 @@ class TestProcessFileException:
             side_effect=Exception("Config load failed")
         )
 
-        pipeline = IngestionPipeline(
-            db=mock_db, config_loader=mock_config_loader, batch_size=100
-        )
+        pipeline = IngestionPipeline(db=mock_db, config_loader=mock_config_loader, batch_size=100)
         pipeline._recon_repo = mock_recon_repo
 
         rec_date = datetime(2024, 1, 15, tzinfo=timezone.utc)
@@ -880,12 +924,12 @@ class TestBatchInsertion:
         mock_recon_repo.update_status = AsyncMock(return_value=True)
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
-        mock_data_repo.insert_many = AsyncMock(side_effect=lambda batch, **kwargs: len(batch))
+        mock_data_repo.insert_many = AsyncMock(
+            side_effect=lambda batch, **_kwargs: BatchWriteResult(inserted=len(batch))
+        )
 
         # Use batch_size=5 to test batching
-        pipeline = IngestionPipeline(
-            db=mock_db, config_loader=mock_config_loader, batch_size=5
-        )
+        pipeline = IngestionPipeline(db=mock_db, config_loader=mock_config_loader, batch_size=5)
         pipeline._recon_repo = mock_recon_repo
         pipeline._data_repo = mock_data_repo
 
@@ -971,12 +1015,15 @@ class TestPipelineLogging:
         mock_recon_repo.update_status = AsyncMock(return_value=True)
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
-        mock_data_repo.insert_many = AsyncMock(return_value=3)
+        mock_data_repo.insert_many = AsyncMock(return_value=BatchWriteResult(inserted=3))
 
         mock_logger = MockStructuredLogger()
 
         pipeline = IngestionPipeline(
-            db=mock_db, config_loader=mock_config_loader, batch_size=100, logger=mock_logger,
+            db=mock_db,
+            config_loader=mock_config_loader,
+            batch_size=100,
+            logger=mock_logger,
         )
         pipeline._recon_repo = mock_recon_repo
         pipeline._data_repo = mock_data_repo
@@ -1060,12 +1107,15 @@ class TestPipelineLogging:
         mock_recon_repo.update_status = AsyncMock(return_value=True)
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
-        mock_data_repo.insert_many = AsyncMock(return_value=2)
+        mock_data_repo.insert_many = AsyncMock(return_value=BatchWriteResult(inserted=2))
 
         mock_logger = MockStructuredLogger()
 
         pipeline = IngestionPipeline(
-            db=mock_db, config_loader=mock_config_loader, batch_size=100, logger=mock_logger,
+            db=mock_db,
+            config_loader=mock_config_loader,
+            batch_size=100,
+            logger=mock_logger,
         )
         pipeline._recon_repo = mock_recon_repo
         pipeline._data_repo = mock_data_repo
@@ -1140,7 +1190,10 @@ class TestPipelineLogging:
         mock_logger = MockStructuredLogger()
 
         pipeline = IngestionPipeline(
-            db=mock_db, config_loader=mock_config_loader, batch_size=100, logger=mock_logger,
+            db=mock_db,
+            config_loader=mock_config_loader,
+            batch_size=100,
+            logger=mock_logger,
         )
         pipeline._recon_repo = mock_recon_repo
 
@@ -1157,7 +1210,10 @@ class TestPipelineLogging:
         events = mock_logger.events
         assert len(events) == 1
         assert events[0][0] == "FILE_FAILED"
-        assert "already processed" in events[0][1]["error"].lower() or "duplicate" in events[0][1]["error"].lower()
+        assert (
+            "already processed" in events[0][1]["error"].lower()
+            or "duplicate" in events[0][1]["error"].lower()
+        )
         assert events[0][1]["file_id"] == "duplicate"
 
     @pytest.mark.asyncio
@@ -1185,7 +1241,10 @@ class TestPipelineLogging:
         mock_logger = MockStructuredLogger()
 
         pipeline = IngestionPipeline(
-            db=mock_db, config_loader=mock_config_loader, batch_size=100, logger=mock_logger,
+            db=mock_db,
+            config_loader=mock_config_loader,
+            batch_size=100,
+            logger=mock_logger,
         )
         pipeline._recon_repo = mock_recon_repo
 
@@ -1252,11 +1311,9 @@ class TestPipelineAllInvalidRows:
         mock_recon_repo.update_status = AsyncMock(return_value=True)
 
         mock_data_repo = MagicMock(spec=DataContainerRepository)
-        mock_data_repo.insert_many = AsyncMock(return_value=0)
+        mock_data_repo.insert_many = AsyncMock(return_value=BatchWriteResult(inserted=0))
 
-        pipeline = IngestionPipeline(
-            db=mock_db, config_loader=mock_config_loader, batch_size=100
-        )
+        pipeline = IngestionPipeline(db=mock_db, config_loader=mock_config_loader, batch_size=100)
         pipeline._recon_repo = mock_recon_repo
         pipeline._data_repo = mock_data_repo
 
@@ -1294,4 +1351,5 @@ class TestPipelineAllInvalidRows:
             assert len(result.errors) >= 3
         finally:
             from pathlib import Path
+
             Path(temp_path).unlink(missing_ok=True)

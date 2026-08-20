@@ -43,10 +43,10 @@ class TestConfigLoadError:
     def test_error_has_validation_errors(self):
         """ConfigLoadError stores validation_errors list."""
         from src.config.loader import ConfigLoadError
-        from src.config.validator import ConfigValidationError
+        from src.domain.ingestion.quality import QualityViolation
 
         validation_errors = [
-            ConfigValidationError(field="amount", reason="duplicate path"),
+            QualityViolation(field="amount", message="duplicate path"),
         ]
         err = ConfigLoadError(
             message="Config validation failed",
@@ -248,7 +248,9 @@ class TestLoadByPartnerType:
         # Require a path that doesn't exist in the config
         with pytest.raises(self.ConfigLoadError) as exc_info:
             await self.loader.load_by_partner_type(
-                "MOMO", "UPC", FileType.SETTLEMENT,
+                "MOMO",
+                "UPC",
+                FileType.SETTLEMENT,
                 required_paths={"amount", "currency", "nonexistent_path"},
             )
 
@@ -374,6 +376,7 @@ class TestDefaultTtlApplied:
         assert entry is not None
         # The expiry should be ~600 seconds from now (within 1 second tolerance)
         from datetime import datetime, timezone
+
         expected_expiry = datetime.now(timezone.utc).timestamp() + 600
         actual_expiry = entry.expires_at.timestamp()
         assert abs(actual_expiry - expected_expiry) < 1

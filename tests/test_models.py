@@ -378,9 +378,7 @@ class TestReconciliationFileRepository:
 
         assert created is False
         assert canonical.file_hash == "old-content"
-        assert mock_collection.find_one.await_args_list[1].args[0] == {
-            "fetchUnitKey": "fetch-key"
-        }
+        assert mock_collection.find_one.await_args_list[1].args[0] == {"fetchUnitKey": "fetch-key"}
 
     @pytest.mark.asyncio
     async def test_concurrent_file_claim_has_one_canonical_winner(self):
@@ -450,19 +448,37 @@ class TestDataContainerRepository:
     @pytest.mark.asyncio
     async def test_insert_many_returns_zero_for_empty_list(self):
         from src.infrastructure.partner_transaction.repository import DataContainerRepository
+        from src.domain.partner_transaction.duplicates import BatchWriteResult
 
         repo = DataContainerRepository(engine=object())
 
-        assert await repo.insert_many([]) == 0
+        assert await repo.insert_many([]) == BatchWriteResult(inserted=0)
 
 
 class TestDataContainerIngestionKey:
     def test_ingestion_key_roundtrip_via_row_helpers(self):
         from src.domain.partner_transaction.models import DataContainer, PartnerData
-        from src.infrastructure.partner_transaction.repository import data_container_to_row, row_to_data_container
+        from src.infrastructure.partner_transaction.repository import (
+            data_container_to_row,
+            row_to_data_container,
+        )
+
         now = datetime.now(timezone.utc)
-        partner = PartnerData(id="TXN001", trace="TRACE001", status="SUCCESS", amount=Decimal("100000"), currency="VND")
-        doc = DataContainer(identify="MOMO", workflow_type="UPC", reconciliation_date=now, source_file_id=uuid.uuid4(), partner_data=partner, ingestion_key="MOMO:TXN001")
+        partner = PartnerData(
+            id="TXN001",
+            trace="TRACE001",
+            status="SUCCESS",
+            amount=Decimal("100000"),
+            currency="VND",
+        )
+        doc = DataContainer(
+            identify="MOMO",
+            workflow_type="UPC",
+            reconciliation_date=now,
+            source_file_id=uuid.uuid4(),
+            partner_data=partner,
+            ingestion_key="MOMO:TXN001",
+        )
         row = data_container_to_row(doc)
         assert row["ingestion_key"] == "MOMO:TXN001"
         restored = row_to_data_container(row)

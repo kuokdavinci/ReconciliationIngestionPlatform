@@ -6,7 +6,8 @@ from decimal import Decimal
 import pytest
 
 from src.core.enums import TransactionStatus
-from src.core.types import FieldMapping, FieldMappingType, ValidationError
+from src.core.types import FieldMapping, FieldMappingType
+from src.domain.ingestion.quality import QualityViolation
 from src.normalizer import TransactionNormalizer, NormalizationResult
 
 
@@ -44,7 +45,7 @@ class TestNormalizationResult:
         assert result.errors == []
 
     def test_result_with_data_and_errors(self):
-        err = ValidationError(field="amount", reason="invalid")
+        err = QualityViolation(field="amount", message="invalid")
         result = NormalizationResult(
             data={"id": "TXN001"},
             errors=[err],
@@ -126,7 +127,7 @@ class TestDecimalConversion:
         result = normalizer.normalize({"B": 100.50})
         assert "amount" not in result.data
         assert len(result.errors) == 1
-        assert "float" in result.errors[0].reason.lower()
+        assert "float" in result.errors[0].message.lower()
 
     def test_invalid_string_produces_validation_error(self):
         normalizer = TransactionNormalizer(
@@ -215,9 +216,7 @@ class TestConstantConversion:
 
     def test_valid_constant_returned(self):
         normalizer = TransactionNormalizer(
-            field_mappings=[
-                _make_mapping("currency", FieldMappingType.CONSTANT, constant="VND")
-            ]
+            field_mappings=[_make_mapping("currency", FieldMappingType.CONSTANT, constant="VND")]
         )
         result = normalizer.normalize({})
         assert result.data["currency"] == "VND"
@@ -225,9 +224,7 @@ class TestConstantConversion:
 
     def test_none_constant_produces_error(self):
         normalizer = TransactionNormalizer(
-            field_mappings=[
-                _make_mapping("currency", FieldMappingType.CONSTANT, constant=None)
-            ]
+            field_mappings=[_make_mapping("currency", FieldMappingType.CONSTANT, constant=None)]
         )
         result = normalizer.normalize({})
         assert "currency" not in result.data
@@ -247,9 +244,7 @@ class TestSourceFieldResolution:
 
     def test_resolve_by_source_field(self):
         normalizer = TransactionNormalizer(
-            field_mappings=[
-                _make_mapping("id", FieldMappingType.STRING, sourceField="txn_id")
-            ]
+            field_mappings=[_make_mapping("id", FieldMappingType.STRING, sourceField="txn_id")]
         )
         result = normalizer.normalize({"txn_id": "TXN002"})
         assert result.data["id"] == "TXN002"
@@ -257,9 +252,7 @@ class TestSourceFieldResolution:
     def test_column_takes_precedence_over_source_field(self):
         normalizer = TransactionNormalizer(
             field_mappings=[
-                _make_mapping(
-                    "id", FieldMappingType.STRING, column="A", sourceField="txn_id"
-                )
+                _make_mapping("id", FieldMappingType.STRING, column="A", sourceField="txn_id")
             ]
         )
         result = normalizer.normalize({"A": "FROM_COL", "txn_id": "FROM_SOURCE"})
@@ -272,35 +265,29 @@ class TestSourceFieldResolution:
         result = normalizer.normalize({"A": "TXN001"})
         assert "id" not in result.data
         assert len(result.errors) == 1
-        assert "not found" in result.errors[0].reason.lower()
+        assert "not found" in result.errors[0].message.lower()
 
     def test_missing_source_field_key_produces_error(self):
         normalizer = TransactionNormalizer(
-            field_mappings=[
-                _make_mapping("id", FieldMappingType.STRING, sourceField="missing_key")
-            ]
+            field_mappings=[_make_mapping("id", FieldMappingType.STRING, sourceField="missing_key")]
         )
         result = normalizer.normalize({"A": "TXN001"})
         assert "id" not in result.data
         assert len(result.errors) == 1
-        assert "not found" in result.errors[0].reason.lower()
+        assert "not found" in result.errors[0].message.lower()
 
     def test_no_column_and_no_source_field_produces_error(self):
         normalizer = TransactionNormalizer(
-            field_mappings=[
-                _make_mapping("id", FieldMappingType.STRING)
-            ]
+            field_mappings=[_make_mapping("id", FieldMappingType.STRING)]
         )
         result = normalizer.normalize({"A": "TXN001"})
         assert "id" not in result.data
         assert len(result.errors) == 1
-        assert "no column" in result.errors[0].reason.lower()
+        assert "no column" in result.errors[0].message.lower()
 
     def test_constant_skips_row_lookup(self):
         normalizer = TransactionNormalizer(
-            field_mappings=[
-                _make_mapping("currency", FieldMappingType.CONSTANT, constant="VND")
-            ]
+            field_mappings=[_make_mapping("currency", FieldMappingType.CONSTANT, constant="VND")]
         )
         # Empty row — should still work for CONSTANT
         result = normalizer.normalize({})
@@ -418,7 +405,7 @@ class TestMappingConversion:
         assert error is None
 
     def test_unknown_value_without_others_produces_error(self):
-        """Unknown value 'X' without 'others' key → ValidationError."""
+        """Unknown value 'X' without 'others' key → QualityViolation."""
         fm = self._make_mapping_with_dict(
             "status",
             mapping={"Thành công": "SUCCESS", "Thất bại": "FAILED"},
@@ -427,12 +414,12 @@ class TestMappingConversion:
         value, error = TransactionNormalizer._convert_mapping("X", fm)
         assert value is None
         assert error is not None
-        assert isinstance(error, ValidationError)
-        assert "unmapped value" in error.reason
-        assert "X" in error.reason
+        assert isinstance(error, QualityViolation)
+        assert "unmapped value" in error.message
+        assert "X" in error.message
 
     def test_none_value_produces_error(self):
-        """None value → ValidationError."""
+        """None value → QualityViolation."""
         fm = self._make_mapping_with_dict(
             "status",
             mapping={"Thành công": "SUCCESS", "others": "FAILED"},
@@ -441,11 +428,11 @@ class TestMappingConversion:
         value, error = TransactionNormalizer._convert_mapping(None, fm)
         assert value is None
         assert error is not None
-        assert isinstance(error, ValidationError)
-        assert "empty" in error.reason.lower() or "null" in error.reason.lower()
+        assert isinstance(error, QualityViolation)
+        assert "empty" in error.message.lower() or "null" in error.message.lower()
 
     def test_empty_string_produces_error(self):
-        """Empty string value → ValidationError."""
+        """Empty string value → QualityViolation."""
         fm = self._make_mapping_with_dict(
             "status",
             mapping={"Thành công": "SUCCESS", "others": "FAILED"},
@@ -454,8 +441,8 @@ class TestMappingConversion:
         value, error = TransactionNormalizer._convert_mapping("", fm)
         assert value is None
         assert error is not None
-        assert isinstance(error, ValidationError)
-        assert "empty" in error.reason.lower() or "null" in error.reason.lower()
+        assert isinstance(error, QualityViolation)
+        assert "empty" in error.message.lower() or "null" in error.message.lower()
 
     def test_numeric_value_converted_to_string_before_lookup(self):
         """Numeric value 1 → str '1' → lookup in mapping."""
@@ -469,7 +456,7 @@ class TestMappingConversion:
         assert error is None
 
     def test_row_number_propagated_to_error(self):
-        """Row number included in ValidationError."""
+        """Row number included in QualityViolation."""
         fm = self._make_mapping_with_dict(
             "status",
             mapping={"Thành công": "SUCCESS"},
@@ -480,7 +467,7 @@ class TestMappingConversion:
         assert error.row == 5
 
     def test_mapping_with_status_field_None_value(self):
-        """MAPPING field with None source value produces ValidationError with 'empty' or 'null'."""
+        """MAPPING field with None source value produces QualityViolation with 'empty' or 'null'."""
         fm = self._make_mapping_with_dict(
             "status",
             mapping={"Thành công": "SUCCESS", "Thất bại": "FAILED", "others": "FAILED"},
@@ -489,11 +476,11 @@ class TestMappingConversion:
         value, error = TransactionNormalizer._convert_mapping(None, fm)
         assert value is None
         assert error is not None
-        assert isinstance(error, ValidationError)
-        assert "empty" in error.reason.lower() or "null" in error.reason.lower()
+        assert isinstance(error, QualityViolation)
+        assert "empty" in error.message.lower() or "null" in error.message.lower()
 
     def test_mapping_with_unknown_value_no_others_case_insensitive(self):
-        """Unknown status value without 'others' fallback produces ValidationError."""
+        """Unknown status value without 'others' fallback produces QualityViolation."""
         fm = self._make_mapping_with_dict(
             "status",
             mapping={"Thành công": "SUCCESS", "Thất bại": "FAILED"},
@@ -502,8 +489,8 @@ class TestMappingConversion:
         value, error = TransactionNormalizer._convert_mapping("unknown_status", fm)
         assert value is None
         assert error is not None
-        assert isinstance(error, ValidationError)
-        assert "unmapped value" in error.reason
+        assert isinstance(error, QualityViolation)
+        assert "unmapped value" in error.message
 
 
 class TestBuildCanonical:
@@ -517,7 +504,7 @@ class TestBuildCanonical:
             "currency": "VND",
             "status": "SUCCESS",
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is not None
         assert txn.id == "TXN001"
@@ -527,64 +514,64 @@ class TestBuildCanonical:
         assert errors == []
 
     def test_missing_id_produces_error(self):
-        """Missing 'id' → ValidationError."""
+        """Missing 'id' → QualityViolation."""
         data = {
             "amount": Decimal("100000"),
             "currency": "VND",
             "status": "SUCCESS",
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is None
         assert len(errors) == 1
         assert errors[0].field == "id"
 
     def test_missing_amount_produces_error(self):
-        """Missing 'amount' → ValidationError."""
+        """Missing 'amount' → QualityViolation."""
         data = {
             "id": "TXN001",
             "currency": "VND",
             "status": "SUCCESS",
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is None
         assert len(errors) == 1
         assert errors[0].field == "amount"
 
     def test_missing_currency_produces_error(self):
-        """Missing 'currency' → ValidationError."""
+        """Missing 'currency' → QualityViolation."""
         data = {
             "id": "TXN001",
             "amount": Decimal("100000"),
             "status": "SUCCESS",
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is None
         assert len(errors) == 1
         assert errors[0].field == "currency"
 
     def test_missing_status_produces_error(self):
-        """Missing 'status' → ValidationError."""
+        """Missing 'status' → QualityViolation."""
         data = {
             "id": "TXN001",
             "amount": Decimal("100000"),
             "currency": "VND",
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is None
         assert len(errors) == 1
         assert errors[0].field == "status"
 
     def test_multiple_missing_fields_produce_multiple_errors(self):
-        """Missing 'id' and 'amount' → 2 ValidationErrors."""
+        """Missing 'id' and 'amount' → 2 QualityViolations."""
         data = {
             "currency": "VND",
             "status": "SUCCESS",
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is None
         assert len(errors) == 2
@@ -593,19 +580,19 @@ class TestBuildCanonical:
         assert "amount" in fields
 
     def test_invalid_status_string_produces_error(self):
-        """Invalid status 'UNKNOWN' → ValidationError."""
+        """Invalid status 'UNKNOWN' → QualityViolation."""
         data = {
             "id": "TXN001",
             "amount": Decimal("100000"),
             "currency": "VND",
             "status": "UNKNOWN",
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is None
         assert len(errors) == 1
         assert errors[0].field == "status"
-        assert "invalid status" in errors[0].reason.lower()
+        assert "invalid status" in errors[0].message.lower()
 
     def test_valid_status_converted_to_enum(self):
         """Valid status 'SUCCESS' → TransactionStatus.SUCCESS enum."""
@@ -615,7 +602,7 @@ class TestBuildCanonical:
             "currency": "VND",
             "status": "SUCCESS",
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is not None
         assert txn.status is TransactionStatus.SUCCESS
@@ -630,7 +617,7 @@ class TestBuildCanonical:
             "currency": "VND",
             "status": "SUCCESS",
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is not None
         assert txn.trace == "REF123"
@@ -645,7 +632,7 @@ class TestBuildCanonical:
             "status": "SUCCESS",
             "transDate": dt,
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is not None
         assert txn.transDate == dt
@@ -660,7 +647,7 @@ class TestBuildCanonical:
             "partnerCode": "VN001",
             "batchId": "BATCH1",
         }
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is not None
         assert txn.extra == {"partnerCode": "VN001", "batchId": "BATCH1"}
@@ -673,17 +660,17 @@ class TestBuildCanonical:
             "currency": "VND",
             "status": "SUCCESS",
         }
-        existing_error = ValidationError(field="amount", reason="pre-existing error")
-        errors: list[ValidationError] = [existing_error]
+        existing_error = QualityViolation(field="amount", message="pre-existing error")
+        errors: list[QualityViolation] = [existing_error]
         txn, errors = TransactionNormalizer.build_canonical(data, errors)
         assert txn is not None
         assert len(errors) == 1
-        assert errors[0].reason == "pre-existing error"
+        assert errors[0].message == "pre-existing error"
 
     def test_row_number_propagated_to_error(self):
-        """Row number included in ValidationError."""
+        """Row number included in QualityViolation."""
         data = {"amount": Decimal("100000"), "currency": "VND", "status": "SUCCESS"}
-        errors: list[ValidationError] = []
+        errors: list[QualityViolation] = []
         txn, errors = TransactionNormalizer.build_canonical(data, errors, row_number=10)
         assert txn is None
         assert errors[0].row == 10
@@ -718,7 +705,9 @@ class TestFullIntegration:
 
         normalizer = TransactionNormalizer(field_mappings)
         result = normalizer.normalize(row, row_number=5)
-        txn, errors = TransactionNormalizer.build_canonical(result.data, result.errors, row_number=5)
+        txn, errors = TransactionNormalizer.build_canonical(
+            result.data, result.errors, row_number=5
+        )
 
         assert txn is not None
         assert txn.id == "TXN20240115001"
@@ -752,7 +741,9 @@ class TestFullIntegration:
 
         normalizer = TransactionNormalizer(field_mappings)
         result = normalizer.normalize(row, row_number=3)
-        txn, errors = TransactionNormalizer.build_canonical(result.data, result.errors, row_number=3)
+        txn, errors = TransactionNormalizer.build_canonical(
+            result.data, result.errors, row_number=3
+        )
 
         assert txn is None
         assert len(errors) >= 1
@@ -775,12 +766,14 @@ class TestFullIntegration:
         row = {
             "A": "TXN003",
             "C": "not-a-number",  # Invalid decimal
-            "D": "Thành công",     # Valid mapping
+            "D": "Thành công",  # Valid mapping
         }
 
         normalizer = TransactionNormalizer(field_mappings)
         result = normalizer.normalize(row, row_number=7)
-        txn, errors = TransactionNormalizer.build_canonical(result.data, result.errors, row_number=7)
+        txn, errors = TransactionNormalizer.build_canonical(
+            result.data, result.errors, row_number=7
+        )
 
         # id and status normalized, amount failed → missing amount in build_canonical
         assert txn is None
@@ -820,7 +813,9 @@ class TestFullIntegration:
 
         normalizer = TransactionNormalizer(field_mappings)
         result = normalizer.normalize(row, row_number=5)
-        txn, errors = TransactionNormalizer.build_canonical(result.data, result.errors, row_number=5)
+        txn, errors = TransactionNormalizer.build_canonical(
+            result.data, result.errors, row_number=5
+        )
 
         assert txn is not None
         assert txn.id == "TXN20240115001"

@@ -44,6 +44,7 @@ from src.core.types import (
     FieldMappingType,
 )
 from src.domain.mapping.models import MappingConfig
+from src.domain.partner_transaction.duplicates import BatchWriteResult
 from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
 
@@ -78,7 +79,9 @@ def mock_reconciliation_file_repo() -> MagicMock:
 def mock_data_container_repo() -> MagicMock:
     """Mock DataContainerRepository that tracks insert_many calls."""
     repo = MagicMock(spec=DataContainerRepository)
-    repo.insert_many = AsyncMock(side_effect=lambda docs, **kwargs: len(docs))
+    repo.insert_many = AsyncMock(
+        side_effect=lambda docs, **kwargs: BatchWriteResult(inserted=len(docs))
+    )
     repo.find_by_duplicate_key = AsyncMock(return_value=None)
     return repo
 

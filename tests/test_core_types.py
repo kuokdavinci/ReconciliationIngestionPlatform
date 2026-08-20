@@ -15,10 +15,11 @@ from src.core.types import (
     FieldMappingType,
     FieldMapping,
     CanonicalTransaction,
-    BatchInsertResult,
-    ValidationError,
     ProcessingStats,
 )
+from src.application.ingestion.contracts import serialize_quality_violation
+from src.domain.ingestion.quality import QualityViolation
+from src.domain.partner_transaction.duplicates import BatchWriteResult
 
 
 class TestProcessingStatus:
@@ -237,25 +238,25 @@ class TestFieldMapping:
         assert m.required is True
 
 
-class TestValidationError:
-    """Test ValidationError model."""
+class TestQualityViolation:
+    """Test the domain quality violation model."""
 
     def test_required_fields(self):
-        err = ValidationError(field="amount", reason="invalid decimal")
+        err = QualityViolation(field="amount", message="invalid decimal")
         assert err.field == "amount"
-        assert err.reason == "invalid decimal"
+        assert err.message == "invalid decimal"
 
     def test_optional_row(self):
-        err = ValidationError(field="amount", reason="invalid", row=42)
+        err = QualityViolation(field="amount", message="invalid", row=42)
         assert err.row == 42
 
     def test_optional_trace(self):
-        err = ValidationError(field="id", reason="missing", trace="TXN-001")
+        err = QualityViolation(field="id", message="missing", trace="TXN-001")
         assert err.trace == "TXN-001"
 
     def test_serialization(self):
-        err = ValidationError(field="amount", reason="invalid", row=10)
-        data = err.model_dump()
+        err = QualityViolation(field="amount", message="invalid", row=10)
+        data = serialize_quality_violation(err)
         assert data["field"] == "amount"
         assert data["reason"] == "invalid"
         assert data["row"] == 10
@@ -272,9 +273,9 @@ class TestProcessingStats:
         assert stats.duplicate_rows == 0
 
 
-class TestBatchInsertResult:
-    """Test BatchInsertResult model."""
+class TestBatchWriteResult:
+    """Test BatchWriteResult model."""
 
     def test_attempted_property(self):
-        result = BatchInsertResult(inserted=3, duplicates=2, failed=1)
-        assert result.attempted == 6
+        result = BatchWriteResult(inserted=3, failed=1)
+        assert result.attempted == 4

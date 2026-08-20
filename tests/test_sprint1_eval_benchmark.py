@@ -406,7 +406,7 @@ async def test_run_sprint1_eval_and_generate_report():
         distinct = await data_repo.insert_many([
             _benchmark_transaction("MOMO_EVAL", "TXN_DISTINCT_A"),
             _benchmark_transaction("MOMO_EVAL", "TXN_DISTINCT_B"),
-        ], detailed=True)
+        ])
         async with engine.connect() as conn:
             cnt5 = (await conn.execute(text(
                 "SELECT COUNT(*) FROM partner_transaction WHERE identify='MOMO_EVAL'"

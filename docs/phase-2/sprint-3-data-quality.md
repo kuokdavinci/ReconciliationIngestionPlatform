@@ -2,10 +2,13 @@
 
 ## Status and boundary
 
-**Workstream A is complete** only for EDA/profile/provenance/frozen-baseline,
+**Workstream A is complete** for EDA/profile/provenance/frozen-baseline,
 controlled-mutation, and coverage-handoff evidence for the Fraud Detection
-Dataset. Workstreams **B–F remain planned**; this document does not approve a
-production quality gate or change runtime behavior.
+Dataset. **Workstream B is now implemented** for the shared runtime quality
+contract, deterministic file/row gate, duplicate classification, bounded
+source-unit result, and conflict quarantine routing. Workstreams C–F remain
+handoffs; this document does not promote statistical or fraud semantics into
+automatic rejection.
 
 The full-profile baseline is version `3`, SHA-256
 `e3895c988fe37efc76dabfe62d23f7ab75e89477bb17ba0c53092b008431caf6`, with
@@ -50,23 +53,38 @@ EDA uniqueness is local to this source file. Runtime persistence uniqueness is
 |---|---|---|---|
 | Required ID/amount/currency and Decimal conversion | COVERED | Mapping, normalizer, validator | A closed; B/C maintain |
 | Negative amount; zero valid | COVERED | Validator rejects negative values and accepts zero | A closed; C maintain |
-| ISO timezone timestamp to `transDate` | GAP | Timestamp remains `extra.sourceTimestamp` | B/C |
-| Equivalent duplicate/idempotency | PARTIAL | PostgreSQL `(identify, ingestion_key)`; EDA is file-local | B |
-| Conflicting duplicate | PARTIAL | Quarantine persistence exists; conflict insert does not compare payloads | B/D |
-| Header/schema drift | PARTIAL | StructureSignature, ConfigHealth, mapping coverage; no type-aware runtime gate | B/C |
+| ISO timezone timestamp to `transDate` | GAP | Timestamp remains `extra.sourceTimestamp` | C |
+| Equivalent duplicate/idempotency | COVERED | PostgreSQL key conflict plus canonical business-payload SHA-256 classification | B closed; D/F operate |
+| Conflicting duplicate | COVERED | Bulk payload comparison, typed evidence, quarantine, and source-unit hold | B closed; D owns lifecycle |
+| Header/schema drift | COVERED | Runtime file gate distinguishes append-only warning from breaking/fatal drift | B closed; C maintains types |
 | Amount IQR | DO_NOT_PROMOTE | Descriptive observation only; not a profile decision rule | Partner/business contract |
 | Fraud semantics | DO_NOT_PROMOTE | Monitoring candidate only | Partner/business contract |
 | Card/customer, merchant/location, coordinate semantics | DO_NOT_PROMOTE | Monitoring candidates only | Partner/business contract |
 | Temporal volume | DO_NOT_PROMOTE | Monitoring candidate only | Partner/business contract |
 
-## Planned workstreams B–F
+## Workstreams B–F
 
-### B — Quality contract and gate
+### B — Quality contract and gate — implemented
 
-Define approved rule codes, deterministic decision semantics, type-aware schema
-gating, timestamp contract, duplicate payload comparison, and the actions for
-`PASS`, `REVIEW`, reject, and batch failure. EDA does not replace mapping or
-business approval.
+Implemented in `src/domain/ingestion/quality.py`,
+`src/domain/partner_transaction/duplicates.py`, application policy/serialization
+modules, and `src/pipeline/quality_gate.py`. Approved rule codes, deterministic
+decision semantics, structural gating, duplicate payload comparison, conflict
+quarantine, bounded Airflow result, tests, and benchmark evidence are documented in
+[`sprint-3-workstream-b-quality-contract.md`](sprint-3-workstream-b-quality-contract.md).
+EDA does not replace mapping or business approval.
+
+The latest 1M-row quick-win comparison shows a 12.0% reduction in row-preparation
+time and an 88.7% reduction in duplicate-row mapping time after removing the
+`model_docs` list and projecting only fingerprint fields. PostgreSQL conflict
+lookup is now implemented with a transaction-scoped temporary key table loaded
+by `COPY` and read through one set-based `JOIN`; 1M-row equivalent and
+conflicting duplicate runs complete at 6,944 and 5,169 rows/s respectively.
+The clean-path regression investigation found per-row Pydantic
+`QualityEvaluation` allocation as the dominant avoidable overhead. The
+context-free valid-evaluation fast path reduced the 1M regression from 13.45%
+to 9.01% against the stored pre-Workstream-B baseline, within the acceptance
+target.
 
 ### C — Normalization and validation contract
 
@@ -76,9 +94,9 @@ boundaries while adding contract-backed tests.
 
 ### D — Quarantine lifecycle
 
-Define when a record is quarantined, preserve sanitized lineage and reason,
-and add conflicting-duplicate comparison and reprocess evidence. Existing
-persistence alone is not evidence that conflicts are distinguished.
+Define retention, operator resolution, reprocessing, and lifecycle evidence for
+the sanitized row rejects and conflicting duplicates already routed by
+Workstream B.
 
 ### E — Operator and approval flow
 

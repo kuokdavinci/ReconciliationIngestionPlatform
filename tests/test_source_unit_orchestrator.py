@@ -4,6 +4,7 @@ import pytest
 
 from src.application.ingestion.source_unit_orchestrator import process_source_units
 from src.domain.ingestion.retry_policy import RetryPolicy
+from src.domain.ingestion.source_units import IngestionOutcome
 
 
 def _unit(number: int, *, cursor_before=None, cursor_after=None):
@@ -13,6 +14,21 @@ def _unit(number: int, *, cursor_before=None, cursor_after=None):
         "cursorAfter": cursor_after,
         "localPath": f"/tmp/page-{number}.json",
     }
+
+
+def test_quality_fail_action_overrides_an_inconsistent_success_flag():
+    outcome = IngestionOutcome.from_result(
+        {
+            "success": True,
+            "outcome": "INGESTED",
+            "qualityDecision": "FAIL",
+            "orchestrationAction": "FAIL",
+            "topRuleCodes": ["REQUIRED_SCHEMA_PATH"],
+        }
+    )
+
+    assert outcome.success is False
+    assert outcome.error_code == "quality_batch_fatal"
 
 
 @pytest.mark.asyncio
@@ -265,6 +281,87 @@ async def test_waiting_review_stops_without_marking_source_unit_failed():
 
 
 @pytest.mark.asyncio
+async def test_quality_hold_releases_checkpoint_without_advancing():
+    checkpoint_repo = AsyncMock()
+    checkpoint = AsyncMock()
+    checkpoint.last_completed_unit_key = None
+    checkpoint_repo.claim_unit.return_value = (checkpoint, True)
+    checkpoint_repo.release_for_review.return_value = True
+
+    result = await process_source_units(
+        checkpoint_repo,
+        stream_identity={
+            "partner": "momo",
+            "fetchConfigId": "config-1",
+            "sourceType": "API",
+            "streamKey": "momo-settlement",
+        },
+        units=[_unit(1)],
+        ingest_unit=AsyncMock(
+            return_value={
+                "success": True,
+                "outcome": "INGESTED",
+                "qualityDecision": "REVIEW",
+                "orchestrationAction": "HOLD_FOR_REVIEW",
+                "qualityCounters": {"conflictingDuplicateRows": 1},
+                "topRuleCodes": ["NEGATIVE_AMOUNT", "CONFLICTING_DUPLICATE"],
+            }
+        ),
+    )
+
+    assert result["qualityDecision"] == "REVIEW"
+    assert result["orchestrationAction"] == "HOLD_FOR_REVIEW"
+    assert result["waitingForReview"] is True
+    assert result["error"] == "quality_review:CONFLICTING_DUPLICATE"
+    checkpoint_repo.mark_completed.assert_not_awaited()
+    checkpoint_repo.advance.assert_not_awaited()
+    checkpoint_repo.release_for_review.assert_awaited_once_with(
+        checkpoint,
+        unit_key="unit-1",
+        reason="quality_review:CONFLICTING_DUPLICATE",
+    )
+
+
+@pytest.mark.asyncio
+async def test_quality_fail_marks_checkpoint_failed_without_retry():
+    checkpoint_repo = AsyncMock()
+    checkpoint = AsyncMock()
+    checkpoint.last_completed_unit_key = None
+    checkpoint.attempt_count = 1
+    checkpoint_repo.claim_unit.return_value = (checkpoint, True)
+    checkpoint_repo.mark_failed.return_value = True
+
+    result = await process_source_units(
+        checkpoint_repo,
+        stream_identity={
+            "partner": "momo",
+            "fetchConfigId": "config-1",
+            "sourceType": "API",
+            "streamKey": "momo-settlement",
+        },
+        units=[_unit(1)],
+        ingest_unit=AsyncMock(
+            return_value={
+                "success": False,
+                "outcome": "FAILED",
+                "qualityDecision": "FAIL",
+                "orchestrationAction": "FAIL",
+                "error": "required schema path is missing",
+                "errorCode": "quality_batch_fatal",
+                "retryable": True,
+            }
+        ),
+    )
+
+    assert result["success"] is False
+    assert result["qualityDecision"] == "FAIL"
+    assert result["orchestrationAction"] == "FAIL"
+    checkpoint_repo.mark_failed.assert_awaited_once()
+    assert checkpoint_repo.mark_failed.await_args.kwargs["retryable"] is False
+    assert checkpoint_repo.mark_failed.await_args.kwargs["max_attempts"] is None
+
+
+@pytest.mark.asyncio
 async def test_all_file_duplicates_are_exposed_as_safe_duplicate_outcome():
     checkpoint_repo = AsyncMock()
     checkpoint = AsyncMock()
@@ -302,12 +399,12 @@ async def test_completion_hook_runs_only_after_checkpoint_advance():
     checkpoint.last_completed_unit_key = None
     events = []
     checkpoint_repo.claim_unit.return_value = (checkpoint, True)
-    checkpoint_repo.mark_completed.side_effect = lambda *_args, **_kwargs: events.append(
-        "completed"
-    ) or True
-    checkpoint_repo.advance.side_effect = lambda *_args, **_kwargs: events.append(
-        "advanced"
-    ) or True
+    checkpoint_repo.mark_completed.side_effect = lambda *_args, **_kwargs: (
+        events.append("completed") or True
+    )
+    checkpoint_repo.advance.side_effect = lambda *_args, **_kwargs: (
+        events.append("advanced") or True
+    )
 
     async def on_completed(_unit):
         events.append("cleanup")

@@ -1,9 +1,8 @@
 """Tests for ConfigValidator — field mapping integrity checks."""
 
-
-
 from src.core.enums import FileType
 from src.core.types import FieldMapping, FieldMappingType
+from src.domain.ingestion.quality import QualityRuleCode
 from src.domain.mapping.models import MappingConfig
 
 
@@ -19,35 +18,35 @@ def _make_config(field_mappings: list[FieldMapping], version: str | None = None)
     )
 
 
-class TestConfigValidationError:
-    """Tests for ConfigValidationError model."""
+class TestConfigQualityViolation:
+    """Tests for configuration quality violations."""
 
     def test_error_has_field_and_reason(self):
-        """ConfigValidationError stores field and reason."""
-        from src.config.validator import ConfigValidationError
+        """A configuration violation stores its field and message."""
+        from src.domain.ingestion.quality import QualityViolation
 
-        err = ConfigValidationError(field="amount", reason="duplicate path")
+        err = QualityViolation(field="amount", message="duplicate path")
 
         assert err.field == "amount"
-        assert err.reason == "duplicate path"
+        assert err.message == "duplicate path"
 
     def test_error_has_optional_config_version(self):
-        """ConfigValidationError stores optional config_version."""
-        from src.config.validator import ConfigValidationError
+        """A configuration violation stores optional config_version."""
+        from src.domain.ingestion.quality import QualityViolation
 
-        err = ConfigValidationError(
+        err = QualityViolation(
             field="amount",
-            reason="duplicate path",
+            message="duplicate path",
             config_version="v1.0",
         )
 
         assert err.config_version == "v1.0"
 
     def test_error_config_version_defaults_to_none(self):
-        """ConfigValidationError.config_version defaults to None."""
-        from src.config.validator import ConfigValidationError
+        """QualityViolation.config_version defaults to None."""
+        from src.domain.ingestion.quality import QualityViolation
 
-        err = ConfigValidationError(field="amount", reason="test")
+        err = QualityViolation(field="amount", message="test")
 
         assert err.config_version is None
 
@@ -88,7 +87,7 @@ class TestConfigValidatorDuplicatePaths:
 
         assert len(errors) == 1
         assert errors[0].field == "amount"
-        assert "duplicate" in errors[0].reason.lower()
+        assert "duplicate" in errors[0].message.lower()
 
 
 class TestConfigValidatorConstantType:
@@ -107,7 +106,7 @@ class TestConfigValidatorConstantType:
 
         assert len(errors) == 1
         assert errors[0].field == "currency"
-        assert "constant" in errors[0].reason.lower()
+        assert "constant" in errors[0].message.lower()
 
     def test_constant_with_empty_string_value(self):
         """validate() detects CONSTANT type with empty string value."""
@@ -153,7 +152,7 @@ class TestConfigValidatorMappingType:
 
         assert len(errors) == 1
         assert errors[0].field == "status"
-        assert "mapping" in errors[0].reason.lower()
+        assert "mapping" in errors[0].message.lower()
 
     def test_mapping_with_empty_dict(self):
         """validate() detects MAPPING type with empty mapping dict."""
@@ -203,7 +202,7 @@ class TestConfigValidatorRequiredFields:
 
         assert len(errors) == 1
         assert errors[0].field == "amount"
-        assert "required" in errors[0].reason.lower()
+        assert "required" in errors[0].message.lower()
 
     def test_required_with_column_is_valid(self):
         """validate() accepts required=True with column set."""
@@ -223,7 +222,9 @@ class TestConfigValidatorRequiredFields:
         from src.config.validator import ConfigValidator
 
         mappings = [
-            FieldMapping(path="currency", type=FieldMappingType.CONSTANT, required=True, constant="VND"),
+            FieldMapping(
+                path="currency", type=FieldMappingType.CONSTANT, required=True, constant="VND"
+            ),
         ]
         config = _make_config(mappings)
 
@@ -236,7 +237,9 @@ class TestConfigValidatorRequiredFields:
         from src.config.validator import ConfigValidator
 
         mappings = [
-            FieldMapping(path="amount", sourceField="amount", type=FieldMappingType.DECIMAL, required=True),
+            FieldMapping(
+                path="amount", sourceField="amount", type=FieldMappingType.DECIMAL, required=True
+            ),
         ]
         config = _make_config(mappings)
 
@@ -315,7 +318,7 @@ class TestConfigValidatorEmptyMappings:
         errors = ConfigValidator.validate(config)
 
         assert len(errors) == 1
-        assert "empty" in errors[0].reason.lower()
+        assert "empty" in errors[0].message.lower()
 
 
 class TestConfigValidatorRequiredCoverage:
@@ -355,6 +358,7 @@ class TestConfigValidatorRequiredCoverage:
         missing_paths = {e.field for e in errors}
         assert "currency" in missing_paths
         assert "status" in missing_paths
+        assert {error.code for error in errors} == {QualityRuleCode.REQUIRED_SCHEMA_PATH}
 
     def test_required_coverage_with_config_version(self):
         """validate_required_coverage() includes config_version in errors."""
@@ -365,9 +369,7 @@ class TestConfigValidatorRequiredCoverage:
         ]
         config = _make_config(mappings, version="v2.0")
 
-        errors = ConfigValidator.validate_required_coverage(
-            config, required_paths={"currency"}
-        )
+        errors = ConfigValidator.validate_required_coverage(config, required_paths={"currency"})
 
         assert len(errors) == 1
         assert errors[0].config_version == "v2.0"
@@ -382,8 +384,10 @@ class TestConfigValidatorMultipleErrors:
 
         mappings = [
             FieldMapping(path="amount", type=FieldMappingType.CONSTANT),  # CONSTANT without value
-            FieldMapping(path="status", type=FieldMappingType.MAPPING),    # MAPPING without dict
-            FieldMapping(path="amount", column="D", type=FieldMappingType.DECIMAL),  # duplicate path
+            FieldMapping(path="status", type=FieldMappingType.MAPPING),  # MAPPING without dict
+            FieldMapping(
+                path="amount", column="D", type=FieldMappingType.DECIMAL
+            ),  # duplicate path
         ]
         config = _make_config(mappings)
 

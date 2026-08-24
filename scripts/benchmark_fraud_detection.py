@@ -35,14 +35,14 @@ DEFAULT_INPUT = Path(
     "data/eda/fraud_detection/raw/Fraud Detection Dataset.csv"
 )
 DEFAULT_OUTPUT_JSON = Path(
-    "data/eda/fraud_detection/profiles/benchmark_results.json"
+    "data/eda/fraud_detection/profiles/benchmark_results_workstream_c.json"
 )
 DEFAULT_OUTPUT_MARKDOWN = Path(
-    "docs/phase-2/sprint-3-fraud-detection-baseline.md"
+    "docs/phase-2/sprint-3-workstream-c-baseline.md"
 )
 BENCHMARK_PARTNER = "SPRINT3_FRAUD_EDA_BASELINE"
 BENCHMARK_WORKFLOW = "SPRINT3_BASELINE"
-BENCHMARK_CONFIG_VERSION = "sprint3-fraud-detection-v1"
+BENCHMARK_CONFIG_VERSION = "sprint3-fraud-detection-v2"
 BENCHMARK_BATCH_SIZE = 20_000
 BENCHMARK_WORKERS = 1
 BENCHMARK_ORDERED_INSERT = False
@@ -86,7 +86,7 @@ def build_mapping_document(
 
     mappings = [
         {"path": "id", "column": 1, "type": "STRING", "required": True},
-        {"path": "extra.sourceTimestamp", "column": 2, "type": "STRING"},
+        {"path": "transDate", "column": 2, "type": "DATE", "required": True},
         {"path": "extra.customerId", "column": 3, "type": "STRING"},
         {"path": "extra.cardId", "column": 4, "type": "STRING"},
         {"path": "extra.deviceId", "column": 5, "type": "STRING"},
@@ -176,6 +176,20 @@ async def _remove_mapping(db: Any) -> None:
     )
 
 
+def _case_meets_acceptance(case: dict[str, Any]) -> bool:
+    """Return whether a benchmark case proves clean ingestion."""
+
+    return (
+        case["input_rows"] > 0
+        and case["persisted_rows"] == case["input_rows"]
+        and case["failed_rows"] == 0
+        and case["duplicate_rows"] == 0
+        and case["quality_decision"] == "PASS"
+        and case["orchestration_action"] == "CONTINUE"
+        and case["outcome"] == "INGESTED"
+    )
+
+
 async def _run_case(
     *,
     db: Any,
@@ -232,6 +246,8 @@ async def _run_case(
         "duplicate_rows": stats.duplicate_rows,
         "failed_rows": stats.failed_rows,
         "quarantined_rows": result.quality_counters.get("quarantinedRows", 0),
+        "quality_decision": result.quality_decision.value,
+        "orchestration_action": result.orchestration_action.value,
         "outcome": result.outcome,
         "elapsed_seconds": round(elapsed, 6),
         "throughput_rows_per_second": round(
@@ -260,7 +276,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Database: `{report['environment']['db_name']}`",
         f"- Cleanup: `{report.get('cleanup', 'not-run')}`",
         "- Boundary: `IngestionPipeline.process_file`",
-        "- Mapping: `sprint3-fraud-detection-v1`",
+        f"- Mapping: `{report['configuration']['config_version']}`",
         f"- Configuration: `batch_size={report['configuration']['batch_size']:,}`, "
         f"`write_workers={report['configuration']['write_workers']}`, "
         "`ordered_insert=false`, `fast_mode=false`",
@@ -290,20 +306,19 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## Interpretation",
             "",
-            "This is an ingestion-boundary benchmark, not an E2E or reconciliation benchmark.",
-            "The mapping preserves the source ISO-8601 timestamp in "
-            "`extra.sourceTimestamp`; the current normalizer timestamp contract "
-            "does not yet parse that value into canonical `transDate`.",
-            "The conditional-empty `fraud_type` source column is intentionally "
-            "not mapped as a required canonical field; its null semantics are "
-            "covered by the EDA profile instead.",
+            "This is ingestion-boundary evidence, not reconciliation or statistical evidence.",
+            "Source column 2 maps to canonical `transDate`; offset-bearing values "
+            "normalize to UTC-aware canonical timestamps and the existing PostgreSQL "
+            "mapper persists them using the UTC-naive convention.",
+            "The conditional-empty `fraud_type` source column remains intentionally "
+            "unmapped and outside canonical quality rejection.",
             "",
             "## Limitations",
             "",
             "- Prefix preparation time is excluded from elapsed ingestion time.",
             "- MongoDB/service startup and reconciliation are excluded.",
-            "- No quality gate was inserted into the runtime path for this benchmark.",
-            "- Results are comparable only when dataset checksum, mapping, database and configuration match.",
+            "- Results are comparable only when dataset checksum, mapping, database "
+            "and configuration match.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -321,7 +336,7 @@ async def run_benchmark(
         raise FileNotFoundError(f"Dataset file not found: {input_path}")
     config = benchmark_config or build_benchmark_config()
     report: dict[str, Any] = {
-        "benchmark_version": 1,
+        "benchmark_version": 2,
         "status": "completed",
         "dataset": {
             "path": str(input_path),
@@ -333,6 +348,7 @@ async def run_benchmark(
             "db_name": settings.db_name,
         },
         "configuration": {
+            "config_version": BENCHMARK_CONFIG_VERSION,
             "batch_size": config.batch_size,
             "write_workers": config.write_workers,
             "ordered_insert": BENCHMARK_ORDERED_INSERT,
@@ -375,10 +391,7 @@ async def run_benchmark(
                         benchmark_config=config,
                     )
                 )
-        if not all(
-            case["outcome"] == "INGESTED" and case["input_rows"] > 0
-            for case in report["cases"]
-        ):
+        if not all(_case_meets_acceptance(case) for case in report["cases"]):
             report["status"] = "benchmark_failed"
     finally:
         if db is not None:

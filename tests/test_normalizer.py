@@ -205,6 +205,30 @@ class TestDateConversion:
         assert violation.actual == {"type": "str"}
         assert violation.row == 9
 
+    def test_utc_overflow_timestamp_has_stable_structured_evidence(self):
+        normalizer = TransactionNormalizer(
+            field_mappings=[_make_mapping("transDate", FieldMappingType.DATE, column="C")]
+        )
+
+        result = normalizer.normalize(
+            {"C": "0001-01-01T00:00:00+01:00"}, row_number=9
+        )
+
+        assert result.data == {}
+        assert len(result.errors) == 1
+        violation = result.errors[0]
+        assert violation.code is QualityRuleCode.INVALID_TIMESTAMP
+        assert violation.phase is QualityPhase.NORMALIZATION
+        assert violation.severity is QualitySeverity.ERROR
+        assert violation.outcome is QualityOutcome.REJECT
+        assert violation.field == "transDate"
+        assert violation.message == "Timestamp is not a supported date/time value."
+        assert violation.expected == (
+            "ISO-8601 datetime with Z/UTC offset or an approved legacy date format"
+        )
+        assert violation.actual == {"type": "str"}
+        assert violation.row == 9
+
     def test_empty_timestamp_is_invalid_timestamp(self):
         normalizer = TransactionNormalizer(
             field_mappings=[_make_mapping("transDate", FieldMappingType.DATE, column="C")]

@@ -29,6 +29,15 @@ def test_aware_datetime_is_normalized_to_utc():
     assert parse_transaction_timestamp(source) == datetime(2025, 1, 1, 8, tzinfo=UTC)
 
 
+def test_aware_datetime_utc_overflow_raises_bounded_error():
+    source = datetime(1, 1, 1, tzinfo=timezone(timedelta(hours=1)))
+
+    with pytest.raises(TimestampParseError, match="unsupported timestamp") as captured:
+        parse_transaction_timestamp(source)
+
+    assert captured.value.args == ("unsupported timestamp",)
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
@@ -67,6 +76,23 @@ def test_naive_datetime_preserves_identity():
 def test_unsupported_value_raises_bounded_error(source):
     with pytest.raises(TimestampParseError, match="unsupported timestamp"):
         parse_transaction_timestamp(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "2025-01-01X08:00:00+00:00",
+        "20250101T080000+00:00",
+        "2025-W01-3T08:00:00+00:00",
+        "2025-01-01T08:00:00+07",
+        "0001-01-01T00:00:00+01:00",
+    ],
+)
+def test_non_contract_iso_value_raises_bounded_error(source):
+    with pytest.raises(TimestampParseError, match="unsupported timestamp") as captured:
+        parse_transaction_timestamp(source)
+
+    assert captured.value.args == ("unsupported timestamp",)
 
 
 def test_error_does_not_retain_raw_input():

@@ -19,9 +19,9 @@ quality precedence, PostgreSQL schema, or reconciliation behavior.
 
 | Source input | Canonical result |
 |---|---|
-| ISO timestamp ending in `Z` | Accepted as an aware `datetime`, normalized to UTC |
-| ISO timestamp with positive or negative offset | Accepted as an aware `datetime`, normalized to the equivalent UTC instant |
-| ISO timestamp with microseconds and an offset | Accepted; microsecond precision is preserved while normalizing to UTC |
+| Extended ISO timestamp `YYYY-MM-DDTHH:MM:SSZ` | Accepted as an aware `datetime`, normalized to UTC |
+| Extended ISO timestamp `YYYY-MM-DDTHH:MM:SS±HH:MM` | Accepted as an aware `datetime`, normalized to the equivalent UTC instant |
+| Extended ISO timestamp with 1–6 fractional digits and an offset | Accepted; microsecond precision is preserved while normalizing to UTC |
 | `YYYY-MM-DD` | Accepted as a legacy naive `datetime` |
 | `DD/MM/YYYY` | Accepted as a legacy naive `datetime` |
 | `YYYY-MM-DD HH:MM:SS` | Accepted as a legacy naive `datetime` |
@@ -29,9 +29,10 @@ quality precedence, PostgreSQL schema, or reconciliation behavior.
 | Naive `datetime` object | Accepted without assigning or reinterpreting a timezone |
 
 Padded values, empty strings, malformed or impossible dates, naive ISO values
-using `T`, and unsupported types reject deterministically. The benchmark v2
-mapping sends source column 2 (`timestamp`) to required canonical `transDate`;
-the obsolete `extra.sourceTimestamp` interpretation is no longer active.
+using `T`, and offset-bearing forms outside this strict extended-calendar
+grammar reject deterministically. The benchmark v2 mapping sends source column
+2 (`timestamp`) to required canonical `transDate`; the obsolete
+`extra.sourceTimestamp` interpretation is no longer active.
 
 ## Structured validation error contract
 

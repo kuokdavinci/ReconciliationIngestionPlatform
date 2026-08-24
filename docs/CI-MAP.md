@@ -45,8 +45,20 @@ uv run pytest tests/ --ignore=tests/test_analysis_e2e.py --ignore=tests/test_ing
 
 ```bash
 uv run alembic upgrade head
-uv run ruff check src/fetchers src/pipeline src/application/automation scripts/demo/scenarios
-uv run pytest tests/test_indexes.py tests/test_ingestion_integration.py tests/test_ingestion_pipeline.py tests/test_seed_momo_e2e.py tests/test_sprint1_eval_benchmark.py
+uv run ruff check \
+  src/fetchers \
+  src/pipeline \
+  src/application/automation \
+  src/domain/fetch_config/models.py \
+  src/infrastructure/persistence/mongo_indexes.py \
+  scripts/demo/scenarios
+uv run pytest \
+  tests/test_indexes.py \
+  tests/test_ingestion_integration.py \
+  tests/test_ingestion_pipeline.py \
+  tests/test_seed_momo_e2e.py \
+  tests/test_sprint1_eval_benchmark.py \
+  -v --tb=short
 ```
 
 ### Analysis Eval

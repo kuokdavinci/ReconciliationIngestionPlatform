@@ -26,6 +26,11 @@ Index canonical của tài liệu dự án. README là điểm bắt đầu; tà
 
 Index đầy đủ theo sprint nằm tại [docs/phase-2/INDEX.md](phase-2/INDEX.md). Phase 2 mở rộng từ idempotency sang incremental recovery, Airflow control plane, recovery hardening, data quality và observability.
 
+### Sprint 3 — Data quality và quarantine
+
+- [Kế hoạch và trạng thái Sprint 3](phase-2/sprint-3-data-quality.md)
+- [Workstream C — normalization và validation evidence](phase-2/sprint-3-workstream-c-normalization-validation.md) — `implemented; full-dataset v2 evidence pending`
+
 ## Vận hành và giới hạn
 
 - [Milestones](MILESTONES.md) — trạng thái milestone và acceptance evidence.

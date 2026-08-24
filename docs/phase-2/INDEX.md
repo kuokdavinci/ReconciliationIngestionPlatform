@@ -48,16 +48,19 @@ Các capability của sprint hợp nhất:
 frozen ingestion baseline, controlled mutation và coverage handoff cho Fraud
 Detection Dataset. Workstream B đã triển khai quality contract/gate,
 duplicate classification, conflict quarantine và bounded source-unit outcome;
-Production approval và Workstream C–F vẫn còn trong phạm vi kế hoạch.
+Workstream C có trạng thái `implemented; full-dataset v2 evidence pending` cho
+normalization/validation contract. Production approval và Workstream D–F vẫn
+còn trong phạm vi kế hoạch.
 
 - [Kế hoạch data quality và quarantine](sprint-3-data-quality.md)
 - [Workstream B — quality contract và Airflow-ready outcome](sprint-3-workstream-b-quality-contract.md)
+- [Workstream C — normalization và validation contract](sprint-3-workstream-c-normalization-validation.md)
 - [Review EDA và rule candidates](sprint-3-eda-review.md)
 - [Mentor summary: Workstream A decisions và rule coverage](sprint-3-workstream-a-mentor-summary.md)
 
-Phạm vi còn lại: complete timezone-aware normalization, quarantine lifecycle,
-operator flow, production observability và acceptance. Notebook EDA vẫn không
-thay đổi và chỉ chạy trên Kaggle.
+Phạm vi còn lại: full-dataset v2 evidence cho Workstream C, quarantine
+lifecycle, operator flow, production observability và acceptance. Notebook EDA
+vẫn không thay đổi và chỉ chạy trên Kaggle.
 
 ## Sprint 4 — Observability
 
@@ -74,5 +77,5 @@ Phạm vi dự kiến: metrics, structured logs, alerting, dashboard operational
 | 1 | Idempotency | `sprint-1-index.md`, benchmark | Đã triển khai |
 | 2 | Incremental/recovery | `sprint-2-index.md`, `sprint-2-incremental-recovery.md` | Đã triển khai |
 | 2.5 | Airflow + recovery hardening | `sprint-2-index.md`, `sprint-2.5-airflow-migration.md` | Còn 5 tiêu chí acceptance |
-| 3 | Data quality/quarantine | `sprint-3-data-quality.md`, `sprint-3-workstream-b-quality-contract.md` | A/B implemented; C–F handoff |
+| 3 | Data quality/quarantine | `sprint-3-data-quality.md`, Workstream B/C evidence | A/B implemented; C `implemented; full-dataset v2 evidence pending`; D–F pending |
 | 4 | Observability | `sprint-4-observability.md` | Kế hoạch |

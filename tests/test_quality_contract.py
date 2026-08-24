@@ -1,6 +1,6 @@
 """Focused acceptance tests for the Workstream B quality contract."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -67,6 +67,50 @@ def _base_mappings() -> list[FieldMapping]:
             required=True,
         ),
     ]
+
+
+def _timestamp_processor(*, fast_mode: bool) -> RowProcessor:
+    mappings = [
+        FieldMapping(
+            path="id",
+            column=1,
+            type=FieldMappingType.STRING,
+            required=True,
+        ),
+        FieldMapping(
+            path="amount",
+            column=2,
+            type=FieldMappingType.DECIMAL,
+            required=True,
+        ),
+        FieldMapping(
+            path="currency",
+            column=3,
+            type=FieldMappingType.STRING,
+            required=True,
+        ),
+        FieldMapping(
+            path="transDate",
+            column=4,
+            type=FieldMappingType.DATE,
+            required=True,
+        ),
+        FieldMapping(
+            path="status",
+            type=FieldMappingType.CONSTANT,
+            constant=TransactionStatus.SUCCESS.value,
+            required=True,
+        ),
+    ]
+    return RowProcessor(
+        normalizer=TransactionNormalizer(mappings),
+        validator=Validator(),
+        fast_mode=fast_mode,
+        partner="INTER",
+        workflow_type="SETTLEMENT",
+        reconciliation_date=datetime(2025, 1, 1, tzinfo=UTC),
+        source_file_id=uuid4(),
+    )
 
 
 def _transaction(
@@ -469,6 +513,51 @@ def test_fast_mode_enforces_negative_amount_rule():
 
     assert result.outcome is QualityOutcome.REJECT
     assert any(item.code is QualityRuleCode.NEGATIVE_AMOUNT for item in result.violations)
+
+
+def test_iso_timestamp_contract_matches_in_normal_and_fast_mode():
+    row = ("txn-1", "10.00", "USD", "2025-01-01T15:00:00+07:00")
+
+    normal = _timestamp_processor(fast_mode=False).process(row, row_number=2)
+    fast = _timestamp_processor(fast_mode=True).process(row, row_number=2)
+
+    expected = datetime(2025, 1, 1, 8, tzinfo=UTC)
+    assert normal.is_valid is True
+    assert fast.is_valid is True
+    assert normal.outcome is fast.outcome is QualityOutcome.VALID
+    assert normal.violations == fast.violations == []
+    assert normal.errors == fast.errors == []
+    assert normal.normalized_data == fast.normalized_data
+    assert normal.data_container.partner_data.trans_date == expected
+    assert fast.data_container.partner_data.trans_date == expected
+
+
+def test_invalid_timestamp_contract_matches_in_normal_and_fast_mode():
+    row = ("txn-1", "10.00", "USD", "not-a-timestamp")
+
+    normal = _timestamp_processor(fast_mode=False).process(row, row_number=3)
+    fast = _timestamp_processor(fast_mode=True).process(row, row_number=3)
+
+    expected_error = {
+        "field": "transDate",
+        "reason": "Timestamp is not a supported date/time value.",
+        "errorCode": "INVALID_TIMESTAMP",
+        "phase": "NORMALIZATION",
+        "severity": "ERROR",
+        "outcome": "REJECT",
+        "expected": (
+            "ISO-8601 datetime with Z/UTC offset or an approved legacy date format"
+        ),
+        "actual": {"type": "str"},
+        "row": 3,
+    }
+    assert normal.outcome is fast.outcome is QualityOutcome.REJECT
+    assert normal.data_container is fast.data_container is None
+    assert [item.code for item in normal.violations] == [
+        QualityRuleCode.INVALID_TIMESTAMP
+    ]
+    assert normal.violations == fast.violations
+    assert normal.errors == fast.errors == [expected_error]
 
 
 @pytest.mark.parametrize(

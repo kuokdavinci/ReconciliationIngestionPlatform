@@ -12,23 +12,67 @@ Tests cover:
 - StructuredLogger integration (lifecycle events emitted)
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
-from src.core.enums import FileType, ProcessingStatus
+from src.core.enums import FileType, ProcessingStatus, TransactionStatus
 from src.core.types import (
     FieldMapping,
     FieldMappingType,
     ProcessingStats,
 )
-from src.domain.ingestion.quality import QualityRuleCode
+from src.domain.ingestion.quality import QualityOutcome, QualityRuleCode
 from src.domain.partner_transaction.duplicates import (
     BatchWriteResult,
     DuplicateDetail,
 )
+from src.normalizer.normalizer import TransactionNormalizer
+from src.pipeline.row_processor import RowProcessor
+from src.readers.csv_reader import CSVStreamReader
+from src.validators.validator import Validator
+
+
+def _csv_timestamp_processor(*, fast_mode: bool) -> RowProcessor:
+    mappings = [
+        FieldMapping(path="id", column=1, type=FieldMappingType.STRING, required=True),
+        FieldMapping(
+            path="amount",
+            column=2,
+            type=FieldMappingType.DECIMAL,
+            required=True,
+        ),
+        FieldMapping(
+            path="currency",
+            column=3,
+            type=FieldMappingType.STRING,
+            required=True,
+        ),
+        FieldMapping(
+            path="transDate",
+            column=4,
+            type=FieldMappingType.DATE,
+            required=True,
+        ),
+        FieldMapping(
+            path="status",
+            type=FieldMappingType.CONSTANT,
+            constant=TransactionStatus.SUCCESS.value,
+            required=True,
+        ),
+    ]
+    return RowProcessor(
+        normalizer=TransactionNormalizer(mappings),
+        validator=Validator(),
+        fast_mode=fast_mode,
+        partner="INTER",
+        workflow_type="SETTLEMENT",
+        reconciliation_date=datetime(2025, 1, 1, tzinfo=UTC),
+        source_file_id=uuid4(),
+    )
 
 
 def _equivalent_duplicate_detail(
@@ -42,6 +86,47 @@ def _equivalent_duplicate_detail(
         incoming_fingerprint="same",
         existing_fingerprint="same",
     )
+
+
+@pytest.mark.parametrize("fast_mode", [False, True])
+def test_generated_csv_applies_timestamp_contract(tmp_path, fast_mode):
+    source = tmp_path / "transactions.csv"
+    source.write_text(
+        "transaction_id,amount,currency,timestamp\n"
+        "txn-1,10.00,USD,2025-01-01T15:00:00+07:00\n"
+        "txn-2,11.00,USD,not-a-timestamp\n",
+        encoding="utf-8",
+    )
+    processor = _csv_timestamp_processor(fast_mode=fast_mode)
+
+    with CSVStreamReader(source, start_row=2, skip_patterns=[]) as reader:
+        outcomes = [
+            processor.process(row, row_number=row_number)
+            for row_number, row in enumerate(reader.iter_rows(), start=2)
+        ]
+
+    assert len(outcomes) == 2
+    assert outcomes[0].is_valid is True
+    assert outcomes[0].data_container.partner_data.trans_date == datetime(
+        2025, 1, 1, 8, tzinfo=UTC
+    )
+    assert outcomes[1].outcome is QualityOutcome.REJECT
+    assert outcomes[1].data_container is None
+    assert outcomes[1].errors == [
+        {
+            "field": "transDate",
+            "reason": "Timestamp is not a supported date/time value.",
+            "errorCode": "INVALID_TIMESTAMP",
+            "phase": "NORMALIZATION",
+            "severity": "ERROR",
+            "outcome": "REJECT",
+            "expected": (
+                "ISO-8601 datetime with Z/UTC offset or an approved legacy date format"
+            ),
+            "actual": {"type": "str"},
+            "row": 3,
+        }
+    ]
 
 
 @pytest.fixture(autouse=True)

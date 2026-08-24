@@ -22,8 +22,12 @@ from src.api.review_packets import (
     get_review_packet_raw_records,
     SaveDraftMappingPayload,
 )
+from src.domain.ingestion.quality import QualityRuleCode
 from src.domain.review.models import ReviewPacket
-from src.application.review.runtime_validation import run_runtime_validation
+from src.application.review.runtime_validation import (
+    run_runtime_validation,
+    runtime_error_code,
+)
 from src.domain.mapping.models import MappingConfig
 
 
@@ -32,6 +36,14 @@ def _make_request(db: MagicMock, headers: dict | None = None):
         app=SimpleNamespace(state=SimpleNamespace(db=db)),
         headers=headers or {},
     )
+
+
+def test_runtime_timestamp_code_does_not_parse_reason():
+    assert runtime_error_code(
+        "transDate",
+        "Timestamp is not a supported date/time value.",
+        QualityRuleCode.INVALID_TIMESTAMP,
+    ) == "INVALID_DATE"
 
 
 @pytest.mark.asyncio

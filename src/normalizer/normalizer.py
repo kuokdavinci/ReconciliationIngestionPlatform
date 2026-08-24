@@ -20,6 +20,7 @@ from src.domain.ingestion.quality import (
     QualityViolation,
     quality_violation,
 )
+from src.normalizer.timestamps import TimestampParseError, parse_transaction_timestamp
 
 
 _REQUIRED_CANONICAL_FIELDS = frozenset({"id", "amount", "currency", "status"})
@@ -31,6 +32,8 @@ def _normalization_violation(
     field: str,
     message: str,
     row: int | None = None,
+    expected: Any = None,
+    actual: Any = None,
 ) -> QualityViolation:
     return quality_violation(
         code=code,
@@ -39,6 +42,8 @@ def _normalization_violation(
         outcome=QualityOutcome.REJECT,
         field=field,
         message=message,
+        expected=expected,
+        actual=actual,
         row=row,
     )
 
@@ -82,13 +87,6 @@ class TransactionNormalizer:
     collects validation errors. Never raises exceptions — all errors
     are collected as QualityViolation objects.
     """
-
-    _DATE_FORMATS = (
-        "%Y-%m-%d",
-        "%d/%m/%Y",
-        "%Y-%m-%d %H:%M:%S",
-        "%d/%m/%Y %H:%M:%S",
-    )
 
     def __init__(self, field_mappings: list[FieldMapping]) -> None:
         """Initialize with a list of field mappings.
@@ -409,12 +407,7 @@ class TransactionNormalizer:
         fm: FieldMapping,
         row_number: Optional[int],
     ) -> tuple[datetime | None, QualityViolation | None]:
-        """Convert value to datetime.
-
-        Already datetime objects are returned as-is. String values are
-        parsed against a whitelist of 4 date formats. Unmatched formats
-        produce a QualityViolation.
-        """
+        """Convert a source value to a canonical transaction timestamp."""
         if value is None:
             return None, _normalization_violation(
                 code=_missing_value_code(fm),
@@ -423,29 +416,19 @@ class TransactionNormalizer:
                 row=row_number,
             )
 
-        if isinstance(value, datetime):
-            return value, None
-
-        if not isinstance(value, str):
+        try:
+            return parse_transaction_timestamp(value), None
+        except TimestampParseError:
             return None, _normalization_violation(
                 code=QualityRuleCode.INVALID_TIMESTAMP,
                 field=fm.path,
-                message=f"expected string or datetime, got {type(value).__name__}",
+                message="Timestamp is not a supported date/time value.",
+                expected=(
+                    "ISO-8601 datetime with Z/UTC offset or an approved legacy date format"
+                ),
+                actual={"type": type(value).__name__},
                 row=row_number,
             )
-
-        for fmt in self._DATE_FORMATS:
-            try:
-                return datetime.strptime(value, fmt), None
-            except ValueError:
-                continue
-
-        return None, _normalization_violation(
-            code=QualityRuleCode.INVALID_TIMESTAMP,
-            field=fm.path,
-            message=f"invalid date value: {value!r} (tried formats: {', '.join(self._DATE_FORMATS)})",
-            row=row_number,
-        )
 
     @staticmethod
     def _convert_mapping(

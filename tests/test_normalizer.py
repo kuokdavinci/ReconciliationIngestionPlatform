@@ -1,13 +1,19 @@
 """Tests for TransactionNormalizer core normalization engine."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
 from src.core.enums import TransactionStatus
 from src.core.types import FieldMapping, FieldMappingType
-from src.domain.ingestion.quality import QualityViolation
+from src.domain.ingestion.quality import (
+    QualityOutcome,
+    QualityPhase,
+    QualityRuleCode,
+    QualitySeverity,
+    QualityViolation,
+)
 from src.normalizer import TransactionNormalizer, NormalizationResult
 
 
@@ -150,6 +156,85 @@ class TestDecimalConversion:
 
 class TestDateConversion:
     """Test DATE type conversion."""
+
+    def test_iso_timezone_timestamp_maps_to_utc_trans_date(self):
+        normalizer = TransactionNormalizer(
+            field_mappings=[_make_mapping("transDate", FieldMappingType.DATE, column="C")]
+        )
+
+        result = normalizer.normalize(
+            {"C": "2025-01-01T15:00:00+07:00"},
+            row_number=9,
+        )
+
+        assert result.data["transDate"] == datetime(2025, 1, 1, 8, tzinfo=UTC)
+        assert result.errors == []
+
+    def test_invalid_timestamp_has_stable_structured_evidence(self):
+        normalizer = TransactionNormalizer(
+            field_mappings=[_make_mapping("transDate", FieldMappingType.DATE, column="C")]
+        )
+
+        result = normalizer.normalize({"C": "not-a-timestamp"}, row_number=9)
+
+        assert result.data == {}
+        assert len(result.errors) == 1
+        violation = result.errors[0]
+        assert violation.code is QualityRuleCode.INVALID_TIMESTAMP
+        assert violation.phase is QualityPhase.NORMALIZATION
+        assert violation.severity is QualitySeverity.ERROR
+        assert violation.outcome is QualityOutcome.REJECT
+        assert violation.field == "transDate"
+        assert violation.message == "Timestamp is not a supported date/time value."
+        assert violation.expected == (
+            "ISO-8601 datetime with Z/UTC offset or an approved legacy date format"
+        )
+        assert violation.actual == {"type": "str"}
+        assert violation.row == 9
+
+    def test_empty_timestamp_is_invalid_timestamp(self):
+        normalizer = TransactionNormalizer(
+            field_mappings=[_make_mapping("transDate", FieldMappingType.DATE, column="C")]
+        )
+
+        result = normalizer.normalize({"C": ""}, row_number=9)
+
+        assert [item.code for item in result.errors] == [
+            QualityRuleCode.INVALID_TIMESTAMP
+        ]
+        assert result.errors[0].actual == {"type": "str"}
+
+    def test_required_none_timestamp_remains_missing_required_field(self):
+        normalizer = TransactionNormalizer(
+            field_mappings=[
+                FieldMapping(
+                    path="transDate",
+                    type=FieldMappingType.DATE,
+                    column="C",
+                    required=True,
+                )
+            ]
+        )
+
+        result = normalizer.normalize({"C": None}, row_number=9)
+
+        assert [item.code for item in result.errors] == [
+            QualityRuleCode.MISSING_REQUIRED_FIELD
+        ]
+
+    def test_trace_normalizes_offset_timestamp_to_utc(self):
+        normalizer = TransactionNormalizer(
+            field_mappings=[_make_mapping("transDate", FieldMappingType.DATE, column="C")]
+        )
+
+        result, traces = normalizer.normalize_with_trace(
+            {"C": "2025-01-01T15:00:00+07:00"},
+            row_number=9,
+        )
+
+        assert result.errors == []
+        assert traces[0].output_value == datetime(2025, 1, 1, 8, tzinfo=UTC)
+        assert traces[0].error is None
 
     def test_iso_format_date(self):
         normalizer = TransactionNormalizer(

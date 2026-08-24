@@ -392,7 +392,7 @@ class TransactionNormalizer:
             )
 
         try:
-            return Decimal(str(value)), None
+            decimal_value = Decimal(str(value))
         except InvalidOperation:
             return None, _normalization_violation(
                 code=QualityRuleCode.INVALID_AMOUNT,
@@ -400,6 +400,16 @@ class TransactionNormalizer:
                 message=f"invalid decimal value: {value!r}",
                 row=row_number,
             )
+
+        if not decimal_value.is_finite():
+            return None, _normalization_violation(
+                code=QualityRuleCode.INVALID_AMOUNT,
+                field=fm.path,
+                message="non-finite decimal monetary value",
+                row=row_number,
+            )
+
+        return decimal_value, None
 
     def _convert_date(
         self,

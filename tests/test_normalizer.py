@@ -144,6 +144,19 @@ class TestDecimalConversion:
         assert len(result.errors) == 1
         assert result.errors[0].field == "amount"
 
+    @pytest.mark.parametrize("source", ["NaN", "Infinity"])
+    def test_non_finite_decimal_source_produces_invalid_amount(self, source):
+        normalizer = TransactionNormalizer(
+            field_mappings=[_make_mapping("amount", FieldMappingType.DECIMAL, column="B")]
+        )
+
+        result = normalizer.normalize({"B": source}, row_number=9)
+
+        assert "amount" not in result.data
+        assert [item.code for item in result.errors] == [QualityRuleCode.INVALID_AMOUNT]
+        assert result.errors[0].actual is None
+        assert result.errors[0].row == 9
+
     def test_none_value_produces_validation_error(self):
         normalizer = TransactionNormalizer(
             field_mappings=[_make_mapping("amount", FieldMappingType.DECIMAL, column="B")]

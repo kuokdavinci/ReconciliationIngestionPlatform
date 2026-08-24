@@ -84,8 +84,8 @@ class TransactionNormalizer:
     """Applies FieldMapping rules to raw row tuples.
 
     Performs type conversions (STRING, DECIMAL, DATE, CONSTANT) and
-    collects validation errors. Never raises exceptions — all errors
-    are collected as QualityViolation objects.
+    collects expected row-quality conversion errors as QualityViolation
+    objects; unexpected exceptions propagate to the caller.
     """
 
     def __init__(self, field_mappings: list[FieldMapping]) -> None:

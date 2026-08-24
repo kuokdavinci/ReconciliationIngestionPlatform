@@ -561,6 +561,94 @@ def test_invalid_timestamp_contract_matches_in_normal_and_fast_mode():
 
 
 @pytest.mark.parametrize(
+    ("amount", "timestamp", "expected_code", "is_valid"),
+    [
+        ("0", "2025-01-01T00:00:00Z", None, True),
+        ("10.25", "2025-01-01T07:00:00+07:00", None, True),
+        ("-0.01", "2025-01-01T00:00:00Z", QualityRuleCode.NEGATIVE_AMOUNT, False),
+        ("not-decimal", "2025-01-01T00:00:00Z", QualityRuleCode.INVALID_AMOUNT, False),
+        ("NaN", "2025-01-01T00:00:00Z", QualityRuleCode.INVALID_AMOUNT, False),
+        (10.5, "2025-01-01T00:00:00Z", QualityRuleCode.INVALID_AMOUNT, False),
+        ("10.25", "not-a-time", QualityRuleCode.INVALID_TIMESTAMP, False),
+    ],
+)
+def test_workstream_c_preserves_promoted_rules_in_both_modes(
+    amount,
+    timestamp,
+    expected_code,
+    is_valid,
+):
+    row = ("txn-1", amount, "USD", timestamp)
+    normal = _timestamp_processor(fast_mode=False).process(row, row_number=2)
+    fast = _timestamp_processor(fast_mode=True).process(row, row_number=2)
+
+    expected_codes = [] if expected_code is None else [expected_code]
+    assert normal.is_valid is fast.is_valid is is_valid
+    assert normal.outcome is fast.outcome
+    assert [item.code for item in normal.violations] == expected_codes
+    assert [item.code for item in fast.violations] == expected_codes
+    assert normal.errors == fast.errors
+
+
+@pytest.mark.parametrize("fast_mode", [False, True])
+def test_required_timestamp_none_remains_missing_required_field(fast_mode):
+    result = _timestamp_processor(fast_mode=fast_mode).process(
+        ("txn-1", "10.25", "USD", None),
+        row_number=2,
+    )
+
+    assert result.outcome is QualityOutcome.REJECT
+    assert [item.code for item in result.violations] == [
+        QualityRuleCode.MISSING_REQUIRED_FIELD
+    ]
+    assert result.violations[0].field == "transDate"
+
+
+def test_invalid_timestamp_serialization_is_stable():
+    violation = QualityViolation(
+        code=QualityRuleCode.INVALID_TIMESTAMP,
+        phase=QualityPhase.NORMALIZATION,
+        severity=QualitySeverity.ERROR,
+        outcome=QualityOutcome.REJECT,
+        field="transDate",
+        message="Timestamp is not a supported date/time value.",
+        expected="ISO-8601 datetime with Z/UTC offset or an approved legacy date format",
+        actual={"type": "str"},
+        row=3,
+    )
+
+    assert serialize_quality_violation(violation) == {
+        "field": "transDate",
+        "reason": "Timestamp is not a supported date/time value.",
+        "errorCode": "INVALID_TIMESTAMP",
+        "phase": "NORMALIZATION",
+        "severity": "ERROR",
+        "outcome": "REJECT",
+        "expected": (
+            "ISO-8601 datetime with Z/UTC offset or an approved legacy date format"
+        ),
+        "actual": {"type": "str"},
+        "row": 3,
+    }
+
+
+def test_invalid_timestamp_is_review_with_continue_not_hold():
+    result = _timestamp_processor(fast_mode=True).process(
+        ("txn-1", "10.25", "USD", "not-a-time"),
+        row_number=2,
+    )
+    evaluation = QualityEvaluation(
+        outcome=result.outcome,
+        violations=result.violations,
+    )
+    summary = QualitySummary.from_evaluations([evaluation])
+
+    assert summary.decision is QualityDecision.REVIEW
+    assert orchestration_action_for(summary) is OrchestrationAction.CONTINUE
+    assert QualityRuleCode.CONFLICTING_DUPLICATE.value not in summary.rule_counts
+
+
+@pytest.mark.parametrize(
     ("override", "expected_code"),
     [
         ({"id": ""}, QualityRuleCode.MISSING_REQUIRED_FIELD),

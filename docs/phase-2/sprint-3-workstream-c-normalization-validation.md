@@ -90,6 +90,42 @@ Verification date: 2026-08-25.
 | Generated 20-row smoke | 20/20, zero failed/duplicate, PASS | Config `sprint3-fraud-detection-v2`; 20 input/20 persisted, zero failed/duplicate, `PASS / CONTINUE`, `INGESTED` |
 | Full 1M v2 | optional for implemented-pending state | `implemented; full-dataset v2 evidence pending` |
 
+Exact Backend CI parity commands executed:
+
+```bash
+uv sync --all-extras --dev
+uv run alembic upgrade head
+uv run ruff check src dags scripts cli
+uv run mypy src/ --show-error-codes
+AI_API_KEY=sk-test-fake-key uv run pytest tests/ \
+  --ignore=tests/test_analysis_e2e.py \
+  --ignore=tests/test_ingestion_integration.py \
+  --ignore=tests/test_ingestion_pipeline.py \
+  --ignore=tests/test_seed_momo_e2e.py \
+  --ignore=tests/test_sprint1_eval_benchmark.py \
+  -v --tb=short
+```
+
+Exact Ingestion Pipeline CI parity commands executed:
+
+```bash
+uv run alembic upgrade head
+uv run ruff check \
+  src/fetchers \
+  src/pipeline \
+  src/application/automation \
+  src/domain/fetch_config/models.py \
+  src/infrastructure/persistence/mongo_indexes.py \
+  scripts/demo/scenarios
+AI_API_KEY=sk-test-fake-key uv run pytest \
+  tests/test_indexes.py \
+  tests/test_ingestion_integration.py \
+  tests/test_ingestion_pipeline.py \
+  tests/test_seed_momo_e2e.py \
+  tests/test_sprint1_eval_benchmark.py \
+  -v --tb=short
+```
+
 The exact performance command used sizes `10000,100000,1000000`, three repeats,
 and wrote only to `/tmp`. Its prescribed machine assertions passed. Transient
 pytest timings are not used as performance evidence.

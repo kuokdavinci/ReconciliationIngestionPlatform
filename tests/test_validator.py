@@ -1,14 +1,19 @@
 """Tests for Validator core validation — required field validation."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
+
+import pytest
 
 from src.core.enums import TransactionStatus
 from src.core.types import CanonicalTransaction
 from src.domain.ingestion.quality import (
     QualityEvaluation,
     QualityOutcome,
+    QualityPhase,
+    QualityRuleCode,
+    QualitySeverity,
     QualityViolation,
 )
 from src.validators import Validator
@@ -188,6 +193,47 @@ class TestDecimalValidation:
 
 class TestDateValidation:
     """Test date (transDate) type integrity validation."""
+
+    def test_invalid_timestamp_type_uses_bounded_actual_evidence(self):
+        transaction = {
+            "id": "txn-1",
+            "amount": Decimal("1"),
+            "currency": "VND",
+            "status": TransactionStatus.SUCCESS.value,
+            "transDate": "2025-01-01T00:00:00Z",
+        }
+
+        result = Validator().validate(
+            transaction,
+            row_number=4,
+            trace="trace-4",
+        )
+
+        assert len(result.violations) == 1
+        violation = result.violations[0]
+        assert violation.code is QualityRuleCode.INVALID_TIMESTAMP
+        assert violation.phase is QualityPhase.VALIDATION
+        assert violation.severity is QualitySeverity.ERROR
+        assert violation.outcome is QualityOutcome.REJECT
+        assert violation.field == "transDate"
+        assert violation.message == "transDate must be a datetime object."
+        assert violation.expected == "datetime"
+        assert violation.actual == {"type": "str"}
+        assert violation.row == 4
+        assert violation.trace == "trace-4"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            datetime(2024, 1, 15, 10, 30),
+            datetime(2024, 1, 15, 10, 30, tzinfo=timezone.utc),
+        ],
+    )
+    def test_datetime_trans_date_passes(self, value):
+        result = Validator().validate(_make_valid_txn(transDate=value))
+
+        assert result.is_valid is True
+        assert result.violations == []
 
     def test_none_trans_date_passes(self):
         """None transDate → no error (it's optional)."""

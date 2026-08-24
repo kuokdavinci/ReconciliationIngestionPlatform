@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -60,6 +60,47 @@ def test_partner_mapper_converts_aware_timestamps_to_utc_naive():
 
     assert row["reconciliation_date"] == datetime(2026, 8, 9, 17, 0)
     assert row["reconciliation_date"].tzinfo is None
+
+
+def _partner_document_with_trans_date(value):
+    return DataContainer(
+        identify="MOMO",
+        workflow_type="UPC",
+        reconciliation_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        source_file_id=uuid4(),
+        partner_data=PartnerData(
+            _id="txn-1",
+            trace="trace-1",
+            status="SUCCESS",
+            amount=Decimal("100.25"),
+            currency="VND",
+            transDate=value,
+        ),
+    )
+
+
+def test_partner_mapper_converts_partner_timestamp_to_utc_naive():
+    local_time = datetime(
+        2025,
+        1,
+        1,
+        15,
+        tzinfo=timezone(timedelta(hours=7)),
+    )
+
+    row = data_container_to_row(_partner_document_with_trans_date(local_time))
+
+    assert row["partner_trans_date"] == datetime(2025, 1, 1, 8)
+    assert row["partner_trans_date"].tzinfo is None
+
+
+def test_partner_mapper_does_not_reinterpret_naive_timestamp():
+    source = datetime(2025, 1, 1, 8)
+
+    row = data_container_to_row(_partner_document_with_trans_date(source))
+
+    assert row["partner_trans_date"] == source
+    assert row["partner_trans_date"].tzinfo is None
 
 
 def test_reconciliation_result_mapper_handles_legacy_aliases_and_decimal128():

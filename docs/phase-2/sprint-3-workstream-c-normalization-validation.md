@@ -84,8 +84,8 @@ Verification date: 2026-08-25.
 
 | Evidence | Required result | Artifact/status |
 |---|---|---|
-| Focused C tests | Pass | `uv run pytest tests/test_timestamp_normalization.py tests/test_normalizer.py tests/test_validator.py tests/test_persistence_time.py tests/test_persistence_mappers.py tests/test_quality_contract.py tests/test_ingestion_pipeline.py tests/test_benchmark_fraud_detection.py tests/test_benchmark_quality_contract.py tests/test_api_review_packets.py::test_runtime_timestamp_code_does_not_parse_reason tests/test_api_review_packets.py::test_run_runtime_validation_returns_high_risk_for_failed_validation -v --tb=short` — 244 passed |
-| Backend CI parity | Pass | Python 3.11.15; `uv sync --all-extras --dev`; Alembic upgrade; `ruff check src dags scripts cli`; `mypy src/ --show-error-codes`; exact backend pytest exclusions with `-v --tb=short` — 1,211 passed, 6 skipped on 2026-08-25 |
+| Focused C tests | Pass | `uv run pytest tests/test_timestamp_normalization.py tests/test_normalizer.py tests/test_validator.py tests/test_persistence_time.py tests/test_persistence_mappers.py tests/test_quality_contract.py tests/test_ingestion_pipeline.py tests/test_benchmark_fraud_detection.py tests/test_benchmark_quality_contract.py tests/test_api_review_packets.py -q --tb=short` — 300 passed |
+| Backend CI parity | Pass | Python 3.11.15; `uv sync --all-extras --dev`; Alembic upgrade; `ruff check src dags scripts cli`; `mypy src/ --show-error-codes`; exact backend pytest exclusions with `-q --tb=short` — 1,269 passed, 6 skipped on 2026-08-25 |
 | Ingestion CI parity | Pass | Python 3.11.15; Alembic upgrade; Ruff over all workflow paths; exact five-file pytest command with `-v --tb=short` — 57 passed on 2026-08-25 |
 | Workstream B performance | clean acceptance true | Fresh `/tmp/workstream-c-non-regression.json`, not committed: 10k `2.573746665097812%`, 100k `3.93044804439444%`, 1M `4.115527979760645%`; all accepted, zero clean lookups |
 | Generated 20-row smoke | 20/20, zero failed/duplicate, PASS | Config `sprint3-fraud-detection-v2`; 20 input/20 persisted, zero failed/duplicate, `PASS / CONTINUE`, `INGESTED` |
@@ -101,10 +101,8 @@ uv run mypy src/ --show-error-codes
 AI_API_KEY=sk-test-fake-key uv run pytest tests/ \
   --ignore=tests/test_analysis_e2e.py \
   --ignore=tests/test_ingestion_integration.py \
-  --ignore=tests/test_ingestion_pipeline.py \
   --ignore=tests/test_seed_momo_e2e.py \
-  --ignore=tests/test_sprint1_eval_benchmark.py \
-  -v --tb=short
+  -q --tb=short
 ```
 
 Exact Ingestion Pipeline CI parity commands executed:

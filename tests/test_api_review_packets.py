@@ -1084,14 +1084,17 @@ async def test_run_runtime_validation_returns_medium_risk_for_partial_pass():
     assert amount_trace["errorMessage"]
 
 
+@pytest.mark.parametrize("mapping_type", ["CONSTANT", "MAPPING"])
 @pytest.mark.parametrize("amount", ["NaN", "Infinity"])
-async def test_runtime_preview_reports_non_finite_constant_as_invalid_decimal(amount):
+async def test_runtime_preview_reports_non_finite_amount_as_invalid_decimal(
+    mapping_type, amount
+):
     review_collection = MagicMock()
     review_collection.update_one = AsyncMock()
     packet = SimpleNamespace(
         id="pkt-non-finite",
         source_file_path=None,
-        sample_preview=[{"rowIndex": 2, "values": ["TXN001"]}],
+        sample_preview=[{"rowIndex": 2, "values": ["TXN001", "raw-amount"]}],
         validation_gates=[],
     )
     config = MappingConfig.model_validate(
@@ -1104,12 +1107,22 @@ async def test_runtime_preview_reports_non_finite_constant_as_invalid_decimal(am
             "startRow": 2,
             "fieldMappings": [
                 {"path": "id", "column": 1, "type": "STRING", "required": True},
-                {
-                    "path": "amount",
-                    "type": "CONSTANT",
-                    "constant": amount,
-                    "required": True,
-                },
+                (
+                    {
+                        "path": "amount",
+                        "type": "CONSTANT",
+                        "constant": amount,
+                        "required": True,
+                    }
+                    if mapping_type == "CONSTANT"
+                    else {
+                        "path": "amount",
+                        "column": 2,
+                        "type": "MAPPING",
+                        "mapping": {"raw-amount": amount},
+                        "required": True,
+                    }
+                ),
                 {
                     "path": "currency",
                     "type": "CONSTANT",

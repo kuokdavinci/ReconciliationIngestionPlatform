@@ -17,6 +17,7 @@ from scripts.benchmark_fraud_detection import (
     render_markdown,
     run_benchmark,
     write_prefix_csv,
+    _redact_mongodb_credentials,
 )
 
 
@@ -129,6 +130,19 @@ def test_markdown_uses_report_config_version() -> None:
     assert "`extra.sourceTimestamp`" not in markdown
 
 
+def test_mongodb_error_redaction_removes_uri_credentials() -> None:
+    credentialed_uri = "mongodb://review_user:review_password@localhost:27017/db"
+
+    redacted = _redact_mongodb_credentials(
+        f"failed to connect using {credentialed_uri}"
+    )
+
+    assert credentialed_uri not in redacted
+    assert "review_user" not in redacted
+    assert "review_password" not in redacted
+    assert "mongodb://***:***@localhost:27017/db" in redacted
+
+
 def test_benchmark_artifacts_exclude_mongodb_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -139,7 +153,7 @@ def test_benchmark_artifacts_exclude_mongodb_credentials(
     class UnavailableAdmin:
         async def command(self, _: str) -> None:
             raise benchmark_fraud_detection.ServerSelectionTimeoutError(
-                "MongoDB unavailable for test"
+                f"MongoDB unavailable at {credentialed_uri}"
             )
 
     class UnavailableClient:
@@ -155,7 +169,9 @@ def test_benchmark_artifacts_exclude_mongodb_credentials(
     output_json = tmp_path / "benchmark.json"
     output_markdown = tmp_path / "benchmark.md"
     input_path.write_text("id\n1\n", encoding="utf-8")
-    monkeypatch.setenv("MONGODB_URL", credentialed_uri)
+    monkeypatch.setattr(
+        benchmark_fraud_detection.settings, "mongodb_url", credentialed_uri
+    )
     monkeypatch.setattr(
         benchmark_fraud_detection, "AsyncIOMotorClient", UnavailableClient
     )
@@ -179,6 +195,7 @@ def test_benchmark_artifacts_exclude_mongodb_credentials(
         assert "review_user" not in artifact
         assert "review_password" not in artifact
         assert credentialed_uri not in artifact
+        assert "mongodb://***:***@localhost:27017/db" in artifact
     assert report["environment"] == {
         "mongodb": "configured",
         "db_name": report["environment"]["db_name"],

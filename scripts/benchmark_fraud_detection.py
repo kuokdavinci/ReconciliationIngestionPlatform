@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -46,6 +47,15 @@ BENCHMARK_BATCH_SIZE = 20_000
 BENCHMARK_WORKERS = 1
 BENCHMARK_ORDERED_INSERT = False
 BENCHMARK_CASES = (10_000, 100_000, None)
+_MONGODB_CREDENTIALS_PATTERN = re.compile(
+    r"(?P<scheme>mongodb(?:\+srv)?://)(?P<credentials>[^@\s]+)@",
+    re.IGNORECASE,
+)
+
+
+def _redact_mongodb_credentials(value: object) -> str:
+    """Remove MongoDB URI userinfo before an error reaches an artifact."""
+    return _MONGODB_CREDENTIALS_PATTERN.sub(r"\g<scheme>***:***@", str(value))
 
 
 @dataclass(frozen=True)
@@ -282,7 +292,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     if report.get("error"):
-        lines.extend([f"- Error: `{report['error']}`", ""])
+        lines.extend(
+            [f"- Error: `{_redact_mongodb_credentials(report['error'])}`", ""]
+        )
     if report.get("cases"):
         lines.extend(
             [
@@ -366,7 +378,9 @@ async def run_benchmark(
             await client.admin.command("ping")
         except ServerSelectionTimeoutError as exc:
             report["status"] = "blocked_by_environment"
-            report["error"] = f"MongoDB unavailable: {exc}"
+            report["error"] = _redact_mongodb_credentials(
+                f"MongoDB unavailable: {exc}"
+            )
             return report
 
         db = client[settings.db_name]
@@ -400,7 +414,7 @@ async def run_benchmark(
                 report["cleanup"] = "benchmark records and mapping removed"
             except Exception as exc:  # pragma: no cover - environment cleanup
                 report["cleanup"] = "failed"
-                report["cleanup_error"] = str(exc)
+                report["cleanup_error"] = _redact_mongodb_credentials(exc)
         client.close()
         output_json.parent.mkdir(parents=True, exist_ok=True)
         output_markdown.parent.mkdir(parents=True, exist_ok=True)

@@ -28,6 +28,7 @@ Index đầy đủ theo sprint nằm tại [docs/phase-2/INDEX.md](phase-2/INDEX
 
 ### Sprint 3 — Data quality và quarantine
 
+- [Sprint 3 index](phase-2/sprint-3-index.md) — scope, canonical documents, status và pending artifact
 - [Kế hoạch và trạng thái Sprint 3](phase-2/sprint-3-data-quality.md)
 - [Workstream C — normalization và validation evidence](phase-2/sprint-3-workstream-c-normalization-validation.md) — `implemented; full-dataset v2 evidence pending`
 

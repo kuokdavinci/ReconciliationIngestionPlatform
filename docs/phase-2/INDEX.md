@@ -53,10 +53,11 @@ normalization/validation contract. Production approval và Workstream D–F vẫ
 còn trong phạm vi kế hoạch.
 
 - [Kế hoạch data quality và quarantine](sprint-3-data-quality.md)
+- [Sprint 3 index](sprint-3-index.md)
 - [Workstream B — quality contract và Airflow-ready outcome](sprint-3-workstream-b-quality-contract.md)
 - [Workstream C — normalization và validation contract](sprint-3-workstream-c-normalization-validation.md)
 - [Review EDA và rule candidates](sprint-3-eda-review.md)
-- [Mentor summary: Workstream A decisions và rule coverage](sprint-3-workstream-a-mentor-summary.md)
+- [Workstream A decision matrix](sprint-3-workstream-summary.md)
 
 Phạm vi còn lại: full-dataset v2 evidence cho Workstream C, quarantine
 lifecycle, operator flow, production observability và acceptance. Notebook EDA

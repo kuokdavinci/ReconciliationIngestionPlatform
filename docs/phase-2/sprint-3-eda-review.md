@@ -9,7 +9,8 @@ validation-contract, quarantine, operational, and observability work remains
 planned in Workstreams B–F.
 
 The Kaggle notebook is unchanged and Kaggle-only. The suggestions below are
-not instructions to edit or run it locally.
+not instructions to edit or run it locally. Workstream B and the deterministic
+parts of Workstream C are now implemented; Workstreams D–F remain handoffs.
 
 ## Provenance and full-dataset finding
 
@@ -49,13 +50,15 @@ The source has these 17 columns, in benchmark order:
 `merchant_city`, `merchant_latitude`, `merchant_longitude`,
 `transaction_type`, `amount`, `currency`, `is_fraud`, `fraud_type`.
 
-The frozen baseline in `scripts/benchmark_fraud_detection.py` maps them as
-follows:
+The historical Workstream A frozen baseline mapped them as follows. The current
+Workstream C benchmark v2 promotes `timestamp` to required canonical
+`transDate`; the Workstream C evidence document is authoritative for runtime
+behavior.
 
-| Source field | Current benchmark mapping | Contract note |
+| Source field | Mapping reference | Contract note |
 |---|---|---|
 | `transaction_id` | `id` | Required. |
-| `timestamp` | `extra.sourceTimestamp` | The intended canonical target is `transDate`; ISO timestamp parsing with timezone is still a gap. |
+| `timestamp` | `transDate` (v2) | Required `DATE`; offset-aware values normalize to UTC-aware canonical timestamps, while approved legacy formats remain naive. |
 | `customer_id` | `extra.customerId` | Context only. |
 | `card_id` | `extra.cardId` | Context only. |
 | `device_id` | `extra.deviceId` | Context only. |
@@ -100,7 +103,7 @@ the other.
 |---|---|---|---|
 | Required ID, amount, currency, and Decimal conversion | COVERED | Mapping marks the fields required; normalizer converts `DECIMAL`; validator enforces canonical required fields | A closed; maintain in B/C |
 | Negative amount | COVERED | Validator rejects negative values; zero remains valid | A closed; maintain in C |
-| ISO timezone timestamp to `transDate` | GAP | Baseline stores `timestamp` in `extra.sourceTimestamp`; current date parsing does not accept the ISO timezone form | B/C |
+| ISO timezone timestamp to `transDate` | IMPLEMENTED | Workstream C parses `Z`/offset ISO values, preserves approved legacy naive formats, and persists aware values through the existing UTC-naive mapper | C; full-dataset v2 evidence pending |
 | Equivalent duplicate / idempotency | PARTIAL | PostgreSQL handles `(identify, ingestion_key)`; EDA proves only file-local uniqueness | B |
 | Conflicting duplicate | PARTIAL | Quarantine persistence exists, but `ON CONFLICT DO NOTHING` does not compare payloads | B/D |
 | Header/schema drift | PARTIAL | `StructureSignature`, ConfigHealth, and mapping coverage detect structure signals; a type-aware runtime gate is still absent | B/C |

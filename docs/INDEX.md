@@ -31,6 +31,7 @@ Index đầy đủ theo sprint nằm tại [docs/phase-2/INDEX.md](phase-2/INDEX
 - [Sprint 3 index](phase-2/sprint-3-index.md) — scope, canonical documents, status và pending artifact
 - [Kế hoạch và trạng thái Sprint 3](phase-2/sprint-3-data-quality.md)
 - [Workstream C — normalization và validation evidence](phase-2/sprint-3-workstream-c-normalization-validation.md) — `implemented; full-dataset v2 evidence pending`
+- [Workstream D/E/F implementation plan](superpowers/plans/2026-08-25-sprint-3-workstreams-def.md) — D persistence foundation implemented; D actions, E và F pending
 
 ## Vận hành và giới hạn
 

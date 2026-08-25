@@ -8,8 +8,10 @@ Dataset. **Workstream B is now implemented** for the shared runtime quality
 contract, deterministic file/row gate, duplicate classification, bounded
 source-unit result, and conflict quarantine routing. **Workstream C is
 `implemented; full-dataset v2 evidence pending`** for the normalization and
-validation contract. Workstreams D–F remain handoffs; this document does not
-promote statistical or fraud semantics into automatic rejection.
+validation contract. This document does not promote statistical or fraud
+semantics into automatic rejection. Workstream D has its persistence
+foundation implemented; D operator actions/reprocess, Workstream E, and
+Workstream F remain pending.
 
 The frozen 1M-row source CSV is now available locally at
 `data/eda/fraud_detection/raw/Fraud Detection Dataset.csv`; the v2 benchmark
@@ -106,22 +108,31 @@ performance evidence, smoke evidence, and the exact full-dataset limitation are
 recorded in
 [`sprint-3-workstream-c-normalization-validation.md`](sprint-3-workstream-c-normalization-validation.md).
 
-### D — Quarantine lifecycle
+### D — Quarantine lifecycle — persistence foundation implemented
 
-Define retention, operator resolution, reprocessing, and lifecycle evidence for
-the sanitized row rejects and conflicting duplicates already routed by
-Workstream B.
+The first D checkpoint is implemented in `35ecada`. `IngestionQuarantineRecord`
+now carries bounded lifecycle metadata; the Mongo repository applies a
+configurable 30-day `expiresAt`, TTL cleanup, bounded listing, atomic
+compare-and-set transitions, action-id replay detection, and metadata/raw-row
+redaction. The focused lifecycle/component suite passes (`27 passed`).
 
-### E — Operator and approval flow
+Remaining D scope: operator action routes, audit-backed ownership, and the
+bounded source-unit reprocess request. A sanitized `rawRow` is never used as a
+canonical replay payload.
+
+### E — Operator and approval flow — pending
 
 Define review ownership, approval/rejection actions, counters, and escalation
-for `REVIEW` outcomes.
+for `REVIEW` outcomes. This has not been implemented yet; mapping
+`ReviewPacket` approval remains on its existing contract.
 
-### F — Observability and production acceptance
+### F — Observability and production acceptance — pending
 
-Define monitoring baselines, alerts, dashboards, partner sign-off, and
-production acceptance evidence. Statistical or semantic candidates must stay
-out of automatic rejection until that contract exists.
+Define data-quality acceptance baselines and the handoff inputs for Sprint 4
+observability. Generic stage metrics, structured logs, dashboards, alert
+delivery, and the 100k observability benchmark remain outside Sprint 3.
+Statistical or semantic candidates must stay out of automatic rejection until
+that contract exists.
 
 ## Fixture and test guidance
 

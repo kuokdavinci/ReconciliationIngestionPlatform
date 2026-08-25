@@ -44,6 +44,7 @@ Các default chính trong `src/config/settings.py`:
 | `APP_INGEST_BATCH_SIZE` | `20000` | Batch size khi ghi ingestion |
 | `APP_INGEST_WRITE_WORKERS` | `2` | Số worker ghi batch |
 | `APP_INGEST_ORDERED_INSERT` | `false` | Ordered hay unordered insert |
+| `APP_INGESTION_QUARANTINE_RETENTION_DAYS` | `30` | Số ngày giữ sanitized quarantine evidence trước TTL cleanup |
 
 ### Reconciliation tuning
 

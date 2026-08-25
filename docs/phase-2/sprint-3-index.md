@@ -12,7 +12,7 @@ operator workflow, and observability.
 | A | EDA, provenance, frozen profile, controlled mutations, rule handoff | Implemented |
 | B | Quality rules, duplicate classification, conflict quarantine, bounded result | Implemented |
 | C | Timezone-aware `transDate` normalization and structured validation errors | Implemented; full-dataset v2 evidence pending |
-| D | Quarantine retention, resolution, and reprocessing | Handoff |
+| D | Quarantine retention, resolution, and reprocessing | Persistence foundation implemented; actions/reprocess pending |
 | E | Operator ownership and approval flow | Handoff |
 | F | Observability and production acceptance | Handoff |
 
@@ -30,6 +30,20 @@ operator workflow, and observability.
 The Workstream C evidence document is the canonical source for the current
 `timestamp → transDate` behavior. The A documents retain the historical EDA
 and frozen-baseline context and must not be read as a second runtime mapping.
+
+## Current implementation checkpoint
+
+Workstream D persistence foundation landed in commit `35ecada` on the review
+branch. The quarantine model/repository now provide bounded lifecycle metadata,
+configurable 30-day retention, a Mongo TTL index, compare-and-set transitions,
+action-id replay detection, and sensitive-value redaction. The focused D suite
+passes (`27 passed`), with Ruff and `git diff --check` clean.
+
+The remaining D work is the operator action service, operations routes, audit
+events, and the bounded source-unit reprocess request. Workstream E operator
+ownership/actions and Workstream F acceptance evidence remain pending. The
+implementation plan and its explicit Sprint 4 boundary are tracked in
+[`sprint-3-workstreams-def plan`](../superpowers/plans/2026-08-25-sprint-3-workstreams-def.md).
 
 ## Frozen dataset and pending v2 artifact
 

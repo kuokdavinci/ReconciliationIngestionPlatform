@@ -26,6 +26,10 @@ append-only audit service, pytest, Ruff, Mypy.
 `docs/phase-2/sprint-3-workstream-c-normalization-validation.md`, and
 `docs/phase-2/sprint-4-observability.md` for the explicit handoff boundary.
 
+**Execution status (2026-08-26):** Task 1 is implemented in commit `35ecada`
+with `27` focused tests passing, Ruff clean, and no diff-check errors. Tasks
+2–4 remain pending.
+
 ## Blast-radius guardrails
 
 - Do not modify `src/pipeline/run_state.py`,
@@ -97,23 +101,23 @@ review decision:
 
 **Steps:**
 
-- [ ] Default `expiresAt` from one configuration value without changing the
+- [x] Default `expiresAt` from one configuration value without changing the
   existing quarantine creation call sites’ required arguments.
-- [ ] Make action metadata bounded and omit raw row, complete exception text,
+- [x] Make action metadata bounded and omit raw row, complete exception text,
   fingerprints, and credentials.
-- [ ] Add a TTL index on `expiresAt` for the existing
+- [x] Add a TTL index on `expiresAt` for the existing
   `ingestion_quarantine_record` collection; do not add a migration.
-- [ ] Test pending ordering, partner/status filters, CAS conflicts,
+- [x] Test pending ordering, partner/status filters, CAS conflicts,
   idempotent action-id replay, expiration metadata, and preservation of
   `sanitize_raw_row` behavior.
-- [ ] Run:
+- [x] Run:
   `uv run pytest tests/test_quarantine_lifecycle.py
   tests/test_ingestion_components.py -q`
   and
   `uv run ruff check src/domain/ingestion/quarantine.py
   src/infrastructure/ingestion/quarantine_repository.py
   src/infrastructure/persistence/mongo_indexes.py`.
-- [ ] Review checkpoint: commit D persistence only after the focused tests and
+- [x] Review checkpoint: commit D persistence only after the focused tests and
   diff guard pass.
 
 ## Task 2 — D/E: Add one quarantine action service and bounded operations routes

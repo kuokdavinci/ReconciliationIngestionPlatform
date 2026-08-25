@@ -35,11 +35,12 @@ and frozen-baseline context and must not be read as a second runtime mapping.
 The Workstream A profile remains frozen at version `3` with SHA-256
 `e3895c988fe37efc76dabfe62d23f7ab75e89477bb17ba0c53092b008431caf6`.
 
-Workstream C code and generated-fixture verification are complete. The external
-1M-row v2 evidence is intentionally not claimed yet because the raw dataset
-artifact is local-only and not committed. The benchmark input belongs at
-`data/eda/fraud_detection/raw/Fraud Detection Dataset.csv`. When it is
-available in the checkout, run the benchmark and add both outputs:
+Workstream C code and generated-fixture verification are complete. The raw
+1M-row CSV is now present locally at
+`data/eda/fraud_detection/raw/Fraud Detection Dataset.csv` and matches the
+frozen checksum. The external v2 evidence is still pending because the
+benchmark has not yet produced its report artifacts. Run the benchmark and add
+both outputs:
 
 - `data/eda/fraud_detection/profiles/benchmark_results_workstream_c.json`
 - `docs/phase-2/sprint-3-workstream-c-baseline.md`
@@ -55,6 +56,7 @@ the historical v1 benchmark outputs.
 - Backend suite excluding environment-gated analysis, ingestion integration,
   and seed tests: `1,270 passed, 6 skipped`.
 - PostgreSQL integration/migration suite: `16 passed`.
+- Raw dataset available locally: `167.4M`, SHA-256 matches the frozen profile.
 - Ruff, Mypy, and `git diff --check`: passed.
 - Workstream B clean-path performance evidence remains within the accepted
   regression threshold; timestamp parsing is not on partners without a

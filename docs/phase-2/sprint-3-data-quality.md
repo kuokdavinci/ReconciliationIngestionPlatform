@@ -11,6 +11,10 @@ source-unit result, and conflict quarantine routing. **Workstream C is
 validation contract. Workstreams D–F remain handoffs; this document does not
 promote statistical or fraud semantics into automatic rejection.
 
+The frozen 1M-row source CSV is now available locally at
+`data/eda/fraud_detection/raw/Fraud Detection Dataset.csv`; the v2 benchmark
+JSON/Markdown evidence will be added after the live run.
+
 The full-profile baseline is version `3`, SHA-256
 `e3895c988fe37efc76dabfe62d23f7ab75e89477bb17ba0c53092b008431caf6`, with
 `valid=1,000,000`, `rejected=0`, and `duplicate=0`. Its deterministic quality

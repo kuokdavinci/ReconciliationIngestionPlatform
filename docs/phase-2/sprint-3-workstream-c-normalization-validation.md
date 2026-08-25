@@ -133,12 +133,14 @@ pytest timings are not used as performance evidence.
 
 `implemented; full-dataset v2 evidence pending`
 
-The frozen raw 1M CSV and the official
+The frozen raw 1M CSV is now available locally at
+`data/eda/fraud_detection/raw/Fraud Detection Dataset.csv` and matches the
+Workstream A SHA-256. The official
 `data/eda/fraud_detection/profiles/benchmark_results_workstream_c.json`
-artifact are absent in this checkout. Therefore no checksum/count/throughput
-claim is made for a successful full-dataset v2 run, and no artifact is linked
-as successful evidence. The frozen Workstream A v3 profile, its SHA-256, and
-the Workstream B/v1 benchmark artifacts remain unchanged.
+artifact and its Markdown companion have not been generated yet. Therefore no
+count/throughput claim is made for a successful full-dataset v2 run, and no
+artifact is linked as completed evidence. The frozen Workstream A v3 profile,
+its SHA-256, and the Workstream B/v1 benchmark artifacts remain unchanged.
 
 ## Remaining handoff to Workstream D
 

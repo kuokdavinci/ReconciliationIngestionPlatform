@@ -56,6 +56,21 @@ audit and runtime-run services.
 - Alert thresholds are configuration, not quality rules. Failing an alert must
   never reject a row, alter duplicate classification, or change orchestration.
 
+## Sprint 4 boundary
+
+The repository already has a separate Sprint 4 observability plan. Sprint 3 F
+is the data-quality acceptance slice that defines what must be measured and
+signed off; Sprint 4 owns the generic runtime-observability implementation.
+Therefore this stream does **not** add a new stage model, stage-level metrics
+store, structured-log schema, runtime-run schema, dashboard UI, notification
+delivery engine, or 100k-record observability benchmark. Those remain in
+`docs/phase-2/sprint-4-observability.md`.
+
+The same boundary applies to adjacent workflows: D handles row-level
+quarantine records and duplicate conflicts, not Sprint 2.5 source-unit retry,
+Airflow backfill, or checkpoint recovery; E handles row-level quarantine
+decisions, not mapping `ReviewPacket` approval or runtime `WAITING_REVIEW`.
+
 ## Pre-flight decision gate
 
 Before changing code, record the owner decisions below in the sprint issue or
@@ -257,53 +272,47 @@ review note. The recommended choices make the rest of this plan executable.
 - [ ] Review checkpoint: commit E only after the audit and API contract is
   approved.
 
-## Task 6 — Build Workstream F bounded ingestion observability
+## Task 6 — Define the Workstream F data-quality acceptance baseline
 
 **Files:**
 
-- Create: `src/application/observability/ingestion_metrics.py`
-- Create: `src/api/observability.py`
-- Modify: `src/api/operations.py` for route registration only
-- Modify: `src/application/runtime/service.py` and
-  `src/infrastructure/runtime/repository.py` only where an existing aggregate
-  query is missing
-- Create: `tests/test_ingestion_observability.py`
+- Modify: `docs/phase-2/sprint-3-workstreams-def-contract.md`
+- Create: `docs/phase-2/sprint-3-workstreams-def-evidence.md`
+- Modify: `tests/test_quality_contract.py`
 - Modify: `tests/test_api_operations.py`
+- Modify: `tests/test_source_unit_orchestrator.py`
 
 **Interfaces:**
 
-- Derive bounded metrics from durable runtime/file/quarantine/audit data:
+- Define the F acceptance metrics from data already emitted by
+  `IngestionResult.bounded_source_unit_result()`, `RunState.quality_counters`,
+  existing file summaries, and the D/E quarantine audit events:
   `input_rows`, `rejected_rows`, `conflicting_duplicate_rows`,
-  `pending_quarantine`, `oldest_pending_age_seconds`,
-  `reprocess_success_rate`, `source_evidence_unavailable`, and terminal
-  runtime latency.
-- Expose `GET /api/v1/operations/ingestion/observability` with partner/date
-  filters and a bounded time window.
-- Define alert events with `{metric, observed, threshold, window, severity,
-  partner, reconciliationDate, generatedAt}`; no raw row, timestamp value,
-  credential, or complete error is allowed.
+  `pending_quarantine`, `reprocess_success_rate`, and
+  `source_evidence_unavailable`.
+- Keep the existing read-only operations endpoint as the source of operational
+  visibility. Do not add a generic observability endpoint in Sprint 3.
+- Define threshold and sign-off records as documentation/configuration inputs
+  for Sprint 4. They must not create alert events or mutate quality outcomes in
+  this stream.
 
 **Steps:**
 
-- [ ] Reuse `RunState.quality_counters` and persisted runtime stats instead of
-  recomputing row validation or adding per-row I/O.
-- [ ] Add config-backed thresholds and a deterministic evaluator. Alerting is
-  advisory/operational and cannot mutate quality decisions.
-- [ ] Prove empty-window behavior, bounded output, stable aggregation,
-  partner/date filtering, and no XCom contract expansion.
-- [ ] Run `uv run pytest tests/test_ingestion_observability.py
-  tests/test_api_operations.py tests/test_runtime_service.py -q`.
+- [ ] Add generated-fixture assertions that the existing counters reconcile with
+  input/persisted/rejected/quarantined rows and remain bounded.
+- [ ] Add generated-fixture assertions that ordinary rejects and conflicting
+  duplicates remain distinct, and that no F metric contains raw rows, parsed
+  timestamps, credentials, fingerprints, or full exception text.
+- [ ] Record the proposed threshold names, owner, window, and sign-off evidence
+  required by Sprint 4 without implementing a notification sink.
+- [ ] Run `uv run pytest tests/test_quality_contract.py
+  tests/test_api_operations.py tests/test_source_unit_orchestrator.py -q`.
 
-## Task 7 — Add F alerting, dashboard evidence, and production acceptance
+## Task 7 — Close Sprint 3 F and hand off platform observability to Sprint 4
 
 **Files:**
 
-- Modify: `src/application/observability/ingestion_metrics.py`
-- Modify: `src/api/observability.py`
-- Modify: existing alert integration only if a supported notification sink is
-  already configured
-- Create: `tests/test_ingestion_alerts.py`
-- Create: `docs/phase-2/sprint-3-workstreams-def-evidence.md`
+- Modify: `docs/phase-2/sprint-3-workstreams-def-evidence.md`
 - Modify: `docs/phase-2/sprint-3-data-quality.md`
 - Modify: `docs/phase-2/sprint-3-index.md`
 - Modify: `docs/phase-2/INDEX.md`
@@ -311,29 +320,24 @@ review note. The recommended choices make the rest of this plan executable.
 
 **Interfaces:**
 
-- Alert evaluation must be deterministic, deduplicated by metric/partner/window,
-  and auditable. If no notification sink is configured, return a persisted
-  alert event and mark delivery as `NOT_CONFIGURED`; never silently discard it.
-- The evidence document must state partner sign-off criteria, rollback/disable
-  procedure, ownership, retention, reprocess SLO, and the exact limits of
-  automatic rejection.
+- The evidence document must state the D lifecycle contract, E operator/audit
+  contract, F metric definitions, proposed thresholds, partner sign-off
+  criteria, rollback/disable expectations, and the explicit Sprint 4 handoff.
+- Sprint 3 must not claim a dashboard, alert delivery, stage-level runtime
+  metrics, or production observability implementation that belongs to Sprint 4.
 
 **Steps:**
 
-- [ ] Add generated-fixture alert tests for threshold crossing, recovery,
-  deduplication, missing sink, and bounded event serialization.
 - [ ] Write the evidence document with these sections: Scope and non-goals;
-  D lifecycle contract; E operator and audit contract; F metric definitions;
-  alert thresholds and delivery; dashboard/API evidence; generated fixture
-  evidence; production acceptance; rollback and handoff to Workstream D’s
-  future retention operations.
+  D lifecycle contract; E operator and audit contract; F data-quality metric
+  definitions; proposed threshold/sign-off matrix; generated fixture evidence;
+  production acceptance boundary; and Sprint 4 observability handoff.
 - [ ] Keep the C status text accurate: the full-dataset v2 artifact remains
   pending until it is actually generated; do not claim a live benchmark here.
-- [ ] Run `uv run pytest tests/test_ingestion_alerts.py
-  tests/test_ingestion_observability.py -q` and `uv run ruff check src/api
-  src/application/observability src/application/ingestion`.
-- [ ] Review checkpoint: commit F only after owners approve thresholds and
-  notification behavior.
+- [ ] Run `uv run pytest tests/test_quality_contract.py
+  tests/test_api_operations.py tests/test_source_unit_orchestrator.py -q`.
+- [ ] Review checkpoint: commit F only after owners approve the acceptance
+  matrix and explicitly accept the Sprint 4 handoff.
 
 ## Task 8 — End-to-end verification and closeout
 
@@ -348,8 +352,9 @@ review note. The recommended choices make the rest of this plan executable.
 - [ ] Run the focused D/E/F suite:
   `uv run pytest tests/test_quarantine_lifecycle.py
   tests/test_quarantine_reprocessing.py tests/test_api_quarantine.py
-  tests/test_quarantine_review_actions.py tests/test_ingestion_observability.py
-  tests/test_ingestion_alerts.py -v --tb=short`.
+  tests/test_quarantine_review_actions.py tests/test_quality_contract.py
+  tests/test_api_operations.py tests/test_source_unit_orchestrator.py -v
+  --tb=short`.
 - [ ] Run the existing backend suite with the repository’s environment-gated
   exclusions, then PostgreSQL-backed integration/migration tests separately.
 - [ ] Run `uv run ruff check src dags scripts cli tests` and
@@ -374,7 +379,7 @@ D1 lifecycle storage → D2 source-backed reprocess → D3 lifecycle API
         ↓ review checkpoint
 E1 ownership + audit → E2 operator decision tests
         ↓ review checkpoint
-F1 metrics API → F2 alerts + acceptance evidence
+F1 quality acceptance baseline → F2 evidence + Sprint 4 handoff
         ↓
 full verification and closeout
 ```

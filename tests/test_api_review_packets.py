@@ -46,6 +46,14 @@ def test_runtime_timestamp_code_does_not_parse_reason():
     ) == "INVALID_DATE"
 
 
+def test_runtime_invalid_amount_code_does_not_parse_reason():
+    assert runtime_error_code(
+        "amount",
+        "non-finite decimal monetary value",
+        QualityRuleCode.INVALID_AMOUNT,
+    ) == "INVALID_DECIMAL"
+
+
 @pytest.mark.asyncio
 async def test_approve_keep_current_replays_a_staged_stream_with_active_mapping():
     packet = ReviewPacket(
@@ -1074,6 +1082,64 @@ async def test_run_runtime_validation_returns_medium_risk_for_partial_pass():
     assert amount_trace["status"] == "error"
     assert amount_trace["errorCode"] == "INVALID_DECIMAL"
     assert amount_trace["errorMessage"]
+
+
+@pytest.mark.parametrize("amount", ["NaN", "Infinity"])
+async def test_runtime_preview_reports_non_finite_constant_as_invalid_decimal(amount):
+    review_collection = MagicMock()
+    review_collection.update_one = AsyncMock()
+    packet = SimpleNamespace(
+        id="pkt-non-finite",
+        source_file_path=None,
+        sample_preview=[{"rowIndex": 2, "values": ["TXN001"]}],
+        validation_gates=[],
+    )
+    config = MappingConfig.model_validate(
+        {
+            "_id": "cfg-non-finite",
+            "partner": "MOMO",
+            "workflowType": "UPC",
+            "fileType": "SETTLEMENT",
+            "sheetName": "Sheet1",
+            "startRow": 2,
+            "fieldMappings": [
+                {"path": "id", "column": 1, "type": "STRING", "required": True},
+                {
+                    "path": "amount",
+                    "type": "CONSTANT",
+                    "constant": amount,
+                    "required": True,
+                },
+                {
+                    "path": "currency",
+                    "type": "CONSTANT",
+                    "constant": "VND",
+                    "required": True,
+                },
+                {
+                    "path": "status",
+                    "type": "CONSTANT",
+                    "constant": "SUCCESS",
+                    "required": True,
+                },
+            ],
+            "status": "PENDING_APPROVAL",
+            "configHealth": {},
+        }
+    )
+
+    gate = await run_runtime_validation(
+        _make_db(review_collection=review_collection), packet, config
+    )
+
+    assert gate["status"] == "fail"
+    amount_trace = next(
+        item
+        for item in gate["details"]["traceSamples"][0]["fieldTraces"]
+        if item["path"] == "amount"
+    )
+    assert amount_trace["errorCode"] == "INVALID_DECIMAL"
+    assert amount_trace["outputValue"] is None
 
 
 @pytest.mark.asyncio

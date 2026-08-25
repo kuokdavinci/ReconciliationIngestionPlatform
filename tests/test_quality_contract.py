@@ -113,6 +113,49 @@ def _timestamp_processor(*, fast_mode: bool) -> RowProcessor:
     )
 
 
+def _transformed_amount_processor(
+    *, mapping_type: FieldMappingType, amount: str, fast_mode: bool
+) -> RowProcessor:
+    amount_mapping = (
+        FieldMapping(
+            path="amount",
+            type=FieldMappingType.CONSTANT,
+            constant=amount,
+            required=True,
+        )
+        if mapping_type is FieldMappingType.CONSTANT
+        else FieldMapping(
+            path="amount",
+            column=2,
+            type=FieldMappingType.MAPPING,
+            mapping={"raw-amount": amount},
+            required=True,
+        )
+    )
+    mappings = [
+        FieldMapping(path="id", column=1, type=FieldMappingType.STRING, required=True),
+        amount_mapping,
+        FieldMapping(
+            path="currency", type=FieldMappingType.CONSTANT, constant="VND", required=True
+        ),
+        FieldMapping(
+            path="status",
+            type=FieldMappingType.CONSTANT,
+            constant=TransactionStatus.SUCCESS.value,
+            required=True,
+        ),
+    ]
+    return RowProcessor(
+        normalizer=TransactionNormalizer(mappings),
+        validator=Validator(),
+        fast_mode=fast_mode,
+        partner="MOMO",
+        workflow_type="UPC",
+        reconciliation_date=datetime(2026, 8, 19, tzinfo=timezone.utc),
+        source_file_id=uuid4(),
+    )
+
+
 def _transaction(
     ingestion_key: str,
     *,
@@ -725,6 +768,32 @@ def test_fast_mode_rejects_non_finite_amount_as_invalid(amount):
 
     assert result.outcome is QualityOutcome.REJECT
     assert result.violations[0].code is QualityRuleCode.INVALID_AMOUNT
+
+
+@pytest.mark.parametrize("fast_mode", [False, True])
+@pytest.mark.parametrize(
+    "mapping_type", [FieldMappingType.CONSTANT, FieldMappingType.MAPPING]
+)
+@pytest.mark.parametrize("amount", ["NaN", "Infinity"])
+def test_transformed_non_finite_amount_has_same_rejection_contract(
+    fast_mode,
+    mapping_type,
+    amount,
+):
+    processor = _transformed_amount_processor(
+        mapping_type=mapping_type,
+        amount=amount,
+        fast_mode=fast_mode,
+    )
+
+    result = processor.process(("txn-1", "raw-amount"), row_number=3)
+
+    assert result.data_container is None
+    assert result.outcome is QualityOutcome.REJECT
+    assert [item.code for item in result.violations] == [
+        QualityRuleCode.INVALID_AMOUNT
+    ]
+    assert result.violations[0].actual is None
 
 
 def test_row_processor_preserves_validator_warning_for_quality_aggregation():

@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import os
 import sys
 import time
 from dataclasses import dataclass
@@ -272,7 +271,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Status: **{report['status']}**",
         f"- Dataset: `{report['dataset']['path']}`",
         f"- Dataset SHA-256: `{report['dataset']['sha256']}`",
-        f"- MongoDB: `{report['environment']['mongodb_url']}`",
+        f"- MongoDB: `{report['environment']['mongodb']}`",
         f"- Database: `{report['environment']['db_name']}`",
         f"- Cleanup: `{report.get('cleanup', 'not-run')}`",
         "- Boundary: `IngestionPipeline.process_file`",
@@ -344,7 +343,7 @@ async def run_benchmark(
             "size_bytes": input_path.stat().st_size,
         },
         "environment": {
-            "mongodb_url": os.environ.get("MONGODB_URL", settings.mongodb_url),
+            "mongodb": "configured",
             "db_name": settings.db_name,
         },
         "configuration": {

@@ -1,10 +1,13 @@
 """Unit tests for the Sprint 3 fraud-dataset benchmark helpers."""
 
+import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from scripts import benchmark_fraud_detection
 from scripts.benchmark_fraud_detection import (
     BENCHMARK_CONFIG_VERSION,
     BENCHMARK_WORKFLOW,
@@ -12,6 +15,7 @@ from scripts.benchmark_fraud_detection import (
     build_mapping_document,
     build_benchmark_config,
     render_markdown,
+    run_benchmark,
     write_prefix_csv,
 )
 
@@ -106,7 +110,7 @@ def _render_report() -> dict[str, Any]:
     return {
         "status": "completed",
         "dataset": {"path": "fixture.csv", "sha256": "fixture-sha"},
-        "environment": {"mongodb_url": "mongodb://fixture", "db_name": "fixture"},
+        "environment": {"mongodb": "configured", "db_name": "fixture"},
         "cleanup": "benchmark records and mapping removed",
         "configuration": {
             "config_version": BENCHMARK_CONFIG_VERSION,
@@ -123,3 +127,60 @@ def test_markdown_uses_report_config_version() -> None:
     assert f"- Mapping: `{BENCHMARK_CONFIG_VERSION}`" in markdown
     assert "sprint3-fraud-detection-v1" not in markdown
     assert "`extra.sourceTimestamp`" not in markdown
+
+
+def test_benchmark_artifacts_exclude_mongodb_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    credentialed_uri = (
+        "mongodb://review_user:review_password@localhost:27017/db"
+    )
+
+    class UnavailableAdmin:
+        async def command(self, _: str) -> None:
+            raise benchmark_fraud_detection.ServerSelectionTimeoutError(
+                "MongoDB unavailable for test"
+            )
+
+    class UnavailableClient:
+        admin = UnavailableAdmin()
+
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    input_path = tmp_path / "fixture.csv"
+    output_json = tmp_path / "benchmark.json"
+    output_markdown = tmp_path / "benchmark.md"
+    input_path.write_text("id\n1\n", encoding="utf-8")
+    monkeypatch.setenv("MONGODB_URL", credentialed_uri)
+    monkeypatch.setattr(
+        benchmark_fraud_detection, "AsyncIOMotorClient", UnavailableClient
+    )
+
+    report = asyncio.run(
+        run_benchmark(
+            input_path=input_path,
+            output_json=output_json,
+            output_markdown=output_markdown,
+        )
+    )
+    serialized_json = json.dumps(report)
+    markdown = output_markdown.read_text(encoding="utf-8")
+
+    artifacts = (
+        serialized_json,
+        output_json.read_text(encoding="utf-8"),
+        markdown,
+    )
+    for artifact in artifacts:
+        assert "review_user" not in artifact
+        assert "review_password" not in artifact
+        assert credentialed_uri not in artifact
+    assert report["environment"] == {
+        "mongodb": "configured",
+        "db_name": report["environment"]["db_name"],
+    }
+    assert "- MongoDB: `configured`" in markdown

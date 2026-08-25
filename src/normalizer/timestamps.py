@@ -13,7 +13,13 @@ LEGACY_TIMESTAMP_FORMATS: Final[tuple[str, ...]] = (
 )
 
 _OFFSET_TIMESTAMP_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})"
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?P<hours>\d{2}):(?P<minutes>\d{2}))"
+)
+_LEGACY_TIMESTAMP_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"\d{4}-\d{2}-\d{2}"),
+    re.compile(r"\d{2}/\d{2}/\d{4}"),
+    re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"),
+    re.compile(r"\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}"),
 )
 
 
@@ -37,14 +43,25 @@ def parse_transaction_timestamp(value: object) -> datetime:
     if not isinstance(value, str) or not value:
         raise TimestampParseError("unsupported timestamp")
 
-    if _OFFSET_TIMESTAMP_PATTERN.fullmatch(value):
+    offset_match = _OFFSET_TIMESTAMP_PATTERN.fullmatch(value)
+    if offset_match and (
+        offset_match["hours"] is None
+        or (
+            int(offset_match["hours"]) <= 23
+            and int(offset_match["minutes"]) <= 59
+        )
+    ):
         iso_candidate = f"{value[:-1]}+00:00" if value.endswith("Z") else value
         try:
             return _normalize_aware(datetime.fromisoformat(iso_candidate))
         except ValueError:
             pass
 
-    for date_format in LEGACY_TIMESTAMP_FORMATS:
+    for date_format, pattern in zip(
+        LEGACY_TIMESTAMP_FORMATS, _LEGACY_TIMESTAMP_PATTERNS, strict=True
+    ):
+        if pattern.fullmatch(value) is None:
+            continue
         try:
             return datetime.strptime(value, date_format)
         except ValueError:

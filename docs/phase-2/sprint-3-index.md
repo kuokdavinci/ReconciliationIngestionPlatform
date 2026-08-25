@@ -25,6 +25,7 @@ operator workflow, and observability.
 | [`sprint-3-eda-review.md`](sprint-3-eda-review.md) | Dataset provenance, EDA findings, and rule-promotion rationale |
 | [`sprint-3-workstream-b-quality-contract.md`](sprint-3-workstream-b-quality-contract.md) | Deterministic quality contract, duplicate outcomes, and bounded source-unit result |
 | [`sprint-3-workstream-c-normalization-validation.md`](sprint-3-workstream-c-normalization-validation.md) | Timestamp parser, validation error contract, parity, persistence boundary, and verification evidence |
+| [`../superpowers/plans/2026-08-25-sprint-3-workstreams-def.md`](../superpowers/plans/2026-08-25-sprint-3-workstreams-def.md) | Sequential implementation plan for quarantine lifecycle, operator review, observability, and production acceptance |
 
 The Workstream C evidence document is the canonical source for the current
 `timestamp → transDate` behavior. The A documents retain the historical EDA

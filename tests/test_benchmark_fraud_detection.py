@@ -11,6 +11,7 @@ from scripts.benchmark_fraud_detection import (
     _case_meets_acceptance,
     build_mapping_document,
     build_benchmark_config,
+    redact_mongodb_url,
     render_markdown,
     write_prefix_csv,
 )
@@ -123,3 +124,14 @@ def test_markdown_uses_report_config_version() -> None:
     assert f"- Mapping: `{BENCHMARK_CONFIG_VERSION}`" in markdown
     assert "sprint3-fraud-detection-v1" not in markdown
     assert "`extra.sourceTimestamp`" not in markdown
+
+
+def test_redact_mongodb_url_hides_password() -> None:
+    redacted = redact_mongodb_url(
+        "mongodb://admin:secret@example.test:27017/reconciliation?authSource=admin"
+    )
+
+    assert redacted == (
+        "mongodb://admin:***@example.test:27017/reconciliation?authSource=admin"
+    )
+    assert "secret" not in redacted

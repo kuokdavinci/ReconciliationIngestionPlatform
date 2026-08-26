@@ -1,7 +1,8 @@
 """Domain contract for rejected ingestion rows."""
 
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from enum import StrEnum
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -13,6 +14,21 @@ class QuarantineStatus(StrEnum):
     REPROCESSING = "REPROCESSING"
     RESOLVED = "RESOLVED"
     REJECTED = "REJECTED"
+
+
+class QuarantineTransitionStatus(StrEnum):
+    """Outcome of an optimistic quarantine state transition."""
+
+    APPLIED = "APPLIED"
+    REPLAYED = "REPLAYED"
+    CONFLICT = "CONFLICT"
+    NOT_FOUND = "NOT_FOUND"
+
+
+@dataclass(frozen=True, slots=True)
+class QuarantineTransitionResult:
+    status: QuarantineTransitionStatus
+    record: "IngestionQuarantineRecord | None" = None
 
 
 class QuarantinePhase(StrEnum):
@@ -46,6 +62,10 @@ class IngestionQuarantineRecord(BaseModel):
     config_version: str | None = Field(default=None, alias="configVersion")
     status: QuarantineStatus = QuarantineStatus.PENDING
     attempt_count: int = Field(default=1, alias="attemptCount", ge=1)
+    expires_at: datetime | None = Field(default=None, alias="expiresAt")
+    claimed_by: str | None = Field(default=None, alias="claimedBy", max_length=128)
+    claimed_at: datetime | None = Field(default=None, alias="claimedAt")
+    last_action_id: str | None = Field(default=None, alias="lastActionId", max_length=128)
     resolution_metadata: dict[str, Any] = Field(default_factory=dict, alias="resolutionMetadata")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), alias="createdAt")
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC), alias="updatedAt")
@@ -57,8 +77,10 @@ def sanitize_raw_row(value: Any, *, max_length: int = 512) -> Any:
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
+            normalized_key = "".join(character for character in key_text.lower() if character.isalnum())
             if any(
-                token in key_text.lower() for token in ("password", "secret", "token", "api_key")
+                token in normalized_key
+                for token in ("password", "secret", "token", "apikey", "authorization", "credential")
             ):
                 sanitized[key_text] = "[REDACTED]"
             else:

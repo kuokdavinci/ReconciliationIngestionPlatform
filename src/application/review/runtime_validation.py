@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from src.infrastructure.review.repository import ReviewPacketRepository
+from src.domain.ingestion.quality import QualityRuleCode
 from src.normalizer.normalizer import TransactionNormalizer
 from src.readers import create_reader
 from src.application.review.raw_stream import (
@@ -22,8 +23,18 @@ def serialize_runtime_value(value: Any) -> Any:
     return value
 
 
-def runtime_error_code(field: Optional[str], reason: Optional[str]) -> str:
-    """Determine a standardized API error code from normalizer/validator exceptions."""
+def runtime_error_code(
+    field: Optional[str],
+    reason: Optional[str],
+    quality_code: QualityRuleCode | str | None = None,
+) -> str:
+    """Determine the existing Review Center code from structured evidence."""
+    normalized_code = getattr(quality_code, "value", quality_code)
+    if normalized_code == QualityRuleCode.INVALID_TIMESTAMP.value:
+        return "INVALID_DATE"
+    if normalized_code == QualityRuleCode.INVALID_AMOUNT.value:
+        return "INVALID_DECIMAL"
+
     text = str(reason or "").lower()
     field_name = str(field or "").lower()
     if "sourcefield '" in text and "not found" in text:
@@ -88,11 +99,15 @@ def serialize_runtime_trace(
                 "sourceValue": serialize_runtime_value(trace.source_value),
                 "outputValue": serialize_runtime_value(trace.output_value),
                 "status": runtime_trace_status(
-                    runtime_error_code(trace.error.field, trace.error.message)
+                    runtime_error_code(
+                        trace.error.field, trace.error.message, trace.error.code
+                    )
                     if trace.error
                     else None
                 ),
-                "errorCode": runtime_error_code(trace.error.field, trace.error.message)
+                "errorCode": runtime_error_code(
+                    trace.error.field, trace.error.message, trace.error.code
+                )
                 if trace.error
                 else None,
                 "errorMessage": trace.error.message if trace.error else None,
@@ -104,7 +119,7 @@ def serialize_runtime_trace(
                 "field": err.field,
                 "reason": err.message,
                 "row": err.row,
-                "errorCode": runtime_error_code(err.field, err.message),
+                "errorCode": runtime_error_code(err.field, err.message, err.code),
             }
             for err in (build_errors or [])
         ],

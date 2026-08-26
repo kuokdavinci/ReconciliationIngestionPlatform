@@ -6,9 +6,16 @@
 controlled-mutation, and coverage-handoff evidence for the Fraud Detection
 Dataset. **Workstream B is now implemented** for the shared runtime quality
 contract, deterministic file/row gate, duplicate classification, bounded
-source-unit result, and conflict quarantine routing. Workstreams C–F remain
-handoffs; this document does not promote statistical or fraud semantics into
-automatic rejection.
+source-unit result, and conflict quarantine routing. **Workstream C is
+`implemented; full-dataset v2 evidence pending`** for the normalization and
+validation contract. This document does not promote statistical or fraud
+semantics into automatic rejection. Workstream D has its persistence
+foundation implemented; D operator actions/reprocess, Workstream E, and
+Workstream F remain pending.
+
+The frozen 1M-row source CSV is now available locally at
+`data/eda/fraud_detection/raw/Fraud Detection Dataset.csv`; the v2 benchmark
+JSON/Markdown evidence will be added after the live run.
 
 The full-profile baseline is version `3`, SHA-256
 `e3895c988fe37efc76dabfe62d23f7ab75e89477bb17ba0c53092b008431caf6`, with
@@ -35,11 +42,12 @@ The 17-column source schema is:
 `merchant_city`, `merchant_latitude`, `merchant_longitude`,
 `transaction_type`, `amount`, `currency`, `is_fraud`, `fraud_type`.
 
-The frozen benchmark maps `transaction_id → id` (required), `amount → amount`
-(required `DECIMAL`), and `currency → currency` (required `STRING`). It sets
-`status ← SUCCESS`. It retains timestamp as `extra.sourceTimestamp`; the
-intended canonical destination is `transDate`, but ISO timezone parsing is not
-yet supported by the current baseline. Customer/card/device/IP,
+The Workstream C benchmark v2 mapping maps `transaction_id → id` (required),
+`timestamp → transDate` (required `DATE`), `amount → amount` (required
+`DECIMAL`), and `currency → currency` (required `STRING`). It sets `status ←
+SUCCESS`. ISO `Z` and offset timestamps are normalized to UTC-aware canonical
+values, while the four accepted legacy formats remain naive. The frozen v1
+benchmark artifacts remain unchanged. Customer/card/device/IP,
 merchant/category/country/city/coordinates/transaction type, and fraud label
 are retained in `extra.*`. `fraud_type` is intentionally unmapped and is not a
 canonical field.
@@ -53,7 +61,7 @@ EDA uniqueness is local to this source file. Runtime persistence uniqueness is
 |---|---|---|---|
 | Required ID/amount/currency and Decimal conversion | COVERED | Mapping, normalizer, validator | A closed; B/C maintain |
 | Negative amount; zero valid | COVERED | Validator rejects negative values and accepts zero | A closed; C maintain |
-| ISO timezone timestamp to `transDate` | GAP | Timestamp remains `extra.sourceTimestamp` | C |
+| ISO timezone timestamp to `transDate` | COVERED | Benchmark v2 mapping, UTC-aware normalizer, validator, persistence boundary, normal/fast parity tests | C contract; D operates routed rejects |
 | Equivalent duplicate/idempotency | COVERED | PostgreSQL key conflict plus canonical business-payload SHA-256 classification | B closed; D/F operate |
 | Conflicting duplicate | COVERED | Bulk payload comparison, typed evidence, quarantine, and source-unit hold | B closed; D owns lifecycle |
 | Header/schema drift | COVERED | Runtime file gate distinguishes append-only warning from breaking/fatal drift | B closed; C maintains types |
@@ -88,26 +96,43 @@ target.
 
 ### C — Normalization and validation contract
 
-Specify stable structured validation errors and complete timezone-aware
-`transDate` parsing. Preserve the current Decimal and negative-amount
-boundaries while adding contract-backed tests.
+**Evidence status:** `implemented; full-dataset v2 evidence pending`.
 
-### D — Quarantine lifecycle
+ISO `Z` and offset timestamps now map to canonical `transDate`, normalize to
+UTC-aware values, and use bounded structured `INVALID_TIMESTAMP` evidence when
+invalid. Normal and fast ingestion modes share the same business outcome and
+error contract; Decimal, required-field, duplicate, and quality-policy
+behavior remains unchanged. Review Runtime retains its legacy `INVALID_DATE`
+presentation code through structured rule mapping. Commands, results,
+performance evidence, smoke evidence, and the exact full-dataset limitation are
+recorded in
+[`sprint-3-workstream-c-normalization-validation.md`](sprint-3-workstream-c-normalization-validation.md).
 
-Define retention, operator resolution, reprocessing, and lifecycle evidence for
-the sanitized row rejects and conflicting duplicates already routed by
-Workstream B.
+### D — Quarantine lifecycle — persistence foundation implemented
 
-### E — Operator and approval flow
+The first D checkpoint is implemented in `35ecada`. `IngestionQuarantineRecord`
+now carries bounded lifecycle metadata; the Mongo repository applies a
+configurable 30-day `expiresAt`, TTL cleanup, bounded listing, atomic
+compare-and-set transitions, action-id replay detection, and metadata/raw-row
+redaction. The focused lifecycle/component suite passes (`27 passed`).
+
+Remaining D scope: operator action routes, audit-backed ownership, and the
+bounded source-unit reprocess request. A sanitized `rawRow` is never used as a
+canonical replay payload.
+
+### E — Operator and approval flow — pending
 
 Define review ownership, approval/rejection actions, counters, and escalation
-for `REVIEW` outcomes.
+for `REVIEW` outcomes. This has not been implemented yet; mapping
+`ReviewPacket` approval remains on its existing contract.
 
-### F — Observability and production acceptance
+### F — Observability and production acceptance — pending
 
-Define monitoring baselines, alerts, dashboards, partner sign-off, and
-production acceptance evidence. Statistical or semantic candidates must stay
-out of automatic rejection until that contract exists.
+Define data-quality acceptance baselines and the handoff inputs for Sprint 4
+observability. Generic stage metrics, structured logs, dashboards, alert
+delivery, and the 100k observability benchmark remain outside Sprint 3.
+Statistical or semantic candidates must stay out of automatic rejection until
+that contract exists.
 
 ## Fixture and test guidance
 

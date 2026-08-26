@@ -5,6 +5,11 @@ frozen ingestion baseline và coverage handoff. Tài liệu này chỉ giữ cá
 quyết định và rule cần đối chiếu cùng EDA notebook; không phải production
 quality-gate approval.
 
+> Đây là tài liệu handoff lịch sử của Workstream A. Mapping và timestamp
+> contract hiện tại do Workstream C sở hữu; xem
+> [`sprint-3-workstream-c-normalization-validation.md`](sprint-3-workstream-c-normalization-validation.md)
+> cho behavior runtime và evidence mới nhất.
+
 ## Dataset evidence
 
 | Item | Kết quả |
@@ -22,7 +27,7 @@ quality-gate approval.
 | `INVALID_AMOUNT` | Decimal parse hợp lệ; không có negative amount; zero được giữ hợp lệ | Validator reject parse fail/negative amount | `RECORD` reject/quarantine; dùng `Decimal` làm authority | `COVERED` — C maintain |
 | `MALFORMED_ROW` | Profile đếm malformed/blank rows | Reader/normalizer trả row errors; quarantine persistence có nhưng action contract chưa hoàn chỉnh | Giữ row index/reason; reject hoặc quarantine theo C/D contract | `PARTIAL` — C/D |
 | `SCHEMA_DRIFT` | Profile phát hiện missing optional/unexpected columns | StructureSignature, ConfigHealth và mapping coverage có; chưa có type-aware runtime gate | Required drift → `FATAL`; optional/type drift → `WARNING/REVIEW` sau khi chốt contract | `PARTIAL` — B/C |
-| `INVALID_TIMESTAMP`, `TIMESTAMP_TIMEZONE_REQUIRED` | 1M timestamp parse được, có timezone và second precision | Baseline giữ `timestamp` ở `extra.sourceTimestamp`; chưa map được ISO timezone đầy đủ vào `transDate` | Chốt timezone/format/precision; parse fail → `RECORD` hoặc `FATAL`; không advance source unit | `GAP` — B/C |
+| `INVALID_TIMESTAMP`, `TIMESTAMP_TIMEZONE_REQUIRED` | 1M timestamp parse được, có timezone và second precision | Workstream C map source `timestamp` vào required `transDate`, normalize offset-aware values về UTC và giữ legacy naive formats | Parse failure → `INVALID_TIMESTAMP / NORMALIZATION / ERROR / REJECT`; timezone absence không trở thành global reject | `IMPLEMENTED` — C; timezone policy partner-specific |
 | `TIMESTAMP_PRECISION_DRIFT` | Dataset có second precision ổn định | Chưa có partner precision contract | Chỉ `WARNING`/monitoring, không reject tự động | `DO_NOT_PROMOTE` — F/partner |
 | `UNIQUE_TRANSACTION_ID` | `transaction_id` unique trong file này | Runtime idempotency dùng PostgreSQL `(identify, ingestion_key)`; scope khác EDA | Không tạo constraint production chỉ từ file-local uniqueness; chốt canonical identity/reconciliation scope | `PARTIAL` — B |
 | `EQUIVALENT_DUPLICATE` | Clean file không có duplicate tự nhiên; mutation test có | PostgreSQL conflict-safe insert/idempotency đã có | `DUPLICATE` outcome, skip/persist idempotently, tăng counter, không fail batch | `PARTIAL` — B |
@@ -58,20 +63,21 @@ startup hoặc prefix preparation.
 | 100.000 | 100.000 | 0 | 0 | 9.496s | 10.530,8 rows/s |
 | 1.000.000 | 1.000.000 | 0 | 0 | 102.439s | 9.762,0 rows/s |
 
-Mapping chính: `transaction_id → id`, `amount → Decimal amount`,
-`currency → currency`, `timestamp → extra.sourceTimestamp`,
-`status ← SUCCESS`; `fraud_type` không map canonical.
+Đây là frozen Workstream A/v1 baseline. Mapping v2 của Workstream C thay
+`timestamp → extra.sourceTimestamp` bằng required `timestamp → transDate`;
+không so sánh throughput v1 và v2 như cùng một workload. `fraud_type` vẫn
+không map canonical.
 
 ## Handoff
 
 | Workstream | Phần tiếp nhận |
 |---|---|
 | B — Quality contract/gate | Identity scope, schema severity, timestamp contract, duplicate payload comparison |
-| C — Normalization/validation | Timezone-aware `transDate`, structured validation errors, required/amount rules |
+| C — Normalization/validation | Timezone-aware `transDate`, structured validation errors, required/amount rules; full-dataset v2 evidence pending |
 | D — Quarantine lifecycle | Conflicting duplicate, lineage, reason, reprocess evidence |
 | F — Observability/acceptance | Precision, temporal volume, monitoring baseline, production sign-off |
 
 Chi tiết: [Sprint 3 data-quality](./sprint-3-data-quality.md),
 [EDA review](./sprint-3-eda-review.md),
 [quality profile](../../data/eda/fraud_detection/profiles/quality_profile.md),
-[benchmark baseline](./sprint-3-fraud-detection-baseline.md).
+[Workstream C benchmark evidence](./sprint-3-workstream-c-normalization-validation.md).

@@ -66,6 +66,11 @@ INDEXES: dict[str, list[IndexModel]] = {
             [("status", ASCENDING), ("updatedAt", DESCENDING)],
             name="idx_quarantine_status_updated",
         ),
+        IndexModel(
+            [("expiresAt", ASCENDING)],
+            expireAfterSeconds=0,
+            name="idx_quarantine_expires_at_ttl",
+        ),
     ],
     "reconciliation_mapping_config": [
         IndexModel(

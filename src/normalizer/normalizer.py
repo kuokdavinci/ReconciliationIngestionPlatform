@@ -20,6 +20,7 @@ from src.domain.ingestion.quality import (
     QualityViolation,
     quality_violation,
 )
+from src.normalizer.timestamps import TimestampParseError, parse_transaction_timestamp
 
 
 _REQUIRED_CANONICAL_FIELDS = frozenset({"id", "amount", "currency", "status"})
@@ -31,6 +32,8 @@ def _normalization_violation(
     field: str,
     message: str,
     row: int | None = None,
+    expected: Any = None,
+    actual: Any = None,
 ) -> QualityViolation:
     return quality_violation(
         code=code,
@@ -39,6 +42,8 @@ def _normalization_violation(
         outcome=QualityOutcome.REJECT,
         field=field,
         message=message,
+        expected=expected,
+        actual=actual,
         row=row,
     )
 
@@ -79,16 +84,9 @@ class TransactionNormalizer:
     """Applies FieldMapping rules to raw row tuples.
 
     Performs type conversions (STRING, DECIMAL, DATE, CONSTANT) and
-    collects validation errors. Never raises exceptions — all errors
-    are collected as QualityViolation objects.
+    collects expected row-quality conversion errors as QualityViolation
+    objects; unexpected exceptions propagate to the caller.
     """
-
-    _DATE_FORMATS = (
-        "%Y-%m-%d",
-        "%d/%m/%Y",
-        "%Y-%m-%d %H:%M:%S",
-        "%d/%m/%Y %H:%M:%S",
-    )
 
     def __init__(self, field_mappings: list[FieldMapping]) -> None:
         """Initialize with a list of field mappings.
@@ -146,7 +144,12 @@ class TransactionNormalizer:
                 if fm.type == FieldMappingType.STRING:
                     value, error = self._convert_string(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.DECIMAL:
-                    value, error = self._convert_decimal(source_value, fm, row_number)
+                    if fm.path == "amount":
+                        value = source_value
+                    else:
+                        value, error = self._convert_decimal(
+                            source_value, fm, row_number
+                        )
                 elif fm.type == FieldMappingType.DATE:
                     value, error = self._convert_date(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.MAPPING:
@@ -170,6 +173,12 @@ class TransactionNormalizer:
 
             if error is not None:
                 result.errors.append(error)
+            elif fm.path == "amount" and value is not None:
+                amount, amount_error = self._coerce_amount(value, fm, row_number)
+                if amount_error is not None:
+                    result.errors.append(amount_error)
+                else:
+                    result.data[fm.path] = amount
             elif value is not None:
                 result.data[fm.path] = value
 
@@ -207,7 +216,12 @@ class TransactionNormalizer:
                 elif fm.type == FieldMappingType.STRING:
                     value, error = self._convert_string(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.DECIMAL:
-                    value, error = self._convert_decimal(source_value, fm, row_number)
+                    if fm.path == "amount":
+                        value = source_value
+                    else:
+                        value, error = self._convert_decimal(
+                            source_value, fm, row_number
+                        )
                 elif fm.type == FieldMappingType.DATE:
                     value, error = self._convert_date(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.MAPPING:
@@ -227,6 +241,9 @@ class TransactionNormalizer:
                         message=f"unknown mapping type '{fm.type}' for path '{fm.path}'",
                         row=row_number,
                     )
+
+            if error is None and fm.path == "amount" and value is not None:
+                value, error = self._coerce_amount(value, fm, row_number)
 
             traces.append(
                 FieldNormalizationTrace(
@@ -377,6 +394,15 @@ class TransactionNormalizer:
         Float input is explicitly rejected. Invalid strings produce
         QualityViolation with a stable rule code and failure description.
         """
+        return TransactionNormalizer._coerce_amount(value, fm, row_number)
+
+    @staticmethod
+    def _coerce_amount(
+        value: Any,
+        fm: FieldMapping,
+        row_number: Optional[int],
+    ) -> tuple[Decimal | None, QualityViolation | None]:
+        """Coerce a transformed canonical amount without exposing its raw value."""
         if value is None:
             return None, _normalization_violation(
                 code=_missing_value_code(fm),
@@ -394,14 +420,45 @@ class TransactionNormalizer:
             )
 
         try:
-            return Decimal(str(value)), None
+            decimal_value = Decimal(str(value))
         except InvalidOperation:
             return None, _normalization_violation(
                 code=QualityRuleCode.INVALID_AMOUNT,
                 field=fm.path,
-                message=f"invalid decimal value: {value!r}",
+                message="invalid decimal value for monetary amount",
                 row=row_number,
             )
+
+        error = TransactionNormalizer._normalized_amount_error(
+            decimal_value, row_number, field=fm.path
+        )
+        if error is not None:
+            return None, error
+        return decimal_value, None
+
+    @staticmethod
+    def _normalized_amount_error(
+        value: Any,
+        row_number: Optional[int],
+        *,
+        field: str = "amount",
+    ) -> QualityViolation | None:
+        """Validate the Decimal-only boundary used by canonical builders."""
+        if not isinstance(value, Decimal):
+            return _normalization_violation(
+                code=QualityRuleCode.INVALID_AMOUNT,
+                field=field,
+                message="amount must be a Decimal monetary value",
+                row=row_number,
+            )
+        if not value.is_finite():
+            return _normalization_violation(
+                code=QualityRuleCode.INVALID_AMOUNT,
+                field=field,
+                message="non-finite decimal monetary value",
+                row=row_number,
+            )
+        return None
 
     def _convert_date(
         self,
@@ -409,12 +466,7 @@ class TransactionNormalizer:
         fm: FieldMapping,
         row_number: Optional[int],
     ) -> tuple[datetime | None, QualityViolation | None]:
-        """Convert value to datetime.
-
-        Already datetime objects are returned as-is. String values are
-        parsed against a whitelist of 4 date formats. Unmatched formats
-        produce a QualityViolation.
-        """
+        """Convert a source value to a canonical transaction timestamp."""
         if value is None:
             return None, _normalization_violation(
                 code=_missing_value_code(fm),
@@ -423,29 +475,19 @@ class TransactionNormalizer:
                 row=row_number,
             )
 
-        if isinstance(value, datetime):
-            return value, None
-
-        if not isinstance(value, str):
+        try:
+            return parse_transaction_timestamp(value), None
+        except TimestampParseError:
             return None, _normalization_violation(
                 code=QualityRuleCode.INVALID_TIMESTAMP,
                 field=fm.path,
-                message=f"expected string or datetime, got {type(value).__name__}",
+                message="Timestamp is not a supported date/time value.",
+                expected=(
+                    "ISO-8601 datetime with Z/UTC offset or an approved legacy date format"
+                ),
+                actual={"type": type(value).__name__},
                 row=row_number,
             )
-
-        for fmt in self._DATE_FORMATS:
-            try:
-                return datetime.strptime(value, fmt), None
-            except ValueError:
-                continue
-
-        return None, _normalization_violation(
-            code=QualityRuleCode.INVALID_TIMESTAMP,
-            field=fm.path,
-            message=f"invalid date value: {value!r} (tried formats: {', '.join(self._DATE_FORMATS)})",
-            row=row_number,
-        )
 
     @staticmethod
     def _convert_mapping(
@@ -591,6 +633,12 @@ class TransactionNormalizer:
             )
             return None, errors + new_errors
 
+        amount_error = TransactionNormalizer._normalized_amount_error(
+            data["amount"], row_number
+        )
+        if amount_error is not None:
+            return None, errors + [amount_error]
+
         extra = TransactionNormalizer._extract_extra(data)
 
         txn = {
@@ -658,6 +706,12 @@ class TransactionNormalizer:
                 )
             )
             return None, errors + new_errors
+
+        amount_error = TransactionNormalizer._normalized_amount_error(
+            data["amount"], row_number
+        )
+        if amount_error is not None:
+            return None, errors + [amount_error]
 
         extra = TransactionNormalizer._extract_extra(data)
 

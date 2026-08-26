@@ -186,7 +186,7 @@ class Validator:
                 field="transDate",
                 message="transDate must be a datetime object.",
                 expected="datetime",
-                actual=value,
+                actual={"type": type(value).__name__},
                 row=row_number,
                 trace=trace,
             )

@@ -28,8 +28,10 @@ Index đầy đủ theo sprint nằm tại [docs/phase-2/INDEX.md](phase-2/INDEX
 
 ### Sprint 3 — Data quality và quarantine
 
+- [Chỉ mục Sprint 3](phase-2/sprint-3-index.md)
 - [Kế hoạch và trạng thái Sprint 3](phase-2/sprint-3-data-quality.md)
-- [Workstream C — normalization và validation evidence](phase-2/sprint-3-workstream-c-normalization-validation.md) — `implemented; full-dataset v2 evidence pending`
+- [Workstream C — normalization và validation evidence](phase-2/sprint-3-workstream-c-normalization-validation.md) — implemented + full-dataset v2 evidence
+- [Workstream C — full-dataset v2 baseline](phase-2/sprint-3-workstream-c-baseline.md)
 
 ## Vận hành và giới hạn
 

@@ -1,5 +1,12 @@
 # Sprint 3 — Workstream B: Quality contract, gate và Airflow-ready outcome
 
+**Status:** Implemented. **Index:** [Sprint 3 index](sprint-3-index.md).
+
+Workstream B is the deterministic quality boundary between mapping/validation,
+persistence and runtime orchestration. Workstream C owns canonical timestamp
+normalization; Workstream D owns quarantine resolution and source-unit
+recovery.
+
 ## Scope
 
 Workstream B promotes deterministic ingestion rules into a runtime contract. It
@@ -27,8 +34,8 @@ or promote statistical/fraud semantics into automatic rejection.
 The following remain descriptive/partner-contract candidates and are not
 promoted: amount IQR/outliers, fraud semantics, card/customer consistency,
 merchant/location consistency, coordinate semantics, temporal volume, and
-timestamp precision drift. Complete timezone-aware timestamp parsing remains a
-Workstream C handoff.
+timestamp precision drift. The timestamp normalization contract is defined by
+Workstream C and is documented separately.
 
 Internal violations use `message` and `code`. Serialized error boundaries use
 the existing `field`/`reason` shape and add `errorCode`, `phase`, `severity`,
@@ -312,7 +319,7 @@ profiled separately so duplicate classification guarantees are not weakened.
 
 ## Handoffs
 
-Workstream C owns complete timezone-aware timestamp parsing and the remaining
-normalization contract. Workstream D owns quarantine lifecycle/reprocessing
-and operator evidence. Workstream F owns production dashboards, alerts,
-repeated environment benchmark evidence, and final partner acceptance.
+Workstream C owns the canonical timestamp and normalization contract. Workstream
+D owns quarantine lifecycle/reprocessing and operator evidence. Workstream F
+owns production dashboards, alerts, repeated environment benchmark evidence,
+and final partner acceptance.

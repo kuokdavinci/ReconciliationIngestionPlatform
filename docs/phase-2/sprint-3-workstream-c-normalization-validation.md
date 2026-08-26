@@ -1,6 +1,7 @@
 # Sprint 3 — Workstream C: Normalization and validation contract
 
-**Evidence status:** `implemented; full-dataset v2 evidence pending`
+**Status:** Implemented; full-dataset v2 evidence captured on 2026-08-26.
+**Index:** [Sprint 3 index](sprint-3-index.md).
 
 ## Scope and non-goals
 
@@ -14,6 +15,16 @@ IQR, fraud semantics, entity/location/coordinate consistency, temporal volume,
 and timestamp precision remain outside automatic rejection. This work does not
 change Airflow payloads, duplicate identity/fingerprints, quarantine lifecycle,
 quality precedence, PostgreSQL schema, or reconciliation behavior.
+
+## Implementation map
+
+| Capability | Module | Responsibility |
+|---|---|---|
+| Timestamp parsing | `src/normalizer/timestamps.py` | Strict ISO/offset parsing and legacy format compatibility |
+| Source mapping | `src/normalizer/normalizer.py` | Map source `timestamp` to canonical `transDate` |
+| Canonical validation | `src/validators/validator.py` | Required/date/Decimal boundaries and structured violations |
+| Persistence boundary | `src/infrastructure/partner_transaction/mappers.py` | Normalize aware timestamps to the existing UTC-naive PostgreSQL representation |
+| Full-dataset runner | `scripts/benchmark_fraud_detection.py` | Run v2 mapping through the real ingestion boundary |
 
 ## Timestamp input and canonicalization matrix
 
@@ -84,12 +95,12 @@ Verification date: 2026-08-25.
 
 | Evidence | Required result | Artifact/status |
 |---|---|---|
-| Focused C tests | Pass | `uv run pytest tests/test_timestamp_normalization.py tests/test_normalizer.py tests/test_validator.py tests/test_persistence_time.py tests/test_persistence_mappers.py tests/test_quality_contract.py tests/test_ingestion_pipeline.py tests/test_benchmark_fraud_detection.py tests/test_benchmark_quality_contract.py tests/test_api_review_packets.py::test_runtime_timestamp_code_does_not_parse_reason tests/test_api_review_packets.py::test_run_runtime_validation_returns_high_risk_for_failed_validation -v --tb=short` — 244 passed |
+| Focused C tests | Pass | `uv run pytest tests/test_timestamp_normalization.py tests/test_normalizer.py tests/test_validator.py tests/test_persistence_time.py tests/test_persistence_mappers.py tests/test_quality_contract.py tests/test_ingestion_pipeline.py tests/test_benchmark_fraud_detection.py tests/test_benchmark_quality_contract.py tests/test_api_review_packets.py::test_runtime_timestamp_code_does_not_parse_reason tests/test_api_review_packets.py::test_run_runtime_validation_returns_high_risk_for_failed_validation -v --tb=short` — 242 passed on 2026-08-26 |
 | Backend CI parity | Pass | Python 3.11.15; `uv sync --all-extras --dev`; Alembic upgrade; `ruff check src dags scripts cli`; `mypy src/ --show-error-codes`; exact backend pytest exclusions with `-v --tb=short` — 1,211 passed, 6 skipped on 2026-08-25 |
 | Ingestion CI parity | Pass | Python 3.11.15; Alembic upgrade; Ruff over all workflow paths; exact five-file pytest command with `-v --tb=short` — 57 passed on 2026-08-25 |
 | Workstream B performance | clean acceptance true | Fresh `/tmp/workstream-c-non-regression.json`, not committed: 10k `2.573746665097812%`, 100k `3.93044804439444%`, 1M `4.115527979760645%`; all accepted, zero clean lookups |
 | Generated 20-row smoke | 20/20, zero failed/duplicate, PASS | Config `sprint3-fraud-detection-v2`; 20 input/20 persisted, zero failed/duplicate, `PASS / CONTINUE`, `INGESTED` |
-| Full 1M v2 | optional for implemented-pending state | `implemented; full-dataset v2 evidence pending` |
+| Full 1M v2 | Pass | `1,000,000 persisted`, `0 failed/duplicate/quarantined`, `PASS / CONTINUE / INGESTED`, `125.588s`, `7,962.5 rows/s`; see [baseline report](sprint-3-workstream-c-baseline.md) |
 
 Exact Backend CI parity commands executed:
 
@@ -133,14 +144,22 @@ pytest timings are not used as performance evidence.
 
 ## Full-dataset benchmark evidence
 
-`implemented; full-dataset v2 evidence pending`
+The frozen raw 1M CSV was run through the real Docker-backed ingestion boundary
+with the v2 mapping. The sanitized machine-readable result is
+`data/eda/fraud_detection/profiles/benchmark_results_workstream_c.json`; the
+interpretation and stage timing are in
+[`sprint-3-workstream-c-baseline.md`](sprint-3-workstream-c-baseline.md).
 
-The frozen raw 1M CSV and the official
-`data/eda/fraud_detection/profiles/benchmark_results_workstream_c.json`
-artifact are absent in this checkout. Therefore no checksum/count/throughput
-claim is made for a successful full-dataset v2 run, and no artifact is linked
-as successful evidence. The frozen Workstream A v3 profile, its SHA-256, and
-the Workstream B/v1 benchmark artifacts remain unchanged.
+The run passed with `1,000,000` input and persisted rows, zero failed,
+duplicate or quarantined rows, and `PASS / CONTINUE / INGESTED`. It took
+`125.588s` at `7,962.5 rows/s`. Benchmark records and the temporary mapping
+were removed during cleanup.
+
+The separate CPU/memory quality microbenchmark is not this ingestion result.
+The 2026-08-26 sandbox rerun of its 10k/100k/1M, three-scenario matrix reached
+the 180-second command timeout and produced no artifact, so it is not claimed
+as current evidence. The previously recorded Workstream B performance run
+remains historical evidence under the B contract.
 
 ## Remaining handoff to Workstream D
 

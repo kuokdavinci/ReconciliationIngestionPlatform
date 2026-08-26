@@ -14,6 +14,7 @@ from src.core.enums import FileType
 class PostApprovalRunStatus(str, Enum):
     QUEUED = "QUEUED"
     INGESTING = "INGESTING"
+    WAITING_REVIEW = "WAITING_REVIEW"
     RECONCILING = "RECONCILING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"

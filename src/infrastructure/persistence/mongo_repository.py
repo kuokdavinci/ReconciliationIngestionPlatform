@@ -39,10 +39,6 @@ class BaseRepository(Generic[T]):
             return [BaseRepository._convert_special_types(item) for item in obj]
         return obj
 
-    @staticmethod
-    def _convert_uuids(obj: Any) -> Any:
-        return BaseRepository._convert_special_types(obj)
-
     async def create(self, doc: T) -> T:
         data = self._to_mongo(doc)
         await self.collection.insert_one(data)

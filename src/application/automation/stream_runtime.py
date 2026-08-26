@@ -1,6 +1,6 @@
 """Runtime persistence and streaming helpers for application-owned source streams."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -128,6 +128,16 @@ def runtime_attempt_event(
         )
         if result.get("stoppedAt") is not None:
             event["unitKey"] = result["stoppedAt"]
+        result_stats = result.get("stats")
+        if isinstance(result_stats, Mapping):
+            for key in (
+                "expectedRowCount",
+                "actualRowCount",
+                "sourceUnitKeys",
+                "checkpointFinalized",
+            ):
+                if result_stats.get(key) is not None:
+                    event[key] = result_stats[key]
     if message:
         event["message"] = message
     return event

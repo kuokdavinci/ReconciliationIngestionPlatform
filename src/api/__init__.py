@@ -86,6 +86,9 @@ def create_app() -> FastAPI:
     from src.api.operations import router as operations_router
     app.include_router(operations_router)
 
+    from src.api.quarantine import router as quarantine_router
+    app.include_router(quarantine_router)
+
     from src.api.review_packets import router as review_packets_router
     app.include_router(review_packets_router)
 

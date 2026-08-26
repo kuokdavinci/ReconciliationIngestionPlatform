@@ -441,6 +441,19 @@ class DataContainerRepository:
             row = result.scalars().first()
             return row_to_data_container(row) if row else None
 
+    async def find_existing_fingerprint(self, record: Any) -> str | None:
+        """Return the current fingerprint for an operator accept-existing check."""
+        identify = getattr(record, "partner", None)
+        ingestion_key = getattr(record, "ingestion_key", None)
+        if not identify or not ingestion_key:
+            return None
+        existing = await self.find_by_ingestion_key(str(identify), str(ingestion_key))
+        if existing is None:
+            return None
+        if isinstance(existing, dict):
+            existing = document_to_data_container(existing)
+        return fingerprint_payload(data_container_to_row(existing))
+
     async def find_by_source_file(self, source_file_id: UUID) -> list[DataContainer]:
         from sqlalchemy import select
         from sqlalchemy.ext.asyncio import AsyncSession

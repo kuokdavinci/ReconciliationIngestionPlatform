@@ -207,6 +207,7 @@ class RowBatchCoordinator:
                     reconciliation_date=self._context.reconciliation_date,
                     row_number=row_number,
                     raw_row=raw_row,
+                    ingestion_key=detail.ingestion_key,
                     errors=[
                         {
                             "field": "ingestion_key",

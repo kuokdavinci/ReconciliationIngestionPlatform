@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-import string
 import time
 from typing import Any, Literal, Optional
 
@@ -178,19 +177,6 @@ class IngestionPipeline:
         """Compatibility seam for file hash tests and legacy callers."""
         service = getattr(self, "_file_claim", FileClaimService(None, None))
         return await service.compute_file_hash(file_path)
-
-    def _tuple_to_dict(self, row_tuple: tuple) -> dict[str, Any]:
-        """Convert a row tuple to a dict keyed by column letter.
-
-        Index 0 → "A", 1 → "B", etc.
-
-        Args:
-            row_tuple: Tuple of cell values from ExcelStreamReader.
-
-        Returns:
-            Dict mapping column letters to cell values.
-        """
-        return {string.ascii_uppercase[i]: value for i, value in enumerate(row_tuple)}
 
     def _derive_ingestion_key(self, txn: Any) -> str:
         """Derive a stable transaction key from normalized transaction data."""

@@ -298,5 +298,9 @@ async def get_ingestion_operations(
         "files": files,
         "pendingQuarantine": [record.model_dump(by_alias=True) for record in pending_quarantine],
         "summary": summary,
+        "quarantineCounters": {
+            "quarantinedRows": len(pending_quarantine),
+            "pendingRows": len(pending_quarantine),
+        },
         "generatedAt": datetime.now(timezone.utc).isoformat(),
     }

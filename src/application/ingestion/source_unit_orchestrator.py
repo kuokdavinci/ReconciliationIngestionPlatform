@@ -273,3 +273,50 @@ async def process_source_units(
         )
         summary_result["reconciliationSkipped"] = True
     return summary_result
+
+
+async def resume_held_source_unit(
+    checkpoint_repo: CheckpointRepository,
+    quarantine_repo: Any,
+    *,
+    source_unit_key: str,
+    stream_identity: dict[str, Any],
+    unit: SourceUnitMetadata | dict[str, Any],
+    ingest_unit: Callable[[SourceUnitMetadata], Awaitable[Any]],
+    mode: IngestionMode = IngestionMode.SCHEDULED,
+    max_attempts: int | None = None,
+    retry_policy: RetryPolicy | None = None,
+    on_unit_completed: Callable[[SourceUnitMetadata], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
+    """Resume one held unit through the existing checkpoint state machine.
+
+    The blocker guard runs before checkpoint claim. ``process_source_units``
+    advances the checkpoint before invoking ``on_unit_completed``; callers can
+    therefore consume staged payloads or clean local files only after commit.
+    """
+    requested = SourceUnitMetadata.from_payload(unit)
+    if requested.source_unit_key != source_unit_key:
+        raise ValueError("sourceUnitKey does not match the source unit payload")
+    if await quarantine_repo.has_unresolved_blockers(source_unit_key):
+        return {
+            "success": False,
+            "processed": 0,
+            "failed": 1,
+            "stoppedAt": source_unit_key,
+            "outcome": "QUARANTINE_BLOCKED",
+            "errorCode": "quarantine_conflict_unresolved",
+            "error": "Source unit has unresolved conflicting duplicate quarantine records.",
+        }
+    return await process_source_units(
+        checkpoint_repo,
+        stream_identity={
+            **stream_identity,
+            "lastCompletedUnitKey": stream_identity.get("lastCompletedUnitKey"),
+        },
+        units=[requested],
+        ingest_unit=ingest_unit,
+        mode=mode,
+        max_attempts=max_attempts,
+        retry_policy=retry_policy,
+        on_unit_completed=on_unit_completed,
+    )

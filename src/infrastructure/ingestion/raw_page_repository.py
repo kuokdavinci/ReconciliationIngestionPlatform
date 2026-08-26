@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from shutil import copyfile
+import tempfile
+from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorGridFSBucket
 
 from src.domain.ingestion.raw_pages import RawIngestionPage, RawPageStatus
@@ -140,6 +142,20 @@ class RawIngestionPageRepository(BaseRepository[RawIngestionPage]):
         else:
             raise FileNotFoundError(f"Raw payload missing for {page.source_unit_key}")
         return str(target)
+
+    async def read_row(self, source_unit_key: str, row_number: int) -> Any | None:
+        """Read one row from the durable GridFS/local raw-page payload."""
+        page = await self.find_one({"sourceUnitKey": source_unit_key})
+        if page is None:
+            return None
+
+        from src.infrastructure.ingestion.source_row_reader import read_authoritative_row
+
+        suffix = Path(page.local_path or "page.json").suffix or ".json"
+        with tempfile.TemporaryDirectory(prefix="quarantine-row-") as temp_dir:
+            destination = str(Path(temp_dir) / f"source{suffix}")
+            materialized = await self.materialize(page, destination)
+            return read_authoritative_row(materialized, row_number)
 
     async def cleanup_expired(self, now: datetime | None = None) -> int:
         """Remove expired metadata and its corresponding GridFS objects."""

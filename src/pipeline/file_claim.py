@@ -94,12 +94,12 @@ class FileClaimService:
                 config_version=config_version,
                 metadata=fetch_unit_metadata,
             )
-        existing = await repository.find_by_file_hash(file_hash)
+        existing = await repository.find_by_file_hash(partner, file_hash)
         if isinstance(existing, ReconciliationFile):
             if existing.processing_status == ProcessingStatus.FAILED:
                 reclaim = getattr(repository, "reclaim_failed_by_file_hash", None)
                 if reclaim is not None:
-                    reclaimed = await reclaim(file_hash)
+                    reclaimed = await reclaim(partner, file_hash)
                     if isinstance(reclaimed, ReconciliationFile):
                         return FileClaimResult(reclaimed, True)
             return FileClaimResult(existing, False, "file_duplicate")
@@ -120,6 +120,7 @@ class FileClaimService:
             config_version=config_version,
             fetch_unit_key=fetch_unit_key,
             fetch_unit_metadata=fetch_unit_metadata or {},
+            source_file_path=file_path,
             scope_type=scope_meta["scopeType"],
             scope_confidence=scope_meta["scopeConfidence"],
             scope_reason=scope_meta["scopeReason"],

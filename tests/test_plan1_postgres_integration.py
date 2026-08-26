@@ -14,6 +14,7 @@ from src.config.settings import settings
 from src.domain.partner_transaction.models import DataContainer, PartnerData
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
 from src.infrastructure.persistence.postgres_schema import PartnerTransactionTable
+from tests.postgres_probe import postgres_dsn_if_available, postgres_url_for_tests
 
 
 pytestmark = pytest.mark.integration
@@ -41,18 +42,24 @@ def _transaction(
     )
 
 
+async def _postgres_url_or_skip() -> str:
+    database_url = postgres_url_for_tests(settings.postgres_url)
+    dsn = await postgres_dsn_if_available(settings.postgres_url)
+    if dsn is None:
+        pytest.skip(f"PostgreSQL is not available at {database_url}")
+    try:
+        connection = await asyncpg.connect(dsn, timeout=3)
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL credentials are not usable at {database_url}: {exc}")
+    await connection.close()
+    return database_url
+
+
 @pytest.mark.asyncio
 async def test_plan1_postgres_transaction_idempotency_matrix():
     """Verify insert, mixed replay, full replay and distinct keys on real PostgreSQL."""
-    try:
-        connection = await asyncio.wait_for(
-            asyncpg.connect(settings.postgres_url.replace("+asyncpg", "")),
-            timeout=3,
-        )
-        await connection.close()
-    except Exception as exc:
-        pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}: {exc}")
-    engine = create_async_engine(settings.postgres_url)
+    database_url = await _postgres_url_or_skip()
+    engine = create_async_engine(database_url)
 
     identify = f"PLAN1_IT_{uuid4().hex}"
     repo = DataContainerRepository(engine=engine)
@@ -94,16 +101,8 @@ async def test_plan1_postgres_transaction_idempotency_matrix():
 @pytest.mark.asyncio
 async def test_concurrent_same_payload_insert_is_classified_without_a_race():
     """One atomic winner and one equivalent duplicate are observed under contention."""
-    try:
-        connection = await asyncio.wait_for(
-            asyncpg.connect(settings.postgres_url.replace("+asyncpg", "")),
-            timeout=3,
-        )
-        await connection.close()
-    except Exception as exc:
-        pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}: {exc}")
-
-    engine = create_async_engine(settings.postgres_url)
+    database_url = await _postgres_url_or_skip()
+    engine = create_async_engine(database_url)
     identify = f"QUALITY_RACE_{uuid4().hex}"
     key = "SAME-KEY"
     repository = DataContainerRepository(engine=engine)
@@ -128,16 +127,8 @@ async def test_concurrent_same_payload_insert_is_classified_without_a_race():
 
 @pytest.mark.asyncio
 async def test_intra_batch_conflict_preserves_the_incoming_row_ordinal():
-    try:
-        connection = await asyncio.wait_for(
-            asyncpg.connect(settings.postgres_url.replace("+asyncpg", "")),
-            timeout=3,
-        )
-        await connection.close()
-    except Exception as exc:
-        pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}: {exc}")
-
-    engine = create_async_engine(settings.postgres_url)
+    database_url = await _postgres_url_or_skip()
+    engine = create_async_engine(database_url)
     identify = f"QUALITY_ORDINAL_{uuid4().hex}"
     key = "SAME-KEY"
     repository = DataContainerRepository(engine=engine)
@@ -171,16 +162,8 @@ async def test_intra_batch_conflict_preserves_the_incoming_row_ordinal():
 
 async def test_large_equivalent_duplicate_batch_uses_scalable_conflict_lookup():
     """Bulk conflict lookup must not expand into a stack-depth-sized IN expression."""
-    try:
-        connection = await asyncio.wait_for(
-            asyncpg.connect(settings.postgres_url.replace("+asyncpg", "")),
-            timeout=3,
-        )
-        await connection.close()
-    except Exception as exc:
-        pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}: {exc}")
-
-    engine = create_async_engine(settings.postgres_url)
+    database_url = await _postgres_url_or_skip()
+    engine = create_async_engine(database_url)
     identify = f"QUALITY_LARGE_REPLAY_{uuid4().hex}"
     repository = DataContainerRepository(engine=engine)
     initial = [_transaction(identify, f"KEY-{index}") for index in range(10_000)]

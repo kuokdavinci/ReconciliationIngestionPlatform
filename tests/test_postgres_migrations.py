@@ -10,19 +10,18 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from src.config.settings import settings
 from src.infrastructure.persistence.postgres_connection import _alembic_config, init_postgres_db
+from tests.postgres_probe import postgres_dsn_if_available
 
 
 pytestmark = pytest.mark.integration
 
 
-def _without_asyncpg_scheme(url: str) -> str:
-    return url.replace("postgresql+asyncpg://", "postgresql://", 1)
-
-
 @pytest.mark.asyncio
 async def test_existing_revision_0001_is_upgraded_to_head():
     """Startup must apply 0002 when an existing database is at revision 0001."""
-    configured_url = _without_asyncpg_scheme(settings.postgres_url)
+    configured_url = await postgres_dsn_if_available(settings.postgres_url)
+    if configured_url is None:
+        pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}")
     server_url, _ = configured_url.rsplit("/", 1)
     database_name = f"migration_test_{uuid4().hex}"
     admin_url = f"{server_url}/postgres"

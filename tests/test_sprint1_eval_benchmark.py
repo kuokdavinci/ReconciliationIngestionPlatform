@@ -10,9 +10,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 import tempfile
-import socket
 from uuid import uuid4
-from urllib.parse import urlparse
 from unittest.mock import AsyncMock, MagicMock
 import openpyxl
 import pytest
@@ -27,7 +25,8 @@ from src.infrastructure.ingestion.file_repository import ReconciliationFileRepos
 from src.infrastructure.persistence.postgres_connection import get_pg_engine
 from src.pipeline import IngestionPipeline
 from src.config.settings import settings
-from src.infrastructure.persistence.mongo_indexes import INDEXES
+from src.infrastructure.persistence.mongo_indexes import apply_indexes
+from tests.postgres_probe import postgres_dsn_if_available
 
 
 def _benchmark_transaction(identify: str, key: str):
@@ -61,6 +60,7 @@ async def _run_mongo_claim_scenarios(eval_results, record_eval):
         for scenario_id, name in (
             ("SCENARIO-07", "Concurrent File Claim"),
             ("SCENARIO-08", "Fetch-unit Replay"),
+            ("SCENARIO-09", "Partner-scoped File Claim"),
         ):
             record_eval(
                 scenario_id,
@@ -76,13 +76,14 @@ async def _run_mongo_claim_scenarios(eval_results, record_eval):
 
     db = client[settings.db_name]
     collection = db["reconciliation_file"]
-    await collection.create_indexes(INDEXES["reconciliation_file"])
+    await apply_indexes(db)
     repo = ReconciliationFileRepository(db)
     now = datetime.now(timezone.utc)
     concurrent_hash = f"benchmark-concurrent-{uuid4().hex}"
     fetch_hash_a = f"benchmark-fetch-a-{uuid4().hex}"
     fetch_hash_b = f"benchmark-fetch-b-{uuid4().hex}"
     fetch_key = f"benchmark-fetch-key-{uuid4().hex}"
+    cross_partner_hash = f"benchmark-cross-partner-{uuid4().hex}"
 
     def file_doc(file_hash, file_name, fetch_unit_key=None):
         return ReconciliationFile(
@@ -135,9 +136,43 @@ async def _run_mongo_claim_scenarios(eval_results, record_eval):
             "Nội dung file khác nhau nhưng chung fetchUnitKey sẽ bị chặn không cho tạo mới",
         )
         assert first_created and not second_created and second.file_hash == fetch_hash_a
+
+        t0 = time.perf_counter()
+        partner_a, partner_a_created = await repo.create_or_get_by_file_hash(
+            file_doc(cross_partner_hash, "partner-a.xlsx").model_copy(
+                update={"partner": "PLAN1_PARTNER_A"}
+            )
+        )
+        partner_b, partner_b_created = await repo.create_or_get_by_file_hash(
+            file_doc(cross_partner_hash, "partner-b.xlsx").model_copy(
+                update={"partner": "PLAN1_PARTNER_B"}
+            )
+        )
+        record_eval(
+            "SCENARIO-09",
+            "Claim File Theo Partner",
+            "Hai partner dùng cùng một content hash nhưng thuộc hai phạm vi nghiệp vụ",
+            "Cả hai partner tạo được claim độc lập",
+            f"partner_a_created={partner_a_created}, partner_b_created={partner_b_created}, "
+            f"partner_a={partner_a.partner}, partner_b={partner_b.partner}",
+            partner_a_created
+            and partner_b_created
+            and partner_a.id != partner_b.id,
+            round((time.perf_counter() - t0) * 1000, 2),
+            "Unique index compound (partner, fileHash) ngăn cross-partner collision.",
+        )
+        assert partner_a_created and partner_b_created
+        assert partner_a.id != partner_b.id
     finally:
         await collection.delete_many({
-            "fileHash": {"$in": [concurrent_hash, fetch_hash_a, fetch_hash_b]}
+            "fileHash": {
+                "$in": [
+                    concurrent_hash,
+                    fetch_hash_a,
+                    fetch_hash_b,
+                    cross_partner_hash,
+                ]
+            }
         })
         client.close()
 
@@ -146,15 +181,10 @@ async def _run_mongo_claim_scenarios(eval_results, record_eval):
 @pytest.mark.asyncio
 async def test_run_sprint1_eval_and_generate_report():
     """Run real PostgreSQL end-to-end evaluation tests and export markdown report."""
-    try:
-        parsed_url = urlparse(settings.postgres_url.replace("+asyncpg", ""))
-        with socket.create_connection(
-            (parsed_url.hostname or "localhost", parsed_url.port or 5432),
-            timeout=3,
-        ):
-            pass
-    except Exception as exc:
-        pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}: {exc}")
+    database_url = await postgres_dsn_if_available(settings.postgres_url)
+    if database_url is None:
+        pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}")
+    settings.postgres_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
     engine = get_pg_engine()
     

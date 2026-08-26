@@ -9,6 +9,9 @@ from src.core.enums import TransactionStatus
 from src.core.enums import ReconciliationStatus
 from src.infrastructure.persistence.postgres_schema import ReconciliationResultTable
 
+
+pytestmark = pytest.mark.integration
+
 class SubscriptableDummy:
     def __getitem__(self, item):
         return None

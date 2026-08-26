@@ -1,4 +1,4 @@
-.PHONY: test test-eval ci clean \
+.PHONY: test test-integration test-eval ci clean \
 	momo-e2e-run momo-e2e-job momo-e2e-rebuild momo-e2e-fail \
 	momo-e2e-phase2-file momo-e2e-help momo-e2e-reset momo-e2e-phase2 momo-e2e-phase2-full \
 	momo-e2e-missing-partner-demo momo-sprint6-setup momo-sprint6-wave2 \
@@ -8,6 +8,9 @@
 # ── Test ──────────────────────────────────────────────────────────
 test:
 	uv run pytest tests/ --ignore=tests/test_analysis_e2e.py -v
+
+test-integration:
+	uv run pytest tests/ --integration -m integration -v --tb=short
 
 test-quick:
 	uv run pytest tests/ --ignore=tests/test_analysis_e2e.py -x --tb=short
@@ -32,7 +35,7 @@ eval-all:
 
 # ── CI — runs everything except real LLM E2E tests ──────────────
 ci:
-	uv run pytest tests/ --ignore=tests/test_analysis_e2e.py -v --tb=short
+	uv run pytest tests/ --integration --ignore=tests/test_analysis_e2e.py -v --tb=short
 
 # ── MOMO E2E shortcuts ────────────────────────────────────────────
 momo-e2e-reset:

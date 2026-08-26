@@ -58,6 +58,7 @@ jobs:
       - name: Run ingestion pipeline tests
         run: >
           uv run pytest
+          --integration
           tests/test_indexes.py
           tests/test_ingestion_integration.py
           tests/test_ingestion_pipeline.py

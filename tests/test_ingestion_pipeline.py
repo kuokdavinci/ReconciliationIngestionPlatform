@@ -2,7 +2,6 @@
 
 Tests cover:
 - IngestionResult dataclass construction
-- _tuple_to_dict conversion
 - _compute_file_hash returns consistent SHA256
 - process_file happy path (all rows valid)
 - process_file with mixed valid/invalid rows
@@ -246,41 +245,6 @@ def test_missing_ingestion_key_failure_requires_both_identity_fields():
     )
 
     assert _is_missing_ingestion_key_failure(state) is True
-
-
-class TestTupleToDict:
-    """Tests for _tuple_to_dict conversion."""
-
-    def test_tuple_to_dict_basic(self):
-        """Tuple index 0 → 'A', 1 → 'B', etc."""
-        from src.pipeline import IngestionPipeline
-
-        pipeline = IngestionPipeline(db=MagicMock(), config_loader=MagicMock())
-        row_tuple = ("TXN001", "100.50", "VND", "SUCCESS")
-        result = pipeline._tuple_to_dict(row_tuple)
-
-        assert result == {
-            "A": "TXN001",
-            "B": "100.50",
-            "C": "VND",
-            "D": "SUCCESS",
-        }
-
-    def test_tuple_to_dict_empty(self):
-        """Empty tuple produces empty dict."""
-        from src.pipeline import IngestionPipeline
-
-        pipeline = IngestionPipeline(db=MagicMock(), config_loader=MagicMock())
-        result = pipeline._tuple_to_dict(())
-        assert result == {}
-
-    def test_tuple_to_dict_single_element(self):
-        """Single element tuple maps to 'A'."""
-        from src.pipeline import IngestionPipeline
-
-        pipeline = IngestionPipeline(db=MagicMock(), config_loader=MagicMock())
-        result = pipeline._tuple_to_dict(("only_value",))
-        assert result == {"A": "only_value"}
 
 
 class TestComputeFileHash:

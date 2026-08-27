@@ -143,20 +143,34 @@ class IngestionPipeline:
         require_mapping: bool = False,
     ) -> None:
         """Fail fast when a pipeline was not assembled by a composition root."""
-        dependencies = [
-            ("file_repo", self._recon_repo),
-        ]
-        if require_partner:
-            dependencies.append(("partner_repo", self._data_repo))
-        if require_mapping:
-            dependencies.append(("mapping_repo", self._mapping_repo))
-        missing = [name for name, repository in dependencies if repository is None]
+        missing: list[str] = []
+        if self._recon_repo is None:
+            missing.append("file_repo")
+        if require_partner and self._data_repo is None:
+            missing.append("partner_repo")
+        if require_mapping and self._mapping_repo is None:
+            missing.append("mapping_repo")
         if missing:
             missing_ports = ", ".join(missing)
             raise RuntimeError(
                 "IngestionPipeline requires injected repository ports: "
                 f"{missing_ports}. Use build_ingestion_pipeline() for production wiring."
             )
+
+    def _require_file_repository(self) -> IngestionFileRepository:
+        if self._recon_repo is None:
+            raise RuntimeError("IngestionPipeline requires an injected file repository")
+        return self._recon_repo
+
+    def _require_partner_repository(self) -> PartnerTransactionWriter:
+        if self._data_repo is None:
+            raise RuntimeError("IngestionPipeline requires an injected partner repository")
+        return self._data_repo
+
+    def _require_mapping_repository(self) -> MappingConfigRepositoryPort:
+        if self._mapping_repo is None:
+            raise RuntimeError("IngestionPipeline requires an injected mapping repository")
+        return self._mapping_repo
 
     def _emit_stage(
         self,
@@ -346,7 +360,7 @@ class IngestionPipeline:
             fetch_unit_metadata=command.fetch_unit_metadata,
             file_hash=file_hash,
             fetch_unit_key=fetch_unit_key,
-            repository=self._recon_repo,
+            repository=self._require_file_repository(),
         )
         file_record = claim.file_record
         run_id = str(file_record.id)
@@ -447,7 +461,9 @@ class IngestionPipeline:
                 f"proposal_id={approval_exc.proposal_id or 'unknown'}; "
                 f"action_id={approval_exc.action_id or 'unknown'}"
             )
-            await self._recon_repo.update_status(claimed.file_record.id, ProcessingStatus.PENDING)
+            await self._require_file_repository().update_status(
+                claimed.file_record.id, ProcessingStatus.PENDING
+            )
             claimed.file_record.processing_status = ProcessingStatus.PENDING
             state.add_error({"field": "configApproval", "reason": approval_reason})
             return None
@@ -495,7 +511,7 @@ class IngestionPipeline:
             state=state,
         )
         row_pipeline = RowPipelineExecutor(
-            data_repository=self._data_repo,
+            data_repository=self._require_partner_repository(),
             quarantine_repository=self._quarantine_repo,
             logger=self._logger,
             fast_mode=self._fast_mode,
@@ -540,14 +556,14 @@ class IngestionPipeline:
             state=state,
         )
         await self._finalizer.complete(
-            self._recon_repo,
+            self._require_file_repository(),
             claimed.file_record,
             state,
             (time.monotonic() - started_at) * 1000,
         )
         if command.enable_config_health_check:
             await record_config_run_health(
-                config_repo=self._mapping_repo,
+                config_repo=self._require_mapping_repository(),
                 partner=command.partner,
                 workflow_type=command.workflow_type,
                 file_type=command.file_type,

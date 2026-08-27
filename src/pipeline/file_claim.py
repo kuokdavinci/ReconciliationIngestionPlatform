@@ -24,7 +24,7 @@ class FileClaimResult:
 class FileClaimService:
     """Create one canonical file claim and identify replay attempts."""
 
-    def __init__(self, db: Any, repository: IngestionFileRepository) -> None:
+    def __init__(self, db: Any, repository: IngestionFileRepository | None) -> None:
         self._db = db
         self._repository = repository
 
@@ -83,6 +83,8 @@ class FileClaimService:
         repository: IngestionFileRepository | None = None,
     ) -> FileClaimResult:
         repository = repository or self._repository
+        if repository is None:
+            raise RuntimeError("FileClaimService requires an ingestion file repository")
         if file_hash is None:
             file_hash = await self.compute_file_hash(file_path)
         if fetch_unit_key is None:
@@ -112,19 +114,19 @@ class FileClaimService:
         file_name = Path(file_path).name
         candidate = ReconciliationFile(
             partner=partner,
-            file_name=file_name,
-            file_hash=file_hash,
-            file_type=file_type,
-            reconciliation_date=reconciliation_date,
-            processing_status=ProcessingStatus.PROCESSING,
-            config_version=config_version,
-            fetch_unit_key=fetch_unit_key,
-            fetch_unit_metadata=fetch_unit_metadata or {},
-            source_file_path=file_path,
-            scope_type=scope_meta["scopeType"],
-            scope_confidence=scope_meta["scopeConfidence"],
-            scope_reason=scope_meta["scopeReason"],
-            scope_signals=scope_meta["scopeSignals"],
+            fileName=file_name,
+            fileHash=file_hash,
+            fileType=file_type,
+            reconciliationDate=reconciliation_date,
+            processingStatus=ProcessingStatus.PROCESSING,
+            configVersion=config_version,
+            fetchUnitKey=fetch_unit_key,
+            fetchUnitMetadata=fetch_unit_metadata or {},
+            sourceFilePath=file_path,
+            scopeType=scope_meta["scopeType"],
+            scopeConfidence=scope_meta["scopeConfidence"],
+            scopeReason=scope_meta["scopeReason"],
+            scopeSignals=scope_meta["scopeSignals"],
         )
 
         if hasattr(repository, "create_or_get_by_file_hash"):

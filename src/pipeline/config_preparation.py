@@ -20,7 +20,7 @@ class ConfigPreparationService:
     def __init__(
         self,
         config_loader: ConfigLoader,
-        mapping_repository: MappingConfigRepositoryPort,
+        mapping_repository: MappingConfigRepositoryPort | None,
         logger: StructuredLogger,
     ) -> None:
         self._config_loader = config_loader
@@ -45,6 +45,10 @@ class ConfigPreparationService:
         mapping_repository = mapping_repository or self._mapping_repository
         config = None
         if enable_health_check:
+            if mapping_repository is None:
+                raise RuntimeError(
+                    "ConfigPreparationService requires a mapping repository for health checks"
+                )
             try:
                 config = await check_and_refresh_config(
                     file_path=file_path,

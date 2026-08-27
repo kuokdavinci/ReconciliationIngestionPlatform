@@ -50,10 +50,6 @@ Các default chính trong `src/config/settings.py`:
 
 | Biến | Default | Mục đích |
 |---|---:|---|
-| `APP_RECON_PARTNER_BATCH_SIZE` | `10000` | Batch đọc partner records |
-| `APP_RECON_RESULT_BATCH_SIZE` | `20000` | Batch ghi reconciliation result |
-| `APP_RECON_RESULT_WRITE_WORKERS` | `2` | Số worker ghi result |
-| `APP_RECON_RESULT_ORDERED_INSERT` | `false` | Ordered hay unordered result insert |
 
 ## Database và source connector
 
@@ -114,8 +110,6 @@ Default trong `src/analysis/config.py`:
 | `AI_JSON_MODE` | `true` | Structured JSON output |
 | `AI_CACHE_TTL_SECONDS` | `300` | Insight cache TTL |
 | `AI_CACHE_ENABLED` | `true` | Bật in-memory cache |
-| `AI_ALERT_MISMATCH_RATE_THRESHOLD` | `5.0` | Mismatch alert threshold |
-| `AI_ALERT_MISSING_COUNT_THRESHOLD` | `10` | Missing-count alert threshold |
 
 `.env.example` có thể đặt model/key khác cho demo. Không cần real `AI_API_KEY` cho các test guardrail/provider dùng fake key; real LLM E2E cần secret riêng.
 

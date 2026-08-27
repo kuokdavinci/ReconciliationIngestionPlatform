@@ -3,7 +3,7 @@
 Provides AnalysisConfig with env-prefix AI_ for all LLM-related settings:
 - Provider selection (openai/ollama)
 - Model name, endpoint, API key
-- Timeout, retry, alert thresholds
+- Timeout, retry and cache settings
 """
 
 from typing import Optional
@@ -70,16 +70,6 @@ class AnalysisConfig(BaseSettings):
     cache_enabled: bool = Field(
         default=True,
         description="Enable in-memory caching of AI insight results",
-    )
-
-    # Alert thresholds
-    alert_mismatch_rate_threshold: float = Field(
-        default=5.0,
-        description="Mismatch rate percentage threshold for alerts",
-    )
-    alert_missing_count_threshold: int = Field(
-        default=10,
-        description="Missing transaction count threshold for alerts",
     )
 
     @property

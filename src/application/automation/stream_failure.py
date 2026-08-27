@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Any
 
-from src.core.error_formatting import summarize_runtime_error
+from src.core.utils import summarize_runtime_error
 
 
 def fetch_error_code(error: str | None, metadata: dict[str, Any] | None = None) -> str:

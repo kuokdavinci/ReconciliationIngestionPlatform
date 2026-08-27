@@ -4,7 +4,7 @@ from typing import Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from src.domain.reconciliation.run import ReconciliationRun
+from src.domain.reconciliation.models import ReconciliationRun
 from src.infrastructure.persistence.mongo_repository import BaseRepository
 
 

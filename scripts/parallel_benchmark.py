@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from motor.motor_asyncio import AsyncIOMotorClient
 from src.config.settings import settings
 from src.infrastructure.ingestion.composition import build_ingestion_pipeline
+from src.infrastructure.partner_transaction.repository import DataContainerRepository
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 from src.reconciliation.engine import ReconciliationEngine
 from src.config.loader import ConfigLoader
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
@@ -122,6 +124,8 @@ async def benchmark_matrix():
         ConfigValidator(),
     )
     config = await config_loader.load_by_partner_type(PARTNER, "UPC", FileType.SETTLEMENT)
+    transaction_repository = DataContainerRepository()
+    result_repository = ReconciliationResultRepository()
 
     results = []
 
@@ -135,7 +139,7 @@ async def benchmark_matrix():
                     end=" ",
                     flush=True,
                 )
-                await db["data_container"].delete_many({"identify": PARTNER})
+                await transaction_repository.delete_by_partner(PARTNER)
                 await db["reconciliation_file"].delete_many({"partner": PARTNER})
 
                 pipeline = build_ingestion_pipeline(
@@ -194,7 +198,7 @@ async def benchmark_matrix():
     best_ingest = _recommend(results).get("ingestion_insert")
     if best_ingest:
         print(f"\nRe-seeding with best ingest config for reconciliation: batch={best_ingest['batch_size']}, workers={best_ingest['workers']}")
-        await db["data_container"].delete_many({"identify": PARTNER})
+        await transaction_repository.delete_by_partner(PARTNER)
         await db["reconciliation_file"].delete_many({"partner": PARTNER})
         pipeline = build_ingestion_pipeline(
             db=db,
@@ -218,69 +222,26 @@ async def benchmark_matrix():
         ingest_res = res
 
     # === RECONCILIATION BENCHMARK ===
-    print("\n--- Benchmarking Reconciliation Result Write ---")
-    for batch_size in BATCH_SIZES:
-        for worker in WORKERS:
-            for ordered in ORDERED_OPTIONS:
-                print(
-                    f"  Reconciliation: batch={batch_size}, workers={worker}, ordered={ordered} ...",
-                    end=" ",
-                    flush=True,
-                )
-                await db["reconciliation_result"].delete_many({"partner": PARTNER})
-
-                engine = ReconciliationEngine(
-                    db=db,
-                    fast_mode=True,
-                    result_batch_size=batch_size,
-                    write_workers=worker,
-                    ordered_insert=ordered,
-                    partner_batch_size=10000,
-                )
-
-                old_stdout = sys.stdout
-                sys.stdout = buf = io.StringIO()
-
-                t0 = time.perf_counter()
-                recon_results = await engine.reconcile(
-                    partner=PARTNER,
-                    reconciliation_date=day,
-                    source_file_id=str(ingest_res.file_record.id),
-                    reconciliation_run_id="bench_run_parallel",
-                    mapping_version=config.config_version,
-                )
-                runtime = time.perf_counter() - t0
-                sys.stdout = old_stdout
-
-                perf = _parse_perf_log(buf.getvalue(), "PERF_RECON")
-                rate = len(recon_results) / runtime if runtime > 0 else 0
-                correct = len(recon_results) == EXPECTED_RECON_RESULTS
-
-                # Count duplicates in results
-                txn_ids = [r.partner_txn_id if hasattr(r, "partner_txn_id") else r.get("partnerTxnId") for r in recon_results]
-                dupes = len(txn_ids) - len(set(txn_ids))
-
-                results.append(
-                    {
-                        "stage": "reconciliation_result_write",
-                        "batch_size": batch_size,
-                        "workers": worker,
-                        "ordered": ordered,
-                        "runtime": runtime,
-                        "rate": rate,
-                        "db_write_ms": perf.get("result_bulk_write_ms", 0),
-                        "slowest_batch_ms": perf.get("slowest_batch_ms", 0),
-                        "errors": 0,
-                        "duplicates": dupes,
-                        "correct": correct,
-                        "inserted": len(recon_results),
-                    }
-                )
-                print(
-                    f"ok ({runtime:.2f}s, {rate:.0f} rec/s)"
-                    if correct
-                    else f"FAIL (correct={correct})"
-                )
+    print("\n--- Benchmarking PostgreSQL Reconciliation ---")
+    await result_repository.delete_by_partner_and_date(PARTNER, day.date().isoformat())
+    engine = ReconciliationEngine(db=db)
+    t0 = time.perf_counter()
+    recon_results = await engine.reconcile(
+        partner=PARTNER,
+        reconciliation_date=day,
+        source_file_id=str(ingest_res.file_record.id),
+        reconciliation_run_id="bench_run_parallel",
+        mapping_version=config.config_version,
+    )
+    runtime = time.perf_counter() - t0
+    rate = len(recon_results) / runtime if runtime > 0 else 0
+    correct = len(recon_results) == EXPECTED_RECON_RESULTS
+    txn_ids = [result.partner_txn_id for result in recon_results]
+    duplicates = len(txn_ids) - len(set(txn_ids))
+    print(
+        f"  Reconciliation: {'ok' if correct else 'FAIL'} "
+        f"({runtime:.2f}s, {rate:.0f} rec/s, duplicates={duplicates})"
+    )
 
     # === PRINT RESULTS ===
     _print_matrix(results)
@@ -299,18 +260,6 @@ async def benchmark_matrix():
     else:
         print("  Ingestion:            NO CORRECT CONFIG FOUND")
 
-    if "reconciliation_result_write" in best:
-        b = best["reconciliation_result_write"]
-        print(f"  Reconciliation Result: batch_size={b['batch_size']}, workers={b['workers']}, ordered={b['ordered']}")
-        print(f"    Runtime: {b['runtime']:.3f}s, Rate: {b['rate']:.0f} rec/s")
-    else:
-        print("  Reconciliation Result: NO CORRECT CONFIG FOUND")
-
-    # Check if defaults are already optimal
-    print()
-    print("Default settings:")
-    print(f"  INGEST_BATCH_SIZE={settings.ingest_batch_size}, INGEST_WRITE_WORKERS={settings.ingest_write_workers}, INGEST_ORDERED_INSERT={settings.ingest_ordered_insert}")
-    print(f"  RECON_RESULT_BATCH_SIZE={settings.recon_result_batch_size}, RECON_RESULT_WRITE_WORKERS={settings.recon_result_write_workers}, RECON_RESULT_ORDERED_INSERT={settings.recon_result_ordered_insert}")
 
 
 if __name__ == "__main__":

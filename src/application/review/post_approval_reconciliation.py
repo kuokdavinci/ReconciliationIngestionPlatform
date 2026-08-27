@@ -7,12 +7,10 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.analysis.insights import invalidate_insight_cache
-from src.application.reconciliation.service import ReconciliationCommand
 from src.application.review.raw_stream import resolve_review_source_file
 from src.application.runtime.service import create_runtime_run, update_runtime_run
 from src.config.settings import settings
-from src.core.business_day import business_date
-from src.core.error_formatting import summarize_runtime_error
+from src.core.utils import business_date, summarize_runtime_error
 from src.core.enums import ProcessingStatus, ReconciliationScopeType
 from src.domain.review.models import (
     PostApprovalRun,
@@ -471,14 +469,12 @@ async def reconcile_approved_packet(
         source_file_id=str(file_record.id),
         stats=result["stats"],
     )
-    recon_results = await reconciliation_service_builder(db, fast_mode=True).execute(
-        ReconciliationCommand(
-            partner=config.partner,
-            reconciliation_date=source_file.reconciliation_date,
-            source_file_id=str(file_record.id),
-            reconciliation_run_id=runtime_run_id,
-            mapping_version=getattr(config, "config_version", None) or str(config.id),
-        )
+    recon_results = await reconciliation_service_builder(db).reconcile(
+        config.partner,
+        source_file.reconciliation_date,
+        source_file_id=str(file_record.id),
+        reconciliation_run_id=runtime_run_id,
+        mapping_version=getattr(config, "config_version", None) or str(config.id),
     )
     result_count = len(recon_results)
     result_stats = {**result["stats"], "resultCount": result_count, "reconciliationCount": result_count}

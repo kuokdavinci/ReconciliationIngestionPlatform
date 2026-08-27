@@ -3,7 +3,7 @@
 from typing import Any
 
 from src.application.automation.stream_failure import file_fetch_failure_result
-from src.application.automation.stream_fetching import (
+from src.application.automation.stream_runtime import (
     source_units,
     unit_high_water_mark,
 )

@@ -93,7 +93,7 @@ async def run_benchmark():
     ingest_total_s = t_ingest_end - t_ingest_start
     
     print("\nStep 3: Benchmarking Reconciliation (100k)...")
-    engine = ReconciliationEngine(db, fast_mode=True)
+    engine = ReconciliationEngine(db)
     
     t_recon_start = time.perf_counter()
     recon_results = await engine.reconcile(

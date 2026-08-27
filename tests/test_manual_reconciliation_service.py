@@ -40,10 +40,10 @@ def _service(*, results=None, failure=None):
         update=AsyncMock(),
     )
     reconciliation_service = SimpleNamespace(
-        execute=AsyncMock(return_value=results or [])
+        reconcile=AsyncMock(return_value=results or [])
     )
     if failure is not None:
-        reconciliation_service.execute.side_effect = failure
+        reconciliation_service.reconcile.side_effect = failure
     audit_service = SimpleNamespace(record=AsyncMock())
     context_query = SimpleNamespace(resolve=AsyncMock(return_value=_context()))
     service = ManualReconciliationService(
@@ -81,7 +81,7 @@ async def test_execute_marks_runtime_completed_and_records_audit() -> None:
 
     await service.execute("run-1", _context())
 
-    reconciliation_service.execute.assert_awaited_once()
+    reconciliation_service.reconcile.assert_awaited_once()
     runtime_service.update.assert_any_await(
         "run-1",
         status=PartnerRuntimeRunStatus.COMPLETED,

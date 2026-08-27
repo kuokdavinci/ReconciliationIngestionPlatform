@@ -1,8 +1,6 @@
 """Application orchestration for one quarantine record lifecycle."""
 
-import asyncio
 import inspect
-import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -25,17 +23,6 @@ from src.domain.ingestion.ports import (
     IngestionQuarantineRepositoryPort,
     QuarantineRowReader,
 )
-
-
-# ponytail: one process-wide lock per action; use a distributed reservation if workers span processes.
-_ACTION_LOCKS: dict[tuple[int, str, str], asyncio.Lock] = {}
-_ACTION_LOCKS_GUARD = threading.Lock()
-
-
-def _action_lock(record_id: str, action_id: str) -> asyncio.Lock:
-    key = (id(asyncio.get_running_loop()), record_id, action_id)
-    with _ACTION_LOCKS_GUARD:
-        return _ACTION_LOCKS.setdefault(key, asyncio.Lock())
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,8 +427,7 @@ class QuarantineResolutionService:
         self,
         request: QuarantineReprocessRequest,
     ) -> QuarantineResolutionResult:
-        async with _action_lock(request.record_id, request.action_id):
-            return await self._resolve_claimed(request)
+        return await self._resolve_claimed(request)
 
     async def _resolve_claimed(
         self,

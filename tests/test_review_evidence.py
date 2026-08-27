@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.application.review.evidence import build_internal_review_evidence
-from src.core.business_day import business_day_bounds
+from src.core.utils import business_day_bounds
 
 
 def test_business_day_bounds_treats_mongo_naive_timestamps_as_utc():

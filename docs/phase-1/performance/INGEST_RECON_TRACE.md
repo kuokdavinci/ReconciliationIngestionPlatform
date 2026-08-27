@@ -1,5 +1,9 @@
 # Performance Tracing Report: Ingestion & Reconciliation Pipeline
 
+> Đây là báo cáo lịch sử của giai đoạn migration. Runtime hiện tại đã chọn
+> PostgreSQL làm source of truth cho transaction và reconciliation result;
+> MongoDB không còn là backend thay thế cho reconciliation.
+
 This document captures the performance tracing implementation, baseline measurements, diagnosed bottlenecks, optimizations applied, and results for the 100k records benchmark.
 
 ## 1. Baseline Performance & Bottlenecks
@@ -95,6 +99,5 @@ Following the migration to PostgreSQL, we executed the 100k reproducible benchma
 1. **UNLOGGED Table Performance (Ingestion)**: By changing `partner_transaction` and `internal_transaction` to `UNLOGGED` tables, we bypassed heavy WAL write-ahead log operations. This reduced database write overhead (`db_insert_ms`) by **19.0%**, bringing total ingestion time down from **14.136s** to **12.555s**.
 2. **Reconciliation Engine Execution**: By migrating the matching logic from Python memory loops and MongoDB bulk inserts to PostgreSQL's native SQL join, the matching and result writing stage time was reduced from **13.436s** to **4.577s** (a **65.9% time saving** or **3x speedup**).
 3. **Primary Key Safety**: Switched the reconciliation results table primary key to use native UUID generation (`gen_random_uuid()`) to prevent constraints violation during duplicate matching scenarios.
-
 
 

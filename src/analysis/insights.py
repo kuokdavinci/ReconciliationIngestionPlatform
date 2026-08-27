@@ -2,12 +2,10 @@
 
 Entry point for summary and discrepancies endpoints.
 Orchestration flow:
-1. Query MongoDB for reconciliation results
-2. Compute metrics via MetricsService
-3. Group results via GroupingEngine
-4. Build AnalysisInput via services helpers
-5. Check TTL cache → call LLM (with fallback chain) → parse structured response
-6. Return results with observability data
+1. Query PostgreSQL for aggregate metrics and bounded error samples
+2. Derive the privacy-safe analysis input
+3. Check TTL cache → call LLM (with fallback chain) → parse structured response
+4. Return results with observability data
 
 Fallback chain: primary provider → fallback provider → rule-based
 """
@@ -16,8 +14,6 @@ import asyncio
 import logging
 import time
 from typing import Any, Optional
-
-from motor.motor_asyncio import AsyncIOMotorCollection
 
 from src.analysis.cache import build_cache_key, get_insight_cache
 from src.analysis.config import AnalysisConfig
@@ -55,175 +51,34 @@ _SEVERITY_RANK = {
 }
 
 
-def _normalize_extra_query_for_mongo(extra_query: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    if not extra_query:
-        return {}
-    normalized = dict(extra_query)
-    if "source_file_id" in normalized and "sourceFileId" not in normalized:
-        normalized["sourceFileId"] = normalized.pop("source_file_id")
-    if "reconciliation_run_id" in normalized and "reconciliationRunId" not in normalized:
-        normalized["reconciliationRunId"] = normalized.pop("reconciliation_run_id")
-    return normalized
-
-
-# ---------------------------------------------------------------------------
-# MongoDB query helper
-# ---------------------------------------------------------------------------
-
-async def _query_reconciliation_results(
-    collection: AsyncIOMotorCollection,
-    partner: str,
-    date: str,
-    *,
-    extra_query: Optional[dict[str, Any]] = None,
-    mismatch_only: bool = False,
-    limit: int | None = None,
-) -> list[Any]:
-    """Query reconciliation results from MongoDB for a partner on a date.
-
-    Args:
-        collection: Motor collection for reconciliation_result.
-        partner: Partner identifier to filter by.
-        date: Date string (YYYY-MM-DD) to filter by.
-
-    Returns:
-        List of reconciliation result objects (as SimpleNamespace-like dicts).
-    """
-    query: dict[str, Any] = {"partner": partner, "date": date}
-    query.update(_normalize_extra_query_for_mongo(extra_query))
-    if mismatch_only:
-        query["reconciliationStatus"] = {
-            "$in": [
-                ReconciliationStatus.AMOUNT_MISMATCH.value,
-                ReconciliationStatus.STATUS_MISMATCH.value,
-                ReconciliationStatus.MULTIPLE_MISMATCH.value,
-                ReconciliationStatus.MISSING_INTERNAL.value,
-                ReconciliationStatus.MISSING_PARTNER.value,
-                ReconciliationStatus.UNMAPPED_SKIPPED.value,
-            ]
-        }
-
-    cursor = collection.find(query)
-    if limit is not None:
-        cursor = cursor.limit(limit)
-    docs = await cursor.to_list(length=limit)
-    return _docs_to_results(docs, partner, date)
-
-
-def _docs_to_results(docs: list[dict[str, Any]], partner: str, date: str) -> list[Any]:
-    from types import SimpleNamespace
-
-    results = []
-    for doc in docs:
-        result = SimpleNamespace()
-        result.partner = doc.get("partner", partner)
-        result.date = doc.get("date", date)
-        result.partner_amount = doc.get("partnerAmount") if "partnerAmount" in doc else doc.get("partner_amount")
-        result.internal_amount = doc.get("internalAmount") if "internalAmount" in doc else doc.get("internal_amount")
-        status_value = (
-            doc.get("reconciliationStatus")
-            if "reconciliationStatus" in doc
-            else doc.get("reconciliation_status", "MATCHED")
-        )
-        status_str = status_value if isinstance(status_value, str) else "MATCHED"
-        try:
-            result.reconciliation_status = ReconciliationStatus(status_str)
-        except ValueError:
-            result.reconciliation_status = ReconciliationStatus.MATCHED
-        results.append(result)
-    return results
-
-
 async def _query_summary_metrics(
-    collection: AsyncIOMotorCollection | ReconciliationResultRepository,
+    repository: ReconciliationResultRepository,
     partner: str,
     date: str,
     *,
     extra_query: Optional[dict[str, Any]] = None,
 ) -> SummaryResult:
-    if isinstance(collection, ReconciliationResultRepository):
-        data = await collection.get_summary_metrics(
-            partner,
-            date,
-            reconciliation_run_id=(extra_query or {}).get("reconciliation_run_id"),
-            source_file_id=(extra_query or {}).get("source_file_id"),
-        )
-        raw_by_status = data.get("by_status")
-        by_status = (
-            {str(k): int(v) for k, v in raw_by_status.items()}
-            if isinstance(raw_by_status, dict)
-            else {}
-        )
-        total_transactions = sum(by_status.values())
-        matched = sum(
-            by_status.get(status, 0)
-            for status in (
-                ReconciliationStatus.MATCHED.value,
-                ReconciliationStatus.MATCHED_FAILED.value,
-                ReconciliationStatus.MATCHED_REVERSED.value,
-            )
-        )
-        mismatch_count = max(0, total_transactions - matched)
-        mismatch_rate = round((mismatch_count * 100 / total_transactions), 2) if total_transactions else 0.0
-        return SummaryResult(
-            partner=partner,
-            date=date,
-            total_transactions=total_transactions,
-            matched=matched,
-            mismatch_rate=mismatch_rate,
-            total_amount_mismatch=float(str(data.get("total_amount_mismatch") or 0.0)),
-            by_status=by_status,
-        )
-
-    match_query: dict[str, Any] = {"partner": partner, "date": date}
-    match_query.update(_normalize_extra_query_for_mongo(extra_query))
-    pipeline = [
-        {"$match": match_query},
-        {
-            "$group": {
-                "_id": "$reconciliationStatus",
-                "count": {"$sum": 1},
-                "mismatch_amount": {
-                    "$sum": {
-                        "$cond": [
-                            {"$in": ["$reconciliationStatus", [
-                                ReconciliationStatus.AMOUNT_MISMATCH.value,
-                                ReconciliationStatus.MULTIPLE_MISMATCH.value,
-                                ReconciliationStatus.STATUS_MISMATCH.value,
-                            ]]},
-                            {"$abs": {"$subtract": ["$partnerAmount", "$internalAmount"]}},
-                            0,
-                        ]
-                    }
-                },
-            }
-        },
-    ]
-    mongo_by_status: dict[str, int] = {}
-    total_transactions = 0
-    matched = 0
-    total_amount_mismatch = 0.0
-    cursor = collection.aggregate(pipeline)
-    async for doc in cursor:
-        status = str(doc["_id"])
-        count = int(doc["count"])
-        mongo_by_status[status] = count
-        total_transactions += count
-        if status in (
+    data = await repository.get_summary_metrics(
+        partner,
+        date,
+        reconciliation_run_id=(extra_query or {}).get("reconciliation_run_id"),
+        source_file_id=(extra_query or {}).get("source_file_id"),
+    )
+    raw_by_status = data.get("by_status")
+    by_status = (
+        {str(k): int(v) for k, v in raw_by_status.items()}
+        if isinstance(raw_by_status, dict)
+        else {}
+    )
+    total_transactions = sum(by_status.values())
+    matched = sum(
+        by_status.get(status, 0)
+        for status in (
             ReconciliationStatus.MATCHED.value,
             ReconciliationStatus.MATCHED_FAILED.value,
             ReconciliationStatus.MATCHED_REVERSED.value,
-        ):
-            matched += count
-        mismatch_amount = doc.get("mismatch_amount")
-        if mismatch_amount is not None:
-            try:
-                total_amount_mismatch += float(
-                    mismatch_amount.to_decimal() if hasattr(mismatch_amount, "to_decimal") else mismatch_amount
-                )
-            except Exception:
-                pass
-
+        )
+    )
     mismatch_count = max(0, total_transactions - matched)
     mismatch_rate = round((mismatch_count * 100 / total_transactions), 2) if total_transactions else 0.0
     return SummaryResult(
@@ -232,8 +87,8 @@ async def _query_summary_metrics(
         total_transactions=total_transactions,
         matched=matched,
         mismatch_rate=mismatch_rate,
-        total_amount_mismatch=total_amount_mismatch,
-        by_status=mongo_by_status,
+        total_amount_mismatch=float(str(data.get("total_amount_mismatch") or 0.0)),
+        by_status=by_status,
     )
 
 
@@ -263,61 +118,30 @@ def _compute_summary_hash(summary: SummaryResult) -> str:
 
 
 async def _query_selected_error_results(
-    collection: AsyncIOMotorCollection | ReconciliationResultRepository,
+    repository: ReconciliationResultRepository,
     partner: str,
     date: str,
     *,
     extra_query: Optional[dict[str, Any]] = None,
     per_status_limit: int = 50,
 ) -> list[Any]:
-    if isinstance(collection, ReconciliationResultRepository):
-        repository_selected_docs: list[dict[str, Any]] = []
-        repo_extra_query = extra_query or {}
-        status_order = [
-            ReconciliationStatus.MISSING_INTERNAL.value,
-            ReconciliationStatus.MISSING_PARTNER.value,
-            ReconciliationStatus.AMOUNT_MISMATCH.value,
-            ReconciliationStatus.MULTIPLE_MISMATCH.value,
-            ReconciliationStatus.STATUS_MISMATCH.value,
-            ReconciliationStatus.UNMAPPED_SKIPPED.value,
-        ]
-        for status in status_order:
-            records, _ = await collection.find_page_by_partner_and_date(
-                partner,
-                date,
-                status=ReconciliationStatus(status),
-                reconciliation_run_id=repo_extra_query.get("reconciliation_run_id"),
-                source_file_id=repo_extra_query.get("source_file_id"),
-                limit=per_status_limit,
-                offset=0,
-            )
-            repository_selected_docs.extend(
-                [record.model_dump(by_alias=True) for record in records]
-            )
-        return _docs_to_results(repository_selected_docs, partner, date)
-
-    selected_docs: list[dict[str, Any]] = []
-    mongo_extra_query = _normalize_extra_query_for_mongo(extra_query)
-    status_order = [
+    repo_extra_query = extra_query or {}
+    status_order = (
         ReconciliationStatus.MISSING_INTERNAL.value,
         ReconciliationStatus.MISSING_PARTNER.value,
         ReconciliationStatus.AMOUNT_MISMATCH.value,
         ReconciliationStatus.MULTIPLE_MISMATCH.value,
         ReconciliationStatus.STATUS_MISMATCH.value,
         ReconciliationStatus.UNMAPPED_SKIPPED.value,
-    ]
-    for status in status_order:
-        cursor = collection.find(
-            {
-                "partner": partner,
-                "date": date,
-                "reconciliationStatus": status,
-                **mongo_extra_query,
-            }
-        ).limit(per_status_limit)
-        docs = await cursor.to_list(length=per_status_limit)
-        selected_docs.extend(docs)
-    return _docs_to_results(selected_docs, partner, date)
+    )
+    return await repository.find_error_samples_by_partner_and_date(
+        partner,
+        date,
+        statuses=[ReconciliationStatus(status) for status in status_order],
+        reconciliation_run_id=repo_extra_query.get("reconciliation_run_id"),
+        source_file_id=repo_extra_query.get("source_file_id"),
+        per_status_limit=per_status_limit,
+    )
 
 
 def _format_amount_band(amount: float) -> str:
@@ -489,7 +313,7 @@ def _compute_results_hash(results: list[Any]) -> str:
 async def get_summary(
     partner: str,
     date: str,
-    collection: AsyncIOMotorCollection | ReconciliationResultRepository,
+    repository: ReconciliationResultRepository,
     llm_provider: Provider,
     config: Optional[AnalysisConfig] = None,
     extra_query: Optional[dict[str, Any]] = None,
@@ -497,16 +321,14 @@ async def get_summary(
     """Generate summary insights for a partner on a given date.
 
     Orchestration flow:
-    1. Query MongoDB → reconciliation results
-    2. MetricsService.compute_summary() → SummaryResult
-    3. GroupingEngine.group() → list[GroupResult]
-    4. Build AnalysisInput → check cache → LLM for key_findings
-    5. Return {summary_metrics, grouped_stats, key_findings, observation}
+    1. Query PostgreSQL for aggregate metrics
+    2. Build AnalysisInput → check cache → LLM for key_findings
+    3. Return {summary_metrics, grouped_stats, key_findings, observation}
 
     Args:
         partner: Partner identifier.
         date: Date string (YYYY-MM-DD).
-        collection: Motor collection for reconciliation_result.
+        repository: PostgreSQL reconciliation result repository.
         llm_provider: LLM provider instance (AIProviderRouter).
         config: Optional AnalysisConfig (uses defaults if not provided).
 
@@ -516,8 +338,8 @@ async def get_summary(
     start_time = time.monotonic()
     cfg = config or AnalysisConfig()
 
-    # Step 1: Query aggregated metrics from MongoDB
-    summary = await _query_summary_metrics(collection, partner, date, extra_query=extra_query)
+    # Step 1: Query aggregated metrics from PostgreSQL
+    summary = await _query_summary_metrics(repository, partner, date, extra_query=extra_query)
     logger.info(
         f"Queried aggregated reconciliation metrics for {partner} on {date}",
         extra={"event": "ai_insight_query", "partner": partner, "date": date, "count": summary.total_transactions},
@@ -634,7 +456,7 @@ async def get_discrepancies(
     partner: str,
     date: str,
     focus: str,
-    collection: AsyncIOMotorCollection | ReconciliationResultRepository,
+    repository: ReconciliationResultRepository,
     llm_provider: Provider,
     config: Optional[AnalysisConfig] = None,
     extra_query: Optional[dict[str, Any]] = None,
@@ -642,18 +464,16 @@ async def get_discrepancies(
     """Generate discrepancy insights for a partner on a given date.
 
     Orchestration flow:
-    1. Query MongoDB → reconciliation results
-    2. MetricsService.compute_summary() → SummaryResult
-    3. GroupingEngine.group() → list[GroupResult]
-    4. Rule-based pre-process → anomalies
-    5. Build AnalysisInput → check cache → generate insights
-    6. Return list[AnalysisResult]
+    1. Query PostgreSQL for aggregate metrics and bounded error samples
+    2. Group samples and run rule-based pre-processing
+    3. Build AnalysisInput → check cache → generate insights
+    4. Return list[AnalysisResult]
 
     Args:
         partner: Partner identifier.
         date: Date string (YYYY-MM-DD).
         focus: Analysis focus (operational | partner | inconsistency).
-        collection: Motor collection for reconciliation_result.
+        repository: PostgreSQL reconciliation result repository.
         llm_provider: LLM provider instance (AIProviderRouter).
         config: Optional AnalysisConfig.
 
@@ -663,10 +483,10 @@ async def get_discrepancies(
     start_time = time.monotonic()
     cfg = config or AnalysisConfig()
 
-    # Step 1: Query MongoDB
-    summary = await _query_summary_metrics(collection, partner, date, extra_query=extra_query)
+    # Step 1: Query PostgreSQL
+    summary = await _query_summary_metrics(repository, partner, date, extra_query=extra_query)
     results = await _query_selected_error_results(
-        collection,
+        repository,
         partner,
         date,
         extra_query=extra_query,
@@ -975,18 +795,10 @@ async def _generate_insights_with_fallback(
             },
         )
 
-        # If provider is AIProviderRouter, it handles fallback internally.
-        # If it's a plain LLMProvider (backward compat), call generate directly.
-        if isinstance(llm_provider, AIProviderRouter):
-            llm_response = await asyncio.wait_for(
-                llm_provider.generate(user_prompt, system_prompt),
-                timeout=timeout_seconds,
-            )
-        else:
-            llm_response = await asyncio.wait_for(
-                llm_provider.generate(user_prompt, system_prompt),
-                timeout=timeout_seconds,
-            )
+        llm_response = await asyncio.wait_for(
+            llm_provider.generate(user_prompt, system_prompt),
+            timeout=timeout_seconds,
+        )
 
         if not llm_response:
             logger.warning("LLM returned no response, falling back to rule-based")

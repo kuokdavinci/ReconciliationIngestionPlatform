@@ -316,7 +316,9 @@ async def test_resume_reconciles_completed_file_before_consuming_raw_page():
     fetch_repo = MagicMock()
     fetch_repo.find_by_id = AsyncMock(return_value=_fetch_config())
     reconciliation = SimpleNamespace(
-        execute=AsyncMock(side_effect=lambda _command: events.append("reconcile") or [])
+        reconcile=AsyncMock(
+            side_effect=lambda *_args, **_kwargs: events.append("reconcile") or []
+        )
     )
     cleanup = AsyncMock(side_effect=lambda _config, _unit: events.append("cleanup"))
 
@@ -367,4 +369,4 @@ async def test_resume_reconciles_completed_file_before_consuming_raw_page():
 
     assert result["success"] is True
     assert events == ["claim", "reconcile", "mark_completed", "advance", "consume", "cleanup"]
-    reconciliation.execute.assert_awaited_once()
+    reconciliation.reconcile.assert_awaited_once()

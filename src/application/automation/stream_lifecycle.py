@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from src.application.automation.stream_fetching import checkpoint_result
+from src.application.automation.stream_runtime import checkpoint_result
 from src.domain.ingestion.checkpoints import CheckpointStatus
 from src.domain.runtime.models import (
     PartnerRuntimeRunStatus,

@@ -1,0 +1,82 @@
+name: Topology Contract
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  topology:
+    name: Full topology contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Create CI Compose environment
+        run: |
+          cp .env.example .env
+          sed -i \
+            -e 's/^MONGO_ROOT_PASSWORD=.*/MONGO_ROOT_PASSWORD=ci-mongo-password/' \
+            -e 's/^AIRFLOW_DB_PASSWORD=.*/AIRFLOW_DB_PASSWORD=ci-airflow-db-password/' \
+            -e 's/^AIRFLOW_ADMIN_PASSWORD=.*/AIRFLOW_ADMIN_PASSWORD=ci-airflow-admin-password/' \
+            -e 's/^AIRFLOW_JWT_SECRET=.*/AIRFLOW_JWT_SECRET=ci-airflow-jwt-secret-012345678901234567890123456789012345678901234567890123456789/' \
+            -e 's/^SFTP_PASS=.*/SFTP_PASS=ci-sftp-password/' \
+            .env
+
+      - name: Start the full runtime topology
+        env:
+          MONGO_ROOT_PASSWORD: ci-mongo-password
+          AIRFLOW_DB_PASSWORD: ci-airflow-db-password
+          AIRFLOW_ADMIN_USERNAME: airflow
+          AIRFLOW_ADMIN_PASSWORD: ci-airflow-admin-password
+          AIRFLOW_DAGS_ARE_PAUSED_AT_CREATION: "false"
+          AIRFLOW_JWT_SECRET: ci-airflow-jwt-secret-012345678901234567890123456789012345678901234567890123456789
+          SFTP_PASS: ci-sftp-password
+        run: >-
+          docker compose -p reconciliation-ci up -d --build --wait
+          postgres mongodb sftp airflow-db-bootstrap airflow-volume-permissions
+          airflow-init airflow-api-server airflow-scheduler airflow-dag-processor
+          api viettelpay-mock
+
+      - name: Activate CI Airflow DAG
+        run: docker compose -p reconciliation-ci exec -T airflow-api-server airflow dags unpause reconciliation_ingestion
+
+      - name: Run full topology contract
+        run: uv run pytest tests/test_topology_contract.py --e2e -s -v --tb=short
+        env:
+          APP_MONGODB_URL: mongodb://admin:ci-mongo-password@127.0.0.1:27017/reconciliation?authSource=admin
+          APP_DB_NAME: reconciliation
+          APP_POSTGRES_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/reconciliation
+          APP_AIRFLOW_BASE_URL: http://127.0.0.1:8080
+          APP_AIRFLOW_USERNAME: airflow
+          APP_AIRFLOW_PASSWORD: ci-airflow-admin-password
+          TOPOLOGY_API_URL: http://127.0.0.1:8000
+          TOPOLOGY_SOURCE_URL: http://127.0.0.1:8001
+          TOPOLOGY_AIRFLOW_URL: http://127.0.0.1:8080
+          TOPOLOGY_SFTP_HOST: 127.0.0.1
+          TOPOLOGY_SFTP_PORT: "2222"
+          AI_API_KEY: sk-test-fake-key
+
+      - name: Show Compose diagnostics
+        if: ${{ !success() }}
+        run: docker compose -p reconciliation-ci ps && docker compose -p reconciliation-ci logs --no-color --tail=200
+
+      - name: Tear down Compose topology
+        if: ${{ always() }}
+        run: docker compose -p reconciliation-ci down -v --remove-orphans

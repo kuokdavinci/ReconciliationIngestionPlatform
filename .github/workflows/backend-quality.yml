@@ -1,11 +1,10 @@
 name: Backend Quality
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   backend:
@@ -48,8 +47,10 @@ jobs:
       - name: Lint
         run: uv run ruff check src dags scripts cli
 
-      - name: Type check
-        run: uv run mypy src/ --show-error-codes
+      - name: Type check all runtime code
+        run: |
+          uv run mypy src --show-error-codes --no-incremental --check-untyped-defs
+          uv run mypy dags scripts cli --show-error-codes --no-incremental
 
       - name: Run backend tests (excluding E2E and ingestion pipeline)
         run: uv run pytest tests/ --integration --ignore=tests/test_analysis_e2e.py --ignore=tests/test_ingestion_integration.py --ignore=tests/test_ingestion_pipeline.py --ignore=tests/test_seed_momo_e2e.py --ignore=tests/test_sprint1_eval_benchmark.py -v --tb=short

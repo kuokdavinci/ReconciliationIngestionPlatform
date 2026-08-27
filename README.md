@@ -211,7 +211,8 @@ Các timestamp event của PostgreSQL được lưu UTC-naive; business date đ�
 
 ```bash
 uv run ruff check src dags scripts cli
-uv run mypy src/ --show-error-codes
+uv run mypy src --show-error-codes --no-incremental --check-untyped-defs
+uv run mypy dags scripts cli --show-error-codes --no-incremental
 uv run pytest tests/ --ignore=tests/test_analysis_e2e.py
 
 npm --prefix frontend-next run lint

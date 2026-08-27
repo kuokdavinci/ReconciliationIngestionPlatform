@@ -27,7 +27,7 @@
 
 ## CI và tài liệu
 
-- Codegraph hiện không có `src/scheduler/`, `src/services/` hoặc `frontend/`; một số historical plan/report và workflow cũ còn nhắc tên legacy này. Khi chỉnh CI tiếp theo, cần dọn các path legacy trong `.github/workflows/ingestion-pipeline.yml`.
+- Codegraph hiện không có `src/scheduler/`, `src/services/` hoặc `frontend/`; một số historical plan/report còn nhắc tên legacy này. CI hiện map theo các path runtime thực tế và có topology contract riêng.
 - Nội dung recovery hardening đã được hợp nhất vào `docs/phase-2/sprint-2.5-airflow-migration.md`; Sprint 2.6 không còn là sprint độc lập.
 - Sau thay đổi cấu trúc, chạy `codegraph sync .` và cập nhật `README.md`, `docs/INDEX.md`, architecture/module/CI docs nếu cần.
 
@@ -41,6 +41,6 @@
 ## Follow-up
 
 - Thu thập live acceptance evidence đầy đủ cho Sprint 2.5.
-- Dọn các workflow path legacy trong CI.
+- Theo dõi độ ổn định và thời lượng của nightly full-topology contract.
 - Hoàn thiện kế hoạch Sprint 3 data quality/quarantine và Sprint 4 observability.
 - Giữ `TODO.md` làm nguồn công việc sản phẩm chưa giải quyết.

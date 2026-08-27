@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from src.core.enums import TransactionStatus
 from src.domain.internal_transaction.models import InternalTransaction
+from src.domain.reconciliation.models import ReconciliationResult
 from src.infrastructure.postgres.internal_transaction_repository import (
     InternalTransactionRepository,
 )
@@ -63,4 +64,14 @@ async def run_reconciliation(partner: str, date_str: str, seed_mock: bool = Fals
     results = await engine.reconcile(partner, recon_date)
     print(f"Reconciliation finished. Total results generated/updated: {len(results)}")
     for r in results:
-        print(f"  - Key: {r.partner_txn_id} -> Status: {r.reconciliation_status} (Partner Amt: {r.partner_amount}, Internal Amt: {r.internal_amount})")
+        if isinstance(r, ReconciliationResult):
+            print(
+                f"  - Key: {r.partner_txn_id} -> Status: {r.reconciliation_status} "
+                f"(Partner Amt: {r.partner_amount}, Internal Amt: {r.internal_amount})"
+            )
+        else:
+            print(
+                f"  - Key: {r.get('partner_txn_id')} -> Status: "
+                f"{r.get('reconciliation_status')} (Partner Amt: {r.get('partner_amount')}, "
+                f"Internal Amt: {r.get('internal_amount')})"
+            )

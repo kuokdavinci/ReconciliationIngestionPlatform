@@ -27,6 +27,7 @@ def test_compose_uses_minimal_airflow_local_executor_topology() -> None:
     environment = compose["x-airflow-common"]["environment"]
     assert environment["AIRFLOW__CORE__EXECUTOR"] == "LocalExecutor"
     assert environment["AIRFLOW__CORE__PARALLELISM"] == 2
+    assert environment["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "${AIRFLOW_DAGS_ARE_PAUSED_AT_CREATION:-true}"
     assert environment["AIRFLOW__CORE__DEFAULT_TIMEZONE"] == "${APP_BUSINESS_TIMEZONE:-Asia/Ho_Chi_Minh}"
     assert environment["AIRFLOW_GLOBAL_SCHEDULE"] == "${AIRFLOW_GLOBAL_SCHEDULE:-none}"
     assert environment["AIRFLOW_TASK_RETRIES"] == "${AIRFLOW_TASK_RETRIES:-0}"

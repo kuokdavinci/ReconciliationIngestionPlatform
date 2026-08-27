@@ -1,6 +1,6 @@
 # Project Milestones
 
-**Cập nhật:** 2026-08-26
+**Cập nhật:** 2026-08-27
 
 ## Milestone 1 — Foundation
 

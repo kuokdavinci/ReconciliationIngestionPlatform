@@ -1,10 +1,10 @@
 # Architecture hiện tại
 
-**Cập nhật:** 2026-08-14
+**Cập nhật:** 2026-08-27
 
 ## Tổng quan
 
-Repository là một ứng dụng Python/FastAPI với application boundaries rõ ràng, dual persistence và dashboard Next.js. Dữ liệu settlement đi qua fetcher → source-unit orchestration → ingestion pipeline → PostgreSQL/MongoDB; Airflow gọi cùng application entrypoint cho scheduled/manual/backfill execution.
+Repository là ứng dụng Python/FastAPI với dashboard Next.js, PostgreSQL cho transaction/result, MongoDB cho metadata/config/workflow state và Airflow làm control plane. Dữ liệu settlement đi qua fetcher → source-unit orchestration → ingestion pipeline; reconciliation đọc/ghi PostgreSQL.
 
 ```mermaid
 flowchart TB
@@ -66,7 +66,7 @@ Kiến trúc không còn lớp `src/models/` trung gian. Code dùng `src/domain/
 
 `dags/reconciliation_ingestion.py` có hai task chính: `select_streams` và mapped `run_stream`. DAG gọi `src.application.automation.execute_stream()`; không chứa business ingestion logic.
 
-`src/infrastructure/workflows/airflow.py` là gateway gọi Airflow REST API cho Run Now, retry, backfill và task-state lookup. `src/infrastructure/workflows/local.py` là adapter test/compatibility. Compose pilot chỉ bật Airflow control plane, với:
+`src/infrastructure/workflows/airflow.py` là gateway gọi Airflow REST API cho Run Now, retry, backfill và task-state lookup. Compose pilot chỉ bật Airflow control plane, với:
 
 - `AIRFLOW_GLOBAL_SCHEDULE=none` để manual-only.
 - `AIRFLOW_TASK_RETRIES=0` để retry do operator kiểm soát.

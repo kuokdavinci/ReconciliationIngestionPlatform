@@ -1,7 +1,7 @@
 """Metrics service — single source of truth for reconciliation statistics.
 
 Pure functions — no IO, deterministic.
-All stats are computed here; reporter and alerter MUST NOT duplicate computation.
+All stats are computed here; API and insight consumers MUST NOT duplicate computation.
 
 Enforces: MetricsService is the ONLY place where mismatch_rate,
 total_volume, avg_mismatch_amount, count_by_status are calculated.
@@ -35,7 +35,7 @@ class MetricsService:
     """Single source of truth for all reconciliation statistics.
 
     Pure function class — no IO, no external state, deterministic.
-    All consumers (reporter, alerter, insights) MUST read from here.
+    All API and insight consumers MUST read from here.
     """
 
     @staticmethod

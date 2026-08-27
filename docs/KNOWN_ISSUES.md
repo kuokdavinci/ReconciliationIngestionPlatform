@@ -1,6 +1,6 @@
 # Known Issues và Operational Constraints
 
-**Cập nhật:** 2026-08-14
+**Cập nhật:** 2026-08-27
 
 ## Môi trường
 
@@ -30,6 +30,7 @@
 - Codegraph hiện không có `src/scheduler/`, `src/services/` hoặc `frontend/`; một số historical plan/report còn nhắc tên legacy này. CI hiện map theo các path runtime thực tế và có topology contract riêng.
 - Nội dung recovery hardening đã được hợp nhất vào `docs/phase-2/sprint-2.5-airflow-migration.md`; Sprint 2.6 không còn là sprint độc lập.
 - Sau thay đổi cấu trúc, chạy `codegraph sync .` và cập nhật `README.md`, `docs/INDEX.md`, architecture/module/CI docs nếu cần.
+- `run.py --data/--config` vẫn có trong CLI nhưng local-file ingestion chưa được compose repository hoàn chỉnh; flow vận hành hiện tại dùng API/Airflow. Không dùng hai flag này cho production.
 
 ## Test dependencies
 

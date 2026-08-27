@@ -23,7 +23,7 @@ Bản đồ dưới đây phản ánh package hiện có trong `src/`, `dags/` v
 | `src/normalizer/` | Raw row → canonical value | `normalizer.py` |
 | `src/validators/` | Canonical transaction validation | `validator.py` |
 | `src/reconciliation/` | Key normalization, scope classification, matching engine | `keys.py`, `scope.py`, `engine.py` |
-| `src/analysis/` | Insights, metrics, reports, alerts, guardrails, provider fallback | `provider.py`, `insights.py`, `services.py`, `guardrails.py` |
+| `src/analysis/` | Insights, metrics, guardrails, provider fallback | `provider.py`, `insights.py`, `services.py`, `guardrails.py` |
 | `src/config/` | Settings, mapping loader/cache/validator, config health, AI mapping | `settings.py`, `loader.py`, `validator.py`, `config_health.py` |
 | `src/core/` | Shared enums, constants, canonical types và utility functions | `__init__.py`, `utils.py`, `enums.py`, `types.py` |
 | `src/infrastructure/persistence/` | Mongo index definitions, PostgreSQL schema/connection và persistence bootstrap | `mongo_indexes.py`, `postgres_schema.py`, `postgres_connection.py` |
@@ -44,7 +44,7 @@ Bản đồ dưới đây phản ánh package hiện có trong `src/`, `dags/` v
 
 | File | Prefix | Nghiệp vụ |
 |---|---|---|
-| `insights.py` | `/api/v1` | Insights và daily reports |
+| `insights.py` | `/api/v1` | Insights |
 | `reconciliation.py` | `/api/v1/reconciliation` | Results, stats, runs, review records |
 | `data_explorer.py` | `/api/v1/data` | Transactions, files, stats |
 | `mappings.py` | `/api/v1/mappings`, `/api/v1/mapping` | Mapping CRUD, validate, publish, generate |

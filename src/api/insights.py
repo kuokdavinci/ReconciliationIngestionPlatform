@@ -1,9 +1,8 @@
 """FastAPI Router for AI Analysis insights endpoints.
 
-Provides three endpoints:
+Provides two endpoints:
 - GET /api/v1/insights/summary — summary + groups + key_findings
 - GET /api/v1/insights/discrepancies — LLM-powered discrepancy analysis
-- GET /api/v1/reports/daily — daily batch report
 
 All endpoints validate request parameters and handle errors gracefully.
 """
@@ -36,7 +35,7 @@ def _validate_partner(value: str | None) -> str:
     return partner
 
 
-def _get_collection(request: Request) -> ReconciliationResultRepository:
+def _get_repository(request: Request) -> ReconciliationResultRepository:
     """Get the PostgreSQL reconciliation result repository.
 
     Args:
@@ -208,13 +207,13 @@ async def insights_summary(
     try:
         from src.analysis.insights import get_summary
 
-        collection = _get_collection(request)
+        repository = _get_repository(request)
         llm_provider = _get_llm_provider()
 
         result = await get_summary(
             partner=partner,
             date=date,
-            collection=collection,
+            repository=repository,
             llm_provider=llm_provider,
         )
 
@@ -315,14 +314,14 @@ async def insights_discrepancies(
     try:
         from src.analysis.insights import get_discrepancies
 
-        collection = _get_collection(request)
+        repository = _get_repository(request)
         llm_provider = _get_llm_provider()
 
         results = await get_discrepancies(
             partner=partner,
             date=date,
             focus=focus,
-            collection=collection,
+            repository=repository,
             llm_provider=llm_provider,
         )
 
@@ -336,64 +335,4 @@ async def insights_discrepancies(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate discrepancy insights: {str(exc)}",
-        )
-
-
-# ---------------------------------------------------------------------------
-# GET /api/v1/reports/daily
-# ---------------------------------------------------------------------------
-
-@router.get("/reports/daily")
-async def reports_daily(
-    request: Request,
-    date: Optional[str] = Query(default=None, description="Date (YYYY-MM-DD)"),
-):
-    """Get daily batch report for all active partners.
-
-    Returns a consolidated report with summary metrics for each partner,
-    global statistics, and any threshold alerts.
-
-    **Parameters:**
-    - `date`: Date string in YYYY-MM-DD format (required)
-
-    **Response:**
-    - `date`: Report date
-    - `generated_at`: Timestamp of generation
-    - `partners`: List of partner reports with summary_metrics, grouped_stats, key_findings
-    - `global_stats`: Aggregated statistics across all partners
-    - `alerts`: List of threshold breach alerts
-    """
-    try:
-        date = _validate_date(date)
-    except HTTPException:
-        raise
-
-    try:
-        from src.analysis.reporter import DailyReporter
-        from src.analysis.alerter import ThresholdAlerter
-
-        collection = _get_collection(request)
-        llm_provider = _get_llm_provider()
-        config = AnalysisConfig()
-
-        reporter = DailyReporter(collection, llm_provider, config)
-        report = await reporter.generate_report(date)
-
-        # Generate alerts for the report
-        alerter = ThresholdAlerter(config)
-        alerts = alerter.alerts_for_report(report)
-        report["alerts"] = [a.model_dump() for a in alerts]
-
-        # Add proper timestamp
-        report["generated_at"] = datetime.now(timezone.utc).isoformat()
-
-        return camelize(report)
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(f"Error generating daily report: {exc}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate daily report: {str(exc)}",
         )

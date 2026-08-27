@@ -2,7 +2,7 @@
 
 Uses FastAPI TestClient with mocked orchestration layer to verify:
 - Request validation (date format, partner required)
-- Endpoint responses (summary, discrepancies, daily report)
+- Endpoint responses (summary, discrepancies)
 - Error handling (400, 500 responses)
 """
 
@@ -277,102 +277,6 @@ class TestInsightsDiscrepancies:
 
         assert response.status_code == 500
         assert "Failed to generate discrepancy insights" in response.json()["detail"]
-
-
-# ---------------------------------------------------------------------------
-# GET /api/v1/reports/daily tests
-# ---------------------------------------------------------------------------
-
-class TestReportsDaily:
-    """Test GET /api/v1/reports/daily endpoint."""
-
-    def test_requires_date_parameter(self) -> None:
-        app = _create_test_app()
-        client = TestClient(app)
-
-        response = client.get("/api/v1/reports/daily")
-
-        assert response.status_code == 400
-        assert "Date parameter is required" in response.json()["detail"]
-
-    def test_validates_date_format(self) -> None:
-        app = _create_test_app()
-        client = TestClient(app)
-
-        response = client.get(
-            "/api/v1/reports/daily",
-            params={"date": "not-a-date"},
-        )
-
-        assert response.status_code == 400
-        assert "Invalid date format" in response.json()["detail"]
-
-    def test_returns_daily_report(self) -> None:
-        app = _create_test_app()
-        client = TestClient(app)
-
-        mock_report = {
-            "date": "2024-07-07",
-            "generated_at": "2024-07-07",
-            "partners": [
-                {
-                    "partner": "MOMO",
-                    "summary_metrics": {"total_transactions": 100, "matched": 95, "mismatch_rate": 5.0},
-                    "grouped_stats": [],
-                    "key_findings": ["Test finding"],
-                }
-            ],
-            "global_stats": {"total_mismatch_rate": 5.0, "total_volume": 10000000, "alert_count": 0},
-        }
-
-        with patch("src.analysis.reporter.DailyReporter") as MockReporter:
-            mock_reporter_instance = MagicMock()
-            mock_reporter_instance.generate_report = AsyncMock(return_value=mock_report)
-            MockReporter.return_value = mock_reporter_instance
-
-            with patch("src.analysis.alerter.ThresholdAlerter") as MockAlerter:
-                mock_alerter_instance = MagicMock()
-                mock_alerter_instance.alerts_for_report = MagicMock(return_value=[])
-                MockAlerter.return_value = mock_alerter_instance
-
-                with patch("src.api.insights._get_llm_provider", return_value=MockLLMProvider(response="{}")):
-                    response = client.get(
-                        "/api/v1/reports/daily",
-                        params={"date": "2024-07-07"},
-                    )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["date"] == "2024-07-07"
-        assert len(data["partners"]) == 1
-        assert data["partners"][0]["partner"] == "MOMO"
-        assert "alerts" in data
-        assert data["partners"][0]["summaryMetrics"]["totalTransactions"] == 100
-        assert "generatedAt" in data
-        assert "T" in data["generatedAt"]  # Proper ISO timestamp
-
-    def test_returns_500_on_report_error(self) -> None:
-        app = _create_test_app()
-        client = TestClient(app)
-
-        with patch("src.analysis.reporter.DailyReporter") as MockReporter:
-            mock_reporter_instance = MagicMock()
-            mock_reporter_instance.generate_report = AsyncMock(side_effect=RuntimeError("DB error"))
-            MockReporter.return_value = mock_reporter_instance
-
-            with patch("src.analysis.alerter.ThresholdAlerter") as MockAlerter:
-                mock_alerter_instance = MagicMock()
-                mock_alerter_instance.alerts_for_report = MagicMock(return_value=[])
-                MockAlerter.return_value = mock_alerter_instance
-
-                with patch("src.api.insights._get_llm_provider", return_value=MockLLMProvider(response="{}")):
-                    response = client.get(
-                        "/api/v1/reports/daily",
-                        params={"date": "2024-07-07"},
-                    )
-
-        assert response.status_code == 500
-        assert "Failed to generate daily report" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

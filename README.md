@@ -161,7 +161,7 @@ Stream API nhiều trang được stage bền vững trước khi tạo packet. 
 
 | Nhóm | Prefix |
 |---|---|
-| Insights/reports | `/api/v1` |
+| Insights | `/api/v1` |
 | Reconciliation | `/api/v1/reconciliation` |
 | Data explorer | `/api/v1/data` |
 | Mapping | `/api/v1/mappings`, `/api/v1/mapping` |
@@ -183,7 +183,7 @@ Copy `.env.example` thành `.env`. Nguồn khai báo chính:
 | Database | `MONGO_*`, `APP_MONGODB_URL`, `APP_POSTGRES_URL` | MongoDB/PostgreSQL |
 | Airflow | `AIRFLOW_*`, `APP_AIRFLOW_*` | API server, DAG, retry, timeout, credentials |
 | Source | `SFTP_*` | SFTP fetcher và local Compose SFTP |
-| Analysis | `AI_*` | provider, model, fallback, cache và thresholds |
+| Analysis | `AI_*` | provider, model, fallback và cache |
 
 Các timestamp event của PostgreSQL được lưu UTC-naive; business date được tính theo `APP_BUSINESS_TIMEZONE` (mặc định `Asia/Ho_Chi_Minh`). Không dùng secret mặc định trong production; `AIRFLOW_JWT_SECRET` phải là giá trị ngẫu nhiên đủ dài và đồng nhất giữa các Airflow services.
 

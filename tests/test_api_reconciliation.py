@@ -334,7 +334,7 @@ class TestRunReconciliation:
         from src.application.reconciliation.manual_runs import ManualReconciliationService
         from src.application.reconciliation.queries import ReconciliationRunContext
 
-        runner = SimpleNamespace(execute=AsyncMock(return_value=["result"]))
+        runner = SimpleNamespace(reconcile=AsyncMock(return_value=["result"]))
         runtime_service = SimpleNamespace(update=AsyncMock())
         audit_service = SimpleNamespace(record=AsyncMock())
         service = ManualReconciliationService(
@@ -354,7 +354,7 @@ class TestRunReconciliation:
             ),
         )
 
-        runner.execute.assert_awaited_once()
+        runner.reconcile.assert_awaited_once()
         audit_service.record.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -377,7 +377,10 @@ class TestRunReconciliation:
                     )
                 ),
             ),
-            patch("src.api.reconciliation.ReconciliationEngine.reconcile", new=AsyncMock(return_value=[1, 2, 3])),
+            patch(
+                "src.api.reconciliation.build_reconciliation_service",
+                return_value=SimpleNamespace(reconcile=AsyncMock(return_value=[1, 2, 3])),
+            ),
         ):
             response = await run_reconciliation_now(
                 request,

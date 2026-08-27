@@ -100,7 +100,7 @@ def _harness(results, pages=None):
     pipeline.process_file = AsyncMock(side_effect=results)
 
     reconciliation = MagicMock()
-    reconciliation.execute = AsyncMock(return_value=[object()] * 6)
+    reconciliation.reconcile = AsyncMock(return_value=[object()] * 6)
 
     return (
         raw_repo,
@@ -149,9 +149,9 @@ async def test_three_pages_share_one_file_and_reconcile_once():
     assert result["stats"]["totalRows"] == 6
     assert result["stats"]["actualRowCount"] == 6
     assert result["stats"]["sourceUnitKeys"] == ["unit-1", "unit-2", "unit-3"]
-    reconciliation.execute.assert_awaited_once()
-    command = reconciliation.execute.await_args.args[0]
-    assert command.source_file_id == "page-file-1"
+    reconciliation.reconcile.assert_awaited_once()
+    call = reconciliation.reconcile.await_args
+    assert call.kwargs["source_file_id"] == "page-file-1"
     assert transaction_repo.rebind_source_file.await_count == 2
     assert file_repo.delete_one.await_count == 2
 
@@ -203,7 +203,7 @@ async def test_incomplete_staged_replay_fails_before_reconciliation():
     assert result["stats"]["expectedRowCount"] == 6
     assert result["stats"]["actualRowCount"] == 3
     assert result["errors"][-1]["errorCode"] == "staged_replay_incomplete"
-    reconciliation.execute.assert_not_awaited()
+    reconciliation.reconcile.assert_not_awaited()
     transaction_repo.delete_by_source_file.assert_awaited_once_with("page-file-1")
     checkpoint_repo.mark_stream_failed_after_review.assert_awaited_once()
 
@@ -260,7 +260,7 @@ async def test_conflicting_page_stays_in_review_and_keeps_logical_source_owner()
         "page-file-2", "page-file-1"
     )
     assert transaction_repo.rebind_source_file.await_count == 1
-    reconciliation.execute.assert_not_awaited()
+    reconciliation.reconcile.assert_not_awaited()
     assert any(
         call.kwargs.get("status") == "WAITING_REVIEW"
         for call in runtime_update.await_args_list
@@ -404,7 +404,7 @@ async def test_failed_middle_page_stops_before_reconciliation():
 
     assert result["ok"] is False
     assert pipeline.process_file.await_count == 2
-    reconciliation.execute.assert_not_awaited()
+    reconciliation.reconcile.assert_not_awaited()
     transaction_repo.delete_by_source_file.assert_awaited()
 
 
@@ -418,7 +418,7 @@ async def test_reconciliation_failure_marks_logical_batch_failed():
         ]
     )
     raw_repo, file_repo, transaction_repo, result_repo, pipeline, reconciliation = harness
-    reconciliation.execute = AsyncMock(side_effect=RuntimeError("reconciliation failed"))
+    reconciliation.reconcile = AsyncMock(side_effect=RuntimeError("reconciliation failed"))
 
     with (
         patch("src.application.review.reprocessing.RawIngestionPageRepository", return_value=raw_repo),
@@ -440,7 +440,7 @@ async def test_reconciliation_failure_marks_logical_batch_failed():
             raw_stage_key="stream-1",
         )
 
-    reconciliation.execute.assert_awaited_once()
+    reconciliation.reconcile.assert_awaited_once()
     assert result["ok"] is False
     assert result["stage"] == "reconciliation"
     transaction_repo.delete_by_source_file.assert_awaited()

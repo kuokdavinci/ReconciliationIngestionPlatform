@@ -7,7 +7,7 @@ from typing import Any, Optional
 from src.application.automation.file_stream_runner import run_file_stream
 from src.application.automation.paginated_stream_runner import run_paginated_stream
 from src.application.automation.stream_failure import unexpected_failure_result
-from src.application.automation.stream_fetching import checkpoint_result
+from src.application.automation.stream_runtime import checkpoint_result
 from src.application.automation.stream_identity import (
     raw_stage_key as build_raw_stage_key,
     stream_identity,
@@ -25,18 +25,18 @@ from src.application.automation.stream_lifecycle import (
     checkpoint_short_circuit_result,
     empty_stream_stats,
 )
-from src.application.automation.stream_review_gate import (
+from src.application.automation.stream_runtime import (
     create_stream_review_packet,
     evaluate_stream_mapping,
 )
 from src.application.automation.stream_runtime import (
     finish_source_stream_run,
     runtime_attempt_event,
+    stage_stream_unit,
 )
-from src.application.automation.stream_staging import stage_stream_unit
 from src.application.ingestion.source_unit_orchestrator import process_source_units
 from src.application.runtime.service import create_runtime_run, update_runtime_run
-from src.core.error_formatting import summarize_runtime_error
+from src.core.utils import summarize_runtime_error
 from src.domain.fetch_config.models import FetchConfig, FetchMethod
 from src.domain.ingestion.checkpoints import IngestionMode
 from src.domain.ingestion.retry_policy import RetryPolicy

@@ -8,7 +8,7 @@ from src.config.config_health import (
     check_and_refresh_config,
 )
 from src.config.loader import ConfigLoader
-from src.core.date_templates import interpolate_date
+from src.core.utils import interpolate_date
 from src.domain.ingestion.ports import MappingConfigRepositoryPort
 from src.domain.mapping.models import MappingConfig
 from src.logging import StructuredLogger

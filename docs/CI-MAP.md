@@ -179,7 +179,7 @@ dashboard, stage metrics, and broader observability.
 
 ```bash
 AI_API_KEY=sk-test-fake-key uv run pytest tests/test_analysis_guardrails.py tests/test_analysis_providers.py tests/test_analysis_scenarios.py
-AI_API_KEY=sk-test-fake-key uv run pytest tests/test_analysis_insights.py tests/test_analysis_services.py tests/test_analysis_schemas.py tests/test_analysis_metrics.py tests/test_analysis_grouping.py tests/test_analysis_alerter.py tests/test_analysis_reporter.py
+AI_API_KEY=sk-test-fake-key uv run pytest tests/test_analysis_insights.py tests/test_analysis_services.py tests/test_analysis_schemas.py tests/test_analysis_metrics.py tests/test_analysis_grouping.py tests/test_analysis_scenarios.py
 ```
 
 ### Frontend CI

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from src.core.enums import ProcessingStatus
-from src.core.file_identity import compute_file_hash
+from src.core.utils import compute_file_hash
 from src.domain.ingestion.models import ReconciliationFile
 from src.domain.ingestion.ports import IngestionFileRepository
 from src.reconciliation.scope import classify_scope

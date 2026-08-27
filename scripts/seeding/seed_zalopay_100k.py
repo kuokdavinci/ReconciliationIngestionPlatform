@@ -25,6 +25,7 @@ from src.domain.fetch_config.models import (
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.domain.internal_transaction.models import InternalTransaction
 from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -189,8 +190,6 @@ async def _cleanup_existing_run_data(db) -> None:
     collections_to_clean = [
         "review_packet",
         "reconciliation_file",
-        "data_container",
-        "reconciliation_result",
         "partner_runtime_run",
         "post_approval_run"
     ]
@@ -198,6 +197,10 @@ async def _cleanup_existing_run_data(db) -> None:
         query = {"identify": PARTNER} if coll_name == "data_container" else {"partner": PARTNER}
         res = await db[coll_name].delete_many(query)
         logger.info(f"Deleted {res.deleted_count} records from collection '{coll_name}'")
+    deleted = await ReconciliationResultRepository().delete_by_partner_and_date(
+        PARTNER, _date_str(_today_utc())
+    )
+    logger.info("Deleted %s PostgreSQL reconciliation results", deleted)
 
 async def main():
     parser = argparse.ArgumentParser(description="Seed ZALOPAY 100k data")

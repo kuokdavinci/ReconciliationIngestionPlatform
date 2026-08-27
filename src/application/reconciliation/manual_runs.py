@@ -8,8 +8,7 @@ from src.application.reconciliation.queries import (
     ReconciliationContextQuery,
     ReconciliationRunContext,
 )
-from src.application.reconciliation.service import ReconciliationCommand
-from src.core.error_formatting import summarize_runtime_error
+from src.core.utils import summarize_runtime_error
 from src.domain.runtime.models import (
     PartnerRuntimeRun,
     PartnerRuntimeRunStatus,
@@ -31,14 +30,12 @@ class ManualReconciliationService:
         self,
         *,
         runtime_service,
-        reconciliation_service=None,
-        reconciliation_service_factory=None,
+        reconciliation_service,
         audit_service,
         context_query: ReconciliationContextQuery,
     ) -> None:
         self.runtime_service = runtime_service
         self.reconciliation_service = reconciliation_service
-        self.reconciliation_service_factory = reconciliation_service_factory
         self.audit_service = audit_service
         self.context_query = context_query
 
@@ -75,18 +72,12 @@ class ManualReconciliationService:
             reconciliation_date = datetime.strptime(
                 context.date, "%Y-%m-%d"
             ).replace(tzinfo=UTC)
-            if self.reconciliation_service_factory is not None:
-                reconciliation_service = self.reconciliation_service_factory()
-            else:
-                reconciliation_service = self.reconciliation_service
-            results = await reconciliation_service.execute(
-                ReconciliationCommand(
-                    partner=context.partner,
-                    reconciliation_date=reconciliation_date,
-                    source_file_id=context.source_file_id,
-                    reconciliation_run_id=run_id,
-                    mapping_version=context.mapping_version,
-                )
+            results = await self.reconciliation_service.reconcile(
+                context.partner,
+                reconciliation_date,
+                source_file_id=context.source_file_id,
+                reconciliation_run_id=run_id,
+                mapping_version=context.mapping_version,
             )
             finished_at = datetime.now(UTC)
             await self.runtime_service.update(

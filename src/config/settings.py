@@ -33,13 +33,6 @@ class Settings(BaseSettings):
     ingestion_quarantine_retention_days: int = Field(default=30, ge=1, le=3650)
     ingestion_quarantine_review_sla_hours: int = Field(default=24, ge=1, le=8760)
 
-    # Reconciliation Performance Tuning Configurations
-    recon_partner_batch_size: int = 10000
-    recon_result_batch_size: int = 20000
-    recon_result_write_workers: int = 2
-    recon_result_ordered_insert: bool = False
-
-
     model_config = SettingsConfigDict(
         env_prefix="APP_",
         env_file=".env",

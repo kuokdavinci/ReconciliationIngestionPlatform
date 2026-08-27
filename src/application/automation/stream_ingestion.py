@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Any, Optional
 
 from src.application.ingestion.contracts import IngestionResult, ProcessFileCommand
-from src.application.reconciliation.service import ReconciliationCommand
 from src.application.automation.stream_identity import fetch_source_endpoint
 from src.config.loader import ConfigLoader
 from src.core.enums import FileType, ProcessingStatus
@@ -15,7 +14,7 @@ from src.domain.ingestion.source_units import SourceUnitMetadata
 from src.fetchers.base import BaseFetcher
 from src.infrastructure.ingestion.composition import build_ingestion_pipeline
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
-from src.application.ingestion.error_classification import is_missing_ingestion_key_failure
+from src.application.ingestion.contracts import is_missing_ingestion_key_failure
 from src.application.ingestion.source_unit_orchestrator import resume_held_source_unit
 from src.logging import StructuredLogger
 
@@ -270,13 +269,11 @@ def build_source_unit_ingestor(
                 "reconciliationSkipped": True,
             }
 
-        reconciliation_results = await build_reconciliation_service(db, fast_mode=True).execute(
-            ReconciliationCommand(
-                partner=partner,
-                reconciliation_date=reconciliation_date,
-                source_file_id=str(file_record.id),
-                reconciliation_run_id=reconciliation_run_id,
-            )
+        reconciliation_results = await build_reconciliation_service(db).reconcile(
+            partner,
+            reconciliation_date,
+            source_file_id=str(file_record.id),
+            reconciliation_run_id=reconciliation_run_id,
         )
         stats["reconciliationCount"] += len(reconciliation_results)
         return {

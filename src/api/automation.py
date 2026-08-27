@@ -286,7 +286,7 @@ async def _attach_pending_backfill_review_packet(
     from datetime import date, datetime, time
     from zoneinfo import ZoneInfo
 
-    from src.core.business_day import business_day_bounds
+    from src.core.utils import business_day_bounds
 
     backfill_run = await db["backfill_run"].find_one(
         {"_id": backfill_run_id},

@@ -196,23 +196,20 @@ uv run python scripts/parallel_benchmark.py
 
 Kết quả hiển thị matrix và đề xuất cấu hình tối ưu (xem [Performance Trace](performance/INGEST_RECON_TRACE.md)).
 
-### 1M-Row Reconciliation Benchmark
+### PostgreSQL Reconciliation Benchmark
+
+Reconciliation hiện chạy bằng PostgreSQL set-based query. Dùng benchmark hiện
+tại để đo ingestion grid và một lần reconciliation PostgreSQL:
 
 ```bash
-uv run python scripts/benchmark_reconcile_million.py
-```
-
-Các tùy chọn:
-
-```bash
-# Bỏ qua seed (dùng data đã có)
-uv run python scripts/benchmark_reconcile_million.py --skip-seed
-
-# Kết nối Mongo URL tùy chỉnh
-uv run python scripts/benchmark_reconcile_million.py --mongo-url "mongodb://admin:admin123@localhost:27017/reconciliation?authSource=admin"
+uv run python scripts/parallel_benchmark.py
 ```
 
 ### Performance Trace (3 Configurations)
+
+> Các số liệu MongoDB bên dưới là lịch sử migration. Runtime hiện tại dùng
+> PostgreSQL cho partner/internal transactions và reconciliation results; MongoDB
+> chỉ giữ metadata/config/workflow linh hoạt.
 
 So sánh Baseline ↔ MongoDB Optimized ↔ Hybrid PostgreSQL:
 
@@ -266,7 +263,6 @@ make zalopay-e2e-reset
 | `scripts/demo/` | Demo fixtures, evaluation và scenario seed scripts |
 | `scripts/seeding/` | Seed dữ liệu nền và benchmark fixtures |
 | `tasks/` | Báo cáo đánh giá (eval.md, REPORT.md) |
-| `reports/` | Báo cáo xuất (daily/) |
 | `mock_data/` | Dữ liệu mẫu cho testing |
 | `test_data/` | Test data files |
 | `sftp_data/` | SFTP settlement files |

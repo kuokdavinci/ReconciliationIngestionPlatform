@@ -2,7 +2,7 @@ from hashlib import sha256
 
 import pytest
 
-from src.core.file_identity import compute_file_hash
+from src.core.utils import compute_file_hash
 from src.fetchers.base import BaseFetcher
 from src.pipeline import file_claim as file_claim_module
 from src.pipeline.file_claim import FileClaimService

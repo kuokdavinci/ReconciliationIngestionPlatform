@@ -287,6 +287,16 @@ async def test_concurrent_replay_of_same_action_persists_once():
     record = _record(QuarantineStatus.REPROCESSING)
     repo = _repo(record)
     completed_event = None
+    reserved = False
+
+    async def reserve_action(*_args, **_kwargs):
+        nonlocal reserved
+        if completed_event is not None:
+            return "COMPLETED"
+        if reserved:
+            return "IN_PROGRESS"
+        reserved = True
+        return "RESERVED"
 
     async def find_action(record_id, action_id):
         del record_id, action_id
@@ -314,6 +324,7 @@ async def test_concurrent_replay_of_same_action_persists_once():
         return True
 
     repo.find_action = find_action
+    repo.reserve_action = reserve_action
     repo.resolve = resolve
     service = QuarantineResolutionService(
         repo,
@@ -337,7 +348,8 @@ async def test_concurrent_replay_of_same_action_persists_once():
     )
 
     assert persist.calls == 1
-    assert {first.outcome, second.outcome} == {"RESOLVED"}
+    assert {first.outcome, second.outcome} <= {"RESOLVED", "ACTION_IN_PROGRESS"}
+    assert "RESOLVED" in {first.outcome, second.outcome}
 
 
 @pytest.mark.asyncio

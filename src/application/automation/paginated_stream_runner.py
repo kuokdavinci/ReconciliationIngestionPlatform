@@ -8,7 +8,7 @@ from src.application.automation.stream_failure import (
     fetch_error_code,
     paginated_fetch_failure_result,
 )
-from src.application.automation.stream_fetching import unit_high_water_mark
+from src.application.automation.stream_runtime import unit_high_water_mark
 from src.application.automation.stream_lifecycle import StreamRunContext
 from src.application.ingestion.source_unit_orchestrator import resume_held_source_unit
 from src.config.config_health import ConfigurationApprovalRequiredError

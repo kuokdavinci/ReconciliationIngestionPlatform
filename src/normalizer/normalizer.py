@@ -159,12 +159,7 @@ class TransactionNormalizer:
                 elif fm.type == FieldMappingType.STRING:
                     value, error = self._convert_string(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.DECIMAL:
-                    if fm.path == "amount":
-                        value = source_value
-                    else:
-                        value, error = self._convert_decimal(
-                            source_value, fm, row_number
-                        )
+                    value, error = self._convert_decimal(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.DATE:
                     value, error = self._convert_date(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.MAPPING:
@@ -184,6 +179,9 @@ class TransactionNormalizer:
                         message=f"unknown mapping type '{fm.type}' for path '{fm.path}'",
                         row=row_number,
                     )
+
+            if error is None and fm.path == "amount" and value is not None:
+                value, error = self._coerce_amount(value, fm, row_number)
 
             if collect_trace:
                 traces.append(

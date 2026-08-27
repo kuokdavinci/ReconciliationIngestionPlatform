@@ -1,6 +1,5 @@
 """Domain contract for rejected ingestion rows."""
 
-from dataclasses import dataclass
 from enum import StrEnum
 from datetime import UTC, datetime
 from typing import Any
@@ -133,6 +132,7 @@ class IngestionQuarantineRecord(BaseModel):
     config_version: str | None = Field(default=None, alias="configVersion")
     status: QuarantineStatus = QuarantineStatus.PENDING
     attempt_count: int = Field(default=1, alias="attemptCount", ge=1)
+    expires_at: datetime | None = Field(default=None, alias="expiresAt")
     claimed_by: str | None = Field(default=None, alias="claimedBy")
     claimed_at: datetime | None = Field(default=None, alias="claimedAt")
     claim_expires_at: datetime | None = Field(default=None, alias="claimExpiresAt")

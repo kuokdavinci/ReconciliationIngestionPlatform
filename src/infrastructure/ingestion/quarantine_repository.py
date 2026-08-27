@@ -19,6 +19,37 @@ from src.config.settings import settings
 from src.infrastructure.persistence.mongo_repository import BaseRepository
 
 
+def _bounded_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Keep lifecycle metadata bounded and free of sensitive evidence."""
+    forbidden = ("raw", "fingerprint", "password", "secret", "token", "credential")
+    bounded: dict[str, Any] = {}
+    for key, value in metadata.items():
+        key_text = str(key)
+        normalized = "".join(character for character in key_text.lower() if character.isalnum())
+        if (
+            any(token in normalized for token in forbidden)
+            or normalized in {"error", "exception", "trace", "stacktrace", "traceback", "authorization"}
+            or (normalized.startswith("error") and normalized != "errorcode")
+            or normalized.startswith(("api", "auth"))
+        ):
+            continue
+        if isinstance(value, str):
+            bounded[key_text] = value[:512]
+        elif isinstance(value, (int, float, bool)) or value is None:
+            bounded[key_text] = value
+    return bounded
+
+
+def _bounded_limit(value: int, *, maximum: int = 200) -> int:
+    return max(1, min(int(value), maximum))
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
     """Store rejected rows independently from canonical transactions."""
 

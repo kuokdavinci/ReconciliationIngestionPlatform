@@ -26,6 +26,7 @@ htmlcov/
 
 # Planning artifacts (internal GSD docs)
 .planning/
+.superpowers/
 docs/superpowers/
 
 # Local agent/index artifacts

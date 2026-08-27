@@ -4,7 +4,7 @@ Nền tảng nhận settlement từ partner, chuẩn hóa/kiểm tra dữ liệu
 
 Trạng thái hiện tại: FastAPI + Next.js, PostgreSQL cho dữ liệu đối soát, MongoDB cho metadata/config/workflow state và Airflow làm control plane. Runtime hỗ trợ file/stream ingestion, mapping theo partner, quarantine, retry/resume, ordered backfill, review packet và operator audit.
 
-## 🎯 Phạm vi chức năng
+## Phạm vi chức năng
 
 - Nhận CSV, JSON, Excel từ FileDrop, API hoặc SFTP.
 - Mapping, normalize, validate và quarantine record lỗi theo partner.
@@ -15,7 +15,7 @@ Trạng thái hiện tại: FastAPI + Next.js, PostgreSQL cho dữ liệu đối
 - Insights/Copilot có guardrail, cache và provider fallback.
 - Dashboard cho reconciliation, Review Center, Mapping Studio, Schedules và Audit Log.
 
-## 🏗️ Kiến trúc hiện tại
+## Kiến trúc hiện tại
 
 ```mermaid
 flowchart LR
@@ -40,7 +40,7 @@ flowchart LR
 | `src/infrastructure/` | PostgreSQL/MongoDB repositories và Airflow gateway |
 | `dags/` | Schedule, dependency, retry/timeout và task state |
 
-## 💾 Data ownership
+## Data ownership
 
 | Dữ liệu | Source of truth |
 |---|---|
@@ -63,7 +63,7 @@ fetch -> source-unit identity -> claim -> mapping -> read/normalize/validate
 
 API stream nhiều trang stage raw pages trong MongoDB GridFS trước review. Replay dùng cùng source identity; ordered backfill dùng một `backfillRunId` và resume theo ngày.
 
-## 🔁 Project flow và Phase 2
+## Project flow và Phase 2
 
 ```mermaid
 flowchart LR
@@ -91,16 +91,16 @@ flowchart LR
 
 | Outcome | Ý nghĩa |
 |---|---|
-| ✅ `CONTINUE` / `INGESTED` | Ghi row hợp lệ và advance checkpoint |
-| 🟡 `REVIEW` / `CONTINUE` | Quarantine row lỗi, tiếp tục row hợp lệ |
-| ⏸️ `REVIEW` / `HOLD_FOR_REVIEW` | Conflict cần operator xử lý trước checkpoint |
-| 📝 `WAITING_REVIEW` | Đã stage dữ liệu, chờ mapping/operator approval |
-| 🔴 `FAILED` / `BLOCKED` | Cần recovery; không retry vô hạn |
-| ♻️ `SAFE_DUPLICATE` | Stream đã hoàn tất, không fetch/ghi lại |
+| `CONTINUE` / `INGESTED` | Ghi row hợp lệ và advance checkpoint |
+| `REVIEW` / `CONTINUE` | Quarantine row lỗi, tiếp tục row hợp lệ |
+| `REVIEW` / `HOLD_FOR_REVIEW` | Conflict cần operator xử lý trước checkpoint |
+| `WAITING_REVIEW` | Đã stage dữ liệu, chờ mapping/operator approval |
+| `FAILED` / `BLOCKED` | Cần recovery; không retry vô hạn |
+| `SAFE_DUPLICATE` | Stream đã hoàn tất, không fetch/ghi lại |
 
 Acceptance chi tiết và evidence nằm trong [Phase 2 index](docs/phase-2/INDEX.md), [Sprint 2.5 runbook](docs/phase-2/sprint-2.5-airflow-migration.md) và [Sprint 3 index](docs/phase-2/sprint-3-index.md).
 
-## 🔌 Entrypoints và product surface
+## Entrypoints và product surface
 
 - Backend: `run.py --serve` → `src.api:create_app`.
 - Ingestion: Airflow DAG `reconciliation_ingestion` → `select_streams` → mapped `run_stream` → `execute_stream()`.
@@ -118,7 +118,7 @@ Acceptance chi tiết và evidence nằm trong [Phase 2 index](docs/phase-2/INDE
 
 Dashboard routes: `/`, `/reconciliation`, `/review-center`, `/mapping-studio`, `/schedules`, `/audit-log`.
 
-## 🚀 Chạy local
+## Chạy local
 
 Yêu cầu Python 3.11+, `uv`, Node.js và Docker Compose.
 
@@ -151,7 +151,7 @@ docker compose ps
 
 Airflow UI/API: <http://localhost:8080>. Pilot mặc định manual-only (`AIRFLOW_GLOBAL_SCHEDULE=none`, `AIRFLOW_TASK_RETRIES=0`). Compose tạo database metadata `airflow` riêng trong cùng PostgreSQL instance; không chạy scheduler ứng dụng thứ hai.
 
-## ✅ Kiểm tra chất lượng
+## Kiểm tra chất lượng
 
 ```bash
 uv run ruff check src dags scripts cli
@@ -182,7 +182,7 @@ tests, scripts, docker, docs                 # verification, tools, runtime và 
 
 `scripts/demo/` chứa scenario MOMO, ViettelPay, VNPAY và ZaloPay; `scripts/seeding/` chứa seed dataset; `alembic/versions/` là migration PostgreSQL; `docker/` mô tả service/volume/port.
 
-## 📚 Tài liệu
+## Tài liệu
 
 - [Documentation index](docs/INDEX.md)
 - [Architecture](docs/phase-1/ARCHITECTURE.md) · [Data flow](docs/phase-1/DATA_FLOW.md) · [Module map](docs/phase-1/MODULES.md)

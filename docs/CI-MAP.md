@@ -153,6 +153,28 @@ audit metadata, counters, retention evidence, production composition wiring,
 authoritative source readers, and fingerprint verification. Use the Ingestion
 Pipeline workflow for live database and integration validation.
 
+### Workstream E — Operator quarantine flow
+
+```bash
+uv run pytest \
+  tests/test_quarantine_repository.py \
+  tests/test_quarantine_lifecycle.py \
+  tests/test_quarantine_service.py \
+  tests/test_quarantine_actions.py \
+  tests/test_quarantine_audit.py \
+  tests/test_api_quarantine.py \
+  tests/test_api_operations.py \
+  tests/test_api_audit.py \
+  -q --tb=short
+```
+
+This gate verifies explicit claim ownership, stale-status CAS, source-backed
+resolution, accept-existing verification, reject reason requirements,
+escalation cap, idempotent action replay, audit action uniqueness, bounded
+queue summaries, stable error mapping, and redaction. It is contract evidence;
+it does not provide production sign-off. Sprint 4 owns notification,
+dashboard, stage metrics, and broader observability.
+
 ### Analysis Eval
 
 ```bash
@@ -179,7 +201,7 @@ npm --prefix frontend-next run test:e2e
 | `src/domain/ingestion/quality.py`, `src/pipeline/quality_gate.py`, duplicate repository/fingerprint code | Workstream B gate + Ingestion Pipeline | quality contract, duplicate classification and bounded runtime result |
 | `src/normalizer/`, `src/validators/`, persistence timestamp mappers, `scripts/benchmark_fraud_detection.py` | Workstream C gate + Ingestion Pipeline | normal/fast parity, UTC persistence mapping and full-dataset v2 benchmark |
 | `src/application/automation/` | Backend Quality + Airflow tests | `tests/test_airflow_*.py`, automation/recovery/backfill tests, DAG payload |
-| `src/application/ingestion/quarantine_*.py`, `src/api/quarantine.py` | Workstream D gate + Ingestion Pipeline | quarantine state/repository/API/audit/lifecycle tests, source-unit resume and checkpoint tests |
+| `src/application/ingestion/quarantine_*.py`, `src/api/quarantine.py`, `src/infrastructure/audit/` | Workstream D/E gate + Ingestion Pipeline | quarantine state/repository/API/audit/lifecycle tests, source-unit resume, ownership/CAS, queue summary and redaction tests |
 | `src/application/ingestion/`, `src/pipeline/` | Ingestion Pipeline | checkpoint, raw staging, recovery view, backend tests |
 | `src/fetchers/`, `src/domain/ingestion/` | Ingestion Pipeline | source-unit identity, retry/error classification, integration tests |
 | `src/infrastructure/workflows/`, `dags/` | Airflow tests + `docker compose config --quiet` | Build Airflow image, DAG import, runtime correlation |

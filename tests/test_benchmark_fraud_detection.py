@@ -1,13 +1,10 @@
 """Unit tests for the Sprint 3 fraud-dataset benchmark helpers."""
 
-import asyncio
-import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from scripts import benchmark_fraud_detection
 from scripts.benchmark_fraud_detection import (
     BENCHMARK_CONFIG_VERSION,
     BENCHMARK_WORKFLOW,
@@ -16,9 +13,7 @@ from scripts.benchmark_fraud_detection import (
     build_benchmark_config,
     redact_mongodb_url,
     render_markdown,
-    run_benchmark,
     write_prefix_csv,
-    _redact_mongodb_credentials,
 )
 
 

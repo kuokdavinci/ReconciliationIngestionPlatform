@@ -67,7 +67,7 @@ async def test_production_composition_reprocesses_with_approved_mapping():
     claimed = record.model_copy(
         update={
             "status": QuarantineStatus.REPROCESSING,
-            "claimedBy": "operator-1",
+            "claimed_by": "operator-1",
             "resolutionHistory": [
                 QuarantineResolutionEvent(
                     fromStatus=QuarantineStatus.PENDING,
@@ -81,6 +81,8 @@ async def test_production_composition_reprocesses_with_approved_mapping():
         }
     )
     quarantine_repo = SimpleNamespace(
+        find_action=AsyncMock(return_value=None),
+        find_by_id=AsyncMock(side_effect=[record, claimed]),
         claim=AsyncMock(return_value=claimed),
         release_for_retry=AsyncMock(return_value=True),
         resolve=AsyncMock(return_value=True),
@@ -110,6 +112,8 @@ async def test_production_composition_reprocesses_with_approved_mapping():
         QuarantineReprocessRequest(
             recordId=str(record.id),
             operatorId="operator-1",
+            actionId="action-1",
+            expectedStatus=QuarantineStatus.PENDING,
             mode=QuarantineReprocessMode.REPLAY_SOURCE_ROW,
         )
     )
@@ -127,10 +131,12 @@ async def test_production_composition_accepts_existing_using_repository_fingerpr
     claimed = record.model_copy(
         update={
             "status": QuarantineStatus.REPROCESSING,
-            "claimedBy": "operator-1",
+            "claimed_by": "operator-1",
         }
     )
     quarantine_repo = SimpleNamespace(
+        find_action=AsyncMock(return_value=None),
+        find_by_id=AsyncMock(side_effect=[record, claimed]),
         claim=AsyncMock(return_value=claimed),
         release_for_retry=AsyncMock(return_value=True),
         resolve=AsyncMock(return_value=True),
@@ -153,6 +159,8 @@ async def test_production_composition_accepts_existing_using_repository_fingerpr
         QuarantineReprocessRequest(
             recordId=str(record.id),
             operatorId="operator-1",
+            actionId="action-2",
+            expectedStatus=QuarantineStatus.PENDING,
             mode=QuarantineReprocessMode.ACCEPT_EXISTING,
         )
     )

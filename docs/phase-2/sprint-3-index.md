@@ -3,8 +3,9 @@
 Sprint 3 adds deterministic quality decisions to the ingestion runtime and
 routes data that cannot be safely persisted into a bounded quarantine
 lifecycle. The sprint is split by ownership: Workstream B owns quality gates
-and duplicate classification, Workstream C owns normalization/validation, and
-Workstream D owns quarantine resolution and source-unit recovery.
+and duplicate classification, Workstream C owns normalization/validation,
+Workstream D owns quarantine lifecycle/source-unit recovery, and Workstream E
+owns explicit operator actions over that lifecycle.
 
 ## 1. Status and boundary
 
@@ -14,7 +15,7 @@ Workstream D owns quarantine resolution and source-unit recovery.
 | B | Quality contract, file/row gates, duplicate classification and bounded runtime outcome | Implemented | [Quality contract](sprint-3-workstream-b-quality-contract.md) |
 | C | Timestamp normalization, validation parity and v2 source mapping | Implemented; full-dataset v2 evidence captured | [Normalization contract](sprint-3-workstream-c-normalization-validation.md) |
 | D | Quarantine persistence, operator resolution, audit, retention and source-unit resume | Implemented at contract/application level; production acceptance pending | [Quarantine lifecycle](sprint-3-data-quality.md#d--quarantine-lifecycle--implemented) |
-| E | Operator ownership, approval and escalation workflow | Handoff | [Sprint 3 overview](sprint-3-data-quality.md#e--operator-and-approval-flow) |
+| E | Operator ownership, approval and escalation workflow | Implemented at contract/application level; production acceptance pending | [Workstream E operator flow](sprint-3-workstream-e-operator-flow.md) |
 | F | Observability, partner sign-off and production acceptance | Handoff | [Sprint 3 overview](sprint-3-data-quality.md#f--observability-and-production-acceptance) |
 
 This sprint does not promote fraud labels, amount outliers, entity
@@ -40,12 +41,12 @@ source file / API unit
 
 ## 3. Ownership map
 
-| Layer | Workstream B | Workstream C | Workstream D |
-|---|---|---|---|
-| Domain | Rule codes, phases, decisions, violations and bounded aggregation | Timestamp parsing and canonical date contract | Quarantine states, actions, transitions and retention policy |
-| Application | File/row quality policy and bounded Airflow result | Normalizer/validator parity and mapping behavior | Claim, replay, correction, accept-existing, reject and resume |
-| Persistence | Atomic PostgreSQL write and fingerprint comparison | UTC persistence boundary | Mongo quarantine records, raw-page/source-row readers and indexes |
-| Runtime | `CONTINUE`, `HOLD_FOR_REVIEW`, `FAIL` | Canonical `transDate` and structured `INVALID_TIMESTAMP` | Source-unit blocker guard and checkpoint-driven recovery |
+| Layer | Workstream B | Workstream C | Workstream D | Workstream E |
+|---|---|---|---|---|
+| Domain | Rule codes, phases, decisions, violations and bounded aggregation | Timestamp parsing and canonical date contract | Quarantine states, actions, transitions and retention policy | Operator priority, SLA, and action metadata |
+| Application | File/row quality policy and bounded Airflow result | Normalizer/validator parity and mapping behavior | Quarantine lifecycle, source readers and resume | Explicit claim, resolve, reject, escalate and idempotency facade |
+| Persistence | Atomic PostgreSQL write and fingerprint comparison | UTC persistence boundary | Mongo quarantine records, raw-page/source-row readers and indexes | Same-document action ledger, bounded queue summaries and audit projection |
+| Runtime | `CONTINUE`, `HOLD_FOR_REVIEW`, `FAIL` | Canonical `transDate` and structured `INVALID_TIMESTAMP` | Source-unit blocker guard and checkpoint-driven recovery | `/api/v1/quarantine`, ownership/CAS, bounded responses and stable errors |
 
 ## 4. Deterministic contracts
 
@@ -81,6 +82,8 @@ source file / API unit
 - `PENDING → REPROCESSING → PENDING|RESOLVED|REJECTED` is the only valid
   lifecycle.
 - Claims are atomic and lease/actor-bound.
+- An expired claim cannot be mutated by its previous owner and is reclaimed to
+  `PENDING` before another operator claims it.
 - Replay uses authoritative source-file or staged raw-page data; corrected rows
   are explicit operator input.
 - `ACCEPT_EXISTING` requires matching `existingFingerprint`.
@@ -157,9 +160,18 @@ statistical or partner-acceptance evidence.
 - [Workstream D focused lifecycle gate](../CI-MAP.md#workstream-d--quarantine-lifecycle)
 - [Workstream C normalization contract and evidence](sprint-3-workstream-c-normalization-validation.md)
 
+### Workstream E operator workflow gate
+
+The E contract gate covers concurrent claims, stale CAS and owner checks,
+source-backed reprocess, accept-existing fingerprint verification, rejection,
+escalation cap, action replay, bounded queue summaries, audit idempotency, and
+redaction. Run the focused E/D command in
+[`CI-MAP.md`](../CI-MAP.md#workstream-e--operator-quarantine-flow).
+
 ## 8. Handoffs and acceptance boundary
 
-Workstream C and the core B/D contracts are implemented. Remaining Sprint 3
-acceptance work is operator ownership/escalation, repeated live environment
-evidence, dashboards/alerts, partner sign-off and production cutover. Sprint 4
-owns the broader observability expansion.
+Workstreams C, the core B/D contracts, and the E operator workflow are
+implemented at contract/application level. Remaining Sprint 3 acceptance work
+is repeated live-environment evidence, dashboards/alerts, partner sign-off and
+production cutover. Sprint 4 owns notification, broader observability, stage
+metrics and the operator dashboard.

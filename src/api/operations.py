@@ -1,5 +1,6 @@
 """Operational intake and approval overview endpoints."""
 
+import inspect
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -11,6 +12,8 @@ from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 from src.infrastructure.ingestion.quarantine_repository import IngestionQuarantineRepository
 from src.infrastructure.review.repository import ReviewPacketRepository
+from src.domain.ingestion.quarantine import QuarantineQuery
+from src.api.quarantine import _bounded_record
 
 router = APIRouter(prefix="/api/v1/operations")
 
@@ -287,6 +290,26 @@ async def get_ingestion_operations(
         partner=partner,
         limit=limit_value,
     )
+    quarantine_summary: dict[str, int] = {
+        "pending": len(pending_quarantine),
+        "reprocessing": 0,
+        "resolved": 0,
+        "rejected": 0,
+        "overdue": 0,
+        "highPriority": 0,
+    }
+    summarize = getattr(quarantine_repo, "summarize", None)
+    if callable(summarize):
+        summary_value = summarize(QuarantineQuery(partner=partner, limit=limit_value))
+        if inspect.isawaitable(summary_value):
+            summary_value = await summary_value
+        if isinstance(summary_value, dict):
+            quarantine_summary.update(
+                {
+                    key: int(summary_value.get(key, 0) or 0)
+                    for key in quarantine_summary
+                }
+            )
     files = [_serialize_file(record) for record in records]
     summary = {
         "returnedFiles": len(files),
@@ -296,11 +319,18 @@ async def get_ingestion_operations(
     }
     return {
         "files": files,
-        "pendingQuarantine": [record.model_dump(by_alias=True) for record in pending_quarantine],
+        "pendingQuarantine": [
+            _bounded_record(record) for record in pending_quarantine
+        ],
         "summary": summary,
         "quarantineCounters": {
             "quarantinedRows": len(pending_quarantine),
             "pendingRows": len(pending_quarantine),
+            "reprocessingRows": quarantine_summary["reprocessing"],
+            "resolvedRows": quarantine_summary["resolved"],
+            "rejectedRows": quarantine_summary["rejected"],
+            "overdueRows": quarantine_summary["overdue"],
+            "highPriorityRows": quarantine_summary["highPriority"],
         },
         "generatedAt": datetime.now(timezone.utc).isoformat(),
     }

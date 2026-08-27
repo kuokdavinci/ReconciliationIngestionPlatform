@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -75,6 +75,7 @@ async def test_production_resume_rebuilds_raw_unit_and_delegates_to_checkpoint_f
     fetch_repo = MagicMock()
     fetch_repo.find_by_id = AsyncMock(return_value=_fetch_config())
     ingest_unit = AsyncMock()
+    audit = AsyncMock()
 
     with (
         patch(
@@ -115,9 +116,15 @@ async def test_production_resume_rebuilds_raw_unit_and_delegates_to_checkpoint_f
             "unit-1",
             operator_id="operator-1",
             reason="Conflict records resolved",
+            action_id="resume-1",
+            audit_recorder=audit,
         )
 
     assert result == {"success": True, "processed": 1}
+    audit.assert_awaited_once()
+    assert audit.await_args.kwargs["action"] == "QUARANTINE_SOURCE_UNIT_RESUMED"
+    assert audit.await_args.kwargs["metadata"]["actionId"] == "resume-1"
+    assert "sourceUnitKey" in audit.await_args.kwargs["metadata"]
     call = resume.await_args
     assert call.kwargs["source_unit_key"] == "unit-1"
     assert call.kwargs["stream_identity"] == {
@@ -234,7 +241,10 @@ async def test_quarantine_api_exposes_source_unit_resume_entry_point():
         result = await resume_quarantine_source_unit(
             request,
             "unit-1",
-            QuarantineSourceUnitResumePayload(reason="All conflict records resolved."),
+            QuarantineSourceUnitResumePayload(
+                actionId="resume-1",
+                reason="All conflict records resolved.",
+            ),
         )
 
     assert result == {"success": True, "processed": 1}
@@ -243,6 +253,8 @@ async def test_quarantine_api_exposes_source_unit_resume_entry_point():
         "unit-1",
         operator_id="operator-1",
         reason="All conflict records resolved.",
+        action_id="resume-1",
+        audit_recorder=ANY,
     )
 
 

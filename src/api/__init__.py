@@ -8,7 +8,10 @@ and registers the insights router.
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.config.settings import settings
@@ -56,6 +59,17 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def quarantine_validation_error(request: Request, exc: RequestValidationError):
+        if request.url.path == "/api/v1/quarantine" or request.url.path.startswith(
+            "/api/v1/quarantine/"
+        ):
+            return JSONResponse(
+                status_code=400,
+                content={"detail": {"errorCode": "INVALID_QUARANTINE_PAYLOAD"}},
+            )
+        return await request_validation_exception_handler(request, exc)
 
     # Register insights router
     from src.api.insights import router as insights_router

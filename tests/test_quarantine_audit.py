@@ -29,14 +29,17 @@ def _record() -> IngestionQuarantineRecord:
 
 def _repo(record):
     repo = MagicMock()
+    claimed = record.model_copy(
+        update={
+            "status": QuarantineStatus.REPROCESSING,
+            "claimed_by": "operator-1",
+            "attempt_count": 2,
+        }
+    )
+    repo.find_action = AsyncMock(return_value=None)
+    repo.find_by_id = AsyncMock(side_effect=[record, claimed])
     repo.claim = AsyncMock(
-        return_value=record.model_copy(
-            update={
-                "status": QuarantineStatus.REPROCESSING,
-                "claimed_by": "operator-1",
-                "attempt_count": 2,
-            }
-        )
+        return_value=claimed
     )
     repo.resolve = AsyncMock(return_value=True)
     repo.release_for_retry = AsyncMock(return_value=True)
@@ -49,6 +52,8 @@ def _request(mode: str):
     return QuarantineReprocessRequest(
         recordId="record-1",
         operatorId="operator-1",
+        actionId="action-1",
+        expectedStatus=QuarantineStatus.PENDING,
         mode=mode,
         reason="operator decision",
     )

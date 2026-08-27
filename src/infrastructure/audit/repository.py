@@ -12,3 +12,18 @@ class AuditEventRepository(BaseRepository[AuditEvent]):
     def __init__(self, db: AsyncIOMotorDatabase):
         super().__init__(collection_name="audit_event", db=db)
         self._set_model_class(AuditEvent)
+
+    async def find_by_action_id(
+        self,
+        entity_type: str,
+        entity_id: str,
+        action_id: str,
+    ) -> AuditEvent | None:
+        """Find the one action projection for an entity, if already recorded."""
+        return await self.find_one(
+            {
+                "entityType": entity_type,
+                "entityId": entity_id,
+                "metadata.actionId": action_id,
+            }
+        )

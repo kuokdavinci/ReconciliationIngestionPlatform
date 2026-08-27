@@ -614,6 +614,21 @@ class TestMappingConversion:
         assert isinstance(error, QualityViolation)
         assert "unmapped value" in error.message
 
+    def test_mapping_without_configuration_returns_quality_violation(self):
+        mapping = FieldMapping(
+            path="status",
+            column="A",
+            type=FieldMappingType.MAPPING,
+            mapping=None,
+        )
+
+        value, error = TransactionNormalizer._convert_mapping("SUCCESS", mapping)
+
+        assert value is None
+        assert error is not None
+        assert error.code == QualityRuleCode.MALFORMED_ROW
+        assert error.field == "status"
+
 
 class TestBuildCanonical:
     """Test CanonicalTransaction construction from normalized data."""

@@ -464,13 +464,22 @@ class TransactionNormalizer:
                 row=row_number,
             )
 
+        mapping = fm.mapping
+        if mapping is None:
+            return None, _normalization_violation(
+                code=QualityRuleCode.MALFORMED_ROW,
+                field=fm.path,
+                message=f"mapping dict not configured for {fm.path}",
+                row=row_number,
+            )
+
         str_value = str(value)
 
-        if str_value in fm.mapping:
-            return fm.mapping[str_value], None
+        if str_value in mapping:
+            return mapping[str_value], None
 
-        if "others" in fm.mapping:
-            return fm.mapping["others"], None
+        if "others" in mapping:
+            return mapping["others"], None
 
         return None, _normalization_violation(
             code=(

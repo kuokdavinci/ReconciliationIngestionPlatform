@@ -32,6 +32,8 @@ def runtime_error_code(
     normalized_code = getattr(quality_code, "value", quality_code)
     if normalized_code == QualityRuleCode.INVALID_TIMESTAMP.value:
         return "INVALID_DATE"
+    if normalized_code == QualityRuleCode.INVALID_AMOUNT.value:
+        return "INVALID_DECIMAL"
 
     text = str(reason or "").lower()
     field_name = str(field or "").lower()

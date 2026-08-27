@@ -159,7 +159,12 @@ class TransactionNormalizer:
                 elif fm.type == FieldMappingType.STRING:
                     value, error = self._convert_string(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.DECIMAL:
-                    value, error = self._convert_decimal(source_value, fm, row_number)
+                    if fm.path == "amount":
+                        value = source_value
+                    else:
+                        value, error = self._convert_decimal(
+                            source_value, fm, row_number
+                        )
                 elif fm.type == FieldMappingType.DATE:
                     value, error = self._convert_date(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.MAPPING:
@@ -330,6 +335,15 @@ class TransactionNormalizer:
         Float input is explicitly rejected. Invalid strings produce
         QualityViolation with a stable rule code and failure description.
         """
+        return TransactionNormalizer._coerce_amount(value, fm, row_number)
+
+    @staticmethod
+    def _coerce_amount(
+        value: Any,
+        fm: FieldMapping,
+        row_number: Optional[int],
+    ) -> tuple[Decimal | None, QualityViolation | None]:
+        """Coerce a transformed canonical amount without exposing its raw value."""
         if value is None:
             return None, _normalization_violation(
                 code=_missing_value_code(fm),
@@ -352,19 +366,40 @@ class TransactionNormalizer:
             return None, _normalization_violation(
                 code=QualityRuleCode.INVALID_AMOUNT,
                 field=fm.path,
-                message=f"invalid decimal value: {value!r}",
+                message="invalid decimal value for monetary amount",
                 row=row_number,
             )
 
-        if not decimal_value.is_finite():
-            return None, _normalization_violation(
+        error = TransactionNormalizer._normalized_amount_error(
+            decimal_value, row_number, field=fm.path
+        )
+        if error is not None:
+            return None, error
+        return decimal_value, None
+
+    @staticmethod
+    def _normalized_amount_error(
+        value: Any,
+        row_number: Optional[int],
+        *,
+        field: str = "amount",
+    ) -> QualityViolation | None:
+        """Validate the Decimal-only boundary used by canonical builders."""
+        if not isinstance(value, Decimal):
+            return _normalization_violation(
                 code=QualityRuleCode.INVALID_AMOUNT,
-                field=fm.path,
+                field=field,
+                message="amount must be a Decimal monetary value",
+                row=row_number,
+            )
+        if not value.is_finite():
+            return _normalization_violation(
+                code=QualityRuleCode.INVALID_AMOUNT,
+                field=field,
                 message="non-finite decimal monetary value",
                 row=row_number,
             )
-
-        return decimal_value, None
+        return None
 
     def _convert_date(
         self,
@@ -548,6 +583,12 @@ class TransactionNormalizer:
             )
             return None, errors + new_errors
 
+        amount_error = TransactionNormalizer._normalized_amount_error(
+            data["amount"], row_number
+        )
+        if amount_error is not None:
+            return None, errors + [amount_error]
+
         extra = TransactionNormalizer._extract_extra(data)
 
         txn = {
@@ -615,6 +656,12 @@ class TransactionNormalizer:
                 )
             )
             return None, errors + new_errors
+
+        amount_error = TransactionNormalizer._normalized_amount_error(
+            data["amount"], row_number
+        )
+        if amount_error is not None:
+            return None, errors + [amount_error]
 
         extra = TransactionNormalizer._extract_extra(data)
 

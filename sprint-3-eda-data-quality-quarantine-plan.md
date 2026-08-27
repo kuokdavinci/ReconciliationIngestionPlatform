@@ -490,7 +490,7 @@ Quarantine record
 - EDA notebook:
   - `notebooks/ibm_aml_transaction_eda.ipynb`
 - EDA findings:
-  - `docs/phase-2/sprint-3-eda-findings.md`
+  - `docs/phase-2/sprint-3-eda-review.md`
 - Data Quality rules/profile/gate:
   - `src/quality/`
 - Hardened Validator và structured error taxonomy.
@@ -498,7 +498,7 @@ Quarantine record
 - Quarantine query + reprocess backend API.
 - Unit tests + integration tests.
 - Sprint 3 final report:
-  - `docs/phase-2/sprint-3-data-quality-report.md`
+  - `docs/phase-2/sprint-3-data-quality.md`
 
 ---
 

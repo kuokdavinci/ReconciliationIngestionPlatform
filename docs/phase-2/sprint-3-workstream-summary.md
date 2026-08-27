@@ -7,6 +7,11 @@ frozen ingestion baseline và coverage handoff. Tài liệu này chỉ giữ cá
 quyết định và rule cần đối chiếu cùng EDA notebook; không phải production
 quality-gate approval.
 
+> Đây là tài liệu handoff lịch sử của Workstream A. Mapping và timestamp
+> contract hiện tại do Workstream C sở hữu; xem
+> [`sprint-3-workstream-c-normalization-validation.md`](sprint-3-workstream-c-normalization-validation.md)
+> cho behavior runtime và evidence mới nhất.
+
 ## Dataset evidence
 
 | Item | Kết quả |
@@ -70,7 +75,7 @@ Mapping v2 chính: `transaction_id → id`, `amount → Decimal amount`,
 | Workstream | Phần tiếp nhận |
 |---|---|
 | B — Quality contract/gate | Identity scope, schema severity, timestamp contract, duplicate payload comparison |
-| C — Normalization/validation | Timezone-aware `transDate`, structured validation errors, required/amount rules |
+| C — Normalization/validation | Timezone-aware `transDate`, structured validation errors, required/amount rules; full-dataset v2 evidence pending |
 | D — Quarantine lifecycle | Conflicting duplicate, lineage, reason, reprocess evidence |
 | F — Observability/acceptance | Precision, temporal volume, monitoring baseline, production sign-off |
 

@@ -81,6 +81,8 @@ async def resume_quarantined_source_unit(
     reason: str,
     mode: IngestionMode | None = None,
     batch_size: int | None = None,
+    action_id: str | None = None,
+    audit_recorder: Any | None = None,
 ) -> dict[str, Any]:
     """Resume one held unit after all conflicting quarantine records are terminal.
 
@@ -88,7 +90,6 @@ async def resume_quarantined_source_unit(
     The existing checkpoint state machine remains the only component allowed
     to claim, complete, and advance the unit.
     """
-    del operator_id, reason
     if not source_unit_key.strip():
         raise ValueError("source_unit_key must not be empty")
 
@@ -173,7 +174,7 @@ async def resume_quarantined_source_unit(
             await raw_page_repo.mark_consumed(resume_unit.source_unit_key or "")
         await cleanup_source_unit(fetch_config, resume_unit)
 
-    return await resume_held_source_unit(
+    result = await resume_held_source_unit(
         checkpoint_repo,
         quarantine_repo,
         source_unit_key=source_unit_key,
@@ -190,6 +191,23 @@ async def resume_quarantined_source_unit(
         mode=checkpoint.mode,
         on_unit_completed=consume_after_checkpoint,
     )
+    if result.get("success") and audit_recorder is not None and action_id:
+        await audit_recorder(
+            entity_type="INGESTION_QUARANTINE_SOURCE_UNIT",
+            entity_id=source_unit_key,
+            action="QUARANTINE_SOURCE_UNIT_RESUMED",
+            actor=operator_id,
+            metadata={
+                "actionId": action_id.strip()[:128],
+                "previousStatus": "HELD",
+                "newStatus": "RESUMED",
+                "outcome": result.get("outcome", "RESUMED"),
+                "reason": reason.strip()[:500],
+                "partner": checkpoint.partner,
+                "sourceUnitKey": source_unit_key,
+            },
+        )
+    return result
 
 
 __all__ = ["resume_quarantined_source_unit"]

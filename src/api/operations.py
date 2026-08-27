@@ -13,6 +13,7 @@ from src.infrastructure.ingestion.file_repository import ReconciliationFileRepos
 from src.infrastructure.ingestion.quarantine_repository import IngestionQuarantineRepository
 from src.infrastructure.review.repository import ReviewPacketRepository
 from src.domain.ingestion.quarantine import QuarantineQuery
+from src.api.quarantine import _bounded_record
 
 router = APIRouter(prefix="/api/v1/operations")
 
@@ -318,7 +319,9 @@ async def get_ingestion_operations(
     }
     return {
         "files": files,
-        "pendingQuarantine": [record.model_dump(by_alias=True) for record in pending_quarantine],
+        "pendingQuarantine": [
+            _bounded_record(record) for record in pending_quarantine
+        ],
         "summary": summary,
         "quarantineCounters": {
             "quarantinedRows": len(pending_quarantine),

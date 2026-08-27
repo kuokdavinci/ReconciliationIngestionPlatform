@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.actor import require_actor
 from src.api.dependencies import get_request_db as _get_db
+from src.application.audit.service import record_audit_event
 from src.application.ingestion.quarantine_reprocessing import (
     QuarantineReprocessMode,
     QuarantineReprocessRequest,
@@ -102,7 +103,8 @@ class QuarantineSourceUnitResumePayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     operator_id: str | None = Field(default=None, alias="operatorId")
-    reason: str = Field(min_length=1)
+    action_id: str = Field(alias="actionId", min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 _SENSITIVE_METADATA_KEYS = (
@@ -263,6 +265,8 @@ def _raise_operation_error(result: QuarantineResolutionResult) -> None:
         "FINGERPRINT_MISMATCH",
         "ACTION_ID_REUSE_CONFLICT",
         "ESCALATION_CONFLICT",
+        "CLAIM_EXPIRED",
+        "ACTION_IN_PROGRESS",
     }:
         raise HTTPException(status_code=409, detail=_result_payload(result))
     if result.outcome in {
@@ -510,6 +514,8 @@ async def resume_quarantine_source_unit(
             source_unit_key,
             operator_id=actor,
             reason=reason,
+            action_id=payload.action_id,
+            audit_recorder=lambda **kwargs: record_audit_event(_get_db(request), **kwargs),
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -1,9 +1,11 @@
 """Application orchestration for one quarantine record lifecycle."""
 
+import asyncio
 import inspect
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src.application.ingestion.contracts import serialize_quarantine_counters
@@ -19,6 +21,21 @@ from src.domain.ingestion.quarantine import (
     QuarantineResolutionEvent,
     QuarantineStatus,
 )
+from src.domain.ingestion.ports import (
+    IngestionQuarantineRepositoryPort,
+    QuarantineRowReader,
+)
+
+
+# ponytail: one process-wide lock per action; use a distributed reservation if workers span processes.
+_ACTION_LOCKS: dict[tuple[int, str, str], asyncio.Lock] = {}
+_ACTION_LOCKS_GUARD = threading.Lock()
+
+
+def _action_lock(record_id: str, action_id: str) -> asyncio.Lock:
+    key = (id(asyncio.get_running_loop()), record_id, action_id)
+    with _ACTION_LOCKS_GUARD:
+        return _ACTION_LOCKS.setdefault(key, asyncio.Lock())
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +93,15 @@ def _record_error_code(record: IngestionQuarantineRecord) -> str:
     return "UNSPECIFIED"
 
 
+def _claim_expired(record: IngestionQuarantineRecord) -> bool:
+    expiration = record.claim_expires_at
+    if not isinstance(expiration, datetime):
+        return False
+    if expiration.tzinfo is None:
+        expiration = expiration.replace(tzinfo=UTC)
+    return expiration.astimezone(UTC) <= datetime.now(UTC)
+
+
 def _operation_counters(outcome: str) -> dict[str, int]:
     persisted, rejected, duplicate, failed = {
         "VALIDATION_FAILED": (0, 1, 0, 0),
@@ -83,6 +109,10 @@ def _operation_counters(outcome: str) -> dict[str, int]:
         "EQUIVALENT_DUPLICATE": (0, 0, 1, 0),
         "ACCEPTED_EXISTING": (0, 0, 1, 0),
         "RETRYABLE_FAILURE": (0, 0, 0, 1),
+        "SOURCE_EVIDENCE_UNAVAILABLE": (0, 0, 0, 1),
+        "CORRECTED_ROW_REQUIRED": (0, 0, 0, 1),
+        "FINGERPRINT_MISMATCH": (0, 0, 0, 1),
+        "FINGERPRINT_UNAVAILABLE": (0, 0, 0, 1),
         "REJECTED": (0, 1, 0, 0),
     }.get(outcome, (1, 0, 0, 0))
     return serialize_quarantine_counters(
@@ -177,9 +207,9 @@ class QuarantineResolutionService:
 
     def __init__(
         self,
-        quarantine_repo: Any,
-        source_file_repo: Any,
-        raw_page_repo: Any,
+        quarantine_repo: IngestionQuarantineRepositoryPort,
+        source_file_repo: QuarantineRowReader,
+        raw_page_repo: QuarantineRowReader,
         *,
         row_processor: Any | None = None,
         row_processor_factory: Any | None = None,
@@ -246,6 +276,25 @@ class QuarantineResolutionService:
         if finder is None:
             return None
         return _event_from_value(await _maybe_await(finder(record_id, action_id)))
+
+    async def _reserve_action(
+        self,
+        record_id: str,
+        operator_id: str,
+        action_id: str,
+        action: QuarantineAction,
+    ) -> str | None:
+        reserver = getattr(self._quarantine_repo, "reserve_action", None)
+        if not callable(reserver) or not inspect.iscoroutinefunction(reserver):
+            return None
+        return str(
+            await reserver(
+                record_id,
+                operator_id,
+                action_id,
+                action,
+            )
+        )
 
     async def _replayed_action(
         self,
@@ -327,8 +376,20 @@ class QuarantineResolutionService:
         current = await self._quarantine_repo.find_by_id(record_id)
         if current is None:
             return self._missing_record(record_id, action)
-        if expected_status is not QuarantineStatus.PENDING or current.status is not expected_status:
+        if expected_status is not QuarantineStatus.PENDING:
             return self._stale_record(current, action)
+        if current.status is not expected_status:
+            reclaimed = None
+            if (
+                current.status is QuarantineStatus.REPROCESSING
+                and _claim_expired(current)
+            ):
+                reclaimer = getattr(self._quarantine_repo, "reclaim_expired_claim", None)
+                if callable(reclaimer):
+                    reclaimed = await _maybe_await(reclaimer(record_id))
+            if reclaimed is None or reclaimed.status is not QuarantineStatus.PENDING:
+                return self._stale_record(current, action)
+            current = reclaimed
         try:
             claimed = await self._quarantine_repo.claim(
                 record_id,
@@ -379,6 +440,13 @@ class QuarantineResolutionService:
         self,
         request: QuarantineReprocessRequest,
     ) -> QuarantineResolutionResult:
+        async with _action_lock(request.record_id, request.action_id):
+            return await self._resolve_claimed(request)
+
+    async def _resolve_claimed(
+        self,
+        request: QuarantineReprocessRequest,
+    ) -> QuarantineResolutionResult:
         action = _action_for(request.mode)
         replayed = await self._replayed_action(
             request.record_id,
@@ -409,6 +477,19 @@ class QuarantineResolutionService:
                 attempt_count=claimed.attempt_count,
                 escalation_level=claimed.escalation_level,
             )
+        if _claim_expired(claimed):
+            return QuarantineResolutionResult(
+                record_id=request.record_id,
+                success=False,
+                status=claimed.status,
+                outcome="CLAIM_EXPIRED",
+                action=action,
+                reason="The operator claim has expired and can no longer mutate the record.",
+                action_id=request.action_id,
+                previous_status=claimed.status,
+                attempt_count=claimed.attempt_count,
+                escalation_level=claimed.escalation_level,
+            )
 
         if request.mode is QuarantineReprocessMode.REJECT:
             reason = (request.reason or "").strip()
@@ -425,6 +506,41 @@ class QuarantineResolutionService:
                     attempt_count=claimed.attempt_count,
                     escalation_level=claimed.escalation_level,
                 )
+
+        reservation = await self._reserve_action(
+            request.record_id,
+            request.operator_id,
+            request.action_id,
+            action,
+        )
+        if reservation and reservation != "RESERVED":
+            if reservation == "COMPLETED":
+                replayed = await self._replayed_action(
+                    request.record_id,
+                    request.action_id,
+                    request.operator_id,
+                    action,
+                )
+                if replayed is not None:
+                    return replayed
+            return QuarantineResolutionResult(
+                record_id=request.record_id,
+                success=False,
+                status=claimed.status,
+                outcome=(
+                    "ACTION_IN_PROGRESS"
+                    if reservation == "IN_PROGRESS"
+                    else "ACTION_ID_REUSE_CONFLICT"
+                ),
+                action=action,
+                reason="The operator action is already being processed.",
+                action_id=request.action_id,
+                previous_status=claimed.status,
+                attempt_count=claimed.attempt_count,
+                escalation_level=claimed.escalation_level,
+            )
+
+        if request.mode is QuarantineReprocessMode.REJECT:
             return await self._terminal_resolve(
                 claimed,
                 request,
@@ -594,6 +710,19 @@ class QuarantineResolutionService:
                 attempt_count=record.attempt_count,
                 escalation_level=record.escalation_level,
             )
+        if record.status is QuarantineStatus.REPROCESSING and _claim_expired(record):
+            return QuarantineResolutionResult(
+                record_id=record_id,
+                success=False,
+                status=record.status,
+                outcome="CLAIM_EXPIRED",
+                action=action,
+                reason="The operator claim has expired and can no longer mutate the record.",
+                action_id=action_id,
+                previous_status=record.status,
+                attempt_count=record.attempt_count,
+                escalation_level=record.escalation_level,
+            )
         if not reason.strip():
             return QuarantineResolutionResult(
                 record_id=record_id,
@@ -607,22 +736,13 @@ class QuarantineResolutionService:
                 attempt_count=record.attempt_count,
                 escalation_level=record.escalation_level,
             )
-        try:
-            escalated = await self._quarantine_repo.escalate(
-                record_id,
-                operator_id,
-                action_id,
-                expected_status,
-                reason,
-            )
-        except TypeError:
-            escalated = await self._quarantine_repo.escalate(
-                record_id,
-                operator_id,
-                reason,
-                action_id=action_id,
-                expected_status=expected_status,
-            )
+        escalated = await self._quarantine_repo.escalate(
+            record_id,
+            operator_id,
+            action_id,
+            expected_status,
+            reason,
+        )
         if escalated is None:
             return QuarantineResolutionResult(
                 record_id=record_id,

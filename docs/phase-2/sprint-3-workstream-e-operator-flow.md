@@ -36,6 +36,11 @@ the same action with the same actor returns the recorded bounded result and
 does not perform another transition or audit write. Reusing that ID for a
 different actor or action returns `ACTION_ID_REUSE_CONFLICT`.
 
+The source-unit resume route is the checkpoint-owned recovery exception: it
+requires `actionId` and a bounded reason, but has no row `expectedStatus` and
+does not append to a quarantine record's `resolutionHistory`. Its existing
+checkpoint state machine remains the source of truth.
+
 ## API contract
 
 The source-of-truth namespace is `/api/v1/quarantine`:
@@ -82,6 +87,11 @@ records are `NORMAL`. Escalation increments `escalationLevel` up to a cap of
 3, records the operator and timestamp, preserves status and owner, and does
 not change priority by itself.
 
+Claims carry a lease. A live lease is required for reprocess, accept-existing,
+reject, and reprocessing-state escalation; an expired claim cannot be mutated
+by its previous owner. The next claim atomically returns an expired claim to
+`PENDING` before acquiring a fresh lease.
+
 Escalation does not send notifications, transfer ownership, or enforce RBAC in
 Sprint 3. Those are Sprint 4 or later handoffs.
 
@@ -93,6 +103,10 @@ unit metadata. A unique action-scoped audit index (partial/sparse by string
 `actionId`) on
 `(entityType, entityId, metadata.actionId)` makes audit projection retries
 idempotent.
+
+Successful source-unit resume writes the same bounded audit projection under
+`INGESTION_QUARANTINE_SOURCE_UNIT`; it records `HELD → RESUMED` and remains
+outside the row-level action ledger.
 
 Public records and audit metadata do not expose raw rows, credentials, full
 exceptions, parsed timestamps, or incoming/existing transaction fingerprints.

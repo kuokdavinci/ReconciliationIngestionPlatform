@@ -139,7 +139,8 @@ by row-level quarantine approval.
 The default SLA is 24 hours, configurable with
 `APP_INGESTION_QUARANTINE_REVIEW_SLA_HOURS`. Conflicting duplicates and fatal
 records are `HIGH` priority; other records are `NORMAL`. Escalation preserves
-status and owner and is capped at level 3. It does not send notifications or
+status and owner and is capped at level 3. Expired row claims are atomically
+returned to `PENDING` before a fresh claim. It does not send notifications or
 enforce RBAC in Sprint 3. See the [Workstream E operator flow](sprint-3-workstream-e-operator-flow.md)
 for the state/action matrix, payload/response contract, stable errors,
 idempotency scope, audit, and redaction policy.

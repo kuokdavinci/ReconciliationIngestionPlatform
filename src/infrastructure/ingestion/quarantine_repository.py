@@ -73,6 +73,12 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _claim_expired(record: IngestionQuarantineRecord, now: datetime) -> bool:
+    """Treat newly written expired leases as immutable by their old owner."""
+    expiration = record.claim_expires_at
+    return isinstance(expiration, datetime) and _as_utc(expiration) <= now
+
+
 class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
     """Store rejected rows independently from canonical transactions."""
 
@@ -240,6 +246,81 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             return None
         return self._from_mongo(raw)
 
+    async def reclaim_expired_claim(
+        self,
+        record_id: str,
+    ) -> IngestionQuarantineRecord | None:
+        """Return an expired processing claim to the pending queue atomically."""
+        now = datetime.now(UTC)
+        raw = await self.collection.find_one_and_update(
+            {
+                "_id": record_id,
+                "status": QuarantineStatus.REPROCESSING.value,
+                "claimExpiresAt": {"$lte": now},
+            },
+            {
+                "$set": {
+                    "status": QuarantineStatus.PENDING.value,
+                    "claimedBy": None,
+                    "claimedAt": None,
+                    "claimExpiresAt": None,
+                    "lastAttemptError": "Operator claim lease expired.",
+                    "updatedAt": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        return self._from_mongo(raw) if raw is not None else None
+
+    async def reserve_action(
+        self,
+        record_id: str,
+        operator_id: str,
+        action_id: str,
+        action: QuarantineAction,
+    ) -> str:
+        """Reserve one resolution action before external persistence work."""
+        action_id = _bounded_action_id(action_id)
+        if action_id is None:
+            raise ValueError("action_id is required")
+        raw = await self.collection.find_one_and_update(
+            {
+                "_id": record_id,
+                "status": QuarantineStatus.REPROCESSING.value,
+                "claimedBy": operator_id,
+                "resolutionHistory.actionId": {"$ne": action_id},
+                "$or": [
+                    {"activeActionId": {"$exists": False}},
+                    {"activeActionId": None},
+                ],
+            },
+            {
+                "$set": {
+                    "activeActionId": action_id,
+                    "activeActionActor": operator_id,
+                    "activeAction": action.value,
+                    "activeActionStartedAt": datetime.now(UTC),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        if raw is not None:
+            return "RESERVED"
+
+        current = await self.collection.find_one(
+            {"_id": record_id},
+            projection={"activeActionId": 1, "resolutionHistory": 1},
+        )
+        if current is None:
+            return "NOT_FOUND"
+        if any(
+            event.get("actionId") == action_id
+            for event in current.get("resolutionHistory", [])
+            if isinstance(event, dict)
+        ):
+            return "COMPLETED"
+        return "IN_PROGRESS" if current.get("activeActionId") else "CONFLICT"
+
     async def find_pending(self, *, partner: str | None = None, limit: int = 100) -> list[IngestionQuarantineRecord]:
         query: dict[str, Any] = {"status": QuarantineStatus.PENDING.value}
         if partner is not None:
@@ -351,17 +432,18 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
         action_id = _bounded_action_id(action_id)
         reason = _bounded_text(reason)
         current = await self.find_by_id(record_id)
+        now = datetime.now(UTC)
         if (
             current is None
             or current.status is not QuarantineStatus.REPROCESSING
             or current.claimed_by != operator_id
+            or _claim_expired(current, now)
         ):
             return False
         assert_quarantine_transition(
             QuarantineStatus.REPROCESSING,
             QuarantineStatus.PENDING,
         )
-        now = datetime.now(UTC)
         event = QuarantineResolutionEvent(
             fromStatus=QuarantineStatus.REPROCESSING,
             toStatus=QuarantineStatus.PENDING,
@@ -380,6 +462,8 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
         }
         if action_id is not None:
             filters["resolutionHistory.actionId"] = {"$ne": action_id}
+        if current.claim_expires_at is not None:
+            filters["claimExpiresAt"] = {"$gt": now}
         result = await self.collection.update_one(
             filters,
             {
@@ -394,6 +478,12 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
                 },
                 "$push": {
                     "resolutionHistory": self._event_payload(event),
+                },
+                "$unset": {
+                    "activeActionId": "",
+                    "activeActionActor": "",
+                    "activeAction": "",
+                    "activeActionStartedAt": "",
                 },
             },
         )
@@ -413,13 +503,14 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
         assert_quarantine_transition(QuarantineStatus.REPROCESSING, target)
         action_id = _bounded_action_id(action_id)
         current = await self.find_by_id(record_id)
+        now = datetime.now(UTC)
         if (
             current is None
             or current.status is not QuarantineStatus.REPROCESSING
             or current.claimed_by != operator_id
+            or _claim_expired(current, now)
         ):
             return False
-        now = datetime.now(UTC)
         retention_until = now + timedelta(days=self.retention_policy.days_for(target))
         event = QuarantineResolutionEvent(
             fromStatus=QuarantineStatus.REPROCESSING,
@@ -440,6 +531,8 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
         }
         if action_id is not None:
             filters["resolutionHistory.actionId"] = {"$ne": action_id}
+        if current.claim_expires_at is not None:
+            filters["claimExpiresAt"] = {"$gt": now}
         result = await self.collection.update_one(
             filters,
             {
@@ -456,6 +549,12 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
                 },
                 "$push": {
                     "resolutionHistory": self._event_payload(event),
+                },
+                "$unset": {
+                    "activeActionId": "",
+                    "activeActionActor": "",
+                    "activeAction": "",
+                    "activeActionStartedAt": "",
                 },
             },
         )
@@ -551,6 +650,8 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             return None
 
         now = datetime.now(UTC)
+        if current.status is QuarantineStatus.REPROCESSING and _claim_expired(current, now):
+            return None
         target_level = min(current.escalation_level + 1, 3)
         bounded_reason = _bounded_text(reason)
         event = QuarantineResolutionEvent(
@@ -573,11 +674,17 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
                 ),
             },
         )
-        filters: dict[str, Any] = {"_id": record_id, "status": current.status.value}
+        filters: dict[str, Any] = {
+            "_id": record_id,
+            "status": current.status.value,
+            "escalationLevel": current.escalation_level,
+        }
         if current.status is QuarantineStatus.REPROCESSING:
             filters["claimedBy"] = operator_id
         if action_id is not None:
             filters["resolutionHistory.actionId"] = {"$ne": action_id}
+        if current.claim_expires_at is not None:
+            filters["claimExpiresAt"] = {"$gt": now}
         result = await self.collection.update_one(
             filters,
             {

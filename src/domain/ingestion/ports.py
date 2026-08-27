@@ -100,6 +100,13 @@ class IngestionQuarantineWriter(Protocol):
         """Persist a batch of quarantine records."""
 
 
+class QuarantineRowReader(Protocol):
+    """Read one authoritative source row without exposing storage details."""
+
+    async def read_row(self, key: str, row_number: int) -> Any | None:
+        """Return one source row or ``None`` when evidence is unavailable."""
+
+
 class IngestionQuarantineRepositoryPort(IngestionQuarantineWriter, Protocol):
     """Repository operations used by quarantine application services."""
 
@@ -111,8 +118,27 @@ class IngestionQuarantineRepositoryPort(IngestionQuarantineWriter, Protocol):
         record_id: str,
         operator_id: str,
         lease_seconds: int = 900,
+        *,
+        action_id: str | None = None,
     ) -> IngestionQuarantineRecord | None:
         """Atomically claim a pending record for processing."""
+
+    async def reclaim_expired_claim(
+        self,
+        record_id: str,
+    ) -> IngestionQuarantineRecord | None:
+        """Return an expired processing claim to the pending queue."""
+        ...
+
+    async def reserve_action(
+        self,
+        record_id: str,
+        operator_id: str,
+        action_id: str,
+        action: QuarantineAction,
+    ) -> str:
+        """Reserve one action before external persistence work."""
+        ...
 
     async def release_for_retry(
         self,
@@ -120,6 +146,8 @@ class IngestionQuarantineRepositoryPort(IngestionQuarantineWriter, Protocol):
         operator_id: str,
         reason: str,
         metadata: dict[str, Any] | None = None,
+        action_id: str | None = None,
+        outcome: str | None = None,
     ) -> bool:
         """Return a claimed record to the pending queue."""
 
@@ -131,6 +159,8 @@ class IngestionQuarantineRepositoryPort(IngestionQuarantineWriter, Protocol):
         action: QuarantineAction,
         reason: str,
         metadata: dict[str, Any] | None = None,
+        action_id: str | None = None,
+        outcome: str | None = None,
     ) -> bool:
         """Move a claimed record to a terminal resolution state."""
 
@@ -139,3 +169,23 @@ class IngestionQuarantineRepositoryPort(IngestionQuarantineWriter, Protocol):
 
     async def has_unresolved_blockers(self, source_unit_key: str) -> bool:
         """Return whether a conflicting duplicate still holds the source unit."""
+
+    async def find_action(
+        self,
+        record_id: str,
+        action_id: str,
+    ) -> Any | None:
+        """Find the bounded action event for one record."""
+
+    async def summarize(self, query: Any) -> dict[str, int]:
+        """Return queue counts independent of page size."""
+
+    async def escalate(
+        self,
+        record_id: str,
+        operator_id: str,
+        action_id: str,
+        expected_status: QuarantineStatus,
+        reason: str,
+    ) -> IngestionQuarantineRecord | None:
+        """Increment escalation without changing lifecycle status."""

@@ -1,6 +1,8 @@
 """Explicit operator action contracts for quarantine resolution."""
 
+import asyncio
 from datetime import UTC, datetime
+from inspect import signature
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -73,6 +75,20 @@ def test_operator_action_requires_action_id_and_expected_status():
         )
 
 
+def test_quarantine_repository_port_declares_operator_action_contract():
+    from src.domain.ingestion.ports import IngestionQuarantineRepositoryPort
+
+    for method_name in ("claim", "release_for_retry", "resolve", "escalate"):
+        assert hasattr(IngestionQuarantineRepositoryPort, method_name)
+        assert "action_id" in signature(
+            getattr(IngestionQuarantineRepositoryPort, method_name)
+        ).parameters
+    assert hasattr(IngestionQuarantineRepositoryPort, "find_action")
+    assert hasattr(IngestionQuarantineRepositoryPort, "summarize")
+    assert hasattr(IngestionQuarantineRepositoryPort, "reclaim_expired_claim")
+    assert hasattr(IngestionQuarantineRepositoryPort, "reserve_action")
+
+
 @pytest.mark.asyncio
 async def test_claim_is_explicit_and_records_action_id():
     record = _record()
@@ -132,6 +148,66 @@ async def test_reject_requires_non_empty_reason():
 
 
 @pytest.mark.asyncio
+async def test_expired_claim_cannot_be_resolved_by_previous_owner():
+    record = _record(
+        QuarantineStatus.REPROCESSING,
+        claimExpiresAt=datetime(2026, 8, 26, tzinfo=UTC),
+    )
+    repo = _repo(record)
+    service = QuarantineResolutionService(
+        repo,
+        SimpleNamespace(read_row=AsyncMock(return_value={"id": "TX-007"})),
+        SimpleNamespace(read_row=AsyncMock()),
+        row_processor=SimpleNamespace(
+            process=MagicMock(
+                return_value=SimpleNamespace(
+                    is_valid=True,
+                    data_container={"id": "TX-007"},
+                    errors=[],
+                )
+            )
+        ),
+        persist_row=AsyncMock(),
+    )
+
+    result = await service.resolve_claimed(
+        _request(QuarantineReprocessMode.REPLAY_SOURCE_ROW)
+    )
+
+    assert result.success is False
+    assert result.outcome == "CLAIM_EXPIRED"
+    repo.release_for_retry.assert_not_awaited()
+    repo.resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_expired_claim_is_reclaimed_before_new_claim():
+    record = _record(
+        QuarantineStatus.REPROCESSING,
+        claimExpiresAt=datetime(2026, 8, 26, tzinfo=UTC),
+    )
+    repo = _repo(record)
+    repo.reclaim_expired_claim = AsyncMock(
+        return_value=record.model_copy(
+            update={
+                "status": QuarantineStatus.PENDING,
+                "claimed_by": None,
+                "claim_expires_at": None,
+            }
+        )
+    )
+    service = QuarantineResolutionService(repo, MagicMock(), MagicMock())
+
+    result = await service.claim(
+        "record-1", "operator-2", "claim-2", QuarantineStatus.PENDING
+    )
+
+    assert result.success is True
+    assert result.outcome == "CLAIMED"
+    repo.reclaim_expired_claim.assert_awaited_once_with("record-1")
+
+
+@pytest.mark.asyncio
 async def test_missing_source_is_bounded_and_does_not_expose_source_details():
     record = _record(QuarantineStatus.REPROCESSING, rawRow={"secret": "[REDACTED]"})
     service = QuarantineResolutionService(
@@ -145,6 +221,8 @@ async def test_missing_source_is_bounded_and_does_not_expose_source_details():
     )
 
     assert result.outcome == "SOURCE_EVIDENCE_UNAVAILABLE"
+    assert result.quality_counters["persistedRows"] == 0
+    assert result.quality_counters["failedRows"] == 1
     assert "file-1" not in (result.reason or "")
     assert "[REDACTED]" not in (result.reason or "")
 
@@ -202,6 +280,95 @@ async def test_reusing_action_id_for_another_actor_is_a_conflict():
     assert result.success is False
     assert result.outcome == "ACTION_ID_REUSE_CONFLICT"
     repo.resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_replay_of_same_action_persists_once():
+    record = _record(QuarantineStatus.REPROCESSING)
+    repo = _repo(record)
+    completed_event = None
+
+    async def find_action(record_id, action_id):
+        del record_id, action_id
+        return completed_event
+
+    async def persist(_data):
+        persist.calls += 1
+        await asyncio.sleep(0)
+        return SimpleNamespace(conflicting_duplicates=0, equivalent_duplicates=0, failed=0)
+
+    persist.calls = 0
+
+    async def resolve(*_args, **_kwargs):
+        nonlocal completed_event
+        completed_event = QuarantineResolutionEvent(
+            fromStatus=QuarantineStatus.REPROCESSING,
+            toStatus=QuarantineStatus.RESOLVED,
+            action=QuarantineAction.REPROCESS,
+            actor="operator-1",
+            reason="resolved",
+            attempt=2,
+            actionId="action-1",
+            outcome="RESOLVED",
+        )
+        return True
+
+    repo.find_action = find_action
+    repo.resolve = resolve
+    service = QuarantineResolutionService(
+        repo,
+        SimpleNamespace(read_row=AsyncMock(return_value={"id": "TX-007"})),
+        SimpleNamespace(read_row=AsyncMock()),
+        row_processor=SimpleNamespace(
+            process=MagicMock(
+                return_value=SimpleNamespace(
+                    is_valid=True,
+                    data_container={"id": "TX-007"},
+                    errors=[],
+                )
+            )
+        ),
+        persist_row=persist,
+    )
+
+    first, second = await asyncio.gather(
+        service.resolve_claimed(_request(QuarantineReprocessMode.REPLAY_SOURCE_ROW)),
+        service.resolve_claimed(_request(QuarantineReprocessMode.REPLAY_SOURCE_ROW)),
+    )
+
+    assert persist.calls == 1
+    assert {first.outcome, second.outcome} == {"RESOLVED"}
+
+
+@pytest.mark.asyncio
+async def test_document_reservation_blocks_replay_before_persistence():
+    record = _record(QuarantineStatus.REPROCESSING)
+    repo = _repo(record)
+    repo.reserve_action = AsyncMock(return_value="IN_PROGRESS")
+    persist = AsyncMock()
+    service = QuarantineResolutionService(
+        repo,
+        SimpleNamespace(read_row=AsyncMock(return_value={"id": "TX-007"})),
+        SimpleNamespace(read_row=AsyncMock()),
+        row_processor=SimpleNamespace(
+            process=MagicMock(
+                return_value=SimpleNamespace(
+                    is_valid=True,
+                    data_container={"id": "TX-007"},
+                    errors=[],
+                )
+            )
+        ),
+        persist_row=persist,
+    )
+
+    result = await service.resolve_claimed(
+        _request(QuarantineReprocessMode.REPLAY_SOURCE_ROW)
+    )
+
+    assert result.success is False
+    assert result.outcome == "ACTION_IN_PROGRESS"
+    persist.assert_not_awaited()
 
 
 @pytest.mark.asyncio

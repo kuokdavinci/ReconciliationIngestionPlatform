@@ -82,6 +82,8 @@ source file / API unit
 - `PENDING → REPROCESSING → PENDING|RESOLVED|REJECTED` is the only valid
   lifecycle.
 - Claims are atomic and lease/actor-bound.
+- An expired claim cannot be mutated by its previous owner and is reclaimed to
+  `PENDING` before another operator claims it.
 - Replay uses authoritative source-file or staged raw-page data; corrected rows
   are explicit operator input.
 - `ACCEPT_EXISTING` requires matching `existingFingerprint`.

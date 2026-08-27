@@ -182,3 +182,28 @@ async def test_resolver_reports_missing_source_for_replay():
             SimpleNamespace(read_row=AsyncMock(return_value=None)),
             SimpleNamespace(read_row=AsyncMock(return_value=None)),
         )
+
+
+@pytest.mark.asyncio
+async def test_resolver_never_uses_unsanitized_quarantine_row_as_replay_source():
+    from src.application.ingestion.quarantine_reprocessing import (
+        QuarantineReprocessMode,
+        QuarantineReprocessRequest,
+        resolve_reprocess_input,
+    )
+
+    request = QuarantineReprocessRequest(
+        recordId="record-1",
+        operatorId="operator-1",
+        actionId="action-1",
+        expectedStatus="PENDING",
+        mode=QuarantineReprocessMode.REPLAY_SOURCE_ROW,
+    )
+
+    with pytest.raises(ValueError, match="authoritative"):
+        await resolve_reprocess_input(
+            _record(rawRow={"id": "TX-007", "amount": "100"}),
+            request,
+            SimpleNamespace(read_row=AsyncMock(return_value=None)),
+            SimpleNamespace(read_row=AsyncMock(return_value=None)),
+        )

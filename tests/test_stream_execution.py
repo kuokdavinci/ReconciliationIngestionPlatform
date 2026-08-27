@@ -12,6 +12,7 @@ from src.application.automation import (
 )
 from src.config.settings import settings
 from src.domain.fetch_config.models import APIConfig, FetchConfig, FetchMethod
+from src.application.automation.stream_runtime import runtime_attempt_event
 
 
 def _fetch_config() -> FetchConfig:
@@ -27,6 +28,28 @@ def _checkpoint_repository(checkpoint=None):
     repository = MagicMock()
     repository.find_by_stream = AsyncMock(return_value=checkpoint)
     return repository
+
+
+def test_runtime_attempt_event_exposes_replay_integrity_counters() -> None:
+    event = runtime_attempt_event(
+        SimpleNamespace(orchestration=None),
+        "FAILED",
+        result={
+            "errorCode": "staged_replay_incomplete",
+            "stats": {
+                "expectedRowCount": 6,
+                "actualRowCount": 4,
+                "sourceUnitKeys": ["unit-1", "unit-2"],
+                "checkpointFinalized": False,
+            },
+        },
+    )
+
+    assert event["errorCode"] == "staged_replay_incomplete"
+    assert event["expectedRowCount"] == 6
+    assert event["actualRowCount"] == 4
+    assert event["sourceUnitKeys"] == ["unit-1", "unit-2"]
+    assert event["checkpointFinalized"] is False
 
 
 @pytest.mark.asyncio

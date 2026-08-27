@@ -4,7 +4,7 @@ import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
@@ -18,6 +18,7 @@ from src.config.ai_generator import generate_config_from_samples
 from src.config.settings import settings
 from src.config.signature import compute_signature
 from src.core.enums import FileType
+from src.core.types import FieldMapping
 from src.infrastructure.review.repository import CopilotActionRepository
 from src.domain.mapping.models import MappingConfig, MappingConfigStatus
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
@@ -264,7 +265,10 @@ if _MULTIPART_AVAILABLE:
         file: UploadFile = File(...),
     ):
         temp_dir = _get_upload_tmp_dir()
-        temp_file_path = temp_dir / file.filename
+        filename = file.filename
+        if not filename:
+            raise HTTPException(status_code=400, detail="Uploaded file must have a filename.")
+        temp_file_path = temp_dir / filename
         try:
             with open(temp_file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
@@ -291,7 +295,7 @@ async def validate_mapping(payload: dict):
         fileType=payload.get("fileType") or FileType.SETTLEMENT,
         sheetName=payload.get("sheetName") or "Sheet1",
         startRow=payload.get("startRow") or 2,
-        fieldMappings=field_mappings,
+        fieldMappings=[FieldMapping.model_validate(item) for item in field_mappings],
         configVersion=payload.get("configVersion"),
     )
     validation = validate_mapping_contract(candidate_config)
@@ -314,7 +318,7 @@ async def validate_mapping(payload: dict):
 async def test_mapping(payload: dict):
     mapping_config = payload.get("mapping", {})
     sample_row = payload.get("sampleRow", [])
-    output = {}
+    output: dict[str, Any] = {}
     mappings = mapping_config.get("fieldMappings", [])
     for mapping in mappings:
         path = mapping.get("path")
@@ -419,7 +423,10 @@ if _MULTIPART_AVAILABLE:
         file: UploadFile = File(...),
     ):
         temp_dir = _get_upload_tmp_dir()
-        temp_file_path = temp_dir / file.filename
+        filename = file.filename
+        if not filename:
+            raise HTTPException(status_code=400, detail="Uploaded file must have a filename.")
+        temp_file_path = temp_dir / filename
         try:
             with open(temp_file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)

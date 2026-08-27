@@ -21,7 +21,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Creates client on startup, closes on shutdown.
     """
     # Startup: create MongoDB client and attach to app state
-    client = AsyncIOMotorClient(settings.mongodb_url)
+    client: AsyncIOMotorClient = AsyncIOMotorClient(settings.mongodb_url)
     app.state.db = client[settings.db_name]
     app.state.mongo_client = client
 
@@ -85,6 +85,9 @@ def create_app() -> FastAPI:
 
     from src.api.operations import router as operations_router
     app.include_router(operations_router)
+
+    from src.api.quarantine import router as quarantine_router
+    app.include_router(quarantine_router)
 
     from src.api.review_packets import router as review_packets_router
     app.include_router(review_packets_router)

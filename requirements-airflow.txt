@@ -6,7 +6,6 @@ openpyxl>=3.1.0
 pydantic>=2.0
 pydantic-settings>=2.0
 motor>=3.0
-python-decouple>=3.8
 paramiko>=3.5.1,<4.0.0
 httpx>=0.28.1
 httpx2>=2.0.0

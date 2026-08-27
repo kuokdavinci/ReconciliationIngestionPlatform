@@ -201,12 +201,13 @@ class RowBatchCoordinator:
             raw_row = sanitize_raw_row(context.get("rawRow", {}))
             records.append(
                 IngestionQuarantineRecord(
-                    source_file_id=self._context.file_id,
-                    source_unit_key=self._context.fetch_unit_key,
+                    sourceFileId=self._context.file_id,
+                    sourceUnitKey=self._context.fetch_unit_key,
                     partner=self._context.partner,
-                    reconciliation_date=self._context.reconciliation_date,
-                    row_number=row_number,
-                    raw_row=raw_row,
+                    reconciliationDate=self._context.reconciliation_date,
+                    rowNumber=row_number,
+                    rawRow=raw_row,
+                    ingestionKey=detail.ingestion_key,
                     errors=[
                         {
                             "field": "ingestion_key",
@@ -225,9 +226,9 @@ class RowBatchCoordinator:
                         }
                     ],
                     phase=QuarantinePhase.BATCH,
-                    config_version=self._context.config_version,
-                    incoming_fingerprint=incoming,
-                    existing_fingerprint=existing,
+                    configVersion=self._context.config_version,
+                    incomingFingerprint=incoming,
+                    existingFingerprint=existing,
                 )
             )
         if records:
@@ -248,13 +249,13 @@ class RowBatchCoordinator:
         errors: list[dict[str, Any]],
     ) -> IngestionQuarantineRecord:
         return IngestionQuarantineRecord(
-            source_file_id=self._context.file_id,
-            source_unit_key=self._context.fetch_unit_key,
+            sourceFileId=self._context.file_id,
+            sourceUnitKey=self._context.fetch_unit_key,
             partner=self._context.partner,
-            reconciliation_date=self._context.reconciliation_date,
-            row_number=row_number,
-            raw_row=sanitize_raw_row(row_tuple),
+            reconciliationDate=self._context.reconciliation_date,
+            rowNumber=row_number,
+            rawRow=sanitize_raw_row(row_tuple),
             errors=errors,
             phase=QuarantinePhase.VALIDATION,
-            config_version=self._context.config_version,
+            configVersion=self._context.config_version,
         )

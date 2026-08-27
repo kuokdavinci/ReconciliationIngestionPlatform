@@ -1,6 +1,6 @@
 # Project Milestones
 
-**Cập nhật:** 2026-08-14
+**Cập nhật:** 2026-08-26
 
 ## Milestone 1 — Foundation
 
@@ -10,14 +10,14 @@
 
 ## Milestone 2 — Phase 2: Ingestion reliability
 
-**Trạng thái:** Sprint 1 và 2 đã triển khai; Sprint 2.5 đang ở trạng thái partial acceptance với 5 criteria còn pending, local Compose service health đã được kiểm chứng; Sprint 3/4 là kế hoạch mở rộng.
+**Trạng thái:** Sprint 1 và 2 đã triển khai; Sprint 2.5 đang ở trạng thái partial acceptance với 5 criteria còn pending; Sprint 3 đã triển khai lõi A/B/C/D nhưng còn acceptance vận hành; Sprint 4 là kế hoạch mở rộng.
 
 | Sprint | Phạm vi | Trạng thái evidence |
 |---|---|---|
 | 1 | Idempotency, duplicate protection, benchmark | Implemented + benchmark |
 | 2 | Incremental processing, checkpoint, recovery, backfill | Implemented + regression/demo |
 | 2.5 | Airflow integration + recovery hardening (gộp nội dung cũ của 2.6) | Partial acceptance: 6/11 đạt, 5 pending; local health verified, live business evidence còn phụ thuộc môi trường |
-| 3 | Data quality và quarantine | Planned |
+| 3 | Data quality và quarantine | Core implemented; operator/production acceptance pending |
 | 4 | Observability | Planned |
 
 Đọc [Phase 2 Sprint Index](phase-2/INDEX.md) để xem toàn bộ plan, report, evaluation run và runbook của từng sprint.

@@ -1,6 +1,6 @@
 # CI Map và Change Blast Radius
 
-**Cập nhật:** 2026-08-14
+**Cập nhật:** 2026-08-26
 
 Tài liệu này map thay đổi source → workflow kiểm chứng. Workflow thật nằm trong `.github/workflows/`; command dưới đây là local equivalent để chạy trước commit.
 
@@ -38,7 +38,7 @@ uv sync --all-extras --dev
 uv run alembic upgrade head
 uv run ruff check src dags scripts cli
 uv run mypy src/ --show-error-codes
-uv run pytest tests/ --ignore=tests/test_analysis_e2e.py --ignore=tests/test_ingestion_integration.py --ignore=tests/test_ingestion_pipeline.py --ignore=tests/test_seed_momo_e2e.py --ignore=tests/test_sprint1_eval_benchmark.py
+uv run pytest tests/ --integration --ignore=tests/test_analysis_e2e.py --ignore=tests/test_ingestion_integration.py --ignore=tests/test_ingestion_pipeline.py --ignore=tests/test_seed_momo_e2e.py --ignore=tests/test_sprint1_eval_benchmark.py
 ```
 
 ### Ingestion Pipeline
@@ -53,6 +53,7 @@ uv run ruff check \
   src/infrastructure/persistence/mongo_indexes.py \
   scripts/demo/scenarios
 uv run pytest \
+  --integration \
   tests/test_indexes.py \
   tests/test_ingestion_integration.py \
   tests/test_ingestion_pipeline.py \
@@ -60,6 +61,83 @@ uv run pytest \
   tests/test_sprint1_eval_benchmark.py \
   -v --tb=short
 ```
+
+Local `pytest` runs skip real-service integration tests by default. Use
+`pytest --integration -m integration` when PostgreSQL is reachable. Set
+`TEST_POSTGRES_URL` to the network-specific URL when the test runner is inside
+Compose, for example
+`postgresql+asyncpg://postgres:postgres@postgres:5432/reconciliation`;
+host runners normally use `localhost`.
+
+### Workstream B — Quality contract and gate
+
+```bash
+uv run pytest \
+  tests/test_quality_contract.py \
+  tests/test_quality_profile.py \
+  tests/test_benchmark_quality_contract.py \
+  tests/test_ingestion_pipeline.py \
+  -v --tb=short
+uv run python scripts/benchmark_quality_contract.py \
+  --sizes 10000,100000,1000000 \
+  --repeats 1 \
+  --output /tmp/workstream-b-quality-benchmark.json
+```
+
+The quality microbenchmark is CPU/memory evidence and is separate from the
+full-dataset ingestion benchmark. It may take substantially longer than the
+focused contract tests because it measures three scenarios with `tracemalloc`.
+
+### Workstream C — Normalization and validation
+
+```bash
+uv run pytest \
+  tests/test_timestamp_normalization.py \
+  tests/test_normalizer.py \
+  tests/test_validator.py \
+  tests/test_persistence_time.py \
+  tests/test_persistence_mappers.py \
+  tests/test_quality_contract.py \
+  tests/test_ingestion_pipeline.py \
+  tests/test_benchmark_fraud_detection.py \
+  tests/test_benchmark_quality_contract.py \
+  tests/test_api_review_packets.py::test_runtime_timestamp_code_does_not_parse_reason \
+  tests/test_api_review_packets.py::test_run_runtime_validation_returns_high_risk_for_failed_validation \
+  -v --tb=short
+uv run python scripts/benchmark_fraud_detection.py --full-only
+```
+
+The current focused C run passed 242 tests. The full-dataset command requires
+the Docker-backed MongoDB/PostgreSQL services and cleans its benchmark records
+and temporary mapping after completion.
+
+### Workstream D — Quarantine lifecycle
+
+```bash
+uv run ruff check src tests
+uv run mypy src/ --show-error-codes
+uv run pytest \
+  tests/test_quarantine_domain.py \
+  tests/test_quarantine_repository.py \
+  tests/test_quarantine_reprocessing.py \
+  tests/test_quarantine_service.py \
+  tests/test_quarantine_source_unit.py \
+  tests/test_quarantine_resume.py \
+  tests/test_quarantine_retention.py \
+  tests/test_api_quarantine.py \
+  tests/test_quarantine_audit.py \
+  tests/test_quarantine_lifecycle.py \
+  tests/test_quarantine_runtime_wiring.py \
+  tests/test_quarantine_adapters.py \
+  tests/test_quarantine_source_unit_resume.py \
+  -v --tb=short
+```
+
+The lifecycle gate covers state transitions, source-row replay/correction,
+duplicate outcomes, source-unit hold/resume, checkpoint ordering, API bounds,
+audit metadata, counters, retention evidence, production composition wiring,
+authoritative source readers, and fingerprint verification. Use the Ingestion
+Pipeline workflow for live database and integration validation.
 
 ### Analysis Eval
 
@@ -84,7 +162,10 @@ npm --prefix frontend-next run test:e2e
 | Thay đổi | Chạy trước | Kiểm tra thêm |
 |---|---|---|
 | `src/api/`, `src/config/` | Backend Quality | API contract, app factory, runtime callers |
+| `src/domain/ingestion/quality.py`, `src/pipeline/quality_gate.py`, duplicate repository/fingerprint code | Workstream B gate + Ingestion Pipeline | quality contract, duplicate classification and bounded runtime result |
+| `src/normalizer/`, `src/validators/`, persistence timestamp mappers, `scripts/benchmark_fraud_detection.py` | Workstream C gate + Ingestion Pipeline | normal/fast parity, UTC persistence mapping and full-dataset v2 benchmark |
 | `src/application/automation/` | Backend Quality + Airflow tests | `tests/test_airflow_*.py`, automation/recovery/backfill tests, DAG payload |
+| `src/application/ingestion/quarantine_*.py`, `src/api/quarantine.py` | Workstream D gate + Ingestion Pipeline | quarantine state/repository/API/audit/lifecycle tests, source-unit resume and checkpoint tests |
 | `src/application/ingestion/`, `src/pipeline/` | Ingestion Pipeline | checkpoint, raw staging, recovery view, backend tests |
 | `src/fetchers/`, `src/domain/ingestion/` | Ingestion Pipeline | source-unit identity, retry/error classification, integration tests |
 | `src/infrastructure/workflows/`, `dags/` | Airflow tests + `docker compose config --quiet` | Build Airflow image, DAG import, runtime correlation |

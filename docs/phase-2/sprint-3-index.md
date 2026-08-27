@@ -1,89 +1,165 @@
-# Sprint 3 — Index
+# Sprint 3 — Data Quality and Quarantine Index
 
-Sprint 3 turns the Fraud Detection Dataset EDA handoff into an explicit
-runtime quality contract. The work is split into Workstreams A–F so that
-deterministic ingestion rules stay separate from quarantine operations,
-operator workflow, and observability.
+Sprint 3 adds deterministic quality decisions to the ingestion runtime and
+routes data that cannot be safely persisted into a bounded quarantine
+lifecycle. The sprint is split by ownership: Workstream B owns quality gates
+and duplicate classification, Workstream C owns normalization/validation, and
+Workstream D owns quarantine resolution and source-unit recovery.
 
-## Status at a glance
+## 1. Status and boundary
 
-| Workstream | Scope | Status |
-|---|---|---|
-| A | EDA, provenance, frozen profile, controlled mutations, rule handoff | Implemented |
-| B | Quality rules, duplicate classification, conflict quarantine, bounded result | Implemented |
-| C | Timezone-aware `transDate` normalization and structured validation errors | Implemented; full-dataset v2 evidence pending |
-| D | Quarantine retention, resolution, and reprocessing | Persistence foundation implemented; actions/reprocess pending |
-| E | Operator ownership and approval flow | Handoff |
-| F | Observability and production acceptance | Handoff |
+| Workstream | Scope | Current status | Primary evidence |
+|---|---|---|---|
+| A | EDA, provenance, frozen baseline and controlled mutations | Implemented | [EDA review](sprint-3-eda-review.md) |
+| B | Quality contract, file/row gates, duplicate classification and bounded runtime outcome | Implemented | [Quality contract](sprint-3-workstream-b-quality-contract.md) |
+| C | Timestamp normalization, validation parity and v2 source mapping | Implemented; full-dataset v2 evidence captured | [Normalization contract](sprint-3-workstream-c-normalization-validation.md) |
+| D | Quarantine persistence, operator resolution, audit, retention and source-unit resume | Implemented at contract/application level; production acceptance pending | [Quarantine lifecycle](sprint-3-data-quality.md#d--quarantine-lifecycle--implemented) |
+| E | Operator ownership, approval and escalation workflow | Handoff | [Sprint 3 overview](sprint-3-data-quality.md#e--operator-and-approval-flow) |
+| F | Observability, partner sign-off and production acceptance | Handoff | [Sprint 3 overview](sprint-3-data-quality.md#f--observability-and-production-acceptance) |
 
-## Canonical documents
+This sprint does not promote fraud labels, amount outliers, entity
+consistency, coordinates or temporal volume into automatic rejection. Those
+remain partner/business or monitoring contracts.
 
-| Document | Purpose |
+## 2. Core runtime flow
+
+```text
+source file / API unit
+  → mapping and configuration preparation
+  → deterministic file quality gate
+  → normalize source row
+  → validate canonical row
+  → batch persistence and duplicate classification
+      ├─ PASS / CONTINUE → persist, reconcile, advance checkpoint, cleanup
+      ├─ row REJECT      → quarantine the rejected row, continue valid rows
+      ├─ CONFLICT        → quarantine fingerprints, hold the source unit
+      └─ BATCH_FATAL     → fail before row persistence
+  → operator/worker resolution
+  → source-unit resume after all active blockers are terminal
+```
+
+## 3. Ownership map
+
+| Layer | Workstream B | Workstream C | Workstream D |
+|---|---|---|---|
+| Domain | Rule codes, phases, decisions, violations and bounded aggregation | Timestamp parsing and canonical date contract | Quarantine states, actions, transitions and retention policy |
+| Application | File/row quality policy and bounded Airflow result | Normalizer/validator parity and mapping behavior | Claim, replay, correction, accept-existing, reject and resume |
+| Persistence | Atomic PostgreSQL write and fingerprint comparison | UTC persistence boundary | Mongo quarantine records, raw-page/source-row readers and indexes |
+| Runtime | `CONTINUE`, `HOLD_FOR_REVIEW`, `FAIL` | Canonical `transDate` and structured `INVALID_TIMESTAMP` | Source-unit blocker guard and checkpoint-driven recovery |
+
+## 4. Deterministic contracts
+
+### Quality and accounting
+
+- `BATCH_FATAL` stops before row processing.
+- Ordinary row rejects are quarantined while valid rows continue.
+- Equivalent duplicates are counted and skipped without quarantine.
+- Conflicting duplicates retain incoming/existing fingerprints and hold the
+  source unit.
+- For a completed source unit:
+
+  ```text
+  inputRows = persistedRows + rejectedRows + duplicateRows + persistenceFailedRows
+  ```
+
+- Bounded Airflow/runtime results contain counters and rule codes, not raw rows
+  or unbounded error evidence.
+
+### Normalization and validation
+
+- Source `timestamp` maps to required canonical `transDate`.
+- ISO `Z`, offset timestamps and fractional seconds normalize to UTC-aware
+  values.
+- Four legacy date formats remain supported as naive values.
+- Invalid timestamps produce structured `INVALID_TIMESTAMP` evidence without
+  exposing the raw value.
+- Normal and fast paths share canonical business outcomes and error evidence.
+- PostgreSQL receives aware timestamps through the existing UTC-naive mapper.
+
+### Quarantine and recovery
+
+- `PENDING → REPROCESSING → PENDING|RESOLVED|REJECTED` is the only valid
+  lifecycle.
+- Claims are atomic and lease/actor-bound.
+- Replay uses authoritative source-file or staged raw-page data; corrected rows
+  are explicit operator input.
+- `ACCEPT_EXISTING` requires matching `existingFingerprint`.
+- A source unit resumes only when no active conflicting-duplicate blocker
+  remains; checkpoint advancement precedes raw-page/file cleanup.
+
+## 5. Runtime outcomes
+
+| Outcome | Meaning |
 |---|---|
-| [`sprint-3-data-quality.md`](sprint-3-data-quality.md) | Overall scope, non-goals, frozen source schema, and A–F boundaries |
-| [`sprint-3-workstream-summary.md`](sprint-3-workstream-summary.md) | Workstream A decision matrix and EDA-to-runtime handoff |
-| [`sprint-3-eda-review.md`](sprint-3-eda-review.md) | Dataset provenance, EDA findings, and rule-promotion rationale |
-| [`sprint-3-workstream-b-quality-contract.md`](sprint-3-workstream-b-quality-contract.md) | Deterministic quality contract, duplicate outcomes, and bounded source-unit result |
-| [`sprint-3-workstream-c-normalization-validation.md`](sprint-3-workstream-c-normalization-validation.md) | Timestamp parser, validation error contract, parity, persistence boundary, and verification evidence |
-| [`../superpowers/plans/2026-08-25-sprint-3-workstreams-def.md`](../superpowers/plans/2026-08-25-sprint-3-workstreams-def.md) | Sequential implementation plan for quarantine lifecycle, operator review, observability, and production acceptance |
+| `PASS / CONTINUE / INGESTED` | All rows were accepted and the source unit can complete normally. |
+| `REVIEW / CONTINUE` | Some ordinary rows were rejected/quarantined; valid rows continue. |
+| `REVIEW / HOLD_FOR_REVIEW` | A conflicting duplicate requires resolution before checkpoint progress. |
+| `FAIL` | Structural/configuration quality failure; do not retry as infrastructure failure. |
+| `RESOLVED` | A quarantine row was corrected, replayed successfully, or accepted as equivalent/existing. |
+| `REJECTED` | An operator explicitly discarded the row with a reason. |
+| `PENDING` | Resolution failed deterministically or through retryable infrastructure failure and can be attempted again. |
 
-The Workstream C evidence document is the canonical source for the current
-`timestamp → transDate` behavior. The A documents retain the historical EDA
-and frozen-baseline context and must not be read as a second runtime mapping.
+## 6. Canonical implementation map
 
-## Current implementation checkpoint
+| Capability | Module |
+|---|---|
+| Quality domain contract | [`src/domain/ingestion/quality.py`](../../src/domain/ingestion/quality.py) |
+| Quality policy and bounded result | [`src/application/ingestion/quality_policy.py`](../../src/application/ingestion/quality_policy.py), [`contracts.py`](../../src/application/ingestion/contracts.py) |
+| File quality gate | [`src/pipeline/quality_gate.py`](../../src/pipeline/quality_gate.py) |
+| Duplicate classification and persistence | [`src/domain/partner_transaction/duplicates.py`](../../src/domain/partner_transaction/duplicates.py), [`repository.py`](../../src/infrastructure/partner_transaction/repository.py) |
+| Timestamp contract | [`src/normalizer/timestamps.py`](../../src/normalizer/timestamps.py), [`normalizer.py`](../../src/normalizer/normalizer.py), [`validator.py`](../../src/validators/validator.py) |
+| C benchmark runner | [`scripts/benchmark_fraud_detection.py`](../../scripts/benchmark_fraud_detection.py) |
+| Quarantine domain and persistence | [`src/domain/ingestion/quarantine.py`](../../src/domain/ingestion/quarantine.py), [`quarantine_repository.py`](../../src/infrastructure/ingestion/quarantine_repository.py) |
+| Quarantine resolution | [`quarantine_service.py`](../../src/application/ingestion/quarantine_service.py), [`quarantine_reprocessing.py`](../../src/application/ingestion/quarantine_reprocessing.py) |
+| Source-unit resume | [`source_unit_orchestrator.py`](../../src/application/ingestion/source_unit_orchestrator.py), [`source_unit_resume.py`](../../src/application/ingestion/source_unit_resume.py) |
+| Quarantine API | [`src/api/quarantine.py`](../../src/api/quarantine.py) |
 
-Workstream D persistence foundation landed in commit `35ecada` on the review
-branch. The quarantine model/repository now provide bounded lifecycle metadata,
-configurable 30-day retention, a Mongo TTL index, compare-and-set transitions,
-action-id replay detection, and sensitive-value redaction. The focused D suite
-passes (`27 passed`), with Ruff and `git diff --check` clean.
+## 7. Evidence and commands
 
-The remaining D work is the operator action service, operations routes, audit
-events, and the bounded source-unit reprocess request. Workstream E operator
-ownership/actions and Workstream F acceptance evidence remain pending. The
-implementation plan and its explicit Sprint 4 boundary are tracked in
-[`sprint-3-workstreams-def plan`](../superpowers/plans/2026-08-25-sprint-3-workstreams-def.md).
+### Workstream C focused contract tests
 
-## Frozen dataset and pending v2 artifact
+The current focused run is `242 passed`:
 
-The Workstream A profile remains frozen at version `3` with SHA-256
-`e3895c988fe37efc76dabfe62d23f7ab75e89477bb17ba0c53092b008431caf6`.
+```bash
+uv run pytest \
+  tests/test_timestamp_normalization.py \
+  tests/test_normalizer.py \
+  tests/test_validator.py \
+  tests/test_persistence_time.py \
+  tests/test_persistence_mappers.py \
+  tests/test_quality_contract.py \
+  tests/test_ingestion_pipeline.py \
+  tests/test_benchmark_fraud_detection.py \
+  tests/test_benchmark_quality_contract.py \
+  tests/test_api_review_packets.py::test_runtime_timestamp_code_does_not_parse_reason \
+  tests/test_api_review_packets.py::test_run_runtime_validation_returns_high_risk_for_failed_validation \
+  -v --tb=short
+```
 
-Workstream C code and generated-fixture verification are complete. The raw
-1M-row CSV is now present locally at
-`data/eda/fraud_detection/raw/Fraud Detection Dataset.csv` and matches the
-frozen checksum. The external v2 evidence is still pending because the
-benchmark has not yet produced its report artifacts. Run the benchmark and add
-both outputs:
+### Workstream C full-dataset v2 evidence
 
-- `data/eda/fraud_detection/profiles/benchmark_results_workstream_c.json`
-- `docs/phase-2/sprint-3-workstream-c-baseline.md`
+The 1M-row raw dataset was run through the real Docker-backed ingestion
+boundary on 2026-08-26. The sanitized result is recorded in
+[the baseline report](sprint-3-workstream-c-baseline.md) and the machine-readable
+[benchmark artifact](../../data/eda/fraud_detection/profiles/benchmark_results_workstream_c.json).
 
-The v2 artifact must use mapping version `sprint3-fraud-detection-v2`, preserve
-the frozen profile checksum, contain no MongoDB URI or credentials, and report
-the actual measured throughput. Do not edit the frozen Workstream A profile or
-the historical v1 benchmark outputs.
+| Input | Persisted | Failed | Duplicate | Quarantined | Outcome | Throughput |
+|---:|---:|---:|---:|---:|---|---:|
+| 1,000,000 | 1,000,000 | 0 | 0 | 0 | `PASS / CONTINUE / INGESTED` | 7,962.5 rows/s |
 
-## Verification snapshot
+The benchmark elapsed time was `125.588s`; benchmark records and mapping were
+removed after the run. This is ingestion-boundary evidence, not reconciliation,
+statistical or partner-acceptance evidence.
 
-- Focused Workstream C suite: `301 passed`.
-- Backend suite excluding environment-gated analysis, ingestion integration,
-  and seed tests: `1,270 passed, 6 skipped`.
-- PostgreSQL integration/migration suite: `16 passed`.
-- Raw dataset available locally: `167.4M`, SHA-256 matches the frozen profile.
-- Ruff, Mypy, and `git diff --check`: passed.
-- Workstream B clean-path performance evidence remains within the accepted
-  regression threshold; timestamp parsing is not on partners without a
-  `transDate` mapping.
+### Workstream B and D gates
 
-## Scope guardrails
+- [Workstream B quality/performance evidence](sprint-3-workstream-b-quality-contract.md#acceptance-and-performance-evidence)
+- [Workstream D focused lifecycle gate](../CI-MAP.md#workstream-d--quarantine-lifecycle)
+- [Workstream C normalization contract and evidence](sprint-3-workstream-c-normalization-validation.md)
 
-Keep amount IQR, fraud semantics, entity consistency, coordinate semantics,
-temporal volume, and timestamp precision drift outside automatic rejection
-until a partner contract promotes them. Do not add database schema changes,
-repository lookups, raw rows, complete errors, parsed timestamps, or
-credentials to the bounded Airflow/source-unit result.
+## 8. Handoffs and acceptance boundary
 
-Workstream D owns quarantine retention, operator resolution, and reprocessing
-for already-routed rejects and conflicting duplicates.
+Workstream C and the core B/D contracts are implemented. Remaining Sprint 3
+acceptance work is operator ownership/escalation, repeated live environment
+evidence, dashboards/alerts, partner sign-off and production cutover. Sprint 4
+owns the broader observability expansion.

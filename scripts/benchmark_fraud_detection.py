@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -14,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ServerSelectionTimeoutError
@@ -159,6 +161,28 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def redact_mongodb_url(value: str) -> str:
+    """Hide MongoDB credentials before a benchmark report is persisted."""
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        if not hostname:
+            return value
+        host = f"[{hostname}]" if ":" in hostname else hostname
+        if parsed.port is not None:
+            host = f"{host}:{parsed.port}"
+        username = quote(parsed.username, safe="") if parsed.username else ""
+        userinfo = username
+        if parsed.password is not None:
+            userinfo = f"{userinfo}:***" if userinfo else "***"
+        netloc = f"{userinfo}@{host}" if userinfo else host
+        return urlunsplit(
+            (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+        )
+    except ValueError:
+        return value
 
 
 async def _clear_benchmark_data(db: Any) -> None:
@@ -355,7 +379,9 @@ async def run_benchmark(
             "size_bytes": input_path.stat().st_size,
         },
         "environment": {
-            "mongodb": "configured",
+            "mongodb_url": redact_mongodb_url(
+                os.environ.get("MONGODB_URL", settings.mongodb_url)
+            ),
             "db_name": settings.db_name,
         },
         "configuration": {

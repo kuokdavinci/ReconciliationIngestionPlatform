@@ -275,6 +275,24 @@ class TestReconciliationFileRepository:
         assert hasattr(ReconciliationFileRepository, "update_status")
 
     @pytest.mark.asyncio
+    async def test_find_by_file_hash_is_scoped_to_partner(self):
+        from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
+
+        mock_db = MagicMock()
+        mock_collection = AsyncMock()
+        mock_collection.find_one.return_value = None
+        mock_db.__getitem__.return_value = mock_collection
+
+        repo = ReconciliationFileRepository(db=mock_db)
+
+        result = await repo.find_by_file_hash("PARTNER_A", "same-content")
+
+        assert result is None
+        mock_collection.find_one.assert_awaited_once_with(
+            {"partner": "PARTNER_A", "fileHash": "same-content"}
+        )
+
+    @pytest.mark.asyncio
     async def test_create_or_get_by_file_hash_returns_existing_on_duplicate(self):
         from pymongo.errors import DuplicateKeyError
         from src.domain.ingestion.models import ReconciliationFile
@@ -311,7 +329,9 @@ class TestReconciliationFileRepository:
         assert is_created is False
         assert created.file_hash == "same_hash"
         mock_collection.insert_one.assert_called_once()
-        mock_collection.find_one.assert_called_once_with({"fileHash": "same_hash"})
+        mock_collection.find_one.assert_called_once_with(
+            {"partner": "MOMO", "fileHash": "same_hash"}
+        )
 
     @pytest.mark.asyncio
     async def test_create_or_get_by_file_hash_inserts_new_record(self):
@@ -378,7 +398,13 @@ class TestReconciliationFileRepository:
 
         assert created is False
         assert canonical.file_hash == "old-content"
-        assert mock_collection.find_one.await_args_list[1].args[0] == {"fetchUnitKey": "fetch-key"}
+        assert mock_collection.find_one.await_args_list[1].args[0] == {
+            "$or": [
+                {"fetchUnitKey": "fetch-key"},
+                {"fetchUnitMetadata.sourceUnitKey": "fetch-key"},
+                {"fetchUnitMetadata.sourceUnitKeys": "fetch-key"},
+            ]
+        }
 
     @pytest.mark.asyncio
     async def test_concurrent_file_claim_has_one_canonical_winner(self):

@@ -1,5 +1,9 @@
 # Sprint 3 — Data quality and quarantine
 
+Canonical navigation: [Sprint 3 index](sprint-3-index.md). This document is
+the sprint boundary and handoff summary; detailed B/C contracts and evidence
+live in their dedicated documents.
+
 ## Status and boundary
 
 **Workstream A is complete** for EDA/profile/provenance/frozen-baseline,
@@ -7,15 +11,12 @@ controlled-mutation, and coverage-handoff evidence for the Fraud Detection
 Dataset. **Workstream B is now implemented** for the shared runtime quality
 contract, deterministic file/row gate, duplicate classification, bounded
 source-unit result, and conflict quarantine routing. **Workstream C is
-`implemented; full-dataset v2 evidence pending`** for the normalization and
-validation contract. This document does not promote statistical or fraud
-semantics into automatic rejection. Workstream D has its persistence
-foundation implemented; D operator actions/reprocess, Workstream E, and
-Workstream F remain pending.
-
-The frozen 1M-row source CSV is now available locally at
-`data/eda/fraud_detection/raw/Fraud Detection Dataset.csv`; the v2 benchmark
-JSON/Markdown evidence will be added after the live run.
+`implemented; full-dataset v2 evidence captured`** for the normalization and
+validation contract. **Workstream D is implemented at the application,
+persistence, production composition, API, audit, and source-unit resume
+contract level; production
+acceptance remains pending.** Workstreams E–F remain handoffs; this document
+does not promote statistical or fraud semantics into automatic rejection.
 
 The full-profile baseline is version `3`, SHA-256
 `e3895c988fe37efc76dabfe62d23f7ab75e89477bb17ba0c53092b008431caf6`, with
@@ -74,51 +75,54 @@ EDA uniqueness is local to this source file. Runtime persistence uniqueness is
 
 ### B — Quality contract and gate — implemented
 
-Implemented in `src/domain/ingestion/quality.py`,
-`src/domain/partner_transaction/duplicates.py`, application policy/serialization
-modules, and `src/pipeline/quality_gate.py`. Approved rule codes, deterministic
-decision semantics, structural gating, duplicate payload comparison, conflict
-quarantine, bounded Airflow result, tests, and benchmark evidence are documented in
-[`sprint-3-workstream-b-quality-contract.md`](sprint-3-workstream-b-quality-contract.md).
-EDA does not replace mapping or business approval.
+Workstream B owns rule codes, deterministic file/row gates, duplicate payload
+classification, bounded runtime outcomes and conflict routing. The full rule
+registry, decision matrix, fingerprint contract and performance evidence are
+kept in [`sprint-3-workstream-b-quality-contract.md`](sprint-3-workstream-b-quality-contract.md).
 
-The latest 1M-row quick-win comparison shows a 12.0% reduction in row-preparation
-time and an 88.7% reduction in duplicate-row mapping time after removing the
-`model_docs` list and projecting only fingerprint fields. PostgreSQL conflict
-lookup is now implemented with a transaction-scoped temporary key table loaded
-by `COPY` and read through one set-based `JOIN`; 1M-row equivalent and
-conflicting duplicate runs complete at 6,944 and 5,169 rows/s respectively.
-The clean-path regression investigation found per-row Pydantic
-`QualityEvaluation` allocation as the dominant avoidable overhead. The
-context-free valid-evaluation fast path reduced the 1M regression from 13.45%
-to 9.01% against the stored pre-Workstream-B baseline, within the acceptance
-target.
+### C — Normalization and validation contract — implemented
 
-### C — Normalization and validation contract
+Workstream C maps the source timestamp to required `transDate`, normalizes ISO
+and offset timestamps to UTC-aware values, preserves the legacy date formats,
+and keeps normal/fast behavior equivalent. The focused contract run passed
+242 tests, and the full 1M-row v2 ingestion benchmark passed on 2026-08-26.
+Details and reproducible artifacts are in
+[`sprint-3-workstream-c-normalization-validation.md`](sprint-3-workstream-c-normalization-validation.md)
+and [`sprint-3-workstream-c-baseline.md`](sprint-3-workstream-c-baseline.md).
 
-**Evidence status:** `implemented; full-dataset v2 evidence pending`.
+### D — Quarantine lifecycle — implemented
 
-ISO `Z` and offset timestamps now map to canonical `transDate`, normalize to
-UTC-aware values, and use bounded structured `INVALID_TIMESTAMP` evidence when
-invalid. Normal and fast ingestion modes share the same business outcome and
-error contract; Decimal, required-field, duplicate, and quality-policy
-behavior remains unchanged. Review Runtime retains its legacy `INVALID_DATE`
-presentation code through structured rule mapping. Commands, results,
-performance evidence, smoke evidence, and the exact full-dataset limitation are
-recorded in
-[`sprint-3-workstream-c-normalization-validation.md`](sprint-3-workstream-c-normalization-validation.md).
+Workstream D now provides the complete contract for a routed quarantine row:
 
-### D — Quarantine lifecycle — persistence foundation implemented
+1. A sanitized source row or conflicting duplicate is stored as `PENDING` with
+   bounded error/evidence fields.
+2. An operator or worker atomically claims it as `REPROCESSING`; a second claim
+   cannot process the same record concurrently.
+3. The resolver replays the authoritative source row, accepts a corrected row,
+   verifies `existingFingerprint` for `ACCEPT_EXISTING`, or requires an
+   operator reason for `REJECT`.
+4. Deterministic validation failures and retryable persistence failures return to
+   `PENDING`; successful, equivalent, accepted-existing, and explicit-reject
+   outcomes become terminal `RESOLVED` or `REJECTED` states.
+5. Active quarantine blockers hold a source unit. Once all blockers are
+   terminal, the production resume entry point reconstructs the durable raw
+   unit, advances the checkpoint before cleanup, and reconciles an already
+   ingested file without replaying the same conflicting row.
+6. Resolution history, bounded audit events, operation counters, API views, and
+   terminal retention windows preserve the evidence needed for review.
 
-The first D checkpoint is implemented in `35ecada`. `IngestionQuarantineRecord`
-now carries bounded lifecycle metadata; the Mongo repository applies a
-configurable 30-day `expiresAt`, TTL cleanup, bounded listing, atomic
-compare-and-set transitions, action-id replay detection, and metadata/raw-row
-redaction. The focused lifecycle/component suite passes (`27 passed`).
-
-Remaining D scope: operator action routes, audit-backed ownership, and the
-bounded source-unit reprocess request. A sanitized `rawRow` is never used as a
-canonical replay payload.
+The implementation spans `src/domain/ingestion/quarantine.py`, the quarantine
+repository, the ingestion application services, production composition,
+source-row/GridFS adapters, source-unit orchestration, Mongo indexes, and
+`/api/v1/quarantine`. The deterministic lifecycle fixture in
+`tests/test_quarantine_lifecycle.py` covers invalid input, correction,
+equivalent/conflicting duplicates, explicit discard, accept-existing, source
+unit hold/resume, checkpoint advancement, one-time reconciliation, and evidence
+retention. Runtime wiring and adapter coverage is in
+`tests/test_quarantine_runtime_wiring.py`, `tests/test_quarantine_adapters.py`,
+and `tests/test_quarantine_source_unit_resume.py`. Workstream D tests are
+unit/contract tests; live Mongo/PostgreSQL, Airflow, partner sign-off, and
+production acceptance remain Workstream F scope.
 
 ### E — Operator and approval flow — pending
 

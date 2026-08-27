@@ -22,7 +22,11 @@ INDEXES: dict[str, list[IndexModel]] = {
         ),
     ],
     "reconciliation_file": [
-        IndexModel("fileHash", unique=True, name="idx_file_hash_unique"),
+        IndexModel(
+            [("partner", ASCENDING), ("fileHash", ASCENDING)],
+            unique=True,
+            name="idx_file_hash_unique",
+        ),
         IndexModel(
             "fetchUnitKey",
             unique=True,
@@ -67,9 +71,16 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_quarantine_status_updated",
         ),
         IndexModel(
-            [("expiresAt", ASCENDING)],
-            expireAfterSeconds=0,
-            name="idx_quarantine_expires_at_ttl",
+            [("sourceUnitKey", ASCENDING), ("status", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_quarantine_source_unit_status_created",
+        ),
+        IndexModel(
+            [("errors.errorCode", ASCENDING), ("status", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_quarantine_error_status_created",
+        ),
+        IndexModel(
+            [("status", ASCENDING), ("retentionUntil", ASCENDING)],
+            name="idx_quarantine_status_retention",
         ),
     ],
     "reconciliation_mapping_config": [

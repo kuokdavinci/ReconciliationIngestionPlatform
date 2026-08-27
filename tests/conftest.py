@@ -12,10 +12,17 @@ Provides:
 from typing import Any
 
 import pytest
+from tests.postgres_probe import postgres_dsn_if_available, postgres_url_for_tests
 
 
 def pytest_addoption(parser):
     parser.addoption("--e2e", action="store_true", default=False, help="Run E2E tests")
+    parser.addoption(
+        "--integration",
+        action="store_true",
+        default=False,
+        help="Run integration tests against real services",
+    )
 
 
 def pytest_configure(config):
@@ -23,12 +30,16 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    if config.getoption("--e2e"):
-        return
-    skip_e2e = pytest.mark.skip(reason="need --e2e option to run")
-    for item in items:
-        if "e2e" in item.keywords:
-            item.add_marker(skip_e2e)
+    if not config.getoption("--e2e"):
+        skip_e2e = pytest.mark.skip(reason="need --e2e option to run")
+        for item in items:
+            if "e2e" in item.keywords:
+                item.add_marker(skip_e2e)
+    if not config.getoption("--integration"):
+        skip_integration = pytest.mark.skip(reason="need --integration option to run")
+        for item in items:
+            if "integration" in item.keywords:
+                item.add_marker(skip_integration)
 
 import tempfile
 from pathlib import Path
@@ -292,7 +303,7 @@ def setup_postgres_test_db():
     from src.config.settings import settings
     from src.infrastructure.persistence.postgres_connection import init_postgres_db
     
-    url = settings.postgres_url
+    url = postgres_url_for_tests(settings.postgres_url)
     base_url = url.rsplit("/", 1)[0] + "/postgres"
     if base_url.startswith("postgresql://"):
         base_url = base_url.replace("postgresql://", "postgresql+asyncpg://", 1)
@@ -300,10 +311,10 @@ def setup_postgres_test_db():
     asyncpg_url = base_url.replace("postgresql+asyncpg://", "postgresql://", 1)
 
     async def probe_database():
-        connection = await asyncio.wait_for(
-            asyncpg.connect(asyncpg_url, timeout=3),
-            timeout=4,
-        )
+        available_dsn = await postgres_dsn_if_available(url)
+        if available_dsn is None:
+            raise RuntimeError(f"PostgreSQL endpoint is unavailable: {asyncpg_url}")
+        connection = await asyncpg.connect(available_dsn, timeout=3)
         await connection.close()
 
     try:

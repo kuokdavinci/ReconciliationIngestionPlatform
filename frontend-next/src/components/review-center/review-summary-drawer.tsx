@@ -3,7 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ReviewPacket } from "@/types/review-center";
-import { summarizeReviewPacket } from "@/lib/state/mock-review-center-data";
+import { summarizeReviewPacket } from "@/lib/state/review-summary";
 import styles from "./review-center.module.css";
 
 interface Props {

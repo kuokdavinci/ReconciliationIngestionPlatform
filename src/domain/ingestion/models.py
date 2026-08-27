@@ -34,6 +34,7 @@ class ReconciliationFile(BaseModel):
     config_version: Optional[str] = Field(default=None, alias="configVersion")
     fetch_unit_key: Optional[str] = Field(default=None, alias="fetchUnitKey")
     fetch_unit_metadata: dict = Field(default_factory=dict, alias="fetchUnitMetadata")
+    source_file_path: Optional[str] = Field(default=None, alias="sourceFilePath")
     scope_type: ReconciliationScopeType = Field(
         default=ReconciliationScopeType.UNCONFIRMED,
         alias="scopeType",

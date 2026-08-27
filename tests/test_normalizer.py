@@ -69,6 +69,38 @@ class TestEmptyFieldMappings:
             TransactionNormalizer(field_mappings=[])
 
 
+class TestNormalizationParity:
+    """Public normalization APIs must produce the same field results."""
+
+    def test_normalize_and_trace_preserve_the_same_field_results(self):
+        mappings = [
+            FieldMapping(path="id", column="A", type=FieldMappingType.STRING),
+            FieldMapping(path="amount", column="B", type=FieldMappingType.DECIMAL),
+            FieldMapping(path="currency", type=FieldMappingType.CONSTANT, constant="VND"),
+            FieldMapping(
+                path="status",
+                column="C",
+                type=FieldMappingType.MAPPING,
+                mapping={"ok": "SUCCESS"},
+            ),
+            FieldMapping(path="transDate", column="D", type=FieldMappingType.DATE),
+            FieldMapping(path="trace", column="E", type=FieldMappingType.STRING),
+        ]
+        row = {"A": "TX-1", "B": "100", "C": "ok", "D": "2025-01-01T00:00:00Z"}
+        normalizer = TransactionNormalizer(mappings)
+
+        plain = normalizer.normalize(row, row_number=7)
+        traced, traces = normalizer.normalize_with_trace(row, row_number=7)
+
+        assert traced.data == plain.data
+        assert [error.model_dump() for error in traced.errors] == [
+            error.model_dump() for error in plain.errors
+        ]
+        assert len(traces) == len(mappings)
+        assert traces[-1].path == "trace"
+        assert traces[-1].error is not None
+
+
 class TestStringConversion:
     """Test STRING type conversion."""
 
@@ -613,6 +645,21 @@ class TestMappingConversion:
         assert error is not None
         assert isinstance(error, QualityViolation)
         assert "unmapped value" in error.message
+
+    def test_mapping_without_configuration_returns_quality_violation(self):
+        mapping = FieldMapping(
+            path="status",
+            column="A",
+            type=FieldMappingType.MAPPING,
+            mapping=None,
+        )
+
+        value, error = TransactionNormalizer._convert_mapping("SUCCESS", mapping)
+
+        assert value is None
+        assert error is not None
+        assert error.code == QualityRuleCode.MALFORMED_ROW
+        assert error.field == "status"
 
 
 class TestBuildCanonical:

@@ -244,7 +244,7 @@ async def test_file_claim_reopens_failed_file_for_idempotent_retry(monkeypatch):
 
     assert result.created is True
     assert result.file_record.processing_status == ProcessingStatus.PROCESSING
-    repository.reclaim_failed_by_file_hash.assert_awaited_once_with("hash-1")
+    repository.reclaim_failed_by_file_hash.assert_awaited_once_with("MOMO", "hash-1")
     classify_scope.assert_not_awaited()
 
 
@@ -370,7 +370,7 @@ async def test_pipeline_retry_after_persistence_failure_reuses_file_claim(
     failed_record = first.file_record
     file_repository.find_by_file_hash.side_effect = [failed_record]
     file_repository.reclaim_failed_by_file_hash = AsyncMock(
-        side_effect=lambda _: failed_record.model_copy(
+        side_effect=lambda _partner, _file_hash: failed_record.model_copy(
             update={"processing_status": ProcessingStatus.PROCESSING}
         )
     )
@@ -387,7 +387,9 @@ async def test_pipeline_retry_after_persistence_failure_reuses_file_claim(
     assert second.stats.duplicate_rows == 1
     assert second.quality_counters["duplicateRows"] == 1
     assert second.file_record.id == failed_record.id
-    file_repository.reclaim_failed_by_file_hash.assert_awaited_once_with("retry-hash")
+    file_repository.reclaim_failed_by_file_hash.assert_awaited_once_with(
+        "MOMO", "retry-hash"
+    )
 
 
 @pytest.mark.asyncio

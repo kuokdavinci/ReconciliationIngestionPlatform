@@ -53,7 +53,13 @@ def _config():
     )
 
 
-def _ingestion_result(file_id: str, *, status=ProcessingStatus.COMPLETED, row_count=2):
+def _ingestion_result(
+    file_id: str,
+    *,
+    status=ProcessingStatus.COMPLETED,
+    row_count=2,
+    orchestration_action="CONTINUE",
+):
     return SimpleNamespace(
         file_record=SimpleNamespace(id=file_id, processing_status=status),
         stats=SimpleNamespace(
@@ -64,12 +70,13 @@ def _ingestion_result(file_id: str, *, status=ProcessingStatus.COMPLETED, row_co
         ),
         ingestion_keys=[f"{file_id}-key-1", f"{file_id}-key-2"],
         errors=[] if status == ProcessingStatus.COMPLETED else [{"reason": "page failed"}],
+        orchestration_action=orchestration_action,
     )
 
 
-def _harness(results):
+def _harness(results, pages=None):
     raw_repo = MagicMock()
-    raw_repo.find_for_replay = AsyncMock(return_value=_pages())
+    raw_repo.find_for_replay = AsyncMock(return_value=pages or _pages())
     raw_repo.materialize = AsyncMock(side_effect=lambda page, destination: destination)
     raw_repo.mark_consumed = AsyncMock()
 
@@ -140,11 +147,128 @@ async def test_three_pages_share_one_file_and_reconcile_once():
     assert result["fileId"] == "page-file-1"
     assert result["stats"]["pageCount"] == 3
     assert result["stats"]["totalRows"] == 6
+    assert result["stats"]["actualRowCount"] == 6
+    assert result["stats"]["sourceUnitKeys"] == ["unit-1", "unit-2", "unit-3"]
     reconciliation.execute.assert_awaited_once()
     command = reconciliation.execute.await_args.args[0]
     assert command.source_file_id == "page-file-1"
     assert transaction_repo.rebind_source_file.await_count == 2
     assert file_repo.delete_one.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_incomplete_staged_replay_fails_before_reconciliation():
+    pages = _pages()
+    for page in pages:
+        page.item_count = 2
+    harness = _harness(
+        [
+            _ingestion_result("page-file-1", row_count=1),
+            _ingestion_result("page-file-2", row_count=1),
+            _ingestion_result("page-file-3", row_count=1),
+        ],
+        pages=pages,
+    )
+    raw_repo, file_repo, transaction_repo, result_repo, pipeline, reconciliation = harness
+    checkpoint_repo = MagicMock()
+    checkpoint_repo.find_by_stream = AsyncMock(return_value=SimpleNamespace(id="checkpoint-1"))
+    checkpoint_repo.mark_stream_failed_after_review = AsyncMock(return_value=True)
+
+    with (
+        patch("src.application.review.reprocessing.RawIngestionPageRepository", return_value=raw_repo),
+        patch("src.application.review.reprocessing.ReconciliationFileRepository", return_value=file_repo),
+        patch("src.application.review.reprocessing.DataContainerRepository", return_value=transaction_repo),
+        patch("src.application.review.reprocessing.ReconciliationResultRepository", return_value=result_repo),
+        patch("src.application.review.reprocessing.build_ingestion_pipeline", return_value=pipeline),
+        patch("src.application.review.reprocessing.build_config_loader", return_value=MagicMock()),
+        patch("src.application.review.reprocessing.update_runtime_run", new=AsyncMock()),
+        patch("src.application.review.reprocessing._update_post_approval_run", new=AsyncMock()),
+        patch(
+            "src.application.review.staged_page_replay.IngestionCheckpointRepository",
+            return_value=checkpoint_repo,
+        ),
+    ):
+        result = await reprocess_staged_pages(
+            db=MagicMock(),
+            packet=_packet(),
+            config=_config(),
+            run_id="post-approval-1",
+            runtime_run_id="runtime-1",
+            raw_stage_key="stream-1",
+        )
+
+    assert result["ok"] is False
+    assert result["stage"] == "ingestion"
+    assert result["processingStatus"] == ProcessingStatus.FAILED.value
+    assert result["stats"]["expectedRowCount"] == 6
+    assert result["stats"]["actualRowCount"] == 3
+    assert result["errors"][-1]["errorCode"] == "staged_replay_incomplete"
+    reconciliation.execute.assert_not_awaited()
+    transaction_repo.delete_by_source_file.assert_awaited_once_with("page-file-1")
+    checkpoint_repo.mark_stream_failed_after_review.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_conflicting_page_stays_in_review_and_keeps_logical_source_owner():
+    harness = _harness(
+        [
+            _ingestion_result("page-file-1"),
+            _ingestion_result(
+                "page-file-2",
+                orchestration_action="HOLD_FOR_REVIEW",
+            ),
+            _ingestion_result("page-file-3"),
+        ]
+    )
+    raw_repo, file_repo, transaction_repo, result_repo, pipeline, reconciliation = harness
+    quarantine_repo = MagicMock()
+    quarantine_repo.rebind_source_file = AsyncMock(return_value=1)
+
+    with (
+        patch("src.application.review.reprocessing.RawIngestionPageRepository", return_value=raw_repo),
+        patch("src.application.review.reprocessing.ReconciliationFileRepository", return_value=file_repo),
+        patch("src.application.review.reprocessing.DataContainerRepository", return_value=transaction_repo),
+        patch("src.application.review.reprocessing.ReconciliationResultRepository", return_value=result_repo),
+        patch("src.application.review.reprocessing.build_ingestion_pipeline", return_value=pipeline),
+        patch("src.application.review.reprocessing.build_config_loader", return_value=MagicMock()),
+        patch("src.application.review.reprocessing.update_runtime_run", new=AsyncMock()) as runtime_update,
+        patch("src.application.review.reprocessing._update_post_approval_run", new=AsyncMock()) as post_update,
+        patch(
+            "src.application.review.staged_page_replay.IngestionQuarantineRepository",
+            return_value=quarantine_repo,
+        ),
+    ):
+        result = await reprocess_staged_pages(
+            db=MagicMock(),
+            packet=_packet(),
+            config=_config(),
+            run_id="post-approval-1",
+            runtime_run_id="runtime-1",
+            raw_stage_key="stream-1",
+        )
+
+    assert result["ok"] is False
+    assert result["outcome"] == "WAITING_REVIEW"
+    assert result["waitingForReview"] is True
+    assert result["fileId"] == "page-file-1"
+    assert result["stats"]["actualRowCount"] == 4
+    assert result["stats"]["sourceUnitKeys"] == ["unit-1", "unit-2"]
+    assert "expectedRowCount" in result["stats"]
+    assert pipeline.process_file.await_count == 2
+    assert raw_repo.mark_consumed.await_count == 1
+    quarantine_repo.rebind_source_file.assert_awaited_once_with(
+        "page-file-2", "page-file-1"
+    )
+    assert transaction_repo.rebind_source_file.await_count == 1
+    reconciliation.execute.assert_not_awaited()
+    assert any(
+        call.kwargs.get("status") == "WAITING_REVIEW"
+        for call in runtime_update.await_args_list
+    )
+    assert any(
+        call.kwargs.get("status") == "WAITING_REVIEW"
+        for call in post_update.await_args_list
+    )
 
 
 @pytest.mark.asyncio
@@ -193,6 +317,59 @@ async def test_successful_staged_replay_finalizes_scheduled_checkpoint():
         "contentHash": "hash-3",
         "hasMore": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_staged_replay_does_not_complete_when_checkpoint_finalize_fails():
+    harness = _harness(
+        [
+            _ingestion_result("page-file-1"),
+            _ingestion_result("page-file-2"),
+            _ingestion_result("page-file-3"),
+        ]
+    )
+    raw_repo, file_repo, transaction_repo, result_repo, pipeline, reconciliation = harness
+    checkpoint_repo = MagicMock()
+    checkpoint_repo.find_by_stream = AsyncMock(return_value=SimpleNamespace(id="checkpoint-1"))
+    checkpoint_repo.mark_stream_completed_after_review = AsyncMock(return_value=False)
+
+    with (
+        patch("src.application.review.reprocessing.RawIngestionPageRepository", return_value=raw_repo),
+        patch("src.application.review.reprocessing.ReconciliationFileRepository", return_value=file_repo),
+        patch("src.application.review.reprocessing.DataContainerRepository", return_value=transaction_repo),
+        patch("src.application.review.reprocessing.ReconciliationResultRepository", return_value=result_repo),
+        patch("src.application.review.reprocessing.build_ingestion_pipeline", return_value=pipeline),
+        patch("src.application.review.reprocessing.build_reconciliation_service", return_value=reconciliation),
+        patch("src.application.review.reprocessing.build_config_loader", return_value=MagicMock()),
+        patch("src.application.review.reprocessing.update_runtime_run", new=AsyncMock()) as runtime_update,
+        patch("src.application.review.reprocessing._update_post_approval_run", new=AsyncMock()) as post_update,
+        patch(
+            "src.application.review.staged_page_replay.IngestionCheckpointRepository",
+            return_value=checkpoint_repo,
+        ),
+    ):
+        result = await reprocess_staged_pages(
+            db=MagicMock(),
+            packet=_packet(),
+            config=_config(),
+            run_id="post-approval-1",
+            runtime_run_id="runtime-1",
+            raw_stage_key="stream-1",
+        )
+
+    assert result["ok"] is False
+    assert result["stage"] == "checkpoint"
+    assert result["processingStatus"] == ProcessingStatus.FAILED.value
+    assert result["errors"][-1]["errorCode"] == "checkpoint_finalize_failed"
+    assert transaction_repo.delete_by_source_file.await_count >= 1
+    assert any(
+        call.kwargs.get("status") == "FAILED"
+        for call in runtime_update.await_args_list
+    )
+    assert any(
+        call.kwargs.get("status") == "FAILED"
+        for call in post_update.await_args_list
+    )
 
 
 @pytest.mark.asyncio

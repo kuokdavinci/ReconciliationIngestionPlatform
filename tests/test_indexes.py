@@ -58,6 +58,16 @@ class TestReconciliationFileIndexes:
             "No UNIQUE index on file_hash found"
         )
 
+    def test_unique_file_hash_index_is_scoped_to_partner(self):
+        """The file claim boundary is partner plus content hash."""
+        from src.infrastructure.persistence.mongo_indexes import INDEXES
+
+        assert any(
+            idx.document.get("unique", False)
+            and list(idx.document["key"]) == ["partner", "fileHash"]
+            for idx in INDEXES["reconciliation_file"]
+        )
+
     def test_compound_index_on_partner_and_date(self):
         """reconciliation_file has compound index on partner + reconciliation_date."""
         from src.infrastructure.persistence.mongo_indexes import INDEXES

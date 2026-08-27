@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from src.application.ingestion.contracts import serialize_quality_violation
+from src.core.types import CanonicalTransaction
 from src.domain.ingestion.quality import QualityOutcome, QualityViolation
 from src.domain.partner_transaction.models import (
     DataContainer,
@@ -96,6 +97,8 @@ class RowProcessor:
                 normalize_ms=(time.perf_counter() - normalize_started) * 1000,
             )
 
+        txn: CanonicalTransaction | dict[str, Any] | None
+        build_errors: list[QualityViolation]
         if self._fast_mode:
             txn, build_errors = TransactionNormalizer.build_fast_dict(
                 normalized.data, [], row_number
@@ -191,9 +194,9 @@ class RowProcessor:
         )
         return DataContainer(
             identify=self._partner,
-            workflow_type=self._workflow_type,
-            reconciliation_date=self._reconciliation_date,
-            source_file_id=self._source_file_id,
-            ingestion_key=ingestion_key,
-            partner_data=partner_data,
+            workflowType=self._workflow_type,
+            reconciliationDate=self._reconciliation_date,
+            sourceFileId=self._source_file_id,
+            ingestionKey=ingestion_key,
+            partnerData=partner_data,
         )

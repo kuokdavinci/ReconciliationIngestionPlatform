@@ -24,7 +24,7 @@ class LLMProvider(Protocol):
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-    ) -> str:
+    ) -> str | None:
         """Generate a response from the LLM.
 
         Args:

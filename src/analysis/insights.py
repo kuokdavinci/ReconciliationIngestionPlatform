@@ -45,6 +45,8 @@ from src.infrastructure.postgres.reconciliation_result_repository import Reconci
 
 logger = logging.getLogger(__name__)
 
+Provider = LLMProvider | AIProviderRouter
+
 _SEVERITY_RANK = {
     "low": 0,
     "medium": 1,
@@ -118,7 +120,12 @@ def _docs_to_results(docs: list[dict[str, Any]], partner: str, date: str) -> lis
         result.date = doc.get("date", date)
         result.partner_amount = doc.get("partnerAmount") if "partnerAmount" in doc else doc.get("partner_amount")
         result.internal_amount = doc.get("internalAmount") if "internalAmount" in doc else doc.get("internal_amount")
-        status_str = doc.get("reconciliationStatus") if "reconciliationStatus" in doc else doc.get("reconciliation_status", "MATCHED")
+        status_value = (
+            doc.get("reconciliationStatus")
+            if "reconciliationStatus" in doc
+            else doc.get("reconciliation_status", "MATCHED")
+        )
+        status_str = status_value if isinstance(status_value, str) else "MATCHED"
         try:
             result.reconciliation_status = ReconciliationStatus(status_str)
         except ValueError:
@@ -141,7 +148,12 @@ async def _query_summary_metrics(
             reconciliation_run_id=(extra_query or {}).get("reconciliation_run_id"),
             source_file_id=(extra_query or {}).get("source_file_id"),
         )
-        by_status = {str(k): int(v) for k, v in (data.get("by_status") or {}).items()}
+        raw_by_status = data.get("by_status")
+        by_status = (
+            {str(k): int(v) for k, v in raw_by_status.items()}
+            if isinstance(raw_by_status, dict)
+            else {}
+        )
         total_transactions = sum(by_status.values())
         matched = sum(
             by_status.get(status, 0)
@@ -159,7 +171,7 @@ async def _query_summary_metrics(
             total_transactions=total_transactions,
             matched=matched,
             mismatch_rate=mismatch_rate,
-            total_amount_mismatch=float(data.get("total_amount_mismatch") or 0.0),
+            total_amount_mismatch=float(str(data.get("total_amount_mismatch") or 0.0)),
             by_status=by_status,
         )
 
@@ -187,7 +199,7 @@ async def _query_summary_metrics(
             }
         },
     ]
-    by_status: dict[str, int] = {}
+    mongo_by_status: dict[str, int] = {}
     total_transactions = 0
     matched = 0
     total_amount_mismatch = 0.0
@@ -195,7 +207,7 @@ async def _query_summary_metrics(
     async for doc in cursor:
         status = str(doc["_id"])
         count = int(doc["count"])
-        by_status[status] = count
+        mongo_by_status[status] = count
         total_transactions += count
         if status in (
             ReconciliationStatus.MATCHED.value,
@@ -221,7 +233,7 @@ async def _query_summary_metrics(
         matched=matched,
         mismatch_rate=mismatch_rate,
         total_amount_mismatch=total_amount_mismatch,
-        by_status=by_status,
+        by_status=mongo_by_status,
     )
 
 
@@ -259,7 +271,7 @@ async def _query_selected_error_results(
     per_status_limit: int = 50,
 ) -> list[Any]:
     if isinstance(collection, ReconciliationResultRepository):
-        selected_docs: list[dict[str, Any]] = []
+        repository_selected_docs: list[dict[str, Any]] = []
         repo_extra_query = extra_query or {}
         status_order = [
             ReconciliationStatus.MISSING_INTERNAL.value,
@@ -279,8 +291,10 @@ async def _query_selected_error_results(
                 limit=per_status_limit,
                 offset=0,
             )
-            selected_docs.extend([record.model_dump(by_alias=True) for record in records])
-        return _docs_to_results(selected_docs, partner, date)
+            repository_selected_docs.extend(
+                [record.model_dump(by_alias=True) for record in records]
+            )
+        return _docs_to_results(repository_selected_docs, partner, date)
 
     selected_docs: list[dict[str, Any]] = []
     mongo_extra_query = _normalize_extra_query_for_mongo(extra_query)
@@ -476,7 +490,7 @@ async def get_summary(
     partner: str,
     date: str,
     collection: AsyncIOMotorCollection | ReconciliationResultRepository,
-    llm_provider: LLMProvider,
+    llm_provider: Provider,
     config: Optional[AnalysisConfig] = None,
     extra_query: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -532,7 +546,7 @@ async def get_summary(
     cached_results = insight_cache.get(cache_key) if insight_cache else None
     cache_hit = cached_results is not None
 
-    if cache_hit:
+    if cached_results is not None:
         parsed_results, schema_valid = cached_results
         guardrail_result = None
         logger.info(
@@ -621,7 +635,7 @@ async def get_discrepancies(
     date: str,
     focus: str,
     collection: AsyncIOMotorCollection | ReconciliationResultRepository,
-    llm_provider: LLMProvider,
+    llm_provider: Provider,
     config: Optional[AnalysisConfig] = None,
     extra_query: Optional[dict[str, Any]] = None,
 ) -> list[AnalysisResult]:
@@ -699,7 +713,7 @@ async def get_discrepancies(
     cached_results = insight_cache.get(cache_key) if insight_cache else None
     cache_hit = cached_results is not None
 
-    if cache_hit:
+    if cached_results is not None:
         insights, schema_valid = cached_results
         guardrail_result = None
         logger.info(
@@ -759,7 +773,7 @@ async def get_discrepancies(
 
 async def generate_insights(
     analysis_input: AnalysisInput,
-    llm_provider: LLMProvider,
+    llm_provider: Provider,
 ) -> list[AnalysisResult]:
     """Generate insights from AnalysisInput using rule-based + LLM enrichment.
 
@@ -926,7 +940,7 @@ def _compress_insights_for_focus(
 
 async def _generate_insights_with_fallback(
     analysis_input: AnalysisInput,
-    llm_provider: LLMProvider,
+    llm_provider: Provider,
     start_time: float,
     timeout_seconds: float = 30.0,
 ) -> tuple[list[AnalysisResult], bool, dict | None]:
@@ -1123,7 +1137,7 @@ def _rule_based_fallback(analysis_input: AnalysisInput) -> list[AnalysisResult]:
 # Provider helpers
 # ---------------------------------------------------------------------------
 
-def _get_model_name(llm_provider: LLMProvider) -> str:
+def _get_model_name(llm_provider: Provider) -> str:
     """Get model name from a provider, handling AIProviderRouter wrapper.
 
     Args:
@@ -1137,7 +1151,7 @@ def _get_model_name(llm_provider: LLMProvider) -> str:
     return getattr(llm_provider, "model", "")
 
 
-def _get_last_provider(llm_provider: LLMProvider) -> Optional[LLMProvider]:
+def _get_last_provider(llm_provider: Provider) -> Optional[LLMProvider]:
     """Get the last used provider from router or return provider directly.
 
     Args:
@@ -1177,7 +1191,7 @@ def _llm_status(resolution: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _resolve_resolution(
-    llm_provider: LLMProvider,
+    llm_provider: Provider,
     insights: list[AnalysisResult],
     schema_valid: bool,
 ) -> str:

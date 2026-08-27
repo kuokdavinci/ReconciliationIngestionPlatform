@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Self, Any
+from typing import Any, Literal, Self
 
 from src.domain.mapping.models import MappingConfig
 
@@ -59,7 +59,7 @@ class JSONStreamReader:
             )
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> Literal[False]:
         self._rows = None
         return False
 

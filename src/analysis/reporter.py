@@ -19,7 +19,7 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 
 from src.analysis.config import AnalysisConfig
 from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
-from src.analysis.provider import LLMProvider
+from src.analysis.provider import AIProviderRouter, LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,8 @@ class DailyReporter:
 
     def __init__(
         self,
-        collection: AsyncIOMotorCollection,
-        llm_provider: LLMProvider,
+        collection: AsyncIOMotorCollection | ReconciliationResultRepository,
+        llm_provider: LLMProvider | AIProviderRouter,
         config: Optional[AnalysisConfig] = None,
     ):
         """Initialize DailyReporter.

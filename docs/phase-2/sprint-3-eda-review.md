@@ -4,9 +4,8 @@
 
 Workstream A is complete for EDA discovery, the reproducible profile,
 provenance, the frozen ingestion baseline, controlled mutations, and the
-coverage handoff. It is not production approval: runtime quality-gate,
-validation-contract, quarantine, operational, and observability work remains
-planned in Workstreams B–F.
+coverage handoff. It is not production approval: operator ownership,
+observability and production acceptance remain outside A.
 
 The Kaggle notebook is unchanged and Kaggle-only. The suggestions below are
 not instructions to edit or run it locally. Workstream B and the deterministic
@@ -58,7 +57,7 @@ behavior.
 | Source field | Mapping reference | Contract note |
 |---|---|---|
 | `transaction_id` | `id` | Required. |
-| `timestamp` | `transDate` (v2) | Required `DATE`; offset-aware values normalize to UTC-aware canonical timestamps, while approved legacy formats remain naive. |
+| `timestamp` | `transDate` | Required `DATE`; ISO/offset values normalize to UTC-aware canonical timestamps under Workstream C. |
 | `customer_id` | `extra.customerId` | Context only. |
 | `card_id` | `extra.cardId` | Context only. |
 | `device_id` | `extra.deviceId` | Context only. |
@@ -103,7 +102,7 @@ the other.
 |---|---|---|---|
 | Required ID, amount, currency, and Decimal conversion | COVERED | Mapping marks the fields required; normalizer converts `DECIMAL`; validator enforces canonical required fields | A closed; maintain in B/C |
 | Negative amount | COVERED | Validator rejects negative values; zero remains valid | A closed; maintain in C |
-| ISO timezone timestamp to `transDate` | IMPLEMENTED | Workstream C parses `Z`/offset ISO values, preserves approved legacy naive formats, and persists aware values through the existing UTC-naive mapper | C; full-dataset v2 evidence pending |
+| ISO timezone timestamp to `transDate` | COVERED | Workstream C maps the required field, normalizes ISO/offset values to UTC, and proves normal/fast parity | C; D operates routed rejects |
 | Equivalent duplicate / idempotency | PARTIAL | PostgreSQL handles `(identify, ingestion_key)`; EDA proves only file-local uniqueness | B |
 | Conflicting duplicate | PARTIAL | Quarantine persistence exists, but `ON CONFLICT DO NOTHING` does not compare payloads | B/D |
 | Header/schema drift | PARTIAL | `StructureSignature`, ConfigHealth, and mapping coverage detect structure signals; a type-aware runtime gate is still absent | B/C |

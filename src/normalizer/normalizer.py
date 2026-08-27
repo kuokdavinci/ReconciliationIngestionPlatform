@@ -115,73 +115,7 @@ class TransactionNormalizer:
         Returns:
             NormalizationResult with successfully converted data and any errors.
         """
-        result = NormalizationResult(data={}, errors=[])
-
-        for fm in self._field_mappings:
-            value: Any = None
-            error: Optional[QualityViolation] = None
-
-            # Resolve source value from row (skip for CONSTANT)
-            if fm.type == FieldMappingType.CONSTANT:
-                value, error = self._convert_constant(fm, row_number)
-            else:
-                source_value = self._resolve_source(row, fm, row_number)
-                if isinstance(source_value, QualityViolation):
-                    result.errors.append(source_value)
-                    continue
-                if source_value is None:
-                    # Value is None/empty — produce error
-                    error = _normalization_violation(
-                        code=_missing_value_code(fm),
-                        field=fm.path,
-                        message="source field value is None",
-                        row=row_number,
-                    )
-                    result.errors.append(error)
-                    continue
-
-                # Apply type-specific conversion
-                if fm.type == FieldMappingType.STRING:
-                    value, error = self._convert_string(source_value, fm, row_number)
-                elif fm.type == FieldMappingType.DECIMAL:
-                    if fm.path == "amount":
-                        value = source_value
-                    else:
-                        value, error = self._convert_decimal(
-                            source_value, fm, row_number
-                        )
-                elif fm.type == FieldMappingType.DATE:
-                    value, error = self._convert_date(source_value, fm, row_number)
-                elif fm.type == FieldMappingType.MAPPING:
-                    if fm.mapping is None:
-                        error = _normalization_violation(
-                            code=QualityRuleCode.MALFORMED_ROW,
-                            field=fm.path,
-                            message=f"mapping dict not configured for {fm.path}",
-                            row=row_number,
-                        )
-                    else:
-                        value, error = self._convert_mapping(source_value, fm, row_number)
-                else:
-                    # Unknown field mapping type
-                    error = _normalization_violation(
-                        code=QualityRuleCode.MALFORMED_ROW,
-                        field=fm.path,
-                        message=f"unknown mapping type '{fm.type}' for path '{fm.path}'",
-                        row=row_number,
-                    )
-
-            if error is not None:
-                result.errors.append(error)
-            elif fm.path == "amount" and value is not None:
-                amount, amount_error = self._coerce_amount(value, fm, row_number)
-                if amount_error is not None:
-                    result.errors.append(amount_error)
-                else:
-                    result.data[fm.path] = amount
-            elif value is not None:
-                result.data[fm.path] = value
-
+        result, _ = self._normalize(row, row_number, collect_trace=False)
         return result
 
     def normalize_with_trace(
@@ -190,6 +124,15 @@ class TransactionNormalizer:
         row_number: Optional[int] = None,
     ) -> tuple[NormalizationResult, list[FieldNormalizationTrace]]:
         """Normalize a row and capture field-level mapping trace data."""
+        return self._normalize(row, row_number, collect_trace=True)
+
+    def _normalize(
+        self,
+        row: Any,
+        row_number: Optional[int],
+        *,
+        collect_trace: bool,
+    ) -> tuple[NormalizationResult, list[FieldNormalizationTrace]]:
         result = NormalizationResult(data={}, errors=[])
         traces: list[FieldNormalizationTrace] = []
 
@@ -216,12 +159,7 @@ class TransactionNormalizer:
                 elif fm.type == FieldMappingType.STRING:
                     value, error = self._convert_string(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.DECIMAL:
-                    if fm.path == "amount":
-                        value = source_value
-                    else:
-                        value, error = self._convert_decimal(
-                            source_value, fm, row_number
-                        )
+                    value, error = self._convert_decimal(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.DATE:
                     value, error = self._convert_date(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.MAPPING:
@@ -245,17 +183,18 @@ class TransactionNormalizer:
             if error is None and fm.path == "amount" and value is not None:
                 value, error = self._coerce_amount(value, fm, row_number)
 
-            traces.append(
-                FieldNormalizationTrace(
-                    path=fm.path,
-                    mapping_type=str(fm.type),
-                    column=fm.column,
-                    source_field=fm.sourceField,
-                    source_value=source_value,
-                    output_value=value,
-                    error=error,
+            if collect_trace:
+                traces.append(
+                    FieldNormalizationTrace(
+                        path=fm.path,
+                        mapping_type=str(fm.type),
+                        column=fm.column,
+                        source_field=fm.sourceField,
+                        source_value=source_value,
+                        output_value=value,
+                        error=error,
+                    )
                 )
-            )
             if error is not None:
                 result.errors.append(error)
             elif value is not None:
@@ -513,13 +452,22 @@ class TransactionNormalizer:
                 row=row_number,
             )
 
+        mapping = fm.mapping
+        if mapping is None:
+            return None, _normalization_violation(
+                code=QualityRuleCode.MALFORMED_ROW,
+                field=fm.path,
+                message=f"mapping dict not configured for {fm.path}",
+                row=row_number,
+            )
+
         str_value = str(value)
 
-        if str_value in fm.mapping:
-            return fm.mapping[str_value], None
+        if str_value in mapping:
+            return mapping[str_value], None
 
-        if "others" in fm.mapping:
-            return fm.mapping["others"], None
+        if "others" in mapping:
+            return mapping["others"], None
 
         return None, _normalization_violation(
             code=(

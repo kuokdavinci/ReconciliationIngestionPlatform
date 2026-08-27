@@ -44,6 +44,27 @@ def serialize_quality_summary(
     }
 
 
+def serialize_quarantine_counters(
+    *,
+    input_rows: int,
+    persisted_rows: int,
+    rejected_rows: int,
+    duplicate_rows: int,
+    failed_rows: int,
+    quarantined_rows: int,
+) -> dict[str, int]:
+    """Reuse the ingestion row-accounting names for one quarantine operation."""
+    return {
+        "inputRows": input_rows,
+        "persistedRows": persisted_rows,
+        "rejectedRows": rejected_rows,
+        "duplicateRows": duplicate_rows,
+        "failedRows": failed_rows,
+        "persistenceFailedRows": failed_rows,
+        "quarantinedRows": quarantined_rows,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessFileCommand:
     """All inputs required to process one source file."""
@@ -119,5 +140,6 @@ __all__ = [
     "IngestionResult",
     "is_missing_ingestion_key_failure",
     "serialize_quality_summary",
+    "serialize_quarantine_counters",
     "serialize_quality_violation",
 ]

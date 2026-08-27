@@ -1,7 +1,8 @@
 """MongoDB adapter for ingestion file claims."""
 
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 from uuid import UUID
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -20,15 +21,21 @@ class ReconciliationFileRepository(BaseRepository[ReconciliationFile]):
         super().__init__(collection_name="reconciliation_file", db=db)
         self._set_model_class(ReconciliationFile)
 
-    async def find_by_file_hash(self, file_hash: str) -> Optional[ReconciliationFile]:
-        return await self.find_one({"fileHash": file_hash})
+    async def find_by_file_hash(
+        self,
+        partner: str,
+        file_hash: str,
+    ) -> Optional[ReconciliationFile]:
+        return await self.find_one({"partner": partner, "fileHash": file_hash})
 
     async def reclaim_failed_by_file_hash(
         self,
+        partner: str,
         file_hash: str,
     ) -> Optional[ReconciliationFile]:
         raw = await self.collection.find_one_and_update(
             {
+                "partner": partner,
                 "fileHash": file_hash,
                 "processingStatus": ProcessingStatus.FAILED.value,
             },
@@ -49,7 +56,15 @@ class ReconciliationFileRepository(BaseRepository[ReconciliationFile]):
         self,
         fetch_unit_key: str,
     ) -> Optional[ReconciliationFile]:
-        return await self.find_one({"fetchUnitKey": fetch_unit_key})
+        return await self.find_one(
+            {
+                "$or": [
+                    {"fetchUnitKey": fetch_unit_key},
+                    {"fetchUnitMetadata.sourceUnitKey": fetch_unit_key},
+                    {"fetchUnitMetadata.sourceUnitKeys": fetch_unit_key},
+                ]
+            }
+        )
 
     async def find_completed_by_raw_stage_key(
         self,
@@ -69,7 +84,7 @@ class ReconciliationFileRepository(BaseRepository[ReconciliationFile]):
             created = await self.create(doc)
             return created, True
         except DuplicateKeyError:
-            existing = await self.find_by_file_hash(doc.file_hash)
+            existing = await self.find_by_file_hash(doc.partner, doc.file_hash)
             if existing is None and doc.fetch_unit_key:
                 existing = await self.find_by_fetch_unit_key(doc.fetch_unit_key)
             if existing is None:
@@ -85,6 +100,21 @@ class ReconciliationFileRepository(BaseRepository[ReconciliationFile]):
                 "reconciliationDate": reconciliation_date,
             }
         )
+
+    async def read_row(self, source_file_id: str, row_number: int) -> Any | None:
+        """Read one row from the retained source path for a quarantine replay."""
+        source_file = await self.find_one({"_id": source_file_id})
+        if source_file is None:
+            return None
+        source_path = source_file.source_file_path or (
+            source_file.fetch_unit_metadata or {}
+        ).get("localPath")
+        if not source_path or not Path(source_path).is_file():
+            return None
+
+        from src.infrastructure.ingestion.source_row_reader import read_authoritative_row
+
+        return read_authoritative_row(source_path, row_number)
 
     async def update_processing_stats(
         self,

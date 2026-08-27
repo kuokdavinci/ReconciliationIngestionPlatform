@@ -111,6 +111,24 @@ class TestIngestionCheckpointModel:
 
 class TestIngestionCheckpointRepository:
     @pytest.mark.asyncio
+    async def test_find_by_source_unit_key_searches_current_and_timeline_identity(self):
+        collection = AsyncMock()
+        collection.find_one.return_value = _checkpoint(
+            current_unit_key="unit-1"
+        ).model_dump(by_alias=True)
+        repo = _repo(collection)
+
+        result = await repo.find_by_source_unit_key("unit-1")
+
+        assert result is not None
+        query = collection.find_one.await_args.args[0]
+        assert query["$or"] == [
+            {"currentUnitKey": "unit-1"},
+            {"lastCompletedUnitKey": "unit-1"},
+            {"unitTimeline.unitKey": "unit-1"},
+        ]
+
+    @pytest.mark.asyncio
     async def test_mark_stream_completed_after_review(self):
         collection = AsyncMock()
         collection.update_one.return_value = MagicMock(modified_count=1)
@@ -144,6 +162,38 @@ class TestIngestionCheckpointRepository:
         assert update["$set"]["streamEnded"] is True
         assert update["$set"]["highWaterMark"]["page"] == 3
         assert update["$push"]["recoveryEvents"]["status"] == "COMPLETED"
+
+    @pytest.mark.asyncio
+    async def test_mark_stream_failed_after_review_preserves_unit_owner(self):
+        collection = AsyncMock()
+        collection.update_one.return_value = MagicMock(modified_count=1)
+        repo = _repo(collection)
+        checkpoint = _checkpoint(
+            status=CheckpointStatus.DISCOVERED,
+            unit_timeline=[
+                SourceUnitSummary(
+                    unitKey="page-2",
+                    page=2,
+                    status=SourceUnitStatus.WAITING_REVIEW,
+                )
+            ],
+        )
+
+        result = await repo.mark_stream_failed_after_review(
+            checkpoint,
+            unit_key="page-2",
+            error="Replay row count mismatch",
+            error_code="staged_replay_incomplete",
+        )
+
+        assert result is True
+        query, update = collection.update_one.await_args.args
+        assert query["status"] == CheckpointStatus.DISCOVERED.value
+        assert update["$set"]["status"] == CheckpointStatus.FAILED.value
+        assert update["$set"]["currentUnitKey"] == "page-2"
+        assert update["$set"]["errorCode"] == "staged_replay_incomplete"
+        assert update["$set"]["unitTimeline"][0]["status"] == "FAILED"
+        assert update["$push"]["recoveryEvents"]["status"] == "FAILED"
 
     @pytest.mark.asyncio
     async def test_create_or_get_resolves_unique_stream_race(self):

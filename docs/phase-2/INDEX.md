@@ -48,23 +48,24 @@ Các capability của sprint hợp nhất:
 frozen ingestion baseline, controlled mutation và coverage handoff cho Fraud
 Detection Dataset. Workstream B đã triển khai quality contract/gate,
 duplicate classification, conflict quarantine và bounded source-unit outcome;
-Workstream C có trạng thái `implemented; full-dataset v2 evidence pending` cho
-normalization/validation contract. Workstream D đã có persistence foundation;
-operator action/reprocess, Workstream E và Workstream F vẫn còn trong phạm vi
-kế hoạch.
+Workstream C đã triển khai normalization/validation contract và có full-dataset
+v2 evidence. Workstream D đã triển khai quarantine
+lifecycle, operator resolution contract, production row/fingerprint wiring,
+audit/counters, API và source-unit resume; production approval và Workstream
+E–F vẫn còn pending.
 
+- [Chỉ mục Sprint 3 — Data Quality và Quarantine](sprint-3-index.md)
 - [Kế hoạch data quality và quarantine](sprint-3-data-quality.md)
 - [Sprint 3 index](sprint-3-index.md)
 - [Workstream B — quality contract và Airflow-ready outcome](sprint-3-workstream-b-quality-contract.md)
 - [Workstream C — normalization và validation contract](sprint-3-workstream-c-normalization-validation.md)
-- [Kế hoạch D/E/F và checkpoint hiện tại](../superpowers/plans/2026-08-25-sprint-3-workstreams-def.md)
+- [Workstream C — full-dataset v2 baseline](sprint-3-workstream-c-baseline.md)
 - [Review EDA và rule candidates](sprint-3-eda-review.md)
 - [Workstream A decision matrix](sprint-3-workstream-summary.md)
 
-Phạm vi còn lại: full-dataset v2 evidence cho Workstream C, D operator
-actions/reprocess, E operator flow, và F acceptance evidence. Generic
-production observability remains in Sprint 4. Notebook EDA vẫn không thay đổi
-và chỉ chạy trên Kaggle.
+Phạm vi còn lại: operator approval flow, production observability, partner
+sign-off và production acceptance. Notebook EDA vẫn không thay đổi và chỉ
+chạy trên Kaggle.
 
 ## Sprint 4 — Observability
 
@@ -81,5 +82,5 @@ Phạm vi dự kiến: metrics, structured logs, alerting, dashboard operational
 | 1 | Idempotency | `sprint-1-index.md`, benchmark | Đã triển khai |
 | 2 | Incremental/recovery | `sprint-2-index.md`, `sprint-2-incremental-recovery.md` | Đã triển khai |
 | 2.5 | Airflow + recovery hardening | `sprint-2-index.md`, `sprint-2.5-airflow-migration.md` | Còn 5 tiêu chí acceptance |
-| 3 | Data quality/quarantine | `sprint-3-data-quality.md`, Workstream B/C evidence, D/E/F plan | A/B implemented; C `implemented; full-dataset v2 evidence pending`; D persistence foundation implemented; E/F pending |
+| 3 | Data quality/quarantine | `sprint-3-index.md`, Workstream B/C/D evidence | A/B/C/D implemented; E–F pending |
 | 4 | Observability | `sprint-4-observability.md` | Kế hoạch |

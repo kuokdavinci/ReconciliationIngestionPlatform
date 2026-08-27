@@ -16,9 +16,12 @@ from src.fetchers.base import BaseFetcher
 from src.infrastructure.ingestion.composition import build_ingestion_pipeline
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
 from src.application.ingestion.error_classification import is_missing_ingestion_key_failure
+from src.application.ingestion.source_unit_orchestrator import resume_held_source_unit
 from src.logging import StructuredLogger
 
 logger = logging.getLogger("reconciliation.automation.stream_ingestion")
+
+__all__ = ["resume_held_source_unit"]
 
 
 def bounded_source_unit_result(result: Any) -> dict[str, Any]:

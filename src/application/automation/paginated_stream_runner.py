@@ -10,11 +10,48 @@ from src.application.automation.stream_failure import (
 )
 from src.application.automation.stream_fetching import unit_high_water_mark
 from src.application.automation.stream_lifecycle import StreamRunContext
+from src.application.ingestion.source_unit_orchestrator import resume_held_source_unit
 from src.config.config_health import ConfigurationApprovalRequiredError
 from src.core.enums import FileType
 from src.domain.ingestion.source_units import SourceUnitMetadata
 
 logger = logging.getLogger("reconciliation.automation.paginated_stream_runner")
+
+
+async def resume_paginated_source_unit(
+    *,
+    context: StreamRunContext,
+    quarantine_repo: Any,
+    unit: SourceUnitMetadata,
+    ingest_unit: Any | None = None,
+) -> dict[str, Any]:
+    """Replay one staged API unit after quarantine blockers are resolved."""
+
+    async def consume_after_checkpoint(unit_to_consume: SourceUnitMetadata) -> None:
+        if context.stage_key:
+            await context.raw_page_repo.mark_consumed(
+                unit_to_consume.source_unit_key or ""
+            )
+        await context.cleanup_unit(unit_to_consume)
+
+    return await resume_held_source_unit(
+        context.checkpoint_repo,
+        quarantine_repo,
+        source_unit_key=unit.source_unit_key or "",
+        stream_identity={
+            **context.identity,
+            "lastCompletedUnitKey": (
+                context.checkpoint.last_completed_unit_key
+                if context.checkpoint is not None
+                else None
+            ),
+        },
+        unit=unit,
+        ingest_unit=ingest_unit or context.ingest_unit,
+        mode=context.mode,
+        retry_policy=context.retry_policy,
+        on_unit_completed=consume_after_checkpoint,
+    )
 
 
 async def run_paginated_stream(
@@ -344,4 +381,4 @@ async def run_paginated_stream(
     return result
 
 
-__all__ = ["run_paginated_stream"]
+__all__ = ["run_paginated_stream", "resume_paginated_source_unit"]

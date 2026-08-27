@@ -225,12 +225,12 @@ async def get_partner_intake(
                     "status": m.get("status"),
                     "createdAt": m.get("createdAt"),
                 })
-        latest_file = detail_files[0] if detail_files else None
+        latest_file_summary = detail_files[0] if detail_files else None
         overall_state, primary_reason, next_action = _compute_partner_state(
             current_approved,
             [m for m in detail_mappings if m.get("status") == "PENDING_APPROVAL"],
             [p for p in detail_packets if p.get("status") == "PENDING"],
-            latest_file,
+            latest_file_summary,
         )
         detail = {
             "partner": selected_partner,
@@ -245,7 +245,7 @@ async def get_partner_intake(
                 "startRow": current_approved.get("startRow") if current_approved else None,
                 "approvedAt": current_approved.get("approvedAt") if current_approved else None,
             },
-            "latestFileSummary": latest_file,
+            "latestFileSummary": latest_file_summary,
             "pendingItems": pending_items,
             "reviewPackets": detail_packets[:12],
             "recentActivity": _build_activity_items(detail_files, detail_mappings, detail_actions, detail_packets)[:12],
@@ -298,5 +298,9 @@ async def get_ingestion_operations(
         "files": files,
         "pendingQuarantine": [record.model_dump(by_alias=True) for record in pending_quarantine],
         "summary": summary,
+        "quarantineCounters": {
+            "quarantinedRows": len(pending_quarantine),
+            "pendingRows": len(pending_quarantine),
+        },
         "generatedAt": datetime.now(timezone.utc).isoformat(),
     }

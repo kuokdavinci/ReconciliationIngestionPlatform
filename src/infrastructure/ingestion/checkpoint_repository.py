@@ -151,6 +151,21 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
         ]
         return await self.find_many({"$or": filters})
 
+    async def find_by_source_unit_key(
+        self,
+        source_unit_key: str,
+    ) -> Optional[IngestionCheckpoint]:
+        """Find the stream checkpoint that owns a source-unit identity."""
+        return await self.find_one(
+            {
+                "$or": [
+                    {"currentUnitKey": source_unit_key},
+                    {"lastCompletedUnitKey": source_unit_key},
+                    {"unitTimeline.unitKey": source_unit_key},
+                ]
+            }
+        )
+
     async def prepare_manual_retry(
         self,
         checkpoint: IngestionCheckpoint,
@@ -610,6 +625,63 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
                     status=SourceUnitStatus.COMPLETED.value,
                     timestamp=now,
                     reason="Post-approval staged stream reconciliation completed.",
+                )
+            },
+        }
+        result = await self.collection.update_one(query, update)
+        return result.modified_count == 1
+
+    async def mark_stream_failed_after_review(
+        self,
+        checkpoint: IngestionCheckpoint,
+        *,
+        unit_key: str,
+        error: str,
+        error_code: str,
+    ) -> bool:
+        """Persist a post-approval replay failure without losing its unit owner."""
+        query = {
+            **self._stream_filter(
+                partner=checkpoint.partner,
+                fetch_config_id=checkpoint.fetch_config_id,
+                source_type=checkpoint.source_type,
+                stream_key=checkpoint.stream_key,
+                mode=checkpoint.mode,
+            ),
+            "status": CheckpointStatus.DISCOVERED.value,
+            "streamEnded": {"$ne": True},
+        }
+        now = datetime.now(UTC)
+        update = {
+            "$set": {
+                "status": CheckpointStatus.FAILED.value,
+                "currentUnitKey": unit_key,
+                "lastError": error,
+                "errorCode": error_code,
+                "retryable": True,
+                "nextRetryAt": None,
+                "blockedAt": None,
+                "blockedReason": None,
+                "lastErrorMetadata": {},
+                "updatedAt": now,
+                "unitTimeline": self._unit_timeline_update(
+                    checkpoint,
+                    unit_key,
+                    status=SourceUnitStatus.FAILED,
+                    last_error=error,
+                    error_code=error_code,
+                    retryable=True,
+                    next_retry_at=None,
+                ),
+            },
+            "$push": {
+                "recoveryEvents": self._recovery_event_update(
+                    checkpoint,
+                    unit_key=unit_key,
+                    status=CheckpointStatus.FAILED.value,
+                    timestamp=now,
+                    error_code=error_code,
+                    message=error,
                 )
             },
         }

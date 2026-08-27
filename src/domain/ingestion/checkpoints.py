@@ -160,10 +160,24 @@ class CheckpointRepository(Protocol):
         high_water_mark: Optional[dict[str, Any]] = None,
     ) -> bool: ...
 
+    async def mark_stream_failed_after_review(
+        self,
+        checkpoint: IngestionCheckpoint,
+        *,
+        unit_key: str,
+        error: str,
+        error_code: str,
+    ) -> bool: ...
+
     async def find_by_streams(
         self,
         identities: list[dict[str, Any]],
     ) -> list[IngestionCheckpoint]: ...
+
+    async def find_by_source_unit_key(
+        self,
+        source_unit_key: str,
+    ) -> IngestionCheckpoint | None: ...
 
     async def prepare_manual_retry(
         self,

@@ -19,20 +19,16 @@ Trạng thái hiện tại: FastAPI + Next.js, PostgreSQL cho dữ liệu đối
 
 ```mermaid
 flowchart LR
-    P[Partner sources\nFileDrop • API • SFTP] --> F[Fetchers + readers]
-    F --> A[Automation\nsource identity / claim / checkpoint]
-    A --> I[Ingestion pipeline\nmapping / normalize / validate]
-    I --> PG[(PostgreSQL\npartner + internal transactions)]
-    A --> M[(MongoDB\nconfig / runtime / review / raw pages)]
-    PG --> R[Reconciliation engine\nkeys / scope / match]
-    R --> PR[(PostgreSQL\nreconciliation results)]
-    API[FastAPI] --> A
-    API --> R
-    API --> M
-    AF[Airflow DAG] --> A
-    UI[Next.js dashboard] --> API
-    M --> RV[Review / approval / replay]
-    RV --> A
+    P[Partner sources] --> I[Ingestion runtime]
+    API[FastAPI] --> I
+    AF[Airflow] --> I
+    I --> PG[(PostgreSQL)]
+    I --> M[(MongoDB)]
+    PG --> R[Reconciliation]
+    R --> PG
+    UI[Next.js] --> API
+    M --> V[Review / replay]
+    V --> I
 ```
 
 | Boundary | Trách nhiệm |
@@ -50,7 +46,7 @@ Airflow sở hữu schedule, dependency, mapped task, retry/timeout và task log
 
 ## Data ownership
 
-| Dữ liệu | Nguồn sự thật |
+| Dữ liệu | Source of truth |
 |---|---|
 | `partner_transaction`, `internal_transaction`, `reconciliation_result` | PostgreSQL + Alembic |
 | Mapping/fetch config, file metadata, checkpoint/source unit, runtime, review packet, backfill, audit | MongoDB |
@@ -74,26 +70,13 @@ API stream nhiều trang có thể stage raw pages trong MongoDB GridFS trước
 ## Project flow và Phase 2
 
 ```mermaid
-flowchart TD
-    S[FileDrop / API / SFTP source unit] --> I[Source identity + claim]
-    I --> G[Deterministic file quality gate]
-    G -->|BATCH_FATAL| F[Fail source unit]
-    G --> N[Normalize + validate canonical row]
-    N -->|Row reject| Q[Quarantine row\ncontinue valid rows]
-    N --> D[Duplicate classification]
-    D -->|Equivalent duplicate| C[Count + skip safely]
-    D -->|Conflicting duplicate| H[Quarantine fingerprint\nHOLD_FOR_REVIEW]
-    D -->|New row| W[Atomic batch write PostgreSQL]
-    W --> K[Checkpoint + runtime outcome]
-    K --> R[Reconciliation\nkey / scope / amount / status]
-    R --> O[Results + stats + insights]
-    Q --> T[Operator resolve / reject / escalate]
-    H --> T
-    T -->|Replay| I
-    I --> M[Missing/drifted mapping?]
-    M -->|Yes| P[Review packet + raw evidence]
-    M -->|No| W
-    P -->|Approve / keep current| I
+flowchart LR
+    S[Source] --> I[Ingest]
+    I --> Q[Quality / quarantine]
+    I --> PG[(PostgreSQL)]
+    Q -->|Resolve / approve| I
+    PG --> R[Reconcile]
+    R --> O[Results / insights]
 ```
 
 ### Những gì Phase 2 đã đưa vào runtime

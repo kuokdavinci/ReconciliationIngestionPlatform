@@ -7,36 +7,17 @@
 Repository là ứng dụng Python/FastAPI với dashboard Next.js, PostgreSQL cho transaction/result, MongoDB cho metadata/config/workflow state và Airflow làm control plane. Dữ liệu settlement đi qua fetcher → source-unit orchestration → ingestion pipeline; reconciliation đọc/ghi PostgreSQL.
 
 ```mermaid
-flowchart TB
-    Partner[Partner: FileDrop / API / SFTP]
-    Fetch[src/fetchers]
-    Airflow[dags/reconciliation_ingestion.py]
-    API[src/api]
-    Automation[src/application/automation]
-    Ingestion[src/application/ingestion]
-    Pipeline[src/pipeline]
-    Domain[src/domain]
-    Infra[src/infrastructure]
-    Review[src/application/review]
-    Recon[src/application/reconciliation + src/reconciliation]
-    Mongo[(MongoDB)]
-    Postgres[(PostgreSQL)]
-    UI[frontend-next]
-
-    Partner --> Fetch
-    Fetch --> Automation
-    Airflow --> Automation
-    API --> Automation
-    API --> Review
-    API --> Recon
-    UI --> API
-    Automation --> Ingestion --> Pipeline
-    Pipeline --> Domain
-    Pipeline --> Infra
-    Review --> Infra
-    Recon --> Infra
-    Infra --> Mongo
-    Infra --> Postgres
+flowchart LR
+    P[Partner sources] --> I[Ingestion runtime]
+    API[FastAPI] --> I
+    AF[Airflow] --> I
+    I --> PG[(PostgreSQL)]
+    I --> M[(MongoDB)]
+    PG --> R[Reconciliation]
+    R --> PG
+    UI[Next.js] --> API
+    M --> V[Review / replay]
+    V --> I
 ```
 
 ## Application boundaries
@@ -70,7 +51,7 @@ Kiến trúc không còn lớp `src/models/` trung gian. Code dùng `src/domain/
 
 - `AIRFLOW_GLOBAL_SCHEDULE=none` để manual-only.
 - `AIRFLOW_TASK_RETRIES=0` để retry do operator kiểm soát.
-- `ingestion_streams=1`, sequential source-unit boundary và checkpoint là nguồn sự thật.
+- `ingestion_streams=1`, sequential source-unit boundary và checkpoint là source of truth.
 - `runtimeRunId`, `dagRunId`, `taskId`, `mapIndex` để correlation giữa UI/API/Airflow.
 
 Sprint 2.5 bao gồm cả Airflow integration và recovery hardening; xem [Phase 2 sprint index](../phase-2/INDEX.md).

@@ -13,6 +13,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from statistics import median
 import sys
@@ -202,32 +203,21 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, object]:
         for scenario in SCENARIOS:
             conflicting = scenario == "conflicting_duplicate"
             if scenario == "clean":
-
-                def baseline_operation(size: int = size) -> int:
-                    return _clean_baseline(size)
-
-                def quality_operation(size: int = size) -> int:
-                    return _clean_quality_runtime(size)
-
+                baseline_operation = partial(_clean_baseline, size)
+                quality_operation = partial(_clean_quality_runtime, size)
                 lookup_queries = 0
             else:
-
-                def baseline_operation(
-                    size: int = size,
-                    conflicting: bool = conflicting,
-                ) -> int:
-                    return _duplicate_baseline(size, conflicting=conflicting)
-
-                def quality_operation(
-                    size: int = size,
-                    conflicting: bool = conflicting,
-                ) -> int:
-                    return _duplicate_quality_runtime(
-                        size,
-                        conflicting=conflicting,
-                        batch_size=config.batch_size,
-                    )
-
+                baseline_operation = partial(
+                    _duplicate_baseline,
+                    size,
+                    conflicting=conflicting,
+                )
+                quality_operation = partial(
+                    _duplicate_quality_runtime,
+                    size,
+                    conflicting=conflicting,
+                    batch_size=config.batch_size,
+                )
                 lookup_queries = (size + config.batch_size - 1) // config.batch_size
 
             baseline = _measure(size, baseline_operation, config.repeats)
@@ -298,7 +288,10 @@ def main() -> int:
     if args.output is not None:
         args.output.write_text(rendered + "\n", encoding="utf-8")
     print(rendered)
-    return 0 if report["acceptance"]["cleanThroughputPassed"] else 1
+    acceptance = report["acceptance"]
+    if not isinstance(acceptance, dict):
+        return 1
+    return 0 if acceptance.get("cleanThroughputPassed") is True else 1
 
 
 if __name__ == "__main__":

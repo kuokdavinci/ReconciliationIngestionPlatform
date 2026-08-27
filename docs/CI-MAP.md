@@ -1,6 +1,6 @@
 # CI Map và Change Blast Radius
 
-**Cập nhật:** 2026-08-26
+**Cập nhật:** 2026-08-27
 
 Tài liệu này map thay đổi source → workflow kiểm chứng. Workflow thật nằm trong `.github/workflows/`; command dưới đây là local equivalent để chạy trước commit.
 
@@ -8,26 +8,38 @@ Tài liệu này map thay đổi source → workflow kiểm chứng. Workflow th
 
 ```mermaid
 flowchart LR
-    Change[Source change] --> Backend[Backend Quality]
-    Change --> Ingestion[Ingestion Pipeline]
-    Change --> Analysis[Analysis Eval]
-    Change --> Frontend[Frontend CI]
+    Change[PR / push / nightly] --> Selector[CI change detector]
+    Selector --> Backend[Backend Quality]
+    Selector --> Ingestion[Ingestion Pipeline]
+    Selector --> Topology[Full Topology Contract]
+    Selector --> Analysis[Analysis Eval]
+    Selector --> Frontend[Frontend CI]
     Backend --> B[Migration + Ruff + Mypy + backend tests]
     Ingestion --> I[Migration + ingestion tests + benchmark]
+    Topology --> T[Compose: API + Mongo + PostgreSQL + Airflow + source mock + SFTP]
     Analysis --> A[Guardrails + providers + scenarios]
     Frontend --> F[ESLint + TypeScript + Webpack + Playwright]
+    B --> Gate[CI gate]
+    I --> Gate
+    T --> Gate
+    A --> Gate
+    F --> Gate
 ```
 
 ## Workflow matrix
 
 | Workflow | Trigger chính | Validation | Source scope |
 |---|---|---|---|
-| [Backend Quality](../.github/workflows/backend-quality.yml) | Push/PR `main`, manual | Alembic, Ruff, Mypy, backend tests | `src/`, `dags/`, `scripts/`, `cli/` |
-| [Ingestion Pipeline](../.github/workflows/ingestion-pipeline.yml) | Push/PR `main`, manual | Alembic, ingestion lint, integration/pipeline/eval tests | `src/fetchers/`, `src/pipeline/`, `src/application/automation/`, ingestion models/repositories, demo scenarios |
-| [Eval — AI Analysis Quality](../.github/workflows/eval.yml) | Push `main`/`feature/*`, PR, manual | Guardrails, provider fallback, scenario quality | `src/analysis/` và analysis API/services |
-| [Frontend CI](../.github/workflows/frontend-ci.yml) | Push/PR, frontend paths, manual | ESLint, TypeScript, Webpack build, Playwright | `frontend-next/` |
+| [CI entrypoint](../.github/workflows/ci.yml) | Push/PR `main`, nightly, manual | Change detection, reusable workflow dispatch, final `CI gate` | All scopes below |
+| [Backend Quality](../.github/workflows/backend-quality.yml) | Called by CI when backend scope changes | Alembic, Ruff, Mypy, backend tests | `src/`, `dags/`, `scripts/`, `cli/`, tests |
+| [Ingestion Pipeline](../.github/workflows/ingestion-pipeline.yml) | Called by CI when ingestion scope changes | Alembic, ingestion lint, integration/pipeline/eval tests | Fetchers, pipeline, automation and ingestion adapters |
+| [Topology Contract](../.github/workflows/topology-contract.yml) | Called by CI for topology/runtime changes; nightly/manual | Compose startup plus API → Airflow → source → Mongo/PostgreSQL contract | `docker-compose.yml`, Airflow, automation, persistence, demo source |
+| [Eval — AI Analysis Quality](../.github/workflows/eval.yml) | Called by CI when analysis scope changes | Guardrails, provider fallback, scenario quality | `src/analysis/` and analysis tests |
+| [Frontend CI](../.github/workflows/frontend-ci.yml) | Called by CI when frontend scope changes | ESLint, TypeScript, Webpack build, Playwright | `frontend-next/` |
 
 Backend/Eval/Ingestion dùng Python 3.11, `uv sync --all-extras --dev` và PostgreSQL 16. Frontend CI dùng Node.js 22. Các test analysis yêu cầu `AI_API_KEY` fake; real LLM E2E được loại khỏi quality gate mặc định.
+
+`CI / CI gate` là check duy nhất cần đặt thành required status check trên branch protection. Scope không bị ảnh hưởng sẽ được skip ở job level và vẫn được tổng hợp thành trạng thái thành công; thay đổi workflow, dependency, Compose hoặc nightly/manual run sẽ mở toàn bộ scope.
 
 ## Local commands
 
@@ -37,7 +49,8 @@ Backend/Eval/Ingestion dùng Python 3.11, `uv sync --all-extras --dev` và Postg
 uv sync --all-extras --dev
 uv run alembic upgrade head
 uv run ruff check src dags scripts cli
-uv run mypy src/ --show-error-codes
+uv run mypy src --show-error-codes --no-incremental --check-untyped-defs
+uv run mypy dags scripts cli --show-error-codes --no-incremental
 uv run pytest tests/ --integration --ignore=tests/test_analysis_e2e.py --ignore=tests/test_ingestion_integration.py --ignore=tests/test_ingestion_pipeline.py --ignore=tests/test_seed_momo_e2e.py --ignore=tests/test_sprint1_eval_benchmark.py
 ```
 
@@ -115,7 +128,8 @@ and temporary mapping after completion.
 
 ```bash
 uv run ruff check src tests
-uv run mypy src/ --show-error-codes
+uv run mypy src --show-error-codes --no-incremental --check-untyped-defs
+uv run mypy dags scripts cli --show-error-codes --no-incremental
 uv run pytest \
   tests/test_quarantine_domain.py \
   tests/test_quarantine_repository.py \
@@ -174,6 +188,25 @@ npm --prefix frontend-next run test:e2e
 | `src/analysis/` | Analysis Eval | Backend Quality nếu API/service contract thay đổi |
 | `alembic/` | Backend + Ingestion | migration ordering, PostgreSQL integration |
 | `frontend-next/` | Frontend CI | route navigation, API mocks, Playwright |
+
+## Full topology contract
+
+Contract test dùng đúng Compose topology thay vì mock repository:
+
+```bash
+cp .env.example .env
+# Đặt các password local trong .env, sau đó:
+docker compose up -d --build --wait \
+  postgres mongodb sftp airflow-db-bootstrap airflow-volume-permissions \
+  airflow-init airflow-api-server airflow-scheduler airflow-dag-processor \
+  api viettelpay-mock
+APP_MONGODB_URL='mongodb://admin:<password>@127.0.0.1:27017/reconciliation?authSource=admin' \
+APP_POSTGRES_URL='postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/reconciliation' \
+uv run pytest tests/test_topology_contract.py --e2e -v --tb=short
+docker compose down -v --remove-orphans
+```
+
+PR chỉ chạy contract này khi thay đổi chạm topology/runtime boundary. Nightly lúc `02:17 UTC` và manual dispatch chạy full matrix để bắt drift giữa Compose services.
 
 ## Airflow-specific verification
 

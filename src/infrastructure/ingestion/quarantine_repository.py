@@ -9,6 +9,7 @@ from pymongo import ReturnDocument
 from src.domain.ingestion.quarantine import (
     IngestionQuarantineRecord,
     QuarantineAction,
+    QuarantinePriority,
     QuarantineQuery,
     QuarantineRetentionPolicy,
     QuarantineResolutionEvent,
@@ -38,6 +39,20 @@ def _bounded_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(value, (int, float, bool)) or value is None:
             bounded[key_text] = value
     return bounded
+
+
+def _bounded_text(value: str, *, max_length: int = 500) -> str:
+    text = value.strip()
+    return text[:max_length] if text else ""
+
+
+def _bounded_action_id(action_id: str | None) -> str | None:
+    if action_id is None:
+        return None
+    text = action_id.strip()
+    if not 1 <= len(text) <= 128:
+        raise ValueError("action_id must be 1 to 128 characters")
+    return text
 
 
 def _bounded_limit(value: int, *, maximum: int = 200) -> int:
@@ -103,16 +118,68 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             event.model_dump(by_alias=True)
         )
 
+    @staticmethod
+    def _query_filters(query: QuarantineQuery, *, now: datetime | None = None) -> dict[str, Any]:
+        filters: dict[str, Any] = {}
+        if query.partner is not None:
+            filters["partner"] = query.partner
+        if query.status is not None:
+            filters["status"] = query.status.value
+        if query.phase is not None:
+            filters["phase"] = query.phase.value
+        if query.error_code is not None:
+            filters["errors.errorCode"] = query.error_code
+        if query.source_file_id is not None:
+            filters["sourceFileId"] = query.source_file_id
+        if query.source_unit_key is not None:
+            filters["sourceUnitKey"] = query.source_unit_key
+        if query.claimed_by is not None:
+            filters["claimedBy"] = query.claimed_by
+        if query.priority is not None:
+            filters["priority"] = query.priority.value
+        if query.overdue is not None:
+            now = now or datetime.now(UTC)
+            if query.overdue:
+                if query.status is None:
+                    filters["status"] = {
+                        "$in": [
+                            QuarantineStatus.PENDING.value,
+                            QuarantineStatus.REPROCESSING.value,
+                        ]
+                    }
+                filters["reviewDueAt"] = {"$lte": now}
+            else:
+                filters["reviewDueAt"] = {"$gt": now}
+        if query.from_date is not None or query.to_date is not None:
+            date_filter: dict[str, datetime] = {}
+            if query.from_date is not None:
+                date_filter["$gte"] = query.from_date
+            if query.to_date is not None:
+                date_filter["$lt"] = query.to_date
+            filters["createdAt"] = date_filter
+        if query.cursor is not None:
+            cursor_date_text, cursor_id = query.cursor.split("|", maxsplit=1)
+            cursor_date = datetime.fromisoformat(cursor_date_text)
+            filters["$or"] = [
+                {"createdAt": {"$gt": cursor_date}},
+                {"createdAt": cursor_date, "_id": {"$gt": cursor_id}},
+            ]
+        return filters
+
     async def claim(
         self,
         record_id: str,
         operator_id: str,
         lease_seconds: int = 900,
+        *,
+        action_id: str | None = None,
+        expected_status: QuarantineStatus = QuarantineStatus.PENDING,
     ) -> IngestionQuarantineRecord | None:
         if lease_seconds < 1:
             raise ValueError("lease_seconds must be at least 1")
+        action_id = _bounded_action_id(action_id)
         current = await self.find_by_id(record_id)
-        if current is None or current.status is not QuarantineStatus.PENDING:
+        if current is None or current.status is not expected_status:
             return None
 
         now = datetime.now(UTC)
@@ -124,10 +191,12 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             actor=operator_id,
             reason="Quarantine record claimed for processing.",
             attempt=current.attempt_count + 1,
+            actionId=action_id,
+            outcome="CLAIMED",
             metadata={"leaseSeconds": lease_seconds},
         )
         raw = await self.collection.find_one_and_update(
-            {"_id": record_id, "status": QuarantineStatus.PENDING.value},
+            {"_id": record_id, "status": expected_status.value},
             {
                 "$set": {
                     "status": QuarantineStatus.REPROCESSING.value,
@@ -135,6 +204,7 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
                     "claimedAt": now,
                     "claimExpiresAt": claim_expires_at,
                     "lastAttemptError": None,
+                    "lastActionId": action_id,
                     "updatedAt": now,
                 },
                 "$inc": {"attemptCount": 1},
@@ -223,41 +293,19 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
     async def find_many(
         self,
         query: QuarantineQuery,
+        *,
+        now: datetime | None = None,
     ) -> tuple[list[IngestionQuarantineRecord], str | None]: ...
 
     async def find_many(
         self,
         query: dict[Any, Any] | QuarantineQuery,
+        *,
+        now: datetime | None = None,
     ) -> list[IngestionQuarantineRecord] | tuple[list[IngestionQuarantineRecord], str | None]:
         if isinstance(query, dict):
             return await super().find_many(query)
-        filters: dict[str, Any] = {}
-        if query.partner is not None:
-            filters["partner"] = query.partner
-        if query.status is not None:
-            filters["status"] = query.status.value
-        if query.phase is not None:
-            filters["phase"] = query.phase.value
-        if query.error_code is not None:
-            filters["errors.errorCode"] = query.error_code
-        if query.source_file_id is not None:
-            filters["sourceFileId"] = query.source_file_id
-        if query.source_unit_key is not None:
-            filters["sourceUnitKey"] = query.source_unit_key
-        if query.from_date is not None or query.to_date is not None:
-            date_filter: dict[str, datetime] = {}
-            if query.from_date is not None:
-                date_filter["$gte"] = query.from_date
-            if query.to_date is not None:
-                date_filter["$lt"] = query.to_date
-            filters["createdAt"] = date_filter
-        if query.cursor is not None:
-            cursor_date_text, cursor_id = query.cursor.split("|", maxsplit=1)
-            cursor_date = datetime.fromisoformat(cursor_date_text)
-            filters["$or"] = [
-                {"createdAt": {"$gt": cursor_date}},
-                {"createdAt": cursor_date, "_id": {"$gt": cursor_id}},
-            ]
+        filters = self._query_filters(query, now=now)
 
         cursor = self.collection.find(filters).sort(
             [("createdAt", 1), ("_id", 1)]
@@ -290,7 +338,11 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
         operator_id: str,
         reason: str,
         metadata: dict[str, Any] | None = None,
+        action_id: str | None = None,
+        outcome: str | None = None,
     ) -> bool:
+        action_id = _bounded_action_id(action_id)
+        reason = _bounded_text(reason)
         current = await self.find_by_id(record_id)
         if (
             current is None
@@ -310,7 +362,9 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             actor=operator_id,
             reason=reason,
             attempt=current.attempt_count,
-            metadata=metadata or {},
+            actionId=action_id,
+            outcome=outcome,
+            metadata=_bounded_metadata(metadata or {}),
         )
         result = await self.collection.update_one(
             {
@@ -325,6 +379,7 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
                     "claimedAt": None,
                     "claimExpiresAt": None,
                     "lastAttemptError": reason,
+                    "lastActionId": action_id,
                     "updatedAt": now,
                 },
                 "$push": {
@@ -342,8 +397,11 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
         action: QuarantineAction,
         reason: str,
         metadata: dict[str, Any] | None = None,
+        action_id: str | None = None,
+        outcome: str | None = None,
     ) -> bool:
         assert_quarantine_transition(QuarantineStatus.REPROCESSING, target)
+        action_id = _bounded_action_id(action_id)
         current = await self.find_by_id(record_id)
         if (
             current is None
@@ -358,10 +416,13 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             toStatus=target,
             action=action,
             actor=operator_id,
-            reason=reason,
+            reason=_bounded_text(reason),
             attempt=current.attempt_count,
-            metadata=metadata or {},
+            actionId=action_id,
+            outcome=outcome,
+            metadata=_bounded_metadata(metadata or {}),
         )
+        bounded_metadata = _bounded_metadata(metadata or {})
         result = await self.collection.update_one(
             {
                 "_id": record_id,
@@ -375,8 +436,121 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
                     "claimedAt": None,
                     "claimExpiresAt": None,
                     "lastAttemptError": None,
-                    "resolutionMetadata": metadata or {},
+                    "resolutionMetadata": bounded_metadata,
                     "retentionUntil": retention_until,
+                    "lastActionId": action_id,
+                    "updatedAt": now,
+                },
+                "$push": {
+                    "resolutionHistory": self._event_payload(event),
+                },
+            },
+        )
+        return result.modified_count == 1
+
+    async def find_action(
+        self,
+        record_id: str,
+        action_id: str,
+    ) -> QuarantineResolutionEvent | None:
+        action_id = _bounded_action_id(action_id)
+        raw = await self.collection.find_one(
+            {"_id": record_id, "resolutionHistory.actionId": action_id}
+        )
+        if raw is None:
+            return None
+        record = self._from_mongo(raw)
+        return next(
+            (
+                event
+                for event in record.resolution_history
+                if event.action_id == action_id
+            ),
+            None,
+        )
+
+    async def summarize(
+        self,
+        query: QuarantineQuery,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, int]:
+        base = self._query_filters(query, now=now)
+
+        async def count(extra: dict[str, Any] | None = None) -> int:
+            filters = {**base, **(extra or {})}
+            return int(await self.collection.count_documents(filters))
+
+        now = now or datetime.now(UTC)
+        return {
+            "total": await count(),
+            "pending": await count({"status": QuarantineStatus.PENDING.value}),
+            "reprocessing": await count({"status": QuarantineStatus.REPROCESSING.value}),
+            "resolved": await count({"status": QuarantineStatus.RESOLVED.value}),
+            "rejected": await count({"status": QuarantineStatus.REJECTED.value}),
+            "overdue": await count(
+                {
+                    "status": {
+                        "$in": [
+                            QuarantineStatus.PENDING.value,
+                            QuarantineStatus.REPROCESSING.value,
+                        ]
+                    },
+                    "reviewDueAt": {"$lte": now},
+                }
+            ),
+        }
+
+    async def escalate(
+        self,
+        record_id: str,
+        operator_id: str,
+        reason: str,
+        *,
+        action_id: str | None = None,
+        expected_status: QuarantineStatus | None = None,
+        outcome: str = "ESCALATED",
+    ) -> bool:
+        action_id = _bounded_action_id(action_id)
+        current = await self.find_by_id(record_id)
+        if current is None:
+            return False
+        if current.status not in {
+            QuarantineStatus.PENDING,
+            QuarantineStatus.REPROCESSING,
+        }:
+            return False
+        if expected_status is not None and current.status is not expected_status:
+            return False
+        if current.status is QuarantineStatus.REPROCESSING and current.claimed_by != operator_id:
+            return False
+
+        now = datetime.now(UTC)
+        target_level = min(current.escalation_level + 1, 3)
+        bounded_reason = _bounded_text(reason)
+        event = QuarantineResolutionEvent(
+            fromStatus=current.status,
+            toStatus=current.status,
+            action=QuarantineAction.ESCALATE,
+            actor=operator_id,
+            reason=bounded_reason,
+            attempt=current.attempt_count,
+            actionId=action_id,
+            outcome=outcome,
+            metadata={"escalationLevel": target_level},
+        )
+        filters: dict[str, Any] = {"_id": record_id, "status": current.status.value}
+        if current.status is QuarantineStatus.REPROCESSING:
+            filters["claimedBy"] = operator_id
+        result = await self.collection.update_one(
+            filters,
+            {
+                "$set": {
+                    "priority": QuarantinePriority.HIGH.value,
+                    "escalationLevel": target_level,
+                    "escalatedAt": now,
+                    "escalatedBy": operator_id,
+                    "lastActionId": action_id,
                     "updatedAt": now,
                 },
                 "$push": {

@@ -1,11 +1,11 @@
 """Domain contract for rejected ingestion rows."""
 
 from enum import StrEnum
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class QuarantineStatus(StrEnum):
@@ -19,6 +19,12 @@ class QuarantineAction(StrEnum):
     REPROCESS = "REPROCESS"
     ACCEPT_EXISTING = "ACCEPT_EXISTING"
     REJECT = "REJECT"
+    ESCALATE = "ESCALATE"
+
+
+class QuarantinePriority(StrEnum):
+    NORMAL = "NORMAL"
+    HIGH = "HIGH"
 
 
 class QuarantineTransitionError(ValueError):
@@ -88,8 +94,10 @@ class QuarantineResolutionEvent(BaseModel):
     to_status: QuarantineStatus = Field(alias="toStatus")
     action: QuarantineAction
     actor: str
-    reason: str
+    reason: str = Field(max_length=500)
     attempt: int = Field(ge=1)
+    action_id: str | None = Field(default=None, alias="actionId", min_length=1, max_length=128)
+    outcome: str | None = Field(default=None, max_length=128)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -105,6 +113,9 @@ class QuarantineQuery(BaseModel):
     error_code: str | None = Field(default=None, alias="errorCode")
     source_file_id: str | None = Field(default=None, alias="sourceFileId")
     source_unit_key: str | None = Field(default=None, alias="sourceUnitKey")
+    claimed_by: str | None = Field(default=None, alias="claimedBy")
+    priority: QuarantinePriority | None = None
+    overdue: bool | None = None
     from_date: datetime | None = Field(default=None, alias="fromDate")
     to_date: datetime | None = Field(default=None, alias="toDate")
     limit: int = Field(default=100, ge=1, le=200)
@@ -131,6 +142,12 @@ class IngestionQuarantineRecord(BaseModel):
     severity: QuarantineSeverity = QuarantineSeverity.RECORD
     config_version: str | None = Field(default=None, alias="configVersion")
     status: QuarantineStatus = QuarantineStatus.PENDING
+    priority: QuarantinePriority = QuarantinePriority.NORMAL
+    review_due_at: datetime | None = Field(default=None, alias="reviewDueAt")
+    escalation_level: int = Field(default=0, alias="escalationLevel", ge=0, le=3)
+    escalated_at: datetime | None = Field(default=None, alias="escalatedAt")
+    escalated_by: str | None = Field(default=None, alias="escalatedBy")
+    last_action_id: str | None = Field(default=None, alias="lastActionId", min_length=1, max_length=128)
     attempt_count: int = Field(default=1, alias="attemptCount", ge=1)
     expires_at: datetime | None = Field(default=None, alias="expiresAt")
     claimed_by: str | None = Field(default=None, alias="claimedBy")
@@ -145,6 +162,27 @@ class IngestionQuarantineRecord(BaseModel):
     retention_until: datetime | None = Field(default=None, alias="retentionUntil")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), alias="createdAt")
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC), alias="updatedAt")
+
+    @model_validator(mode="after")
+    def _set_operator_defaults(self) -> "IngestionQuarantineRecord":
+        if self.severity is QuarantineSeverity.FATAL or any(
+            isinstance(error, dict)
+            and (
+                error.get("errorCode")
+                or error.get("error_code")
+                or error.get("code")
+            )
+            == "CONFLICTING_DUPLICATE"
+            for error in self.errors
+        ):
+            self.priority = QuarantinePriority.HIGH
+        if self.review_due_at is None:
+            from src.config.settings import settings
+
+            self.review_due_at = self.created_at + timedelta(
+                hours=settings.ingestion_quarantine_review_sla_hours
+            )
+        return self
 
 
 def sanitize_raw_row(value: Any, *, max_length: int = 512) -> Any:

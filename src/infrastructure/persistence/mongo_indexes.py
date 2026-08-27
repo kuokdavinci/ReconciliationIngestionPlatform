@@ -82,6 +82,19 @@ INDEXES: dict[str, list[IndexModel]] = {
             [("status", ASCENDING), ("retentionUntil", ASCENDING)],
             name="idx_quarantine_status_retention",
         ),
+        IndexModel(
+            [("priority", ASCENDING), ("status", ASCENDING), ("reviewDueAt", ASCENDING)],
+            name="idx_quarantine_priority_status_due",
+        ),
+        IndexModel(
+            [("claimedBy", ASCENDING), ("status", ASCENDING)],
+            name="idx_quarantine_claimed_status",
+        ),
+        IndexModel(
+            [("resolutionHistory.actionId", ASCENDING)],
+            sparse=True,
+            name="idx_quarantine_resolution_action_id",
+        ),
     ],
     "reconciliation_mapping_config": [
         IndexModel(

@@ -141,6 +141,32 @@ class TestMappingConfigIndexes:
         assert len(compound_indexes) >= 1, "No compound index found"
 
 
+class TestQuarantineIndexes:
+    """Tests for operator quarantine queue indexes."""
+
+    def test_operator_queue_indexes_are_declared(self):
+        from src.infrastructure.persistence.mongo_indexes import INDEXES
+
+        indexes = INDEXES["ingestion_quarantine_record"]
+
+        assert any(
+            list(idx.document["key"]) == ["priority", "status", "reviewDueAt"]
+            and idx.document["name"] == "idx_quarantine_priority_status_due"
+            for idx in indexes
+        )
+        assert any(
+            list(idx.document["key"]) == ["claimedBy", "status"]
+            and idx.document["name"] == "idx_quarantine_claimed_status"
+            for idx in indexes
+        )
+        assert any(
+            list(idx.document["key"]) == ["resolutionHistory.actionId"]
+            and idx.document["name"] == "idx_quarantine_resolution_action_id"
+            and idx.document.get("sparse") is True
+            for idx in indexes
+        )
+
+
 class TestApplyIndexes:
     """Tests for apply_indexes function."""
 

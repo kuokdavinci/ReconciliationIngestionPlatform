@@ -10,6 +10,7 @@ from src.domain.ingestion.quarantine import (
     QuarantinePhase,
     QuarantineStatus,
 )
+from src.domain.ingestion import quarantine
 from src.infrastructure.ingestion.quarantine_repository import (
     IngestionQuarantineRepository,
 )
@@ -85,6 +86,27 @@ async def test_claim_atomically_moves_pending_record_to_reprocessing():
     assert update["$set"]["status"] == QuarantineStatus.REPROCESSING.value
     assert update["$set"]["claimExpiresAt"] is not None
     assert update["$inc"] == {"attemptCount": 1}
+    assert update["$set"]["lastActionId"] is None
+
+
+@pytest.mark.asyncio
+async def test_claim_records_action_metadata_when_action_id_is_supplied():
+    record, pending = _record()
+    _, reprocessing = _record(QuarantineStatus.REPROCESSING)
+    reprocessing["_id"] = str(record.id)
+    reprocessing["claimedBy"] = "operator-1"
+    reprocessing["lastActionId"] = "act-claim"
+    repository, collection = _repository()
+    collection.find_one = AsyncMock(return_value=pending)
+    collection.find_one_and_update = AsyncMock(return_value=reprocessing)
+
+    await repository.claim(str(record.id), "operator-1", lease_seconds=120, action_id="act-claim")
+
+    _, update = collection.find_one_and_update.call_args.args[:2]
+    event = update["$push"]["resolutionHistory"]
+    assert update["$set"]["lastActionId"] == "act-claim"
+    assert event["actionId"] == "act-claim"
+    assert event["outcome"] == "CLAIMED"
 
 
 @pytest.mark.asyncio
@@ -128,7 +150,9 @@ async def test_resolve_requires_reprocessing_and_operator_claim():
     assert query["status"] == QuarantineStatus.REPROCESSING.value
     assert query["claimedBy"] == "operator-1"
     assert update["$set"]["status"] == QuarantineStatus.RESOLVED.value
-    assert update["$push"]["resolutionHistory"]["action"] == "REPROCESS"
+    event = update["$push"]["resolutionHistory"]
+    assert event["action"] == "REPROCESS"
+    assert event["metadata"] == {"source": "test"}
 
 
 @pytest.mark.asyncio
@@ -156,6 +180,57 @@ async def test_release_for_retry_clears_claim_and_records_reason():
     assert update["$set"]["status"] == QuarantineStatus.PENDING.value
     assert update["$set"]["claimedBy"] is None
     assert update["$set"]["lastAttemptError"] == "Transient database timeout."
+
+
+@pytest.mark.asyncio
+async def test_retry_and_resolve_cas_writes_bound_action_metadata():
+    record, reprocessing = _record(QuarantineStatus.REPROCESSING)
+    reprocessing["_id"] = str(record.id)
+    reprocessing["claimedBy"] = "operator-1"
+    repository, collection = _repository()
+    collection.find_one = AsyncMock(return_value=reprocessing)
+    collection.update_one = AsyncMock(return_value=SimpleNamespace(modified_count=1))
+
+    released = await repository.release_for_retry(
+        str(record.id),
+        "operator-1",
+        "x" * 600,
+        {"error": "raw stack", "retryable": True},
+        action_id="act-retry",
+        outcome="VALIDATION_FAILED",
+    )
+
+    assert released is True
+    retry_query, retry_update = collection.update_one.call_args.args
+    retry_event = retry_update["$push"]["resolutionHistory"]
+    assert retry_query["status"] == QuarantineStatus.REPROCESSING.value
+    assert retry_query["claimedBy"] == "operator-1"
+    assert retry_update["$set"]["lastActionId"] == "act-retry"
+    assert retry_update["$set"]["lastAttemptError"] == "x" * 500
+    assert retry_event["actionId"] == "act-retry"
+    assert retry_event["outcome"] == "VALIDATION_FAILED"
+    assert retry_event["reason"] == "x" * 500
+    assert retry_event["metadata"] == {"retryable": True}
+
+    collection.update_one.reset_mock()
+    resolved = await repository.resolve(
+        str(record.id),
+        QuarantineStatus.RESOLVED,
+        "operator-1",
+        QuarantineAction.REPROCESS,
+        "Resolved",
+        {"existingFingerprint": "secret-fingerprint", "origin": "SOURCE"},
+        action_id="act-resolve",
+        outcome="RESOLVED",
+    )
+
+    assert resolved is True
+    _, resolve_update = collection.update_one.call_args.args
+    resolve_event = resolve_update["$push"]["resolutionHistory"]
+    assert resolve_update["$set"]["lastActionId"] == "act-resolve"
+    assert resolve_update["$set"]["resolutionMetadata"] == {"origin": "SOURCE"}
+    assert resolve_event["actionId"] == "act-resolve"
+    assert resolve_event["outcome"] == "RESOLVED"
 
 
 @pytest.mark.asyncio
@@ -227,3 +302,115 @@ async def test_find_many_builds_structured_filters_and_stable_cursor():
     assert cursor.limit_value == 2
     assert len(records) == 2
     assert next_cursor is not None
+
+
+@pytest.mark.asyncio
+async def test_find_many_adds_operator_priority_and_overdue_filters():
+    priority_model = getattr(quarantine, "QuarantinePriority", None)
+    query_model = getattr(quarantine, "QuarantineQuery", None)
+    assert priority_model is not None
+    assert query_model is not None
+
+    repository, collection = _repository()
+    collection.find.return_value = _AsyncCursor([])
+    now = datetime(2026, 8, 27, tzinfo=UTC)
+
+    await repository.find_many(
+        query_model(
+            claimedBy="operator-1",
+            priority=priority_model.HIGH,
+            overdue=True,
+            limit=10,
+        ),
+        now=now,
+    )
+
+    query = collection.find.call_args.args[0]
+    assert query["claimedBy"] == "operator-1"
+    assert query["priority"] == "HIGH"
+    assert query["status"]["$in"] == ["PENDING", "REPROCESSING"]
+    assert query["reviewDueAt"] == {"$lte": now}
+
+
+@pytest.mark.asyncio
+async def test_find_action_returns_matching_resolution_event():
+    record, raw = _record()
+    raw["resolutionHistory"] = [
+        {
+            "eventId": "11111111-1111-1111-1111-111111111111",
+            "fromStatus": "PENDING",
+            "toStatus": "REPROCESSING",
+            "action": "REPROCESS",
+            "actor": "operator-1",
+            "reason": "claimed",
+            "attempt": 2,
+            "timestamp": datetime(2026, 8, 27, tzinfo=UTC),
+            "metadata": {},
+            "actionId": "act-1",
+            "outcome": "CLAIMED",
+        }
+    ]
+    repository, collection = _repository()
+    collection.find_one = AsyncMock(return_value=raw)
+
+    event = await repository.find_action(str(record.id), "act-1")
+
+    assert event is not None
+    assert event.action_id == "act-1"
+    assert event.outcome == "CLAIMED"
+    query = collection.find_one.call_args.args[0]
+    assert query == {"_id": str(record.id), "resolutionHistory.actionId": "act-1"}
+
+
+@pytest.mark.asyncio
+async def test_summarize_counts_filtered_queue_and_overdue_records():
+    query_model = getattr(quarantine, "QuarantineQuery", None)
+    assert query_model is not None
+
+    repository, collection = _repository()
+    collection.count_documents = AsyncMock(side_effect=[5, 2, 1, 3, 4, 2])
+    now = datetime(2026, 8, 27, tzinfo=UTC)
+
+    summary = await repository.summarize(query_model(partner="MOMO"), now=now)
+
+    assert summary == {
+        "total": 5,
+        "pending": 2,
+        "reprocessing": 1,
+        "resolved": 3,
+        "rejected": 4,
+        "overdue": 2,
+    }
+    overdue_query = collection.count_documents.call_args_list[-1].args[0]
+    assert overdue_query["status"]["$in"] == ["PENDING", "REPROCESSING"]
+    assert overdue_query["reviewDueAt"] == {"$lte": now}
+
+
+@pytest.mark.asyncio
+async def test_escalate_caps_level_sets_high_priority_and_records_action():
+    record, pending = _record()
+    pending["escalationLevel"] = 2
+    pending["reviewDueAt"] = datetime(2026, 8, 26, tzinfo=UTC)
+    repository, collection = _repository()
+    collection.find_one = AsyncMock(return_value=pending)
+    collection.update_one = AsyncMock(return_value=SimpleNamespace(modified_count=1))
+
+    escalated = await repository.escalate(
+        str(record.id),
+        "operator-1",
+        "Needs senior review",
+        action_id="act-escalate",
+        expected_status=QuarantineStatus.PENDING,
+    )
+
+    assert escalated is True
+    query, update = collection.update_one.call_args.args
+    event = update["$push"]["resolutionHistory"]
+    assert query == {"_id": str(record.id), "status": "PENDING"}
+    assert update["$set"]["priority"] == "HIGH"
+    assert update["$set"]["escalationLevel"] == 3
+    assert update["$set"]["escalatedBy"] == "operator-1"
+    assert update["$set"]["lastActionId"] == "act-escalate"
+    assert event["action"] == "ESCALATE"
+    assert event["actionId"] == "act-escalate"
+    assert event["outcome"] == "ESCALATED"

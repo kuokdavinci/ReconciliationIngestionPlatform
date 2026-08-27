@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     ingest_write_workers: int = 2
     ingest_ordered_insert: bool = False
     ingestion_quarantine_retention_days: int = Field(default=30, ge=1, le=3650)
+    ingestion_quarantine_review_sla_hours: int = Field(default=24, ge=1, le=8760)
 
     # Reconciliation Performance Tuning Configurations
     recon_partner_batch_size: int = 10000

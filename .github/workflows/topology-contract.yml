@@ -45,6 +45,7 @@ jobs:
           AIRFLOW_DB_PASSWORD: ci-airflow-db-password
           AIRFLOW_ADMIN_USERNAME: airflow
           AIRFLOW_ADMIN_PASSWORD: ci-airflow-admin-password
+          AIRFLOW_DAGS_ARE_PAUSED_AT_CREATION: "false"
           AIRFLOW_JWT_SECRET: ci-airflow-jwt-secret-012345678901234567890123456789012345678901234567890123456789
           SFTP_PASS: ci-sftp-password
         run: >-

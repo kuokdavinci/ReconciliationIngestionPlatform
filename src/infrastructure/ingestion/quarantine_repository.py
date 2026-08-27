@@ -46,6 +46,14 @@ def _bounded_text(value: str, *, max_length: int = 500) -> str:
     return text[:max_length] if text else ""
 
 
+@overload
+def _bounded_action_id(action_id: str) -> str: ...
+
+
+@overload
+def _bounded_action_id(action_id: None) -> None: ...
+
+
 def _bounded_action_id(action_id: str | None) -> str | None:
     if action_id is None:
         return None

@@ -2,13 +2,10 @@
 
 Covers:
 - MULTIPLE_MISMATCH and STATUS_MISMATCH status handling
-- MongoDB camelCase/snake_case field conversion
 - Cross-partner aggregation with mixed statuses
 - Large volume scenarios with diverse amount ranges
 - LLM response parsing edge cases (markdown, nested JSON, malformed)
-- Severity scaling boundary conditions
 - Amount range boundary conditions (0, 100k, 1M, inf)
-- Daily report with multiple partners and partial failures
 - Rule-based pre-processing for all focus types with complex data
 - Edge cases in metrics, grouping, and insights orchestration
 """
@@ -17,7 +14,7 @@ import json
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -40,7 +37,6 @@ from src.analysis.insights import (
     _rule_based_fallback,
     get_summary,
     get_discrepancies,
-    _query_reconciliation_results,
 )
 from src.core.enums import ReconciliationStatus
 
@@ -66,7 +62,7 @@ def make_result(
     return r
 
 
-def make_mongo_doc(
+def make_result_doc(
     status: str = "MATCHED",
     partner: str = "MOMO",
     date: str = "2024-07-07",
@@ -74,7 +70,7 @@ def make_mongo_doc(
     internal_amount: str | None = "100000",
     camel_case: bool = False,
 ) -> dict[str, Any]:
-    """Create a mock MongoDB document with camelCase or snake_case fields."""
+    """Create a result-shaped test record in either field naming style."""
     doc: dict[str, Any] = {"partner": partner, "date": date}
     if camel_case:
         if partner_amount is not None:
@@ -252,101 +248,6 @@ class TestStatusMismatchAmountHandling:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 3: MongoDB camelCase/snake_case field conversion
-# ---------------------------------------------------------------------------
-
-class TestMongoDBFieldConversion:
-    """Test _query_reconciliation_results handles both field naming conventions."""
-
-    @pytest.mark.asyncio
-    async def test_camel_case_fields_converted_correctly(self) -> None:
-        """camelCase fields should be read and converted to snake_case attributes."""
-        mock_doc = make_mongo_doc(
-            status="AMOUNT_MISMATCH",
-            partner_amount="150000",
-            internal_amount="140000",
-            camel_case=True,
-        )
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=[mock_doc])
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
-
-        results = await _query_reconciliation_results(mock_collection, "MOMO", "2024-07-07")
-
-        assert len(results) == 1
-        assert results[0].partner_amount == Decimal("150000")
-        assert results[0].internal_amount == Decimal("140000")
-        assert results[0].reconciliation_status.value == "AMOUNT_MISMATCH"
-
-    @pytest.mark.asyncio
-    async def test_snake_case_fields_converted_correctly(self) -> None:
-        """snake_case fields should be read correctly."""
-        mock_doc = make_mongo_doc(
-            status="MISSING_INTERNAL",
-            partner_amount="0",
-            internal_amount=None,
-            camel_case=False,
-        )
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=[mock_doc])
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
-
-        results = await _query_reconciliation_results(mock_collection, "MOMO", "2024-07-07")
-
-        assert len(results) == 1
-        assert results[0].partner_amount == Decimal("0")
-        assert results[0].internal_amount is None
-        assert results[0].reconciliation_status.value == "MISSING_INTERNAL"
-
-    @pytest.mark.asyncio
-    async def test_camel_case_takes_precedence_when_both_present(self) -> None:
-        """When both camelCase and snake_case exist, camelCase should be preferred."""
-        mock_doc = {
-            "partner": "MOMO",
-            "date": "2024-07-07",
-            "partnerAmount": Decimal("200000"),
-            "partner_amount": Decimal("100000"),  # Should be ignored
-            "internalAmount": Decimal("190000"),
-            "internal_amount": Decimal("90000"),  # Should be ignored
-            "reconciliationStatus": "AMOUNT_MISMATCH",
-            "reconciliation_status": "MATCHED",  # Should be ignored
-        }
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=[mock_doc])
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
-
-        results = await _query_reconciliation_results(mock_collection, "MOMO", "2024-07-07")
-
-        assert results[0].partner_amount == Decimal("200000")
-        assert results[0].internal_amount == Decimal("190000")
-        assert results[0].reconciliation_status.value == "AMOUNT_MISMATCH"
-
-    @pytest.mark.asyncio
-    async def test_mixed_documents_in_same_query(self) -> None:
-        """Query should handle mix of camelCase and snake_case documents."""
-        docs = [
-            make_mongo_doc(status="MATCHED", partner_amount="100000", internal_amount="100000", camel_case=True),
-            make_mongo_doc(status="AMOUNT_MISMATCH", partner_amount="50000", internal_amount="45000", camel_case=False),
-            make_mongo_doc(status="MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
-        ]
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=docs)
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
-
-        results = await _query_reconciliation_results(mock_collection, "MOMO", "2024-07-07")
-
-        assert len(results) == 3
-        # All should have correct amounts regardless of source format
-        assert results[0].partner_amount == Decimal("100000")
-        assert results[1].partner_amount == Decimal("50000")
-        assert results[2].partner_amount is None
-
-
-# ---------------------------------------------------------------------------
 # Scenario 4: Cross-partner aggregation
 # ---------------------------------------------------------------------------
 
@@ -391,60 +292,6 @@ class TestCrossPartnerAggregation:
             "AMOUNT_MISMATCH": 1,
             "MISSING_INTERNAL": 1,
         }
-
-    @pytest.mark.asyncio
-    async def test_daily_report_aggregates_multiple_partners(self) -> None:
-        """DailyReporter should aggregate stats across partners."""
-        from src.analysis.reporter import DailyReporter
-
-        mock_collection = MagicMock()
-        mock_collection.distinct = AsyncMock(return_value=["MOMO", "VIETTEL", "ZALOPAY"])
-
-        summaries = {
-            "MOMO": {
-                "partner": "MOMO",
-                "date": "2024-07-07",
-                "summary_metrics": {"total_transactions": 100, "matched": 95, "mismatch_rate": 5.0, "total_amount_mismatch": 500000, "by_status": {"MATCHED": 95, "AMOUNT_MISMATCH": 5}},
-                "grouped_stats": [],
-                "key_findings": ["MOMO finding"],
-                "generated_at": "2024-07-07",
-                "llm_status": "success",
-            },
-            "VIETTEL": {
-                "partner": "VIETTEL",
-                "date": "2024-07-07",
-                "summary_metrics": {"total_transactions": 50, "matched": 50, "mismatch_rate": 0.0, "total_amount_mismatch": 0, "by_status": {"MATCHED": 50}},
-                "grouped_stats": [],
-                "key_findings": [],
-                "generated_at": "2024-07-07",
-                "llm_status": "success",
-            },
-            "ZALOPAY": {
-                "partner": "ZALOPAY",
-                "date": "2024-07-07",
-                "summary_metrics": {"total_transactions": 200, "matched": 180, "mismatch_rate": 10.0, "total_amount_mismatch": 1000000, "by_status": {"MATCHED": 180, "MISSING_INTERNAL": 20}},
-                "grouped_stats": [],
-                "key_findings": ["ZaloPay finding"],
-                "generated_at": "2024-07-07",
-                "llm_status": "success",
-            },
-        }
-
-        async def mock_get_summary(partner, **kwargs):
-            return summaries[partner]
-
-        with patch("src.analysis.insights.get_summary", side_effect=mock_get_summary):
-            reporter = DailyReporter(mock_collection, MockLLMProvider())
-            report = await reporter.generate_report("2024-07-07")
-
-        assert len(report["partners"]) == 3
-        assert report["global_stats"]["total_volume"] == 350  # 100 + 50 + 200
-        # Global mismatch rate should be weighted average
-        total_mismatch_txns = 5 + 0 + 20  # 25
-        total_txns = 350
-        expected_rate = (total_mismatch_txns / total_txns) * 100
-        assert report["global_stats"]["total_mismatch_rate"] == pytest.approx(expected_rate, rel=1e-2)
-
 
 # ---------------------------------------------------------------------------
 # Scenario 5: Large volume scenarios with diverse amount ranges
@@ -730,40 +577,6 @@ class TestSeverityScalingBoundaries:
             if anomaly_result:
                 assert anomaly_result.severity == expected_severity, f"Count {count} should be {expected_severity}, got {anomaly_result.severity}"
 
-    def test_alerter_severity_scaling_boundaries(self) -> None:
-        """Test ThresholdAlerter severity scaling at boundaries."""
-        from src.analysis.alerter import ThresholdAlerter
-        from src.analysis.config import AnalysisConfig
-
-        alerter = ThresholdAlerter(AnalysisConfig(alert_mismatch_rate_threshold=5.0))
-
-        # ratio = rate / threshold
-        # ratio > 4 → critical, > 2 → high, > 1.5 → medium, else → low
-        cases = [
-            (5.0, "low"),       # ratio = 1.0
-            (7.5, "low"),       # ratio = 1.5 (not > 1.5)
-            (7.51, "medium"),   # ratio > 1.5
-            (10.0, "medium"),   # ratio = 2.0 (not > 2, but > 1.5)
-            (10.01, "high"),    # ratio > 2
-            (20.0, "high"),     # ratio = 4.0 (not > 4, but > 2)
-            (20.01, "critical"),  # ratio > 4
-        ]
-
-        for rate, expected_severity in cases:
-            summary = SummaryResult(
-                partner="MOMO",
-                date="2024-07-07",
-                total_transactions=100,
-                matched=int(100 - rate),
-                mismatch_rate=rate,
-                total_amount_mismatch=0,
-                by_status={"MATCHED": int(100 - rate), "AMOUNT_MISMATCH": int(rate)},
-            )
-            alerts = alerter.check_thresholds(summary)
-            if alerts:
-                assert alerts[0].severity == expected_severity, f"Rate {rate} should be {expected_severity}, got {alerts[0].severity}"
-
-
 # ---------------------------------------------------------------------------
 # Scenario 8: Amount range boundary conditions
 # ---------------------------------------------------------------------------
@@ -945,47 +758,67 @@ class TestRuleBasedPreProcessingAllFocusTypes:
 # Scenario 10: End-to-end orchestration with diverse data
 # ---------------------------------------------------------------------------
 
-def _make_mock_collection(
+def _make_result_repository(
     docs: list[dict],
     aggregate_results: list[dict] | None = None,
 ) -> MagicMock:
-    """Create a mock collection that handles both find().limit() and aggregate().
+    """Create a small PostgreSQL repository double for analysis tests.
 
     Args:
-        docs: Documents returned by find().to_list() and find().limit().to_list()
-        aggregate_results: Documents yielded by aggregate() async iteration.
-            If None, counts from docs are used to synthesize aggregate results.
+        docs: Result-shaped records used by the analysis scenarios.
+        aggregate_results: Optional precomputed status/count rows.
 
     Returns:
-        MagicMock configured for both find and aggregate paths.
+        MagicMock configured for the repository query methods.
     """
-    # Cursor that supports both .to_list() and .limit() returning self
-    mock_cursor = MagicMock()
-    mock_cursor.to_list = AsyncMock(return_value=docs)
-    mock_cursor.limit = MagicMock(return_value=mock_cursor)
-
-    mock_collection = MagicMock()
-    mock_collection.find = MagicMock(return_value=mock_cursor)
-
+    records = [
+        make_result(
+            status=str(d.get("reconciliationStatus") or d.get("reconciliation_status", "MATCHED")),
+            partner=str(d.get("partner", "MOMO")),
+            date=str(d.get("date", "2024-07-07")),
+            partner_amount=d.get("partnerAmount", d.get("partner_amount")),
+            internal_amount=d.get("internalAmount", d.get("internal_amount")),
+        )
+        for d in docs
+    ]
     if aggregate_results is None:
-        # Auto-synthesize aggregate results from docs
         from collections import Counter
+
         status_counts: Counter = Counter()
-        for d in docs:
-            status = d.get("reconciliationStatus") or d.get("reconciliation_status", "MATCHED")
-            status_counts[status] += 1
-        aggregate_results = [
-            {"_id": s, "count": c, "mismatch_amount": 0.0}
-            for s, c in status_counts.items()
-        ]
+        for record in records:
+            status_counts[record.reconciliation_status.value] += 1
+        aggregate_results = [{"_id": status, "count": count} for status, count in status_counts.items()]
 
-    async def _aggregate_iter():
-        for doc in aggregate_results:
-            yield doc
+    repository = MagicMock()
+    repository.get_summary_metrics = AsyncMock(
+        return_value={
+            "by_status": {str(row["_id"]): int(row["count"]) for row in aggregate_results},
+            "total_amount_mismatch": sum(float(row.get("mismatch_amount") or 0) for row in aggregate_results),
+        }
+    )
 
-    mock_collection.aggregate = MagicMock(return_value=_aggregate_iter())
+    async def find_error_samples_by_partner_and_date(
+        partner: str,
+        date: str,
+        *,
+        statuses: list[ReconciliationStatus],
+        per_status_limit: int,
+        **_kwargs: Any,
+    ) -> list[SimpleNamespace]:
+        selected = []
+        for status in statuses:
+            matches = [
+                record
+                for record in records
+                if record.partner == partner
+                and record.date == date
+                and record.reconciliation_status is status
+            ]
+            selected.extend(matches[:per_status_limit])
+        return selected
 
-    return mock_collection
+    repository.find_error_samples_by_partner_and_date = find_error_samples_by_partner_and_date
+    return repository
 
 
 class TestEndToEndOrchestration:
@@ -1002,12 +835,12 @@ class TestEndToEndOrchestration:
         provider = MockLLMProvider(response=llm_response)
 
         docs = [
-            make_mongo_doc("MATCHED", partner_amount="100000", internal_amount="100000", camel_case=True),
-            make_mongo_doc("MATCHED", partner_amount="500000", internal_amount="500000", camel_case=True),
-            make_mongo_doc("AMOUNT_MISMATCH", partner_amount="100000", internal_amount="90000", camel_case=False),
-            make_mongo_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
-            make_mongo_doc("MISSING_PARTNER", partner_amount=None, internal_amount=None, camel_case=False),
-            make_mongo_doc("STATUS_MISMATCH", partner_amount="200000", internal_amount="200000", camel_case=True),
+            make_result_doc("MATCHED", partner_amount="100000", internal_amount="100000", camel_case=True),
+            make_result_doc("MATCHED", partner_amount="500000", internal_amount="500000", camel_case=True),
+            make_result_doc("AMOUNT_MISMATCH", partner_amount="100000", internal_amount="90000", camel_case=False),
+            make_result_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
+            make_result_doc("MISSING_PARTNER", partner_amount=None, internal_amount=None, camel_case=False),
+            make_result_doc("STATUS_MISMATCH", partner_amount="200000", internal_amount="200000", camel_case=True),
         ]
 
         aggregate_results = [
@@ -1017,7 +850,7 @@ class TestEndToEndOrchestration:
             {"_id": "MISSING_PARTNER", "count": 1, "mismatch_amount": 0.0},
             {"_id": "STATUS_MISMATCH", "count": 1, "mismatch_amount": 0.0},
         ]
-        mock_collection = _make_mock_collection(docs, aggregate_results)
+        mock_collection = _make_result_repository(docs, aggregate_results)
 
         result = await get_summary("MOMO", "2024-07-07", mock_collection, provider)
 
@@ -1045,13 +878,13 @@ class TestEndToEndOrchestration:
         provider = MockLLMProvider(response=llm_response)
 
         docs = [
-            make_mongo_doc("MATCHED", partner_amount="100000", internal_amount="100000", camel_case=True),
-            make_mongo_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
-            make_mongo_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
-            make_mongo_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
+            make_result_doc("MATCHED", partner_amount="100000", internal_amount="100000", camel_case=True),
+            make_result_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
+            make_result_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
+            make_result_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
         ]
 
-        mock_collection = _make_mock_collection(docs)
+        mock_collection = _make_result_repository(docs)
 
         results = await get_discrepancies("MOMO", "2024-07-07", "operational", mock_collection, provider)
 
@@ -1069,12 +902,12 @@ class TestEndToEndOrchestration:
         provider = MockLLMProvider(response=llm_response)
 
         docs = [
-            make_mongo_doc("AMOUNT_MISMATCH", partner_amount="100000", internal_amount="80000", camel_case=True),
-            make_mongo_doc("AMOUNT_MISMATCH", partner_amount="200000", internal_amount="160000", camel_case=True),
-            make_mongo_doc("MATCHED", partner_amount="50000", internal_amount="50000", camel_case=True),
+            make_result_doc("AMOUNT_MISMATCH", partner_amount="100000", internal_amount="80000", camel_case=True),
+            make_result_doc("AMOUNT_MISMATCH", partner_amount="200000", internal_amount="160000", camel_case=True),
+            make_result_doc("MATCHED", partner_amount="50000", internal_amount="50000", camel_case=True),
         ]
 
-        mock_collection = _make_mock_collection(docs)
+        mock_collection = _make_result_repository(docs)
 
         results = await get_discrepancies("MOMO", "2024-07-07", "partner", mock_collection, provider)
 
@@ -1091,13 +924,13 @@ class TestEndToEndOrchestration:
         provider = MockLLMProvider(response=llm_response)
 
         docs = [
-            make_mongo_doc("AMOUNT_MISMATCH", partner_amount="100000", internal_amount="90000", camel_case=True),
-            make_mongo_doc("AMOUNT_MISMATCH", partner_amount="200000", internal_amount="180000", camel_case=True),
-            make_mongo_doc("STATUS_MISMATCH", partner_amount="50000", internal_amount="50000", camel_case=True),
-            make_mongo_doc("MATCHED", partner_amount="75000", internal_amount="75000", camel_case=True),
+            make_result_doc("AMOUNT_MISMATCH", partner_amount="100000", internal_amount="90000", camel_case=True),
+            make_result_doc("AMOUNT_MISMATCH", partner_amount="200000", internal_amount="180000", camel_case=True),
+            make_result_doc("STATUS_MISMATCH", partner_amount="50000", internal_amount="50000", camel_case=True),
+            make_result_doc("MATCHED", partner_amount="75000", internal_amount="75000", camel_case=True),
         ]
 
-        mock_collection = _make_mock_collection(docs)
+        mock_collection = _make_result_repository(docs)
 
         results = await get_discrepancies("MOMO", "2024-07-07", "inconsistency", mock_collection, provider)
 
@@ -1109,14 +942,14 @@ class TestEndToEndOrchestration:
         provider = MockLLMProvider(should_fail=True)
 
         docs = [
-            make_mongo_doc("MATCHED", partner_amount="100000", internal_amount="100000", camel_case=True),
-            make_mongo_doc("AMOUNT_MISMATCH", partner_amount="100000", internal_amount="80000", camel_case=True),
-            make_mongo_doc("AMOUNT_MISMATCH", partner_amount="200000", internal_amount="170000", camel_case=True),
-            make_mongo_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
-            make_mongo_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
+            make_result_doc("MATCHED", partner_amount="100000", internal_amount="100000", camel_case=True),
+            make_result_doc("AMOUNT_MISMATCH", partner_amount="100000", internal_amount="80000", camel_case=True),
+            make_result_doc("AMOUNT_MISMATCH", partner_amount="200000", internal_amount="170000", camel_case=True),
+            make_result_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
+            make_result_doc("MISSING_INTERNAL", partner_amount=None, internal_amount=None, camel_case=True),
         ]
 
-        mock_collection = _make_mock_collection(docs)
+        mock_collection = _make_result_repository(docs)
 
         result = await get_summary("MOMO", "2024-07-07", mock_collection, provider)
 
@@ -1244,78 +1077,7 @@ class TestBuildAnalysisInputEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 13: Daily report with partial failures and alerts
-# ---------------------------------------------------------------------------
-
-class TestDailyReportWithAlerts:
-    """Test daily report generation with threshold alerts."""
-
-    @pytest.mark.asyncio
-    async def test_report_includes_alerts_for_breached_thresholds(self) -> None:
-        """Daily report should include alerts when thresholds are breached."""
-        from src.analysis.reporter import DailyReporter
-
-        mock_collection = MagicMock()
-        mock_collection.distinct = AsyncMock(return_value=["MOMO", "VIETTEL"])
-
-        summaries = {
-            "MOMO": {
-                "partner": "MOMO",
-                "date": "2024-07-07",
-                "summary_metrics": {"total_transactions": 100, "matched": 90, "mismatch_rate": 10.0, "total_amount_mismatch": 500000, "by_status": {"MATCHED": 90, "AMOUNT_MISMATCH": 10}},
-                "grouped_stats": [],
-                "key_findings": ["MOMO high mismatch"],
-                "generated_at": "2024-07-07",
-                "llm_status": "success",
-            },
-            "VIETTEL": {
-                "partner": "VIETTEL",
-                "date": "2024-07-07",
-                "summary_metrics": {"total_transactions": 50, "matched": 50, "mismatch_rate": 0.0, "total_amount_mismatch": 0, "by_status": {"MATCHED": 50}},
-                "grouped_stats": [],
-                "key_findings": [],
-                "generated_at": "2024-07-07",
-                "llm_status": "success",
-            },
-        }
-
-        async def mock_get_summary(partner, **kwargs):
-            return summaries[partner]
-
-        with patch("src.analysis.insights.get_summary", side_effect=mock_get_summary):
-            reporter = DailyReporter(mock_collection, MockLLMProvider())
-            report = await reporter.generate_report("2024-07-07")
-
-        # MOMO has 10% mismatch rate, which exceeds default 5% threshold
-        momo_partner = next(p for p in report["partners"] if p["partner"] == "MOMO")
-        assert momo_partner["summary_metrics"]["mismatch_rate"] == 10.0
-
-        # VIETTEL has 0% mismatch rate, should not trigger alert
-        viettel_partner = next(p for p in report["partners"] if p["partner"] == "VIETTEL")
-        assert viettel_partner["summary_metrics"]["mismatch_rate"] == 0.0
-
-    @pytest.mark.asyncio
-    async def test_report_handles_all_partners_failing(self) -> None:
-        """When all partners fail, report should still be generated with empty partners list."""
-        from src.analysis.reporter import DailyReporter
-
-        mock_collection = MagicMock()
-        mock_collection.distinct = AsyncMock(return_value=["MOMO", "VIETTEL"])
-
-        async def mock_get_summary(partner, **kwargs):
-            raise RuntimeError(f"{partner} data unavailable")
-
-        with patch("src.analysis.insights.get_summary", side_effect=mock_get_summary):
-            reporter = DailyReporter(mock_collection, MockLLMProvider())
-            report = await reporter.generate_report("2024-07-07")
-
-        assert report["date"] == "2024-07-07"
-        assert report["partners"] == []
-        assert report["global_stats"]["total_mismatch_rate"] == 0.0
-
-
-# ---------------------------------------------------------------------------
-# Scenario 14: Metrics edge cases
+# Scenario 13: Metrics edge cases
 # ---------------------------------------------------------------------------
 
 class TestMetricsEdgeCases:

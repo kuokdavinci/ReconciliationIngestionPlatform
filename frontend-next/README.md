@@ -59,7 +59,3 @@ src/
 ├── lib/           # API client + state stores + helpers
 └── types/         # TypeScript interfaces
 ```
-
-## Legacy
-
-The old `frontend/` (Vite + vanilla JS) dashboard in the repo root is kept as a legacy/reference implementation. All active development is in this directory.

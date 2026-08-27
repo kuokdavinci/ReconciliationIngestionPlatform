@@ -19,7 +19,7 @@ from src.application.review.reprocessing import (
     queue_post_approval_reprocess,
 )
 from src.config.settings import settings
-from src.core.business_day import business_date
+from src.core.utils import business_date
 from src.domain.mapping.models import MappingConfigStatus
 from src.domain.review.models import (
     CopilotActionStatus,

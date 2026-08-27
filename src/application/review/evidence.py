@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from src.core.business_day import business_day_bounds
+from src.core.utils import business_day_bounds
 from src.infrastructure.postgres.internal_transaction_repository import InternalTransactionRepository
 
 

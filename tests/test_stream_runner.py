@@ -288,7 +288,7 @@ async def test_stream_runner_fetches_and_ingests_api_pages_one_at_a_time(tmp_pat
         patch("src.application.automation.stream_ingestion.run_ingestion", new=run_ingestion),
         patch("src.application.automation.stream_ingestion.build_reconciliation_service") as reconciliation,
     ):
-        reconciliation.return_value.execute = AsyncMock(return_value=["reconciliation-result"])
+        reconciliation.return_value.reconcile = AsyncMock(return_value=["reconciliation-result"])
         result = await run_source_stream(
             config=config,
             db=db,
@@ -307,8 +307,8 @@ async def test_stream_runner_fetches_and_ingests_api_pages_one_at_a_time(tmp_pat
     assert validation_flags == [True, True]
     assert checkpoint_repo.checkpoint.last_completed_unit_key == "unit-2"
     assert result["stats"]["reconciliationCount"] == 2
-    commands = [call.args[0] for call in reconciliation.return_value.execute.await_args_list]
-    assert [command.reconciliation_run_id for command in commands] == ["run-1", "run-1"]
+    calls = reconciliation.return_value.reconcile.await_args_list
+    assert [call.kwargs["reconciliation_run_id"] for call in calls] == ["run-1", "run-1"]
 
 
 @pytest.mark.asyncio
@@ -348,7 +348,7 @@ async def test_backfill_with_approved_mapping_checks_each_day_for_structure_drif
         patch("src.application.automation.stream_ingestion.run_ingestion", new=run_ingestion),
         patch("src.application.automation.stream_ingestion.build_reconciliation_service") as reconciliation,
     ):
-        reconciliation.return_value.execute = AsyncMock(return_value=[])
+        reconciliation.return_value.reconcile = AsyncMock(return_value=[])
         result = await run_source_stream(
             config=config,
             db=db,
@@ -406,7 +406,7 @@ async def test_stream_runner_does_not_fetch_after_completed_api_stream_on_next_r
         patch("src.application.automation.stream_ingestion.run_ingestion", new=run_ingestion),
         patch("src.application.automation.stream_ingestion.build_reconciliation_service") as reconciliation,
     ):
-        reconciliation.return_value.execute = AsyncMock(return_value=[])
+        reconciliation.return_value.reconcile = AsyncMock(return_value=[])
         first = await run_source_stream(
             config=config,
             db=db,

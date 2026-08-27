@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Any
 
 from src.application.automation.contracts import ExecuteStreamCommand
-from src.core.business_day import business_date
+from src.core.utils import business_date
 
 
 def resolve_schedule(value: str) -> str | None:

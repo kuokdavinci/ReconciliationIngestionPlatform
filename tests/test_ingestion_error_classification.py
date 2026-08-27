@@ -1,4 +1,4 @@
-from src.application.ingestion.error_classification import is_missing_ingestion_key_failure
+from src.application.ingestion.contracts import is_missing_ingestion_key_failure
 
 
 def test_missing_ingestion_key_classifier_requires_all_rows_and_both_identity_fields():

@@ -15,8 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from src.domain.ingestion.source_units import SourceUnitMetadata
-from src.core.date_templates import interpolate_date
-from src.core.file_identity import compute_file_hash
+from src.core.utils import compute_file_hash, interpolate_date
 
 
 @dataclass

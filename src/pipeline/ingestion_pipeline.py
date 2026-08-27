@@ -10,7 +10,7 @@ from src.application.ingestion.contracts import (
     ProcessFileCommand,
     serialize_quality_violation,
 )
-from src.application.ingestion.error_classification import is_missing_ingestion_key_failure
+from src.application.ingestion.contracts import is_missing_ingestion_key_failure
 from src.config.config_health import (
     ConfigurationApprovalRequiredError,
     record_config_run_health,

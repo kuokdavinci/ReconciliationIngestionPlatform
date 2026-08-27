@@ -1,39 +1,13 @@
 """Tests for AI Analysis Layer insights (orchestration)."""
 
 import json
-from decimal import Decimal
-from types import SimpleNamespace
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.analysis.schemas import AnalysisInput, TopAnomaly
-from src.analysis.insights import (
-    _rule_based_fallback,
-    generate_insights,
-    get_discrepancies,
-    get_summary,
-    _query_reconciliation_results,
-)
-
-
-async def empty_async_gen():
-    """Async generator that yields nothing."""
-    if False:
-        yield
-
-
-def _make_mock_result(status: str = "MATCHED", partner: str = "MOMO") -> SimpleNamespace:
-    """Create a mock reconciliation result."""
-    from src.core.enums import ReconciliationStatus
-    r = SimpleNamespace()
-    r.partner = partner
-    r.date = "2024-07-07"
-    r.partner_amount = Decimal("100000")
-    r.internal_amount = Decimal("100000")
-    r.reconciliation_status = ReconciliationStatus(status)
-    return r
+from src.analysis.insights import _rule_based_fallback, generate_insights, get_discrepancies, get_summary
 
 
 class MockLLMProvider:
@@ -61,60 +35,6 @@ class MockLLMProvider:
     @property
     def last_token_usage(self) -> Optional[dict[str, int]]:
         return None
-
-
-class TestQueryReconciliationResults:
-    """Test MongoDB query helper."""
-
-    @pytest.mark.asyncio
-    async def test_queries_and_converts_results(self) -> None:
-        mock_doc = {
-            "partner": "MOMO",
-            "date": "2024-07-07",
-            "partner_amount": Decimal("100000"),
-            "internal_amount": Decimal("110000"),
-            "reconciliation_status": "AMOUNT_MISMATCH",
-        }
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=[mock_doc])
-
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
-
-        results = await _query_reconciliation_results(mock_collection, "MOMO", "2024-07-07")
-
-        assert len(results) == 1
-        assert results[0].partner == "MOMO"
-        assert results[0].reconciliation_status.value == "AMOUNT_MISMATCH"
-
-    @pytest.mark.asyncio
-    async def test_handles_empty_results(self) -> None:
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=[])
-
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
-
-        results = await _query_reconciliation_results(mock_collection, "MOMO", "2024-07-07")
-        assert results == []
-
-    @pytest.mark.asyncio
-    async def test_handles_unknown_status(self) -> None:
-        mock_doc = {
-            "partner": "MOMO",
-            "date": "2024-07-07",
-            "reconciliation_status": "UNKNOWN_STATUS",
-        }
-        mock_cursor = AsyncMock()
-        mock_cursor.to_list = AsyncMock(return_value=[mock_doc])
-
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
-
-        results = await _query_reconciliation_results(mock_collection, "MOMO", "2024-07-07")
-        assert len(results) == 1
-        # Should default to MATCHED for unknown status
-        assert results[0].reconciliation_status.value == "MATCHED"
 
 
 class TestRuleBasedFallback:
@@ -317,19 +237,14 @@ class TestGetSummary:
     """Test get_summary orchestration function."""
 
     @staticmethod
-    def _make_mock_collection(docs: list | None = None) -> MagicMock:
-        """Create a mock collection supporting both find().limit() and aggregate()."""
-        docs = docs or []
-        mock_cursor = MagicMock()
-        mock_cursor.to_list = AsyncMock(return_value=docs)
-        mock_cursor.limit = MagicMock(return_value=mock_cursor)
-
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
-
-        mock_collection.aggregate = MagicMock(return_value=empty_async_gen())
-
-        return mock_collection
+    def _make_mock_repository() -> MagicMock:
+        repository = MagicMock()
+        repository.get_summary_metrics = AsyncMock(
+            return_value={"by_status": {}, "total_amount_mismatch": 0}
+        )
+        repository.find_page_by_partner_and_date = AsyncMock(return_value=([], 0))
+        repository.find_error_samples_by_partner_and_date = AsyncMock(return_value=[])
+        return repository
 
     @pytest.mark.asyncio
     async def test_returns_summary_dict(self) -> None:
@@ -340,7 +255,7 @@ class TestGetSummary:
         })
         provider = MockLLMProvider(response=llm_response)
 
-        mock_collection = self._make_mock_collection()
+        mock_collection = self._make_mock_repository()
 
         result = await get_summary("MOMO", "2024-07-07", mock_collection, provider)
 
@@ -356,7 +271,7 @@ class TestGetSummary:
     async def test_handles_empty_results(self) -> None:
         provider = MockLLMProvider(response="{}")
 
-        mock_collection = self._make_mock_collection()
+        mock_collection = self._make_mock_repository()
 
         result = await get_summary("MOMO", "2024-07-07", mock_collection, provider)
 
@@ -368,19 +283,14 @@ class TestGetDiscrepancies:
     """Test get_discrepancies orchestration function."""
 
     @staticmethod
-    def _make_mock_collection(docs: list | None = None) -> MagicMock:
-        """Create a mock collection supporting both find().limit() and aggregate()."""
-        docs = docs or []
-        mock_cursor = MagicMock()
-        mock_cursor.to_list = AsyncMock(return_value=docs)
-        mock_cursor.limit = MagicMock(return_value=mock_cursor)
-
-        mock_collection = MagicMock()
-        mock_collection.find = MagicMock(return_value=mock_cursor)
-
-        mock_collection.aggregate = MagicMock(return_value=empty_async_gen())
-
-        return mock_collection
+    def _make_mock_repository() -> MagicMock:
+        repository = MagicMock()
+        repository.get_summary_metrics = AsyncMock(
+            return_value={"by_status": {}, "total_amount_mismatch": 0}
+        )
+        repository.find_page_by_partner_and_date = AsyncMock(return_value=([], 0))
+        repository.find_error_samples_by_partner_and_date = AsyncMock(return_value=[])
+        return repository
 
     @pytest.mark.asyncio
     async def test_returns_analysis_results(self) -> None:
@@ -391,17 +301,27 @@ class TestGetDiscrepancies:
         })
         provider = MockLLMProvider(response=llm_response)
 
-        mock_collection = self._make_mock_collection()
+        mock_collection = self._make_mock_repository()
 
         results = await get_discrepancies("MOMO", "2024-07-07", "operational", mock_collection, provider)
 
         assert isinstance(results, list)
 
     @pytest.mark.asyncio
+    async def test_queries_bounded_error_samples_once(self) -> None:
+        provider = MockLLMProvider(response='{"findings": []}')
+        repository = self._make_mock_repository()
+
+        await get_discrepancies("MOMO", "2024-07-07", "operational", repository, provider)
+
+        repository.find_error_samples_by_partner_and_date.assert_awaited_once()
+        repository.find_page_by_partner_and_date.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_fallback_on_llm_failure(self) -> None:
         provider = MockLLMProvider(should_fail=True)
 
-        mock_collection = self._make_mock_collection()
+        mock_collection = self._make_mock_repository()
 
         results = await get_discrepancies("MOMO", "2024-07-07", "operational", mock_collection, provider)
 

@@ -16,6 +16,7 @@ from src.domain.fetch_config.models import FetchConfig, FetchMethod, FileDropCon
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.domain.mapping.models import MappingConfig, MappingConfigStatus
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
+from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 
 async def seed_acmepay_case():
     print("Connecting to MongoDB...")
@@ -32,8 +33,7 @@ async def seed_acmepay_case():
     async with internal_repo.engine.begin() as conn:
         await conn.execute(delete(InternalTransactionTable).where(InternalTransactionTable.partner == "ACMEPAY"))
     await db["reconciliation_file"].delete_many({"partner": "ACMEPAY"})
-    await db["data_container"].delete_many({"identify": "ACMEPAY"})
-    await db["reconciliation_result"].delete_many({"partner": "ACMEPAY"})
+    await ReconciliationResultRepository().delete_by_partner_and_date("ACMEPAY", datetime.now(timezone.utc).date().isoformat())
     await db["reconciliation_mapping_config"].delete_many({"partner": "ACMEPAY"})
     await db["review_packet"].delete_many({"partner": "ACMEPAY"})
     await fetch_repo._collection.delete_many({"partner": "ACMEPAY"})

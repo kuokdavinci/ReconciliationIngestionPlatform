@@ -69,8 +69,9 @@ nghiệp vụ và resume cùng parent sau approval.
 | Workflow/persistence adapters | [`dags/reconciliation_ingestion.py`](../../dags/reconciliation_ingestion.py), [`src/infrastructure/workflows/`](../../src/infrastructure/workflows/) và [`src/infrastructure/persistence/`](../../src/infrastructure/persistence/) |
 
 Các helper cũ như `stream_staging.py`, `stream_review_gate.py`,
-`stream_fetching.py` và các utility core nhỏ chỉ là compatibility re-export;
-không xem chúng là nơi triển khai logic mới.
+`stream_fetching.py` và các utility core nhỏ đã được loại bỏ sau refactor;
+không xem chúng là runtime entrypoint. Logic hiện tại nằm ở stream runner,
+source-unit orchestrator và `src/core/utils.py`.
 
 Chi tiết acceptance và evidence nằm trong [Sprint 2](sprint-2-incremental-recovery.md)
 và [Sprint 2.5](sprint-2.5-airflow-migration.md).

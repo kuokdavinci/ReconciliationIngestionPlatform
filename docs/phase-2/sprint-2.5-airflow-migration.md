@@ -53,7 +53,7 @@ Các thay đổi Phase 2 sau đây là một phần của runtime contract hiệ
   `backend/` không còn được dùng.
 - `src/core/utils.py` là nguồn canonical cho business-day bounds, date
   templates, SHA-256 file identity và runtime error formatting. Các module
-  utility cũ chỉ re-export để không phá import legacy.
+  utility core cũ đã được xóa; code mới không phụ thuộc compatibility wrapper.
 - API fetch unit giữ `metadata.sourceUnitKey` explicit làm identity canonical.
   Nếu raw stage đã hoàn tất, Run Now kết thúc an toàn với
   `SAFE_DUPLICATE`/`streamAlreadyCompleted` trước fetcher và review gate.
@@ -136,7 +136,7 @@ hoặc runtime data.
 - `COMPLETED`, `NO_DATA`, `ALREADY_PROCESSED` và `WAITING_REVIEW` kết thúc task thành công. `WAITING_REVIEW` là operator gate: application runtime giữ trạng thái chờ duyệt và review packet là nguồn hành động tiếp theo, không phải Airflow task failure/retry.
 - `FAILED` và `BLOCKED` làm task fail; deployment mặc định đặt
   `AIRFLOW_TASK_RETRIES=0`, nên không có native/automatic retry. Checkpoint
-  tiếp tục là nguồn sự thật để resume. Manual retry trên UI đọc mapped task bằng `task_id/map_index` rồi
+  tiếp tục là source of truth để resume. Manual retry trên UI đọc mapped task bằng `task_id/map_index` rồi
   gọi `clearTaskInstances` trên chính `dagRunId` hiện tại với
   `reset_dag_runs=true`, nên DagRun terminal được đưa về `QUEUED` và không
   tạo runtime/DAG run thứ hai. Nếu task state đã là `null` do một lần clear
@@ -341,7 +341,7 @@ Airflow retry không thay thế retry policy của source unit. Hai lớp phải
 Sau Sprint 2, migration chủ yếu là thay adapter scheduling vì các contract khó nhất đã có:
 
 - `FetchResult` và `SourceUnitMetadata` có identity ổn định.
-- Checkpoint là nguồn sự thật cho resume/replay.
+- Checkpoint là source of truth cho resume/replay.
 - `process_source_units()` giữ sequential boundary và không advance trước persistence.
 - Replay an toàn dựa trên `fileHash`, `fetchUnitKey` và `ingestion_key`.
 - Scheduled stream và backfill đã có identity riêng.

@@ -4,7 +4,6 @@ from typing import Any
 
 from src.application.automation.stream_ingestion import build_source_unit_ingestor, cleanup_source_unit
 from src.application.ingestion.source_unit_orchestrator import resume_held_source_unit
-from src.application.reconciliation.service import ReconciliationCommand
 from src.config.settings import settings
 from src.core.enums import ProcessingStatus
 from src.domain.ingestion.checkpoints import IngestionMode, IngestionCheckpoint
@@ -152,15 +151,10 @@ async def resume_quarantined_source_unit(
         if source_file is not None and _status_value(
             getattr(source_file, "processing_status", None)
         ) == ProcessingStatus.COMPLETED.value:
-            reconciliation_results = await build_reconciliation_service(
-                db,
-                fast_mode=True,
-            ).execute(
-                ReconciliationCommand(
-                    partner=checkpoint.partner,
-                    reconciliation_date=reconciliation_date,
-                    source_file_id=str(source_file.id),
-                )
+            reconciliation_results = await build_reconciliation_service(db).reconcile(
+                checkpoint.partner,
+                reconciliation_date,
+                source_file_id=str(source_file.id),
             )
             return {
                 "success": True,

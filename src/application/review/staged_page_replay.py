@@ -5,11 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 
-from src.application.reconciliation.service import ReconciliationCommand
 from src.application.runtime.service import update_runtime_run
 from src.config.settings import settings
-from src.core.business_day import business_date
-from src.core.error_formatting import summarize_runtime_error
+from src.core.utils import business_date, summarize_runtime_error
 from src.core.enums import ProcessingStatus
 from src.domain.ingestion.checkpoints import IngestionMode
 from src.domain.review.models import PostApprovalRunStage, PostApprovalRunStatus
@@ -560,15 +558,12 @@ async def replay_staged_pages(
         stats=stats_payload,
     )
     try:
-        recon_results = await build_reconciliation_service(db, fast_mode=True).execute(
-            ReconciliationCommand(
-                partner=config.partner,
-                reconciliation_date=packet.reconciliation_date,
-                source_file_id=logical_source_file_id,
-                reconciliation_run_id=runtime_run_id,
-                mapping_version=getattr(config, "config_version", None)
-                or str(config.id),
-            )
+        recon_results = await build_reconciliation_service(db).reconcile(
+            config.partner,
+            packet.reconciliation_date,
+            source_file_id=logical_source_file_id,
+            reconciliation_run_id=runtime_run_id,
+            mapping_version=getattr(config, "config_version", None) or str(config.id),
         )
     except Exception as exc:
         error_message = summarize_runtime_error(exc)

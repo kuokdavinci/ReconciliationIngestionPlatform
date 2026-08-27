@@ -153,31 +153,75 @@ class ReconciliationResultRepository:
             records = [row_to_reconciliation_result(r) for r in rows]
             return records, total
 
-    async def find_by_partner_date_and_status(
-        self, partner: str, date: str, status: ReconciliationStatus
+    async def find_error_samples_by_partner_and_date(
+        self,
+        partner: str,
+        date: str,
+        *,
+        statuses: Sequence[ReconciliationStatus],
+        per_status_limit: int = 50,
+        reconciliation_run_id: str | None = None,
+        source_file_id: str | None = None,
     ) -> list[ReconciliationResult]:
-        """Find results for a partner+date filtered by reconciliation status."""
-        from sqlalchemy import select, and_
+        """Fetch bounded samples for all requested error statuses in one query."""
+        if not statuses or per_status_limit <= 0:
+            return []
+
+        from sqlalchemy import and_, case, func, select
         from sqlalchemy.ext.asyncio import AsyncSession
         from src.infrastructure.persistence.postgres_schema import ReconciliationResultTable
-        async with AsyncSession(self.engine) as session:
-            stmt = (
-                select(ReconciliationResultTable)
-                .where(
-                    and_(
-                        ReconciliationResultTable.partner == partner,
-                        ReconciliationResultTable.date == date,
-                        ReconciliationResultTable.reconciliation_status == status.value,
-                    )
-                )
-                .order_by(
-                    ReconciliationResultTable.partner_txn_id.asc(),
-                    ReconciliationResultTable.id.asc(),
-                )
+
+        status_values = list(dict.fromkeys(status.value for status in statuses))
+        conditions = [
+            ReconciliationResultTable.partner == partner,
+            ReconciliationResultTable.date == date,
+            ReconciliationResultTable.reconciliation_status.in_(status_values),
+        ]
+        if reconciliation_run_id is not None:
+            conditions.append(
+                ReconciliationResultTable.reconciliation_run_id == reconciliation_run_id
             )
+        elif source_file_id is not None:
+            conditions.append(ReconciliationResultTable.source_file_id == source_file_id)
+
+        ranked = (
+            select(
+                ReconciliationResultTable,
+                func.row_number()
+                .over(
+                    partition_by=ReconciliationResultTable.reconciliation_status,
+                    order_by=(
+                        ReconciliationResultTable.partner_txn_id.asc(),
+                        ReconciliationResultTable.id.asc(),
+                    ),
+                )
+                .label("sample_rank"),
+            )
+            .where(and_(*conditions))
+            .subquery()
+        )
+        columns = [ranked.c[column.name] for column in ReconciliationResultTable.__table__.columns]
+        status_order = case(
+            {value: index for index, value in enumerate(status_values)},
+            value=ranked.c.reconciliation_status,
+            else_=len(status_values),
+        )
+        stmt = (
+            select(*columns)
+            .where(ranked.c.sample_rank <= per_status_limit)
+            .order_by(
+                status_order,
+                ranked.c.partner_txn_id.asc(),
+                ranked.c.id.asc(),
+            )
+        )
+
+        async with AsyncSession(self.engine) as session:
             result = await session.execute(stmt)
-            rows = result.scalars().all()
-            return [row_to_reconciliation_result(r) for r in rows]
+            return [
+                row_to_reconciliation_result(row._mapping)
+                for row in result.all()
+            ]
 
     async def count_by_partner_and_date(self, partner: str, date: str) -> int:
         from sqlalchemy import and_, func, select

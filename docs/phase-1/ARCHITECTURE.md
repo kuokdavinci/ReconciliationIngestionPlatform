@@ -1,42 +1,23 @@
 # Architecture hiện tại
 
-**Cập nhật:** 2026-08-14
+**Cập nhật:** 2026-08-27
 
 ## Tổng quan
 
-Repository là một ứng dụng Python/FastAPI với application boundaries rõ ràng, dual persistence và dashboard Next.js. Dữ liệu settlement đi qua fetcher → source-unit orchestration → ingestion pipeline → PostgreSQL/MongoDB; Airflow gọi cùng application entrypoint cho scheduled/manual/backfill execution.
+Repository là ứng dụng Python/FastAPI với dashboard Next.js, PostgreSQL cho transaction/result, MongoDB cho metadata/config/workflow state và Airflow làm control plane. Dữ liệu settlement đi qua fetcher → source-unit orchestration → ingestion pipeline; reconciliation đọc/ghi PostgreSQL.
 
 ```mermaid
-flowchart TB
-    Partner[Partner: FileDrop / API / SFTP]
-    Fetch[src/fetchers]
-    Airflow[dags/reconciliation_ingestion.py]
-    API[src/api]
-    Automation[src/application/automation]
-    Ingestion[src/application/ingestion]
-    Pipeline[src/pipeline]
-    Domain[src/domain]
-    Infra[src/infrastructure]
-    Review[src/application/review]
-    Recon[src/application/reconciliation + src/reconciliation]
-    Mongo[(MongoDB)]
-    Postgres[(PostgreSQL)]
-    UI[frontend-next]
-
-    Partner --> Fetch
-    Fetch --> Automation
-    Airflow --> Automation
-    API --> Automation
-    API --> Review
-    API --> Recon
-    UI --> API
-    Automation --> Ingestion --> Pipeline
-    Pipeline --> Domain
-    Pipeline --> Infra
-    Review --> Infra
-    Recon --> Infra
-    Infra --> Mongo
-    Infra --> Postgres
+flowchart LR
+    P[Partner sources] --> I[Ingestion runtime]
+    API[FastAPI] --> I
+    AF[Airflow] --> I
+    I --> PG[(PostgreSQL)]
+    I --> M[(MongoDB)]
+    PG --> R[Reconciliation]
+    R --> PG
+    UI[Next.js] --> API
+    M --> V[Review / replay]
+    V --> I
 ```
 
 ## Application boundaries
@@ -51,7 +32,7 @@ flowchart TB
 | `src/pipeline/` | File/row processing, claims, normalization, validation, batch write | Global scheduling |
 | `frontend-next/` | Operator views, typed clients, polling và interaction | Source-of-truth business state |
 
-Kiến trúc không còn lớp `src/models/` trung gian. Code dùng `src/domain/` cho nghiệp vụ thuần, `src/application/` cho use case/orchestration và repositories trong `src/infrastructure/` cho persistence/adapters.
+Domain chứa nghiệp vụ thuần; application chứa use case/orchestration; infrastructure triển khai repositories và workflow adapters. API và frontend chỉ đảm nhiệm delivery/operator interaction.
 
 ## Luồng ingestion
 
@@ -66,11 +47,11 @@ Kiến trúc không còn lớp `src/models/` trung gian. Code dùng `src/domain/
 
 `dags/reconciliation_ingestion.py` có hai task chính: `select_streams` và mapped `run_stream`. DAG gọi `src.application.automation.execute_stream()`; không chứa business ingestion logic.
 
-`src/infrastructure/workflows/airflow.py` là gateway gọi Airflow REST API cho Run Now, retry, backfill và task-state lookup. `src/infrastructure/workflows/local.py` là adapter test/compatibility. Compose pilot chỉ bật Airflow control plane, với:
+`src/infrastructure/workflows/airflow.py` là gateway gọi Airflow REST API cho Run Now, retry, backfill và task-state lookup. `src/infrastructure/workflows/local.py` là adapter local/test. Compose pilot chỉ bật Airflow control plane, với:
 
 - `AIRFLOW_GLOBAL_SCHEDULE=none` để manual-only.
 - `AIRFLOW_TASK_RETRIES=0` để retry do operator kiểm soát.
-- `ingestion_streams=1`, sequential source-unit boundary và checkpoint là nguồn sự thật.
+- `ingestion_streams=1`, sequential source-unit boundary và checkpoint là source of truth.
 - `runtimeRunId`, `dagRunId`, `taskId`, `mapIndex` để correlation giữa UI/API/Airflow.
 
 Sprint 2.5 bao gồm cả Airflow integration và recovery hardening; xem [Phase 2 sprint index](../phase-2/INDEX.md).
@@ -95,6 +76,7 @@ MongoDB lưu các document linh hoạt và runtime control state:
 | `reconciliation_file` | File metadata, status, scope |
 | `ingestion_checkpoint` / `source_unit` | Checkpoint và source-unit lifecycle |
 | `review_packet` | Review/approval evidence |
+| `ingestion_quarantine_record` | Quarantine row, fingerprint, operator action và retention state |
 | `partner_runtime_run` | Runtime status, attempts, orchestration IDs |
 | `backfill_run` | Ordered backfill parent và per-day state |
 | `raw_ingestion_page` + GridFS | Durable raw page metadata/payload |
@@ -124,6 +106,7 @@ FastAPI app factory nằm ở `src/api/__init__.py::create_app`; các router hi�
 | `reconciliation.py` | `/api/v1/reconciliation` |
 | `data_explorer.py` | `/api/v1/data` |
 | `mappings.py` | `/api/v1/mappings`, `/api/v1/mapping` |
+| `quarantine.py` | `/api/v1/quarantine` |
 | `copilot.py` | `/api/v1/copilot` |
 | `operations.py` | `/api/v1/operations` |
 | `review_packets.py` | `/api/v1/review-packets` |

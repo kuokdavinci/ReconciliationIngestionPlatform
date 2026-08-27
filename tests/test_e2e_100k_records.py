@@ -3,7 +3,7 @@
 Large-volume verification of the full pipeline:
 1. Seed 100k internal transactions + partner file for each partner
 2. Run IngestionPipeline.process_file() with configurable batch sizes
-3. Run ReconciliationEngine.reconcile() in fast_mode
+3. Run the PostgreSQL ReconciliationEngine.reconcile() path
 4. Verify reconciliation results and performance characteristics
 
 Requires:
@@ -32,6 +32,9 @@ from src.infrastructure.mapping.config_repository import MappingConfigRepository
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
 from src.infrastructure.postgres.internal_transaction_repository import (
     InternalTransactionRepository,
+)
+from src.infrastructure.postgres.reconciliation_result_repository import (
+    ReconciliationResultRepository,
 )
 from src.reconciliation.engine import ReconciliationEngine
 
@@ -233,7 +236,7 @@ async def _seed_internal_zalopay(db, count: int) -> int:
 async def _cleanup_partner_data(db, partner: str) -> None:
     """Clean up all data for a partner."""
     for coll_name in [
-        "reconciliation_result", "reconciliation_file",
+        "reconciliation_file",
         "review_packet", "reconciliation_mapping_config",
         "partner_runtime_run", "post_approval_run", "reconciliation_review_record",
     ]:
@@ -241,6 +244,10 @@ async def _cleanup_partner_data(db, partner: str) -> None:
             await db[coll_name].delete_many({"partner": partner})
         except Exception:
             pass
+    try:
+        await ReconciliationResultRepository().delete_by_partner_and_date(partner, TEST_DATE)
+    except Exception:
+        pass
     try:
         await DataContainerRepository().delete_by_partner(partner)
     except Exception:
@@ -293,14 +300,8 @@ async def _run_100k_flow(
     t1 = time.monotonic()
     timings["ingest_seconds"] = round(t1 - t0, 3)
 
-    # Run reconciliation with optimized settings
-    engine = ReconciliationEngine(
-        db=db,
-        fast_mode=True,
-        result_batch_size=20000,
-        write_workers=2,
-        ordered_insert=False,
-    )
+    # Run the PostgreSQL reconciliation path.
+    engine = ReconciliationEngine(db=db)
     t0 = time.monotonic()
     result = await engine.reconcile(partner, reconciliation_date)
     t1 = time.monotonic()

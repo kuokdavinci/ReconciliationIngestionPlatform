@@ -1,113 +1,39 @@
-"""Reconciliation entry point and explicit backend composition."""
+"""PostgreSQL-backed reconciliation entry point."""
 
 import time
 from datetime import datetime
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from src.config.settings import settings
-from src.core.business_day import business_date, utc_business_day_bounds
+from src.core.utils import business_date, utc_business_day_bounds
 from src.core.enums import ReconciliationScopeType
-from src.domain.reconciliation.ports import (
-    InternalTransactionReader,
-    PartnerTransactionReader,
-    ReconciliationBackend,
-    ReconciliationExecutor,
-    ReconciliationOutput,
-    ReconciliationResultWriter,
-)
+from src.domain.reconciliation.ports import ReconciliationExecutor, ReconciliationOutput
 from src.logging import StructuredLogger, get_structured_logger
-from src.reconciliation.document_executor import DocumentReconciliationExecutor
 from src.reconciliation.postgres_executor import PostgresReconciliationExecutor
+from src.infrastructure.postgres.reconciliation_result_repository import (
+    ReconciliationResultRepository,
+)
 
 
 class ReconciliationEngine:
-    """Public reconciliation entry point with explicit storage execution."""
-
-    PARTNER_BATCH_SIZE = 100000
-    RESULT_WRITE_BATCH_SIZE = 100000
+    """Public reconciliation entry point backed by PostgreSQL."""
 
     def __init__(
         self,
         db: AsyncIOMotorDatabase,
-        fast_mode: bool = False,
-        result_batch_size: int | None = None,
-        write_workers: int | None = None,
-        ordered_insert: bool | None = None,
-        partner_batch_size: int | None = None,
-        data_repo: PartnerTransactionReader | None = None,
-        internal_repo: InternalTransactionReader | None = None,
-        result_repo: ReconciliationResultWriter | None = None,
         *,
-        backend: ReconciliationBackend = "postgres",
         executor: ReconciliationExecutor | None = None,
     ) -> None:
-        """Initialize the engine with repositories and an explicit executor."""
-        if data_repo is None:
-            from src.infrastructure.partner_transaction.repository import DataContainerRepository
-
-            data_repo = DataContainerRepository(db)
-        if internal_repo is None:
-            from src.infrastructure.postgres.internal_transaction_repository import (
-                InternalTransactionRepository,
-            )
-
-            internal_repo = InternalTransactionRepository(db)
-        if result_repo is None:
-            from src.infrastructure.postgres.reconciliation_result_repository import (
-                ReconciliationResultRepository,
-            )
-
-            result_repo = ReconciliationResultRepository(db)
-
+        """Initialize the engine with the PostgreSQL executor."""
         self._db = db
-        self._data_repo = data_repo
-        self._internal_repo = internal_repo
-        self._result_repo = result_repo
         self._logger: StructuredLogger = get_structured_logger()
-        self.fast_mode = fast_mode
-        self._partner_batch_size = (
-            partner_batch_size
-            if partner_batch_size is not None
-            else settings.recon_partner_batch_size
-        )
-        self._result_batch_size = (
-            result_batch_size
-            if result_batch_size is not None
-            else settings.recon_result_batch_size
-        )
-        self._write_workers = (
-            write_workers
-            if write_workers is not None
-            else settings.recon_result_write_workers
-        )
-        self._ordered_insert = (
-            ordered_insert
-            if ordered_insert is not None
-            else settings.recon_result_ordered_insert
-        )
-        self._backend = backend
-        self._executor = executor or self._build_executor(backend)
-
-    def _build_executor(self, backend: ReconciliationBackend) -> ReconciliationExecutor:
-        if backend == "postgres":
-            return PostgresReconciliationExecutor(
-                result_repo=self._result_repo,
+        if executor is None:
+            result_repo = ReconciliationResultRepository(db)
+            executor = PostgresReconciliationExecutor(
+                result_repo=result_repo,
                 logger=self._logger,
             )
-        if backend == "document":
-            return DocumentReconciliationExecutor(
-                data_repo=self._data_repo,
-                internal_repo=self._internal_repo,
-                result_repo=self._result_repo,
-                fast_mode=self.fast_mode,
-                partner_batch_size=self._partner_batch_size,
-                result_batch_size=self._result_batch_size,
-                write_workers=self._write_workers,
-                ordered_insert=self._ordered_insert,
-                logger=self._logger,
-            )
-        raise ValueError(f"Unsupported reconciliation backend: {backend}")
+        self._executor = executor
 
     @staticmethod
     def _business_day_bounds(reconciliation_date: datetime) -> tuple[datetime, datetime]:

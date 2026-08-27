@@ -29,7 +29,6 @@ from src.infrastructure.review.repository import ReconciliationReviewRecordRepos
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
 from src.core.enums import ReconciliationStatus
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
-from src.reconciliation.engine import ReconciliationEngine
 from src.application.audit.service import record_audit_event
 from src.api.background_tasks import track_background_task
 from src.application.runtime.service import (
@@ -180,11 +179,7 @@ def _manual_reconciliation_service(
             create=create_runtime,
             update=update_runtime,
         ),
-        reconciliation_service_factory=lambda: build_reconciliation_service(
-                db,
-                fast_mode=True,
-                engine_factory=ReconciliationEngine,
-        ),
+        reconciliation_service=build_reconciliation_service(db),
         audit_service=SimpleNamespace(record=record_audit),
         context_query=context_query,
     )
@@ -543,7 +538,7 @@ async def reconciliation_insights(
             result = await get_summary(
                 partner=partner,
                 date=date,
-                collection=repo,
+                repository=repo,
                 llm_provider=llm_provider,
             )
             result["generated_at"] = datetime.now().isoformat()
@@ -561,7 +556,7 @@ async def reconciliation_insights(
                 partner=partner,
                 date=date,
                 focus=focus,
-                collection=repo,
+                repository=repo,
                 llm_provider=llm_provider,
                 extra_query={},
             )

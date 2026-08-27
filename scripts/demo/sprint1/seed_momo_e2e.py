@@ -313,9 +313,7 @@ async def _full_wipe(db) -> None:
 
     `data_container` uses field name `identify`; the rest use `partner`.
     """
-    await db["reconciliation_result"].delete_many({"partner": PARTNER})
     await db["reconciliation_file"].delete_many({"partner": PARTNER})
-    await db["data_container"].delete_many({"identify": PARTNER})
     await db["review_packet"].delete_many({"partner": PARTNER})
     await db["reconciliation_mapping_config"].delete_many({"partner": PARTNER})
     await db["reconciliation_mapping_config_history"].delete_many({"partner": PARTNER})

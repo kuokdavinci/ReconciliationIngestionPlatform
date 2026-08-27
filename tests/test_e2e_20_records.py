@@ -31,6 +31,9 @@ from src.infrastructure.partner_transaction.repository import DataContainerRepos
 from src.infrastructure.postgres.internal_transaction_repository import (
     InternalTransactionRepository,
 )
+from src.infrastructure.postgres.reconciliation_result_repository import (
+    ReconciliationResultRepository,
+)
 from src.reconciliation.engine import ReconciliationEngine
 
 
@@ -171,7 +174,7 @@ async def _seed_internal(db, partner: str, num_records: int) -> int:
 async def _cleanup_partner_data(db, partner: str) -> None:
     """Clean up all data for a partner across collections."""
     for coll_name in [
-        "reconciliation_result", "reconciliation_file",
+        "reconciliation_file",
         "review_packet", "reconciliation_mapping_config",
         "partner_runtime_run", "post_approval_run", "reconciliation_review_record",
     ]:
@@ -179,6 +182,10 @@ async def _cleanup_partner_data(db, partner: str) -> None:
             await db[coll_name].delete_many({"partner": partner})
         except Exception:
             pass
+    try:
+        await ReconciliationResultRepository().delete_by_partner_and_date(partner, TEST_DATE)
+    except Exception:
+        pass
     try:
         await DataContainerRepository().delete_by_partner(partner)
     except Exception:
@@ -223,7 +230,7 @@ async def _run_full_flow(
     assert ingestion_result.stats.success_rows > 0, "Ingestion should have successful rows"
 
     # Run reconciliation
-    engine = ReconciliationEngine(db=db, fast_mode=True)
+    engine = ReconciliationEngine(db=db)
     result = await engine.reconcile(partner, reconciliation_date)
 
     return {

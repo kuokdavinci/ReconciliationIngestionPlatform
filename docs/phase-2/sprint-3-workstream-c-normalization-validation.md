@@ -112,10 +112,8 @@ uv run mypy src/ --show-error-codes
 AI_API_KEY=sk-test-fake-key uv run pytest tests/ \
   --ignore=tests/test_analysis_e2e.py \
   --ignore=tests/test_ingestion_integration.py \
-  --ignore=tests/test_ingestion_pipeline.py \
   --ignore=tests/test_seed_momo_e2e.py \
-  --ignore=tests/test_sprint1_eval_benchmark.py \
-  -v --tb=short
+  -q --tb=short
 ```
 
 Exact Ingestion Pipeline CI parity commands executed:

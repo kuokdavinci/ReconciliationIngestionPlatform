@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +30,7 @@ class Settings(BaseSettings):
     ingest_batch_size: int = 20000
     ingest_write_workers: int = 2
     ingest_ordered_insert: bool = False
+    ingestion_quarantine_retention_days: int = Field(default=30, ge=1, le=3650)
 
     # Reconciliation Performance Tuning Configurations
     recon_partner_batch_size: int = 10000

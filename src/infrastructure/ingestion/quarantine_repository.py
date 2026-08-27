@@ -15,6 +15,7 @@ from src.domain.ingestion.quarantine import (
     QuarantineStatus,
     assert_quarantine_transition,
 )
+from src.config.settings import settings
 from src.infrastructure.persistence.mongo_repository import BaseRepository
 
 
@@ -33,7 +34,25 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
     async def create_many(self, records: list[IngestionQuarantineRecord]) -> int:
         if not records:
             return 0
-        await self.collection.insert_many([self._to_mongo(record) for record in records])
+        expires_at = datetime.now(UTC) + timedelta(
+            days=settings.ingestion_quarantine_retention_days
+        )
+        documents = [
+            self._to_mongo(
+                record.model_copy(update={"expires_at": expires_at})
+                if record.expires_at is None
+                else record.model_copy(
+                    update={
+                        "expires_at": min(
+                            _as_utc(record.expires_at),
+                            expires_at,
+                        )
+                    }
+                )
+            )
+            for record in records
+        ]
+        await self.collection.insert_many(documents)
         return len(records)
 
     async def rebind_source_file(self, source_file_id: str, target_source_file_id: str) -> int:
@@ -102,7 +121,7 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
         query: dict[str, Any] = {"status": QuarantineStatus.PENDING.value}
         if partner is not None:
             query["partner"] = partner
-        cursor = self.collection.find(query).sort("createdAt", 1).limit(limit)
+        cursor = self.collection.find(query).sort("createdAt", 1).limit(_bounded_limit(limit))
         records = []
         async for raw in cursor:
             records.append(self._from_mongo(raw))
@@ -231,7 +250,7 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             "updatedAt": datetime.now(UTC),
         }
         if metadata is not None:
-            update["resolutionMetadata"] = metadata
+            update["resolutionMetadata"] = _bounded_metadata(metadata)
         return await self.update_one({"_id": record_id}, update)
 
     async def release_for_retry(

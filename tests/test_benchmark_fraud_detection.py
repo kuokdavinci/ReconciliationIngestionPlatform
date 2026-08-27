@@ -1,10 +1,13 @@
 """Unit tests for the Sprint 3 fraud-dataset benchmark helpers."""
 
+import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from scripts import benchmark_fraud_detection
 from scripts.benchmark_fraud_detection import (
     BENCHMARK_CONFIG_VERSION,
     BENCHMARK_WORKFLOW,
@@ -13,7 +16,9 @@ from scripts.benchmark_fraud_detection import (
     build_benchmark_config,
     redact_mongodb_url,
     render_markdown,
+    run_benchmark,
     write_prefix_csv,
+    _redact_mongodb_credentials,
 )
 
 
@@ -107,7 +112,7 @@ def _render_report() -> dict[str, Any]:
     return {
         "status": "completed",
         "dataset": {"path": "fixture.csv", "sha256": "fixture-sha"},
-        "environment": {"mongodb_url": "mongodb://fixture", "db_name": "fixture"},
+        "environment": {"mongodb": "configured", "db_name": "fixture"},
         "cleanup": "benchmark records and mapping removed",
         "configuration": {
             "config_version": BENCHMARK_CONFIG_VERSION,

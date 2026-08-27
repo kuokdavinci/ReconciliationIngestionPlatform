@@ -92,9 +92,21 @@ def test_run_state_records_one_explicit_persistence_failure_consistently():
 
 
 def test_quarantine_sanitizes_sensitive_raw_values():
-    result = sanitize_raw_row({"token": "secret", "message": "ok"})
+    result = sanitize_raw_row(
+        {
+            "token": "secret",
+            "apiKey": "secret-key",
+            "api-key": "secret-key-2",
+            "message": "ok",
+        }
+    )
 
-    assert result == {"token": "[REDACTED]", "message": "ok"}
+    assert result == {
+        "token": "[REDACTED]",
+        "apiKey": "[REDACTED]",
+        "api-key": "[REDACTED]",
+        "message": "ok",
+    }
 
 
 def test_row_pipeline_keeps_validation_side_effect_free():

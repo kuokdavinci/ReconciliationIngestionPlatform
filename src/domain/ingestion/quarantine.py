@@ -1,7 +1,8 @@
 """Domain contract for rejected ingestion rows."""
 
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from enum import StrEnum
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -152,8 +153,10 @@ def sanitize_raw_row(value: Any, *, max_length: int = 512) -> Any:
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
+            normalized_key = "".join(character for character in key_text.lower() if character.isalnum())
             if any(
-                token in key_text.lower() for token in ("password", "secret", "token", "api_key")
+                token in normalized_key
+                for token in ("password", "secret", "token", "apikey", "authorization", "credential")
             ):
                 sanitized[key_text] = "[REDACTED]"
             else:

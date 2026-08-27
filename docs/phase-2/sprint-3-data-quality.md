@@ -124,16 +124,19 @@ and `tests/test_quarantine_source_unit_resume.py`. Workstream D tests are
 unit/contract tests; live Mongo/PostgreSQL, Airflow, partner sign-off, and
 production acceptance remain Workstream F scope.
 
-### E — Operator and approval flow
+### E — Operator and approval flow — pending
 
 Define review ownership, approval/rejection actions, counters, and escalation
-for `REVIEW` outcomes.
+for `REVIEW` outcomes. This has not been implemented yet; mapping
+`ReviewPacket` approval remains on its existing contract.
 
-### F — Observability and production acceptance
+### F — Observability and production acceptance — pending
 
-Define monitoring baselines, alerts, dashboards, partner sign-off, and
-production acceptance evidence. Statistical or semantic candidates must stay
-out of automatic rejection until that contract exists.
+Define data-quality acceptance baselines and the handoff inputs for Sprint 4
+observability. Generic stage metrics, structured logs, dashboards, alert
+delivery, and the 100k observability benchmark remain outside Sprint 3.
+Statistical or semantic candidates must stay out of automatic rejection until
+that contract exists.
 
 ## Fixture and test guidance
 

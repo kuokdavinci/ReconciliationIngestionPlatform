@@ -635,6 +635,32 @@ class TestBuildCanonical:
         assert txn.status == TransactionStatus.SUCCESS
         assert errors == []
 
+    @pytest.mark.parametrize(
+        "amount",
+        [Decimal("NaN"), Decimal("Infinity"), "10.25", 10, 10.25],
+    )
+    def test_invalid_normalized_amount_produces_stable_violation(self, amount):
+        txn, errors = TransactionNormalizer.build_canonical(
+            {
+                "id": "TXN001",
+                "amount": amount,
+                "currency": "VND",
+                "status": "SUCCESS",
+            },
+            [],
+            row_number=7,
+        )
+
+        assert txn is None
+        assert len(errors) == 1
+        violation = errors[0]
+        assert violation.code is QualityRuleCode.INVALID_AMOUNT
+        assert violation.phase is QualityPhase.NORMALIZATION
+        assert violation.outcome is QualityOutcome.REJECT
+        assert violation.field == "amount"
+        assert violation.actual is None
+        assert violation.row == 7
+
     def test_missing_id_produces_error(self):
         """Missing 'id' → QualityViolation."""
         data = {

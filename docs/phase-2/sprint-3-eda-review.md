@@ -8,7 +8,8 @@ coverage handoff. It is not production approval: operator ownership,
 observability and production acceptance remain outside A.
 
 The Kaggle notebook is unchanged and Kaggle-only. The suggestions below are
-not instructions to edit or run it locally.
+not instructions to edit or run it locally. Workstream B and the deterministic
+parts of Workstream C are now implemented; Workstreams D–F remain handoffs.
 
 ## Provenance and full-dataset finding
 
@@ -48,10 +49,12 @@ The source has these 17 columns, in benchmark order:
 `merchant_city`, `merchant_latitude`, `merchant_longitude`,
 `transaction_type`, `amount`, `currency`, `is_fraud`, `fraud_type`.
 
-The frozen baseline in `scripts/benchmark_fraud_detection.py` maps them as
-follows:
+The historical Workstream A frozen baseline mapped them as follows. The current
+Workstream C benchmark v2 promotes `timestamp` to required canonical
+`transDate`; the Workstream C evidence document is authoritative for runtime
+behavior.
 
-| Source field | Current benchmark mapping | Contract note |
+| Source field | Mapping reference | Contract note |
 |---|---|---|
 | `transaction_id` | `id` | Required. |
 | `timestamp` | `transDate` | Required `DATE`; ISO/offset values normalize to UTC-aware canonical timestamps under Workstream C. |

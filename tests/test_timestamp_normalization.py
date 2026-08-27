@@ -95,6 +95,39 @@ def test_non_contract_iso_value_raises_bounded_error(source):
     assert captured.value.args == ("unsupported timestamp",)
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "2025-01-01T08:00:00+00:60",
+        "2025-01-01T08:00:00-01:60",
+        "2025-01-01T08:00:00+07:99",
+        "2025-01-01T08:00:00+24:00",
+        "2025-01-01T08:00:00-99:00",
+    ],
+)
+def test_out_of_range_iso_offset_raises_bounded_error(source):
+    with pytest.raises(TimestampParseError, match="unsupported timestamp") as captured:
+        parse_transaction_timestamp(source)
+
+    assert captured.value.args == ("unsupported timestamp",)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "2025-1-1",
+        "1/1/2025",
+        "2025-1-1 8:3:4",
+        "1/1/2025 8:3:4",
+    ],
+)
+def test_non_fixed_width_legacy_value_raises_bounded_error(source):
+    with pytest.raises(TimestampParseError, match="unsupported timestamp") as captured:
+        parse_transaction_timestamp(source)
+
+    assert captured.value.args == ("unsupported timestamp",)
+
+
 def test_error_does_not_retain_raw_input():
     raw = "customer-secret-timestamp"
     with pytest.raises(TimestampParseError) as captured:

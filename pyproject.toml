@@ -12,7 +12,6 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "motor>=3.0",
-    "python-decouple>=3.8",
     "paramiko>=3.5.1,<4.0.0",
     "httpx>=0.28.1",
     "httpx2>=2.0.0",
@@ -50,7 +49,6 @@ markers = [
 
 [dependency-groups]
 dev = [
-    "nest-asyncio>=1.6.0",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.6.9",
 ]

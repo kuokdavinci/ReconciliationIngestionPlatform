@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.domain.ingestion.quarantine import IngestionQuarantineRecord
+from src.domain.ingestion.quarantine import IngestionQuarantineRecord, QuarantineStatus
 
 
 class QuarantineReprocessMode(StrEnum):
@@ -24,11 +24,17 @@ class QuarantineReprocessRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     record_id: str = Field(alias="recordId", min_length=1)
-    operator_id: str = Field(alias="operatorId", min_length=1)
+    operator_id: str = Field(alias="operatorId", min_length=1, max_length=128)
+    action_id: str = Field(alias="actionId", min_length=1, max_length=128)
+    expected_status: QuarantineStatus = Field(alias="expectedStatus")
     mode: QuarantineReprocessMode
     corrected_row: Any | None = Field(default=None, alias="correctedRow")
     mapping_version: str | None = Field(default=None, alias="mappingVersion")
-    reason: str | None = None
+    expected_existing_fingerprint: str | None = Field(
+        default=None,
+        alias="expectedExistingFingerprint",
+    )
+    reason: str | None = Field(default=None, max_length=500)
 
 
 @dataclass(frozen=True, slots=True)

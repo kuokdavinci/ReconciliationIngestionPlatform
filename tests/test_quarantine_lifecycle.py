@@ -57,6 +57,9 @@ class _MemoryQuarantineRepository:
         self.records[record_id] = updated
         return updated
 
+    async def find_by_id(self, record_id):
+        return self.records.get(record_id)
+
     async def release_for_retry(self, record_id, operator_id, reason, metadata=None):
         current = self.records[record_id]
         if current.status is not QuarantineStatus.REPROCESSING:
@@ -239,6 +242,8 @@ def _request(record, mode, **overrides):
     payload = {
         "recordId": str(record.id),
         "operatorId": "operator-1",
+        "actionId": f"action-{record.id}-{mode}",
+        "expectedStatus": QuarantineStatus.PENDING,
         "mode": mode,
     }
     payload.update(overrides)

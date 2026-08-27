@@ -43,7 +43,10 @@ def _claimed(record: IngestionQuarantineRecord) -> IngestionQuarantineRecord:
 
 def _repo(record: IngestionQuarantineRecord):
     repo = MagicMock()
-    repo.claim = AsyncMock(return_value=_claimed(record))
+    claimed = _claimed(record)
+    repo.find_action = AsyncMock(return_value=None)
+    repo.find_by_id = AsyncMock(side_effect=[record, claimed])
+    repo.claim = AsyncMock(return_value=claimed)
     repo.resolve = AsyncMock(return_value=True)
     repo.release_for_retry = AsyncMock(return_value=True)
     return repo
@@ -55,6 +58,8 @@ def _request(mode: str, **overrides):
     payload = {
         "recordId": "record-1",
         "operatorId": "operator-1",
+        "actionId": "action-1",
+        "expectedStatus": QuarantineStatus.PENDING,
         "mode": mode,
     }
     payload.update(overrides)
@@ -100,7 +105,13 @@ async def test_reprocess_persists_then_resolves():
         "operator-1",
         QuarantineAction.REPROCESS,
         "Quarantine row reprocessed successfully.",
-        {"origin": "AUTHORITATIVE_SOURCE_FILE", "mappingVersion": None},
+        {
+            "origin": "AUTHORITATIVE_SOURCE_FILE",
+            "mappingVersion": None,
+            "sourceEvidenceAvailable": True,
+        },
+        action_id="action-1",
+        outcome="RESOLVED",
     )
 
 
@@ -231,6 +242,8 @@ async def test_explicit_reject_is_terminal_and_keeps_record():
         QuarantineAction.REJECT,
         "Confirmed invalid settlement row.",
         {},
+        action_id="action-1",
+        outcome="REJECTED",
     )
 
 

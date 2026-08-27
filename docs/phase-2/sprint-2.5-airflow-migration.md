@@ -53,7 +53,7 @@ Các thay đổi Phase 2 sau đây là một phần của runtime contract hiệ
   `backend/` không còn được dùng.
 - `src/core/utils.py` là nguồn canonical cho business-day bounds, date
   templates, SHA-256 file identity và runtime error formatting. Các module
-  utility cũ chỉ re-export để không phá import legacy.
+  utility core cũ đã được xóa; code mới không phụ thuộc compatibility wrapper.
 - API fetch unit giữ `metadata.sourceUnitKey` explicit làm identity canonical.
   Nếu raw stage đã hoàn tất, Run Now kết thúc an toàn với
   `SAFE_DUPLICATE`/`streamAlreadyCompleted` trước fetcher và review gate.

@@ -77,3 +77,24 @@ DAG sở hữu schedule, dependency, retry/timeout và task log. Application s�
 | Airflow metadata | PostgreSQL database `airflow` riêng |
 
 Dashboard dùng typed clients trong `frontend-next/src/lib/api/` và gọi các router FastAPI; không đọc database trực tiếp.
+
+## Phase 2: quality, quarantine và recovery
+
+Sprint 3 mở rộng ingestion bằng các quyết định bounded, deterministic:
+
+```text
+file quality gate
+  -> normalize source row -> validate canonical row
+  -> duplicate classification -> batch persistence
+      ├─ valid/new       -> PostgreSQL -> checkpoint advance
+      ├─ row reject      -> quarantine -> valid rows vẫn tiếp tục
+      ├─ equivalent dup  -> count/skip, không quarantine
+      ├─ conflict dup    -> quarantine fingerprint -> HOLD_FOR_REVIEW
+      └─ BATCH_FATAL      -> fail trước khi ghi row
+```
+
+Quarantine có lifecycle `PENDING → REPROCESSING → PENDING|RESOLVED|REJECTED`. Operator claim có lease/actor check; resolve, accept-existing, reject và escalate đều có audit/idempotency. Source unit chỉ resume khi blocker active đã terminal; checkpoint advance trước cleanup raw/file.
+
+Các contract chính nằm ở `src/domain/ingestion/quality.py`, `quarantine.py`, `src/application/ingestion/quality_policy.py`, `quarantine_service.py`, `quarantine_reprocessing.py`, `source_unit_resume.py`, `src/pipeline/quality_gate.py` và `src/api/quarantine.py`.
+
+Phase 2 cũng giữ rõ các boundary sau: API stream stage raw pages trong GridFS trước full-stream review/replay; Airflow chỉ sở hữu task orchestration; application sở hữu checkpoint/idempotency; backfill dùng parent `backfillRunId`; `WAITING_REVIEW` là business gate, không phải task failure.

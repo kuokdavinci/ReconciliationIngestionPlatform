@@ -11,6 +11,8 @@ README là điểm bắt đầu. Các trang dưới đây mô tả runtime hiệ
 - [Configuration](phase-1/CONFIGURATION.md) — environment variables.
 - [Docker services](../docker/README.md) — Compose services/ports.
 - [CI map](CI-MAP.md) — workflow và blast radius.
+- [Ingest/reconciliation trace](phase-1/INGEST_RECON_TRACE.md) — trace và benchmark theo flow.
+- [Performance trace](phase-1/performance/INGEST_RECON_TRACE.md) — số liệu ingestion/reconciliation.
 
 ## Trạng thái và evidence
 
@@ -18,6 +20,8 @@ README là điểm bắt đầu. Các trang dưới đây mô tả runtime hiệ
 - [Known issues](KNOWN_ISSUES.md) — pilot constraints và follow-up.
 - [Phase 2 index](phase-2/INDEX.md) — plan, report và acceptance theo sprint.
 - [Sprint 3 index](phase-2/sprint-3-index.md) — data quality/quarantine.
+
+Các plan cũ trong `phase-1/` và report/evaluation trong `phase-2/` được giữ để truy nguyên quyết định; khi có khác biệt, runtime code + CodeGraph và các trang “Runtime hiện tại” ở trên là nguồn ưu tiên.
 
 ## Quy tắc cập nhật
 

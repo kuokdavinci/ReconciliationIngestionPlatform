@@ -66,7 +66,7 @@ Kiến trúc không còn lớp `src/models/` trung gian. Code dùng `src/domain/
 
 `dags/reconciliation_ingestion.py` có hai task chính: `select_streams` và mapped `run_stream`. DAG gọi `src.application.automation.execute_stream()`; không chứa business ingestion logic.
 
-`src/infrastructure/workflows/airflow.py` là gateway gọi Airflow REST API cho Run Now, retry, backfill và task-state lookup. Compose pilot chỉ bật Airflow control plane, với:
+`src/infrastructure/workflows/airflow.py` là gateway gọi Airflow REST API cho Run Now, retry, backfill và task-state lookup. `src/infrastructure/workflows/local.py` là adapter local/test. Compose pilot chỉ bật Airflow control plane, với:
 
 - `AIRFLOW_GLOBAL_SCHEDULE=none` để manual-only.
 - `AIRFLOW_TASK_RETRIES=0` để retry do operator kiểm soát.
@@ -95,6 +95,7 @@ MongoDB lưu các document linh hoạt và runtime control state:
 | `reconciliation_file` | File metadata, status, scope |
 | `ingestion_checkpoint` / `source_unit` | Checkpoint và source-unit lifecycle |
 | `review_packet` | Review/approval evidence |
+| `ingestion_quarantine_record` | Quarantine row, fingerprint, operator action và retention state |
 | `partner_runtime_run` | Runtime status, attempts, orchestration IDs |
 | `backfill_run` | Ordered backfill parent và per-day state |
 | `raw_ingestion_page` + GridFS | Durable raw page metadata/payload |
@@ -124,6 +125,7 @@ FastAPI app factory nằm ở `src/api/__init__.py::create_app`; các router hi�
 | `reconciliation.py` | `/api/v1/reconciliation` |
 | `data_explorer.py` | `/api/v1/data` |
 | `mappings.py` | `/api/v1/mappings`, `/api/v1/mapping` |
+| `quarantine.py` | `/api/v1/quarantine` |
 | `copilot.py` | `/api/v1/copilot` |
 | `operations.py` | `/api/v1/operations` |
 | `review_packets.py` | `/api/v1/review-packets` |

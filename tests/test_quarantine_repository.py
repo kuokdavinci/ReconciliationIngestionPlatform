@@ -393,7 +393,7 @@ async def test_summarize_counts_filtered_queue_and_overdue_records():
     assert query_model is not None
 
     repository, collection = _repository()
-    collection.count_documents = AsyncMock(side_effect=[5, 2, 1, 3, 4, 2])
+    collection.count_documents = AsyncMock(side_effect=[5, 2, 1, 3, 4, 2, 6])
     now = datetime(2026, 8, 27, tzinfo=UTC)
 
     summary = await repository.summarize(query_model(partner="MOMO"), now=now)
@@ -405,8 +405,9 @@ async def test_summarize_counts_filtered_queue_and_overdue_records():
         "resolved": 3,
         "rejected": 4,
         "overdue": 2,
+        "highPriority": 6,
     }
-    overdue_query = collection.count_documents.call_args_list[-1].args[0]
+    overdue_query = collection.count_documents.call_args_list[-2].args[0]
     assert overdue_query["$and"] == [
         {"partner": "MOMO"},
         {"status": {"$in": ["PENDING", "REPROCESSING"]}, "reviewDueAt": {"$lte": now}},
@@ -419,7 +420,7 @@ async def test_summarize_preserves_caller_status_filter_for_buckets():
     assert query_model is not None
 
     repository, collection = _repository()
-    collection.count_documents = AsyncMock(side_effect=[7, 5, 2])
+    collection.count_documents = AsyncMock(side_effect=[7, 5, 2, 4])
     now = datetime(2026, 8, 27, tzinfo=UTC)
 
     summary = await repository.summarize(
@@ -434,6 +435,7 @@ async def test_summarize_preserves_caller_status_filter_for_buckets():
         "resolved": 0,
         "rejected": 0,
         "overdue": 2,
+        "highPriority": 4,
     }
     assert collection.count_documents.call_args_list[1].args[0]["$and"] == [
         {"partner": "MOMO", "status": "PENDING"},
@@ -457,12 +459,12 @@ async def test_escalate_caps_level_sets_high_priority_and_records_action():
     escalated = await repository.escalate(
         str(record.id),
         "operator-1",
+        "act-escalate",
+        QuarantineStatus.PENDING,
         "Needs senior review",
-        action_id="act-escalate",
-        expected_status=QuarantineStatus.PENDING,
     )
 
-    assert escalated is True
+    assert escalated is not None
     query, update = collection.update_one.call_args.args
     event = update["$push"]["resolutionHistory"]
     assert query == {"_id": str(record.id), "status": "PENDING"}
@@ -488,12 +490,12 @@ async def test_escalate_reprocessing_requires_claim_owner_and_preserves_status()
     escalated = await repository.escalate(
         str(record.id),
         "operator-1",
+        "act-escalate-reprocessing",
+        QuarantineStatus.REPROCESSING,
         "Needs senior review",
-        action_id="act-escalate-reprocessing",
-        expected_status=QuarantineStatus.REPROCESSING,
     )
 
-    assert escalated is True
+    assert escalated is not None
     query, update = collection.update_one.call_args.args
     event = update["$push"]["resolutionHistory"]
     assert query == {"_id": str(record.id), "status": "REPROCESSING", "claimedBy": "operator-1"}
@@ -515,12 +517,24 @@ async def test_escalate_at_level_three_records_noop_without_incrementing():
     escalated = await repository.escalate(
         str(record.id),
         "operator-1",
+        "act-escalate-noop",
+        QuarantineStatus.PENDING,
         "Already senior review",
-        action_id="act-escalate-noop",
     )
 
-    assert escalated is True
-    _, update = collection.update_one.call_args.args
-    event = update["$push"]["resolutionHistory"]
-    assert update["$set"]["escalationLevel"] == 3
-    assert event["metadata"] == {"escalationLevel": 3}
+    assert escalated is None
+    collection.update_one.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_summarize_includes_high_priority_count():
+    query_model = getattr(quarantine, "QuarantineQuery", None)
+    assert query_model is not None
+
+    repository, collection = _repository()
+    collection.count_documents = AsyncMock(side_effect=[7, 2, 1, 3, 4, 2, 5])
+    now = datetime(2026, 8, 27, tzinfo=UTC)
+
+    summary = await repository.summarize(query_model(partner="MOMO"), now=now)
+
+    assert summary["highPriority"] == 5

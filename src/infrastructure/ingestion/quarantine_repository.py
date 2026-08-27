@@ -494,31 +494,32 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             "overdue": 0
             if query.status in {QuarantineStatus.RESOLVED, QuarantineStatus.REJECTED}
             else await count(overdue_filter),
+            "highPriority": await count({"priority": QuarantinePriority.HIGH.value}),
         }
 
     async def escalate(
         self,
         record_id: str,
         operator_id: str,
+        action_id: str,
+        expected_status: QuarantineStatus,
         reason: str,
-        *,
-        action_id: str | None = None,
-        expected_status: QuarantineStatus | None = None,
-        outcome: str = "ESCALATED",
-    ) -> bool:
+    ) -> IngestionQuarantineRecord | None:
         action_id = _bounded_action_id(action_id)
         current = await self.find_by_id(record_id)
         if current is None:
-            return False
+            return None
         if current.status not in {
             QuarantineStatus.PENDING,
             QuarantineStatus.REPROCESSING,
         }:
-            return False
-        if expected_status is not None and current.status is not expected_status:
-            return False
+            return None
+        if current.status is not expected_status:
+            return None
         if current.status is QuarantineStatus.REPROCESSING and current.claimed_by != operator_id:
-            return False
+            return None
+        if current.escalation_level >= 3:
+            return None
 
         now = datetime.now(UTC)
         target_level = min(current.escalation_level + 1, 3)
@@ -531,7 +532,7 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             reason=bounded_reason,
             attempt=current.attempt_count,
             actionId=action_id,
-            outcome=outcome,
+            outcome="ESCALATED",
             metadata={"escalationLevel": target_level},
         )
         filters: dict[str, Any] = {"_id": record_id, "status": current.status.value}
@@ -553,4 +554,6 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
                 },
             },
         )
-        return result.modified_count == 1
+        if result.modified_count != 1:
+            return None
+        return await self.find_by_id(record_id)

@@ -124,6 +124,31 @@ async def test_second_claim_returns_none_when_atomic_update_loses():
 
 
 @pytest.mark.asyncio
+async def test_claim_does_not_accept_non_pending_expected_status_override():
+    record, reprocessing = _record(QuarantineStatus.REPROCESSING)
+    reprocessing["_id"] = str(record.id)
+    reprocessing["claimedBy"] = "operator-1"
+    repository, collection = _repository()
+    collection.find_one = AsyncMock(return_value=reprocessing)
+    collection.find_one_and_update = AsyncMock()
+
+    with pytest.raises(TypeError):
+        await repository.claim(
+            str(record.id),
+            "operator-2",
+            expected_status=QuarantineStatus.REPROCESSING,
+        )
+
+    collection.find_one_and_update.assert_not_called()
+
+
+def test_repository_does_not_expose_unbound_mark_status_mutation():
+    repository, _ = _repository()
+
+    assert getattr(repository, "mark_status", None) is None
+
+
+@pytest.mark.asyncio
 async def test_resolve_requires_reprocessing_and_operator_claim():
     record, reprocessing = _record(QuarantineStatus.REPROCESSING)
     reprocessing["_id"] = str(record.id)
@@ -382,8 +407,42 @@ async def test_summarize_counts_filtered_queue_and_overdue_records():
         "overdue": 2,
     }
     overdue_query = collection.count_documents.call_args_list[-1].args[0]
-    assert overdue_query["status"]["$in"] == ["PENDING", "REPROCESSING"]
-    assert overdue_query["reviewDueAt"] == {"$lte": now}
+    assert overdue_query["$and"] == [
+        {"partner": "MOMO"},
+        {"status": {"$in": ["PENDING", "REPROCESSING"]}, "reviewDueAt": {"$lte": now}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_summarize_preserves_caller_status_filter_for_buckets():
+    query_model = getattr(quarantine, "QuarantineQuery", None)
+    assert query_model is not None
+
+    repository, collection = _repository()
+    collection.count_documents = AsyncMock(side_effect=[7, 5, 2])
+    now = datetime(2026, 8, 27, tzinfo=UTC)
+
+    summary = await repository.summarize(
+        query_model(partner="MOMO", status=QuarantineStatus.PENDING),
+        now=now,
+    )
+
+    assert summary == {
+        "total": 7,
+        "pending": 5,
+        "reprocessing": 0,
+        "resolved": 0,
+        "rejected": 0,
+        "overdue": 2,
+    }
+    assert collection.count_documents.call_args_list[1].args[0]["$and"] == [
+        {"partner": "MOMO", "status": "PENDING"},
+        {"status": "PENDING"},
+    ]
+    assert collection.count_documents.call_args_list[2].args[0]["$and"] == [
+        {"partner": "MOMO", "status": "PENDING"},
+        {"status": {"$in": ["PENDING", "REPROCESSING"]}, "reviewDueAt": {"$lte": now}},
+    ]
 
 
 @pytest.mark.asyncio
@@ -414,3 +473,54 @@ async def test_escalate_caps_level_sets_high_priority_and_records_action():
     assert event["action"] == "ESCALATE"
     assert event["actionId"] == "act-escalate"
     assert event["outcome"] == "ESCALATED"
+
+
+@pytest.mark.asyncio
+async def test_escalate_reprocessing_requires_claim_owner_and_preserves_status():
+    record, reprocessing = _record(QuarantineStatus.REPROCESSING)
+    reprocessing["_id"] = str(record.id)
+    reprocessing["claimedBy"] = "operator-1"
+    reprocessing["escalationLevel"] = 1
+    repository, collection = _repository()
+    collection.find_one = AsyncMock(return_value=reprocessing)
+    collection.update_one = AsyncMock(return_value=SimpleNamespace(modified_count=1))
+
+    escalated = await repository.escalate(
+        str(record.id),
+        "operator-1",
+        "Needs senior review",
+        action_id="act-escalate-reprocessing",
+        expected_status=QuarantineStatus.REPROCESSING,
+    )
+
+    assert escalated is True
+    query, update = collection.update_one.call_args.args
+    event = update["$push"]["resolutionHistory"]
+    assert query == {"_id": str(record.id), "status": "REPROCESSING", "claimedBy": "operator-1"}
+    assert "status" not in update["$set"]
+    assert "claimedBy" not in update["$set"]
+    assert update["$set"]["escalationLevel"] == 2
+    assert event["fromStatus"] == "REPROCESSING"
+    assert event["toStatus"] == "REPROCESSING"
+
+
+@pytest.mark.asyncio
+async def test_escalate_at_level_three_records_noop_without_incrementing():
+    record, pending = _record()
+    pending["escalationLevel"] = 3
+    repository, collection = _repository()
+    collection.find_one = AsyncMock(return_value=pending)
+    collection.update_one = AsyncMock(return_value=SimpleNamespace(modified_count=1))
+
+    escalated = await repository.escalate(
+        str(record.id),
+        "operator-1",
+        "Already senior review",
+        action_id="act-escalate-noop",
+    )
+
+    assert escalated is True
+    _, update = collection.update_one.call_args.args
+    event = update["$push"]["resolutionHistory"]
+    assert update["$set"]["escalationLevel"] == 3
+    assert event["metadata"] == {"escalationLevel": 3}

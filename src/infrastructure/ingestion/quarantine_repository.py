@@ -173,13 +173,12 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
         lease_seconds: int = 900,
         *,
         action_id: str | None = None,
-        expected_status: QuarantineStatus = QuarantineStatus.PENDING,
     ) -> IngestionQuarantineRecord | None:
         if lease_seconds < 1:
             raise ValueError("lease_seconds must be at least 1")
         action_id = _bounded_action_id(action_id)
         current = await self.find_by_id(record_id)
-        if current is None or current.status is not expected_status:
+        if current is None or current.status is not QuarantineStatus.PENDING:
             return None
 
         now = datetime.now(UTC)
@@ -196,7 +195,7 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             metadata={"leaseSeconds": lease_seconds},
         )
         raw = await self.collection.find_one_and_update(
-            {"_id": record_id, "status": expected_status.value},
+            {"_id": record_id, "status": QuarantineStatus.PENDING.value},
             {
                 "$set": {
                     "status": QuarantineStatus.REPROCESSING.value,
@@ -316,21 +315,6 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             last = records[-1]
             next_cursor = f"{last.created_at.isoformat()}|{last.id}"
         return records, next_cursor
-
-    async def mark_status(
-        self,
-        record_id: str,
-        status: QuarantineStatus,
-        *,
-        metadata: dict[str, Any] | None = None,
-    ) -> bool:
-        update: dict[str, Any] = {
-            "status": status.value,
-            "updatedAt": datetime.now(UTC),
-        }
-        if metadata is not None:
-            update["resolutionMetadata"] = _bounded_metadata(metadata)
-        return await self.update_one({"_id": record_id}, update)
 
     async def release_for_retry(
         self,
@@ -478,27 +462,38 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
         base = self._query_filters(query, now=now)
 
         async def count(extra: dict[str, Any] | None = None) -> int:
-            filters = {**base, **(extra or {})}
+            if not extra:
+                filters = base
+            elif not base:
+                filters = extra
+            else:
+                filters = {"$and": [base, extra]}
             return int(await self.collection.count_documents(filters))
 
+        async def status_count(status: QuarantineStatus) -> int:
+            if query.status is not None and query.status is not status:
+                return 0
+            return await count({"status": status.value})
+
         now = now or datetime.now(UTC)
+        overdue_filter = {
+            "status": {
+                "$in": [
+                    QuarantineStatus.PENDING.value,
+                    QuarantineStatus.REPROCESSING.value,
+                ]
+            },
+            "reviewDueAt": {"$lte": now},
+        }
         return {
             "total": await count(),
-            "pending": await count({"status": QuarantineStatus.PENDING.value}),
-            "reprocessing": await count({"status": QuarantineStatus.REPROCESSING.value}),
-            "resolved": await count({"status": QuarantineStatus.RESOLVED.value}),
-            "rejected": await count({"status": QuarantineStatus.REJECTED.value}),
-            "overdue": await count(
-                {
-                    "status": {
-                        "$in": [
-                            QuarantineStatus.PENDING.value,
-                            QuarantineStatus.REPROCESSING.value,
-                        ]
-                    },
-                    "reviewDueAt": {"$lte": now},
-                }
-            ),
+            "pending": await status_count(QuarantineStatus.PENDING),
+            "reprocessing": await status_count(QuarantineStatus.REPROCESSING),
+            "resolved": await status_count(QuarantineStatus.RESOLVED),
+            "rejected": await status_count(QuarantineStatus.REJECTED),
+            "overdue": 0
+            if query.status in {QuarantineStatus.RESOLVED, QuarantineStatus.REJECTED}
+            else await count(overdue_filter),
         }
 
     async def escalate(

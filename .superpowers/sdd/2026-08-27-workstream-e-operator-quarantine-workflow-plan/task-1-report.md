@@ -108,3 +108,108 @@ Output: exit code `0`.
 
 - Full-repo `ruff check .` currently fails on unrelated pre-existing unused imports in `tests/test_benchmark_fraud_detection.py`: `asyncio`, `json`, `scripts.benchmark_fraud_detection`, `run_benchmark`, and `_redact_mongodb_credentials`. I did not change that unrelated test file.
 - Task 1 only adds repository/domain support for action metadata and escalation. Task 2/3 still need to wire public action idempotency and API behavior.
+
+## Fix Round 1
+
+### Review Findings Addressed
+
+- Deleted the unused unbound `mark_status()` mutation from `IngestionQuarantineRepository`.
+- Removed `expected_status` from `claim()` so claim remains strictly `PENDING -> REPROCESSING`.
+- Changed `summarize()` to preserve caller status filters with `$and` and return zero for contradictory status buckets.
+- Added escalation tests for claimed `REPROCESSING` records and level-3 cap behavior.
+
+### RED Evidence
+
+Command:
+
+```bash
+pytest -q tests/test_quarantine_repository.py
+```
+
+Output before production changes:
+
+```text
+...FF........F...                                                        [100%]
+3 failed, 14 passed in 0.19s
+```
+
+Failures covered:
+
+- `test_claim_does_not_accept_non_pending_expected_status_override`
+- `test_repository_does_not_expose_unbound_mark_status_mutation`
+- `test_summarize_preserves_caller_status_filter_for_buckets`
+
+### GREEN Evidence
+
+Focused repository tests:
+
+```bash
+pytest -q tests/test_quarantine_repository.py
+```
+
+Output:
+
+```text
+.................                                                        [100%]
+17 passed in 0.10s
+```
+
+Broader quarantine coverage:
+
+```bash
+pytest -q tests/test_quarantine_domain.py tests/test_quarantine_repository.py tests/test_indexes.py tests/test_quarantine_lifecycle.py tests/test_quarantine_retention.py tests/test_quarantine_service.py tests/test_quarantine_audit.py tests/test_api_quarantine.py tests/test_quarantine_runtime_wiring.py tests/test_quarantine_source_unit.py tests/test_quarantine_source_unit_resume.py
+```
+
+Output:
+
+```text
+........................................................................ [ 98%]
+.                                                                        [100%]
+73 passed in 0.75s
+```
+
+Task-scoped ruff:
+
+```bash
+ruff check src/domain/ingestion/quarantine.py src/config/settings.py src/infrastructure/ingestion/quarantine_repository.py src/infrastructure/persistence/mongo_indexes.py tests/test_quarantine_domain.py tests/test_quarantine_repository.py tests/test_indexes.py
+```
+
+Output:
+
+```text
+All checks passed!
+```
+
+Full-repo ruff:
+
+```bash
+ruff check .
+```
+
+Output:
+
+```text
+F401 [*] `asyncio` imported but unused
+ --> tests/test_benchmark_fraud_detection.py:3:8
+F401 [*] `json` imported but unused
+ --> tests/test_benchmark_fraud_detection.py:4:8
+F401 [*] `scripts.benchmark_fraud_detection` imported but unused
+  --> tests/test_benchmark_fraud_detection.py:10:21
+F401 [*] `scripts.benchmark_fraud_detection.run_benchmark` imported but unused
+  --> tests/test_benchmark_fraud_detection.py:19:5
+F401 [*] `scripts.benchmark_fraud_detection._redact_mongodb_credentials` imported but unused
+  --> tests/test_benchmark_fraud_detection.py:21:5
+Found 5 errors.
+```
+
+Diff whitespace check:
+
+```bash
+git diff --check
+```
+
+Output: exit code `0`.
+
+### Concerns
+
+- `ruff check .` still fails on unrelated pre-existing unused imports in `tests/test_benchmark_fraud_detection.py`; Task 1 files pass task-scoped ruff.

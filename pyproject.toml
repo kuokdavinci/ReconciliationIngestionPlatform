@@ -63,19 +63,3 @@ ignore = ["E402", "E701"]
 [tool.mypy]
 ignore_missing_imports = true
 explicit_package_bases = true
-
-[[tool.mypy.overrides]]
-module = [
-  "src.api.*",
-  "src.analysis.*",
-  "src.pipeline.*",
-  "src.services.*",
-  "src.config.*",
-  "src.normalizer.*",
-  "src.readers.*",
-  "src.models.reconciliation_result",
-  "src.models.data_container",
-  "src.reconciliation.engine",
-  "src.models.postgres",
-]
-ignore_errors = true

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 import python_calamine
 from python_calamine import CalamineWorkbook, CalamineSheet
@@ -116,7 +116,7 @@ class ExcelStreamReader:
         self._select_sheet()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> Literal[False]:
         """Close the workbook, even if an exception occurred.
 
         Returns:

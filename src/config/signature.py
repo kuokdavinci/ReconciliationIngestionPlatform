@@ -66,6 +66,8 @@ def _compute_hash(headers: list[str], column_count: int) -> str:
 
 def structure_signature_shape(signature: Any) -> tuple[tuple[str, ...], int] | None:
     """Return the stable shape portion of a persisted or computed signature."""
+    headers: Any = None
+    column_count: Any = None
     if isinstance(signature, StructureSignature):
         headers = signature.headers
         column_count = signature.column_count
@@ -93,7 +95,7 @@ def _read_raw_csv(path: Path, max_rows: int = 20) -> list[list[str]]:
     delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.reader(f, delimiter=delimiter)
-        rows = []
+        rows: list[list[str]] = []
         for row in reader:
             normalized = [_normalize_cell(c) for c in row]
             if not rows and not any(normalized):
@@ -108,7 +110,7 @@ def _read_raw_xlsx(path: Path, max_rows: int = 20) -> list[list[str]]:
     import openpyxl
     wb = openpyxl.load_workbook(path, read_only=True)
     ws = wb.active
-    rows = []
+    rows: list[list[str]] = []
     for row in ws.iter_rows(values_only=True):
         normalized = [_normalize_cell(c) for c in row]
         if not rows and not any(normalized):

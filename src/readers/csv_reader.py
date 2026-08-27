@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Self, TextIO
+from typing import Literal, Self, TextIO
 
 from src.domain.mapping.models import MappingConfig
 
@@ -85,7 +85,7 @@ class CSVStreamReader:
         )
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> Literal[False]:
         """Close the CSV file, even if an exception occurred."""
         if self._file is not None:
             self._file.close()

@@ -40,11 +40,21 @@ jobs:
             .env
 
       - name: Start the full runtime topology
+        env:
+          MONGO_ROOT_PASSWORD: ci-mongo-password
+          AIRFLOW_DB_PASSWORD: ci-airflow-db-password
+          AIRFLOW_ADMIN_USERNAME: airflow
+          AIRFLOW_ADMIN_PASSWORD: ci-airflow-admin-password
+          AIRFLOW_JWT_SECRET: ci-airflow-jwt-secret-012345678901234567890123456789012345678901234567890123456789
+          SFTP_PASS: ci-sftp-password
         run: >-
           docker compose -p reconciliation-ci up -d --build --wait
           postgres mongodb sftp airflow-db-bootstrap airflow-volume-permissions
           airflow-init airflow-api-server airflow-scheduler airflow-dag-processor
           api viettelpay-mock
+
+      - name: Activate CI Airflow DAG
+        run: docker compose -p reconciliation-ci exec -T airflow-api-server airflow dags unpause reconciliation_ingestion
 
       - name: Run full topology contract
         run: uv run pytest tests/test_topology_contract.py --e2e -v --tb=short

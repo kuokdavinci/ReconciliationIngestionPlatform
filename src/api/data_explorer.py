@@ -171,7 +171,11 @@ async def list_files(
             dc_count = await transaction_repo.count_by_source_file(d["_id"])
             file_partner = d.get("partner", "")
             file_date_raw = d.get("reconciliationDate")
-            file_date_str = file_date_raw.strftime("%Y-%m-%d") if hasattr(file_date_raw, "strftime") else str(file_date_raw)[:10] if file_date_raw else None
+            file_date_str: str | None
+            if isinstance(file_date_raw, datetime):
+                file_date_str = file_date_raw.strftime("%Y-%m-%d")
+            else:
+                file_date_str = str(file_date_raw)[:10] if file_date_raw else None
             rr_count = 0
             if file_partner and file_date_str:
                 rr_count = await ReconciliationResultRepository(

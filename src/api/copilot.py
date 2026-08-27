@@ -148,7 +148,7 @@ async def execute_copilot_action(
         result = await approve_keep_current_packet_action(
             request,
             review_item_id,
-            ReviewDecisionPayload(reviewed_by=payload.reviewed_by, scopeType=payload.scope_type),
+            ReviewDecisionPayload(reviewedBy=payload.reviewed_by, scopeType=payload.scope_type),
         )
         context = await _copilot_context(
             service,
@@ -164,13 +164,13 @@ async def execute_copilot_action(
             result = await approve_activate_packet_action(
                 request,
                 review_item_id,
-                ReviewDecisionPayload(reviewed_by=payload.reviewed_by, scopeType=payload.scope_type),
+                ReviewDecisionPayload(reviewedBy=payload.reviewed_by, scopeType=payload.scope_type),
             )
         elif draft_mapping_id:
             result = await approve_mapping_config_action(
                 request,
                 draft_mapping_id,
-                MappingReviewPayload(reviewed_by=payload.reviewed_by),
+                MappingReviewPayload(reviewedBy=payload.reviewed_by),
             )
         else:
             raise HTTPException(status_code=400, detail="No proposal is available for this action.")
@@ -188,13 +188,13 @@ async def execute_copilot_action(
             result = await reject_packet_action(
                 request,
                 review_item_id,
-                ReviewDecisionPayload(reviewed_by=payload.reviewed_by),
+                ReviewDecisionPayload(reviewedBy=payload.reviewed_by),
             )
         elif draft_mapping_id:
             result = await reject_mapping_config_action(
                 request,
                 draft_mapping_id,
-                MappingReviewPayload(reviewed_by=payload.reviewed_by),
+                MappingReviewPayload(reviewedBy=payload.reviewed_by),
             )
         else:
             raise HTTPException(status_code=400, detail="No proposal is available for this action.")

@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from functools import partial
 from types import SimpleNamespace
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -69,7 +68,13 @@ def _track_background_task(request: Request, task: asyncio.Task) -> None:
 
 
 _validate_date = validate_date
-_validate_partner = partial(validate_partner, required=True)
+
+
+def _validate_partner(value: str | None) -> str:
+    partner = validate_partner(value, required=True)
+    if partner is None:
+        raise HTTPException(status_code=400, detail="Partner identifier is required.")
+    return partner
 
 
 def _validate_status(status: Optional[str]) -> Optional[str]:

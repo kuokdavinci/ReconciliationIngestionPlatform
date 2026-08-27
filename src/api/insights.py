@@ -10,7 +10,6 @@ All endpoints validate request parameters and handle errors gracefully.
 
 import logging
 from datetime import datetime, timezone
-from functools import partial
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -20,7 +19,7 @@ from src.api.dependencies import get_request_db
 from src.api.query_validation import validate_date, validate_partner
 from src.api.response_utils import camelize
 from src.analysis.config import AnalysisConfig
-from src.analysis.provider import create_provider
+from src.analysis.provider import AIProviderRouter, create_provider
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,13 @@ router = APIRouter(prefix="/api/v1")
 
 
 _validate_date = validate_date
-_validate_partner = partial(validate_partner, required=True)
+
+
+def _validate_partner(value: str | None) -> str:
+    partner = validate_partner(value, required=True)
+    if partner is None:
+        raise HTTPException(status_code=400, detail="Partner identifier is required.")
+    return partner
 
 
 def _get_collection(request: Request) -> ReconciliationResultRepository:
@@ -46,7 +51,7 @@ def _get_collection(request: Request) -> ReconciliationResultRepository:
     return ReconciliationResultRepository(get_request_db(request))
 
 
-def _get_llm_provider() -> object:
+def _get_llm_provider() -> AIProviderRouter:
     """Create and return an LLM provider instance.
 
     Returns:

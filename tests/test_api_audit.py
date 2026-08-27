@@ -3,6 +3,30 @@
 from src.api.audit import _build_audit_query
 
 
+def test_audit_repository_finds_one_action_id_for_an_entity():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.infrastructure.audit.repository import AuditEventRepository
+
+    repository = AuditEventRepository(MagicMock())
+    repository.find_one = AsyncMock(return_value="event")
+
+    import asyncio
+
+    event = asyncio.run(
+        repository.find_by_action_id("INGESTION_QUARANTINE", "record-1", "action-1")
+    )
+
+    assert event == "event"
+    repository.find_one.assert_awaited_once_with(
+        {
+            "entityType": "INGESTION_QUARANTINE",
+            "entityId": "record-1",
+            "metadata.actionId": "action-1",
+        }
+    )
+
+
 def test_build_audit_query_filters_by_date_for_date_bound_entities():
     query = _build_audit_query(
         entity_type="RECONCILIATION_RUN",

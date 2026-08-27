@@ -170,6 +170,12 @@ INDEXES: dict[str, list[IndexModel]] = {
             [("action", ASCENDING), ("createdAt", DESCENDING)],
             name="idx_audit_action_created",
         ),
+        IndexModel(
+            [("entityType", ASCENDING), ("entityId", ASCENDING), ("metadata.actionId", ASCENDING)],
+            unique=True,
+            sparse=True,
+            name="idx_audit_entity_action_unique",
+        ),
     ],
     "reconciliation_review_record": [
         IndexModel(

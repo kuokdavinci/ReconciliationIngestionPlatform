@@ -467,8 +467,12 @@ async def test_escalate_caps_level_sets_high_priority_and_records_action():
     assert escalated is not None
     query, update = collection.update_one.call_args.args
     event = update["$push"]["resolutionHistory"]
-    assert query == {"_id": str(record.id), "status": "PENDING"}
-    assert update["$set"]["priority"] == "HIGH"
+    assert query == {
+        "_id": str(record.id),
+        "status": "PENDING",
+        "resolutionHistory.actionId": {"$ne": "act-escalate"},
+    }
+    assert "priority" not in update["$set"]
     assert update["$set"]["escalationLevel"] == 3
     assert update["$set"]["escalatedBy"] == "operator-1"
     assert update["$set"]["lastActionId"] == "act-escalate"
@@ -498,7 +502,12 @@ async def test_escalate_reprocessing_requires_claim_owner_and_preserves_status()
     assert escalated is not None
     query, update = collection.update_one.call_args.args
     event = update["$push"]["resolutionHistory"]
-    assert query == {"_id": str(record.id), "status": "REPROCESSING", "claimedBy": "operator-1"}
+    assert query == {
+        "_id": str(record.id),
+        "status": "REPROCESSING",
+        "claimedBy": "operator-1",
+        "resolutionHistory.actionId": {"$ne": "act-escalate-reprocessing"},
+    }
     assert "status" not in update["$set"]
     assert "claimedBy" not in update["$set"]
     assert update["$set"]["escalationLevel"] == 2

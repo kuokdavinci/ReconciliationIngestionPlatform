@@ -3,6 +3,7 @@
 import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from src.application.ingestion.contracts import serialize_quarantine_counters
@@ -14,6 +15,7 @@ from src.application.ingestion.quarantine_reprocessing import (
 from src.domain.ingestion.quarantine import (
     IngestionQuarantineRecord,
     QuarantineAction,
+    QuarantinePriority,
     QuarantineResolutionEvent,
     QuarantineStatus,
 )
@@ -37,6 +39,9 @@ class QuarantineResolutionResult:
     attempt_count: int | None = None
     source_evidence_available: bool | None = None
     escalation_level: int | None = None
+    claimed_by: str | None = None
+    priority: QuarantinePriority | None = None
+    review_due_at: datetime | None = None
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -108,6 +113,20 @@ def _event_success(event: QuarantineResolutionEvent) -> bool:
     } or event.outcome in {"CLAIMED", "ESCALATED"}
 
 
+def _event_due_at(event: QuarantineResolutionEvent) -> datetime | None:
+    if not isinstance(event.metadata, Mapping):
+        return None
+    value = event.metadata.get("reviewDueAt")
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
 def _result_from_event(
     record_id: str,
     event: QuarantineResolutionEvent,
@@ -138,6 +157,18 @@ def _result_from_event(
             if isinstance(event.metadata, Mapping)
             else None
         ),
+        claimed_by=(
+            event.metadata.get("claimedBy")
+            if isinstance(event.metadata, Mapping)
+            else None
+        ),
+        priority=(
+            QuarantinePriority(event.metadata["priority"])
+            if isinstance(event.metadata, Mapping)
+            and event.metadata.get("priority") in {item.value for item in QuarantinePriority}
+            else None
+        ),
+        review_due_at=_event_due_at(event),
     )
 
 
@@ -222,11 +253,18 @@ class QuarantineResolutionService:
         action_id: str,
         operator_id: str,
         action: QuarantineAction,
+        *,
+        expected_outcome: str | None = None,
     ) -> QuarantineResolutionResult | None:
         event = await self._find_action(record_id, action_id)
         if event is None:
             return None
-        if event.actor != operator_id or event.action is not action:
+        action_mismatch = event.actor != operator_id or event.action is not action
+        if expected_outcome is not None:
+            action_mismatch = action_mismatch or event.outcome != expected_outcome
+        elif action is QuarantineAction.REPROCESS and event.outcome == "CLAIMED":
+            action_mismatch = True
+        if action_mismatch:
             return QuarantineResolutionResult(
                 record_id=record_id,
                 success=False,
@@ -276,7 +314,13 @@ class QuarantineResolutionService:
         expected_status: QuarantineStatus,
     ) -> QuarantineResolutionResult:
         action = QuarantineAction.REPROCESS
-        replayed = await self._replayed_action(record_id, action_id, operator_id, action)
+        replayed = await self._replayed_action(
+            record_id,
+            action_id,
+            operator_id,
+            action,
+            expected_outcome="CLAIMED",
+        )
         if replayed is not None:
             return replayed
 
@@ -326,6 +370,9 @@ class QuarantineResolutionService:
             attempt_count=claimed.attempt_count,
             source_evidence_available=None,
             escalation_level=claimed.escalation_level,
+            claimed_by=claimed.claimed_by,
+            priority=claimed.priority,
+            review_due_at=claimed.review_due_at,
         )
 
     async def resolve_claimed(
@@ -611,6 +658,9 @@ class QuarantineResolutionService:
             previous_status=record.status,
             attempt_count=record.attempt_count,
             escalation_level=level,
+            claimed_by=escalated.claimed_by,
+            priority=escalated.priority,
+            review_due_at=escalated.review_due_at,
         )
 
     async def resolve(
@@ -784,6 +834,8 @@ class QuarantineResolutionService:
             attempt_count=claimed.attempt_count,
             source_evidence_available=source_evidence_available,
             escalation_level=claimed.escalation_level,
+            priority=claimed.priority,
+            review_due_at=claimed.review_due_at,
         )
 
     async def _terminal_resolve(
@@ -853,6 +905,8 @@ class QuarantineResolutionService:
             attempt_count=claimed.attempt_count,
             source_evidence_available=source_evidence_available,
             escalation_level=claimed.escalation_level,
+            priority=claimed.priority,
+            review_due_at=claimed.review_due_at,
         )
 
 

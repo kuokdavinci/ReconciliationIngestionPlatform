@@ -192,10 +192,25 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             attempt=current.attempt_count + 1,
             actionId=action_id,
             outcome="CLAIMED",
-            metadata={"leaseSeconds": lease_seconds},
+            metadata={
+                "leaseSeconds": lease_seconds,
+                "claimedBy": operator_id,
+                "priority": current.priority.value,
+                "reviewDueAt": (
+                    current.review_due_at.isoformat()
+                    if current.review_due_at is not None
+                    else None
+                ),
+            },
         )
+        filters: dict[str, Any] = {
+            "_id": record_id,
+            "status": QuarantineStatus.PENDING.value,
+        }
+        if action_id is not None:
+            filters["resolutionHistory.actionId"] = {"$ne": action_id}
         raw = await self.collection.find_one_and_update(
-            {"_id": record_id, "status": QuarantineStatus.PENDING.value},
+            filters,
             {
                 "$set": {
                     "status": QuarantineStatus.REPROCESSING.value,
@@ -350,12 +365,15 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             outcome=outcome,
             metadata=_bounded_metadata(metadata or {}),
         )
+        filters: dict[str, Any] = {
+            "_id": record_id,
+            "status": QuarantineStatus.REPROCESSING.value,
+            "claimedBy": operator_id,
+        }
+        if action_id is not None:
+            filters["resolutionHistory.actionId"] = {"$ne": action_id}
         result = await self.collection.update_one(
-            {
-                "_id": record_id,
-                "status": QuarantineStatus.REPROCESSING.value,
-                "claimedBy": operator_id,
-            },
+            filters,
             {
                 "$set": {
                     "status": QuarantineStatus.PENDING.value,
@@ -407,12 +425,15 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             metadata=_bounded_metadata(metadata or {}),
         )
         bounded_metadata = _bounded_metadata(metadata or {})
+        filters: dict[str, Any] = {
+            "_id": record_id,
+            "status": QuarantineStatus.REPROCESSING.value,
+            "claimedBy": operator_id,
+        }
+        if action_id is not None:
+            filters["resolutionHistory.actionId"] = {"$ne": action_id}
         result = await self.collection.update_one(
-            {
-                "_id": record_id,
-                "status": QuarantineStatus.REPROCESSING.value,
-                "claimedBy": operator_id,
-            },
+            filters,
             {
                 "$set": {
                     "status": target.value,
@@ -533,16 +554,26 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             attempt=current.attempt_count,
             actionId=action_id,
             outcome="ESCALATED",
-            metadata={"escalationLevel": target_level},
+            metadata={
+                "escalationLevel": target_level,
+                "claimedBy": operator_id if current.status is QuarantineStatus.REPROCESSING else None,
+                "priority": current.priority.value,
+                "reviewDueAt": (
+                    current.review_due_at.isoformat()
+                    if current.review_due_at is not None
+                    else None
+                ),
+            },
         )
         filters: dict[str, Any] = {"_id": record_id, "status": current.status.value}
         if current.status is QuarantineStatus.REPROCESSING:
             filters["claimedBy"] = operator_id
+        if action_id is not None:
+            filters["resolutionHistory.actionId"] = {"$ne": action_id}
         result = await self.collection.update_one(
             filters,
             {
                 "$set": {
-                    "priority": QuarantinePriority.HIGH.value,
                     "escalationLevel": target_level,
                     "escalatedAt": now,
                     "escalatedBy": operator_id,

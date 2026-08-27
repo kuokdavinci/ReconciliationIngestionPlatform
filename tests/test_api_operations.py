@@ -27,6 +27,16 @@ async def test_ingestion_operations_returns_stage_and_quarantine_summary():
     file_repository.find_many = AsyncMock(return_value=[file_record])
     quarantine_repository = MagicMock()
     quarantine_repository.find_pending = AsyncMock(return_value=[quarantine_record])
+    quarantine_repository.summarize = AsyncMock(
+        return_value={
+            "pending": 4,
+            "reprocessing": 2,
+            "resolved": 1,
+            "rejected": 3,
+            "overdue": 2,
+            "highPriority": 1,
+        }
+    )
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=MagicMock())))
 
     with (
@@ -42,4 +52,6 @@ async def test_ingestion_operations_returns_stage_and_quarantine_summary():
         "pendingQuarantine": 1,
     }
     assert result["files"][0]["stageSummary"]["currentStage"] == "FINALIZING"
+    assert result["quarantineCounters"]["reprocessingRows"] == 2
+    assert result["quarantineCounters"]["overdueRows"] == 2
     assert result["pendingQuarantine"][0]["status"] == "PENDING"

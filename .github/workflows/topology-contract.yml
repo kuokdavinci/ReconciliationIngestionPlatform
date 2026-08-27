@@ -70,6 +70,7 @@ jobs:
           TOPOLOGY_AIRFLOW_URL: http://127.0.0.1:8080
           TOPOLOGY_SFTP_HOST: 127.0.0.1
           TOPOLOGY_SFTP_PORT: "2222"
+          TOPOLOGY_RUNTIME_TIMEOUT_SECONDS: "300"
           AI_API_KEY: sk-test-fake-key
 
       - name: Show Compose diagnostics

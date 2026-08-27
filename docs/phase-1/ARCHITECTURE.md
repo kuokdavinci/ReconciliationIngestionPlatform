@@ -32,7 +32,7 @@ flowchart LR
 | `src/pipeline/` | File/row processing, claims, normalization, validation, batch write | Global scheduling |
 | `frontend-next/` | Operator views, typed clients, polling và interaction | Source-of-truth business state |
 
-Kiến trúc không còn lớp `src/models/` trung gian. Code dùng `src/domain/` cho nghiệp vụ thuần, `src/application/` cho use case/orchestration và repositories trong `src/infrastructure/` cho persistence/adapters.
+Domain chứa nghiệp vụ thuần; application chứa use case/orchestration; infrastructure triển khai repositories và workflow adapters. API và frontend chỉ đảm nhiệm delivery/operator interaction.
 
 ## Luồng ingestion
 

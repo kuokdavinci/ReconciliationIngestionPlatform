@@ -40,7 +40,7 @@ flowchart LR
 | `src/infrastructure/` | PostgreSQL/MongoDB repositories và Airflow gateway |
 | `dags/` | Schedule, dependency, retry/timeout và task state |
 
-Không còn scheduler service riêng, `src/services/`, `src/models/` hay frontend cũ. Business logic chạy qua application; Airflow chỉ điều phối workflow.
+Application xử lý business workflow và state; repositories trong infrastructure kết nối PostgreSQL/MongoDB; Airflow điều phối workflow và không chứa business logic.
 
 Airflow sở hữu schedule, dependency, mapped task, retry/timeout và task log. Application sở hữu business state, checkpoint, source-unit retry, idempotency và reconciliation. Các correlation id (`runtimeRunId`, `dagRunId`, `taskId`, `mapIndex`) nối UI/API với workflow.
 

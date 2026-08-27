@@ -2,7 +2,7 @@
 
 **Cập nhật:** 2026-08-27
 
-Bản đồ này bám theo package và symbol trong CodeGraph hiện tại. Không còn `src/scheduler/`, `src/services/`, `src/models/` hoặc dashboard `frontend/`.
+Bản đồ này bám theo package và symbol trong CodeGraph hiện tại.
 
 ## Backend
 

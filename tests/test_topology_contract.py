@@ -49,20 +49,30 @@ AIRFLOW_USERNAME = os.getenv("APP_AIRFLOW_USERNAME", settings.airflow_username o
 AIRFLOW_PASSWORD = os.getenv("APP_AIRFLOW_PASSWORD", settings.airflow_password or "airflow")
 
 
+def _log(message: str) -> None:
+    """Emit phase transitions immediately in CI instead of hiding them in capture."""
+
+    print(f"[topology-contract] {message}", flush=True)
+
+
 async def _wait_for_topology_readiness(client: httpx.AsyncClient) -> None:
     """Wait for dependencies that Compose cannot fully health-check."""
 
     deadline = monotonic() + RUNTIME_TIMEOUT_SECONDS
     last_error = "unknown readiness error"
+    logged_probes: set[str] = set()
     while monotonic() < deadline:
         try:
-            for url in (
-                f"{API_URL}/openapi.json",
-                f"{SOURCE_URL}/health",
-                f"{AIRFLOW_URL}/api/v2/monitor/health",
+            for probe, url in (
+                ("api", f"{API_URL}/openapi.json"),
+                ("source", f"{SOURCE_URL}/health"),
+                ("airflow_health", f"{AIRFLOW_URL}/api/v2/monitor/health"),
             ):
                 response = await client.get(url)
                 response.raise_for_status()
+                if probe not in logged_probes:
+                    _log(f"readiness {probe}=ok")
+                    logged_probes.add(probe)
 
             token_response = await client.post(
                 f"{AIRFLOW_URL}/auth/token",
@@ -72,22 +82,36 @@ async def _wait_for_topology_readiness(client: httpx.AsyncClient) -> None:
             token = token_response.json().get("access_token")
             if not isinstance(token, str) or not token:
                 raise AssertionError("Airflow readiness returned no access token")
+            if "airflow_auth" not in logged_probes:
+                _log("readiness airflow_auth=ok")
+                logged_probes.add("airflow_auth")
             dag_response = await client.get(
                 f"{AIRFLOW_URL}/api/v2/dags/{quote(AIRFLOW_DAG_ID, safe='')}",
                 headers={"Authorization": f"Bearer {token}"},
             )
             dag_response.raise_for_status()
+            if "airflow_dag" not in logged_probes:
+                _log(f"readiness airflow_dag={AIRFLOW_DAG_ID}=ok")
+                logged_probes.add("airflow_dag")
 
             _, writer = await asyncio.wait_for(
                 asyncio.open_connection(SFTP_HOST, SFTP_PORT), timeout=5
             )
             writer.close()
             await writer.wait_closed()
+            if "sftp" not in logged_probes:
+                _log("readiness sftp=ok")
+                logged_probes.add("sftp")
+            _log("phase=topology_ready")
             return
         except (AssertionError, OSError, httpx.HTTPError, asyncio.TimeoutError) as exc:
-            last_error = str(exc) or type(exc).__name__
+            error = str(exc) or type(exc).__name__
+            if error != last_error:
+                _log(f"readiness retry error={error}")
+            last_error = error
             await asyncio.sleep(2)
 
+    _log(f"phase=topology_readiness_timeout last_error={last_error}")
     raise AssertionError(
         f"Topology dependencies did not become ready within {RUNTIME_TIMEOUT_SECONDS}s; "
         f"last error={last_error}"
@@ -101,6 +125,7 @@ async def _wait_for_runtime_status(
 ) -> dict:
     deadline = monotonic() + RUNTIME_TIMEOUT_SECONDS
     last_runtime: dict | None = None
+    last_observation: tuple[str | None, str | None, str] | None = None
     while monotonic() < deadline:
         response = await client.get(f"{API_URL}/api/v1/automation/jobs")
         response.raise_for_status()
@@ -113,6 +138,18 @@ async def _wait_for_runtime_status(
             if runtime.get("_id") == runtime_run_id:
                 last_runtime = runtime
                 task_state = (runtime.get("orchestration") or {}).get("taskState")
+                observation = (
+                    runtime.get("status"),
+                    task_state,
+                    str(runtime.get("message") or "")[:160],
+                )
+                if observation != last_observation:
+                    _log(
+                        "phase=runtime_wait "
+                        f"status={observation[0]} task_state={observation[1]} "
+                        f"message={observation[2]}"
+                    )
+                    last_observation = observation
                 if runtime.get("status") == "FAILED":
                     raise AssertionError(f"Topology runtime failed: {runtime}")
                 if task_state in {"failed", "upstream_failed"}:
@@ -120,8 +157,10 @@ async def _wait_for_runtime_status(
                 if runtime.get("status") == expected_status and (
                     expected_status != "WAITING_REVIEW" or task_state == "success"
                 ):
+                    _log(f"phase=runtime_reached_{expected_status}")
                     return runtime
         await asyncio.sleep(2)
+    _log(f"phase=runtime_timeout last_runtime={last_runtime}")
     raise AssertionError(
         f"Topology runtime did not complete within {RUNTIME_TIMEOUT_SECONDS}s; "
         f"last runtime={last_runtime}"
@@ -169,6 +208,7 @@ async def _arm_happy_path_source(client: httpx.AsyncClient) -> None:
 async def _wait_for_post_approval_completion(client: httpx.AsyncClient) -> dict:
     deadline = monotonic() + RUNTIME_TIMEOUT_SECONDS
     last_runtime: dict | None = None
+    last_observation: tuple[str | None, str | None, str] | None = None
     while monotonic() < deadline:
         response = await client.get(f"{API_URL}/api/v1/automation/jobs")
         response.raise_for_status()
@@ -180,11 +220,25 @@ async def _wait_for_post_approval_completion(client: httpx.AsyncClient) -> dict:
             runtime = job.get("latestRuntimeRun") or {}
             if runtime.get("triggerType") == "POST_APPROVAL_REPROCESS":
                 last_runtime = runtime
+                observation = (
+                    runtime.get("status"),
+                    runtime.get("triggerType"),
+                    str(runtime.get("message") or "")[:160],
+                )
+                if observation != last_observation:
+                    _log(
+                        "phase=post_approval_wait "
+                        f"status={observation[0]} trigger={observation[1]} "
+                        f"message={observation[2]}"
+                    )
+                    last_observation = observation
                 if runtime.get("status") == "FAILED":
                     raise AssertionError(f"Post-approval runtime failed: {runtime}")
                 if runtime.get("status") == "COMPLETED":
+                    _log("phase=post_approval_completed")
                     return runtime
         await asyncio.sleep(2)
+    _log(f"phase=post_approval_timeout last_runtime={last_runtime}")
     raise AssertionError(
         f"Post-approval runtime did not complete within {RUNTIME_TIMEOUT_SECONDS}s; "
         f"last runtime={last_runtime}"
@@ -198,22 +252,28 @@ async def test_full_ingestion_topology_contract() -> None:
     async with httpx.AsyncClient(timeout=15) as client:
         await _wait_for_topology_readiness(client)
 
+        _log("phase=verify_mongo")
         mongo = AsyncIOMotorClient(settings.mongodb_url, serverSelectionTimeoutMS=5000)
         try:
             await mongo.admin.command("ping")
         finally:
             mongo.close()
 
+        _log("phase=arm_source")
         await _arm_happy_path_source(client)
+        _log("phase=seed_fixture")
         await _seed_approved_demo_mapping()
+        _log("phase=trigger_runtime")
         response = await client.post(
             f"{API_URL}/api/v1/automation/jobs/{PARTNER}/run",
             headers={"X-Actor": "ci-topology-contract"},
         )
         response.raise_for_status()
         runtime_run_id = response.json()["runtimeRunId"]
+        _log(f"phase=runtime_triggered run_id={runtime_run_id}")
         await _wait_for_runtime_status(client, runtime_run_id, "WAITING_REVIEW")
 
+        _log("phase=prepare_review_packet")
         review_client = AsyncIOMotorClient(settings.mongodb_url)
         try:
             db = review_client[settings.db_name]
@@ -240,6 +300,7 @@ async def test_full_ingestion_topology_contract() -> None:
         )
         validation.raise_for_status()
         assert validation.json()["ok"] is True
+        _log(f"phase=review_validated packet_id={packet_id}")
         approval = await client.post(
             f"{API_URL}/api/v1/review-packets/{packet_id}/approve-keep-current",
             headers={"X-Actor": "ci-topology-contract"},
@@ -249,8 +310,10 @@ async def test_full_ingestion_topology_contract() -> None:
             },
         )
         approval.raise_for_status()
+        _log(f"phase=review_approved packet_id={packet_id}")
         await _wait_for_post_approval_completion(client)
 
+    _log("phase=verify_persistence")
     verification_client = AsyncIOMotorClient(settings.mongodb_url)
     try:
         db = verification_client[settings.db_name]
@@ -268,6 +331,7 @@ async def test_full_ingestion_topology_contract() -> None:
     finally:
         verification_client.close()
 
+    _log("phase=verify_postgres")
     engine = get_pg_engine()
     async with engine.connect() as connection:
         partner_rows = await connection.scalar(
@@ -276,3 +340,4 @@ async def test_full_ingestion_topology_contract() -> None:
             .where(PartnerTransactionTable.identify == PARTNER)
         )
     assert partner_rows == 6
+    _log("phase=contract_complete")

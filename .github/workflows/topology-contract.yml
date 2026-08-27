@@ -58,7 +58,7 @@ jobs:
         run: docker compose -p reconciliation-ci exec -T airflow-api-server airflow dags unpause reconciliation_ingestion
 
       - name: Run full topology contract
-        run: uv run pytest tests/test_topology_contract.py --e2e -v --tb=short
+        run: uv run pytest tests/test_topology_contract.py --e2e -s -v --tb=short
         env:
           APP_MONGODB_URL: mongodb://admin:ci-mongo-password@127.0.0.1:27017/reconciliation?authSource=admin
           APP_DB_NAME: reconciliation
@@ -71,7 +71,6 @@ jobs:
           TOPOLOGY_AIRFLOW_URL: http://127.0.0.1:8080
           TOPOLOGY_SFTP_HOST: 127.0.0.1
           TOPOLOGY_SFTP_PORT: "2222"
-          TOPOLOGY_RUNTIME_TIMEOUT_SECONDS: "300"
           AI_API_KEY: sk-test-fake-key
 
       - name: Show Compose diagnostics

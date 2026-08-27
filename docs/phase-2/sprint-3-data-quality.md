@@ -15,8 +15,10 @@ source-unit result, and conflict quarantine routing. **Workstream C is
 validation contract. **Workstream D is implemented at the application,
 persistence, production composition, API, audit, and source-unit resume
 contract level; production
-acceptance remains pending.** Workstreams E–F remain handoffs; this document
-does not promote statistical or fraud semantics into automatic rejection.
+acceptance remains pending.** Workstream E is implemented at the operator
+ownership, action, queue, bounded API, and audit-contract level; production
+acceptance remains pending. Workstream F remains a handoff. This document does
+not promote statistical or fraud semantics into automatic rejection.
 
 The full-profile baseline is version `3`, SHA-256
 `e3895c988fe37efc76dabfe62d23f7ab75e89477bb17ba0c53092b008431caf6`, with
@@ -124,17 +126,30 @@ and `tests/test_quarantine_source_unit_resume.py`. Workstream D tests are
 unit/contract tests; live Mongo/PostgreSQL, Airflow, partner sign-off, and
 production acceptance remain Workstream F scope.
 
-### E — Operator and approval flow — pending
+### E — Operator and approval flow — implemented
 
-Define review ownership, approval/rejection actions, counters, and escalation
-for `REVIEW` outcomes. This has not been implemented yet; mapping
-`ReviewPacket` approval remains on its existing contract.
+Workstream E adds explicit claim ownership, CAS-bound reprocess,
+`ACCEPT_EXISTING`, reject, escalation, action idempotency, bounded queue
+filters/summary, and audit projection idempotency for row-level quarantine.
+The implementation reuses D's source-backed resolver and shared row processor;
+it does not create a parallel workflow or queue collection. Mapping and
+`ReviewPacket` approval remain on their existing contracts and are not replaced
+by row-level quarantine approval.
+
+The default SLA is 24 hours, configurable with
+`APP_INGESTION_QUARANTINE_REVIEW_SLA_HOURS`. Conflicting duplicates and fatal
+records are `HIGH` priority; other records are `NORMAL`. Escalation preserves
+status and owner and is capped at level 3. It does not send notifications or
+enforce RBAC in Sprint 3. See the [Workstream E operator flow](sprint-3-workstream-e-operator-flow.md)
+for the state/action matrix, payload/response contract, stable errors,
+idempotency scope, audit, and redaction policy.
 
 ### F — Observability and production acceptance — pending
 
 Define data-quality acceptance baselines and the handoff inputs for Sprint 4
-observability. Generic stage metrics, structured logs, dashboards, alert
-delivery, and the 100k observability benchmark remain outside Sprint 3.
+observability. Notifications, generic stage metrics, dashboards, alert
+delivery, live environment evidence, partner sign-off, and the 100k
+observability benchmark remain outside this Workstream E implementation.
 Statistical or semantic candidates must stay out of automatic rejection until
 that contract exists.
 

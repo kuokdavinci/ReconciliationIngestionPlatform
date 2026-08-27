@@ -194,7 +194,15 @@ def sanitize_raw_row(value: Any, *, max_length: int = 512) -> Any:
             normalized_key = "".join(character for character in key_text.lower() if character.isalnum())
             if any(
                 token in normalized_key
-                for token in ("password", "secret", "token", "apikey", "authorization", "credential")
+                for token in (
+                    "password",
+                    "secret",
+                    "token",
+                    "apikey",
+                    "authorization",
+                    "credential",
+                    "fingerprint",
+                )
             ):
                 sanitized[key_text] = "[REDACTED]"
             else:

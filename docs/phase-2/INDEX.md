@@ -51,8 +51,8 @@ duplicate classification, conflict quarantine và bounded source-unit outcome;
 Workstream C đã triển khai normalization/validation contract và có full-dataset
 v2 evidence. Workstream D đã triển khai quarantine
 lifecycle, operator resolution contract, production row/fingerprint wiring,
-audit/counters, API và source-unit resume; production approval và Workstream
-E–F vẫn còn pending.
+audit/counters, API và source-unit resume; Workstream E đã triển khai ở cấp
+contract/application; production acceptance và Workstream F vẫn còn pending.
 
 - [Chỉ mục Sprint 3 — Data Quality và Quarantine](sprint-3-index.md)
 - [Kế hoạch data quality và quarantine](sprint-3-data-quality.md)
@@ -60,12 +60,12 @@ E–F vẫn còn pending.
 - [Workstream B — quality contract và Airflow-ready outcome](sprint-3-workstream-b-quality-contract.md)
 - [Workstream C — normalization và validation contract](sprint-3-workstream-c-normalization-validation.md)
 - [Workstream C — full-dataset v2 baseline](sprint-3-workstream-c-baseline.md)
+- [Workstream E — operator quarantine flow](sprint-3-workstream-e-operator-flow.md)
 - [Review EDA và rule candidates](sprint-3-eda-review.md)
 - [Workstream A decision matrix](sprint-3-workstream-summary.md)
 
-Phạm vi còn lại: operator approval flow, production observability, partner
-sign-off và production acceptance. Notebook EDA vẫn không thay đổi và chỉ
-chạy trên Kaggle.
+Phạm vi còn lại: production observability, partner sign-off và production
+acceptance. Notebook EDA vẫn không thay đổi và chỉ chạy trên Kaggle.
 
 ## Sprint 4 — Observability
 
@@ -82,5 +82,5 @@ Phạm vi dự kiến: metrics, structured logs, alerting, dashboard operational
 | 1 | Idempotency | `sprint-1-index.md`, benchmark | Đã triển khai |
 | 2 | Incremental/recovery | `sprint-2-index.md`, `sprint-2-incremental-recovery.md` | Đã triển khai |
 | 2.5 | Airflow + recovery hardening | `sprint-2-index.md`, `sprint-2.5-airflow-migration.md` | Còn 5 tiêu chí acceptance |
-| 3 | Data quality/quarantine | `sprint-3-index.md`, Workstream B/C/D evidence | A/B/C/D implemented; E–F pending |
+| 3 | Data quality/quarantine | `sprint-3-index.md`, Workstream B/C/D/E evidence | A/B/C/D/E implemented at contract level; F and production acceptance pending |
 | 4 | Observability | `sprint-4-observability.md` | Kế hoạch |

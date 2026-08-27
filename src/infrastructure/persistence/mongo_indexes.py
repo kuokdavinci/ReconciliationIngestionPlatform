@@ -173,7 +173,7 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel(
             [("entityType", ASCENDING), ("entityId", ASCENDING), ("metadata.actionId", ASCENDING)],
             unique=True,
-            sparse=True,
+            partialFilterExpression={"metadata.actionId": {"$type": "string"}},
             name="idx_audit_entity_action_unique",
         ),
     ],

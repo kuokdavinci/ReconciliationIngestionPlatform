@@ -10,6 +10,7 @@ import asyncio
 import os
 from datetime import UTC, datetime
 from time import monotonic
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -43,6 +44,54 @@ AIRFLOW_URL = os.getenv("TOPOLOGY_AIRFLOW_URL", "http://127.0.0.1:8080")
 SFTP_HOST = os.getenv("TOPOLOGY_SFTP_HOST", "127.0.0.1")
 SFTP_PORT = int(os.getenv("TOPOLOGY_SFTP_PORT", "2222"))
 RUNTIME_TIMEOUT_SECONDS = float(os.getenv("TOPOLOGY_RUNTIME_TIMEOUT_SECONDS", "120"))
+AIRFLOW_DAG_ID = os.getenv("APP_AIRFLOW_DAG_ID", settings.airflow_dag_id)
+AIRFLOW_USERNAME = os.getenv("APP_AIRFLOW_USERNAME", settings.airflow_username or "airflow")
+AIRFLOW_PASSWORD = os.getenv("APP_AIRFLOW_PASSWORD", settings.airflow_password or "airflow")
+
+
+async def _wait_for_topology_readiness(client: httpx.AsyncClient) -> None:
+    """Wait for dependencies that Compose cannot fully health-check."""
+
+    deadline = monotonic() + RUNTIME_TIMEOUT_SECONDS
+    last_error = "unknown readiness error"
+    while monotonic() < deadline:
+        try:
+            for url in (
+                f"{API_URL}/openapi.json",
+                f"{SOURCE_URL}/health",
+                f"{AIRFLOW_URL}/api/v2/monitor/health",
+            ):
+                response = await client.get(url)
+                response.raise_for_status()
+
+            token_response = await client.post(
+                f"{AIRFLOW_URL}/auth/token",
+                json={"username": AIRFLOW_USERNAME, "password": AIRFLOW_PASSWORD},
+            )
+            token_response.raise_for_status()
+            token = token_response.json().get("access_token")
+            if not isinstance(token, str) or not token:
+                raise AssertionError("Airflow readiness returned no access token")
+            dag_response = await client.get(
+                f"{AIRFLOW_URL}/api/v2/dags/{quote(AIRFLOW_DAG_ID, safe='')}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            dag_response.raise_for_status()
+
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(SFTP_HOST, SFTP_PORT), timeout=5
+            )
+            writer.close()
+            await writer.wait_closed()
+            return
+        except (AssertionError, OSError, httpx.HTTPError, asyncio.TimeoutError) as exc:
+            last_error = str(exc) or type(exc).__name__
+            await asyncio.sleep(2)
+
+    raise AssertionError(
+        f"Topology dependencies did not become ready within {RUNTIME_TIMEOUT_SECONDS}s; "
+        f"last error={last_error}"
+    )
 
 
 async def _wait_for_runtime_status(
@@ -147,16 +196,7 @@ async def test_full_ingestion_topology_contract() -> None:
     """Prove the API, Airflow, source, Mongo and PostgreSQL paths work together."""
 
     async with httpx.AsyncClient(timeout=15) as client:
-        api_health = await client.get(f"{API_URL}/openapi.json")
-        api_health.raise_for_status()
-        source_health = await client.get(f"{SOURCE_URL}/health")
-        source_health.raise_for_status()
-        airflow_health = await client.get(f"{AIRFLOW_URL}/api/v2/monitor/health")
-        airflow_health.raise_for_status()
-
-        _, sftp_writer = await asyncio.open_connection(SFTP_HOST, SFTP_PORT)
-        sftp_writer.close()
-        await sftp_writer.wait_closed()
+        await _wait_for_topology_readiness(client)
 
         mongo = AsyncIOMotorClient(settings.mongodb_url, serverSelectionTimeoutMS=5000)
         try:

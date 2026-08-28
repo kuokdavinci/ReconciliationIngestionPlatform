@@ -40,7 +40,7 @@ DEFAULT_OUTPUT_JSON = Path(
     "data/eda/fraud_detection/profiles/benchmark_results_workstream_c.json"
 )
 DEFAULT_OUTPUT_MARKDOWN = Path(
-    "docs/phase-2/sprint-3-workstream-c-baseline.md"
+    "docs/phase-2/sprint-3-workstream-c.md"
 )
 BENCHMARK_PARTNER = "SPRINT3_FRAUD_EDA_BASELINE"
 BENCHMARK_WORKFLOW = "SPRINT3_BASELINE"

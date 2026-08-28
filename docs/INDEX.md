@@ -1,35 +1,31 @@
-# Documentation Index
+# Index tài liệu
 
-README là điểm bắt đầu. Các trang dưới đây mô tả runtime hiện tại; report/evaluation trong `docs/phase-2/` là evidence chi tiết, không phải source thay thế cho index này.
+`README.md` là điểm bắt đầu. Index này liệt kê tài liệu runtime và các index
+theo Phase/Sprint.
 
 ## Runtime hiện tại
 
-- [Architecture](phase-1/ARCHITECTURE.md) — boundary, flow, persistence và API/UI surface.
-- [Data flow](phase-1/DATA_FLOW.md) — ingestion, recovery, reconciliation và approval.
-- [Module map](phase-1/MODULES.md) — package/symbol map theo codegraph.
-- [Development](phase-1/DEVELOPMENT.md) — local setup, command và test.
-- [Configuration](phase-1/CONFIGURATION.md) — environment variables.
-- [Docker services](../docker/README.md) — Compose services/ports.
-- [CI map](CI-MAP.md) — workflow và blast radius.
-- [Ingest/reconciliation trace](phase-1/INGEST_RECON_TRACE.md) — trace và benchmark theo flow.
-- [Performance trace](phase-1/performance/INGEST_RECON_TRACE.md) — số liệu ingestion/reconciliation.
+| Tài liệu | Chức năng | Giải quyết vấn đề |
+|---|---|---|
+| [Architecture](phase-1/ARCHITECTURE.md) | Boundary, flow, persistence, API/UI | Xác định cấu trúc runtime và điểm tích hợp |
+| [Data flow](phase-1/DATA_FLOW.md) | Ingestion, recovery, reconciliation, approval | Theo dõi dữ liệu qua các bước xử lý |
+| [Module map](phase-1/MODULES.md) | Package/symbol map theo codegraph | Tìm module và dependency liên quan |
+| [Development](phase-1/DEVELOPMENT.md) | Local setup, command, test | Chạy và kiểm tra hệ thống local |
+| [Configuration](phase-1/CONFIGURATION.md) | Environment variables | Xác định cấu hình runtime |
+| [Docker services](../docker/README.md) | Compose services và ports | Khởi động đúng các service |
+| [CI map](CI-MAP.md) | Workflow và blast radius | Biết test nào kiểm tra từng thay đổi |
+| [Ingest/reconciliation trace](phase-1/INGEST_RECON_TRACE.md) | Trace và benchmark theo flow | Kiểm tra đường đi và thời gian xử lý |
+| [Performance trace](phase-1/performance/INGEST_RECON_TRACE.md) | Số liệu ingestion/reconciliation | Theo dõi hiệu năng runtime |
 
-## Trạng thái và evidence
+## Trạng thái và Sprint
 
-- [Milestones](MILESTONES.md) — trạng thái foundation và Phase 2.
-- [Known issues](KNOWN_ISSUES.md) — pilot constraints và follow-up.
-- [Phase 2 index](phase-2/INDEX.md) — plan, report và acceptance theo sprint.
-- [Sprint 3 index](phase-2/sprint-3-index.md) — data quality/quarantine.
+| Tài liệu | Chức năng | Giải quyết vấn đề |
+|---|---|---|
+| [Milestones](MILESTONES.md) | Trạng thái foundation và Phase 2 | Biết phần nào đã hoàn thành |
+| [Known issues](KNOWN_ISSUES.md) | Pilot constraints và follow-up | Theo dõi giới hạn và việc còn lại |
+| [Phase 2 index](phase-2/INDEX.md) | Danh sách tài liệu theo Sprint | Tìm nhanh tài liệu của từng Sprint |
+| [Sprint 3 index](phase-2/sprint-3-index.md) | Danh sách file, Workstream và phạm vi | Tìm đúng tài liệu cho data quality/quarantine |
 
-Các plan cũ trong `phase-1/` và report/evaluation trong `phase-2/` được giữ để truy nguyên quyết định; khi có khác biệt, runtime code + CodeGraph và các trang “Runtime hiện tại” ở trên là nguồn ưu tiên.
-
-## Quy tắc cập nhật
-
-Sau thay đổi code, đối chiếu tối thiểu:
-
-1. `codegraph status` và `codegraph sync .` cho file/symbol/dependency.
-2. `src/config/settings.py`, `src/analysis/config.py`, `.env.example` cho config.
-3. `src/api/`, `frontend-next/src/app/` cho API và UI routes.
-4. `docker-compose.yml`, Dockerfiles và `.github/workflows/` cho runtime/CI.
-
-Không thêm kiến trúc hoặc entrypoint vào docs nếu chưa có code và test tương ứng.
+Các report/evaluation trong `docs/phase-2/` là evidence chi tiết. Khi cần xác
+định behavior hiện tại, ưu tiên runtime code, test và các tài liệu trong mục
+Runtime hiện tại.

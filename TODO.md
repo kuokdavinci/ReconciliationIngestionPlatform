@@ -2,7 +2,7 @@
 
 ### Sprint 3 — finalize the contract
 
-- [x] Define the canonical normalized `reconciliation_key` used by both sides; document that `partner_trace`/`partner_txn_id` are semantic fields and `vspTransId` is only a partner-specific source input. See `docs/phase-2/sprint-3-reconciliation-contract-evidence.md`.
+- [x] Define the canonical normalized `reconciliation_key` used by both sides; document that `partner_trace`/`partner_txn_id` are semantic fields and `vspTransId` is only a partner-specific source input. See `docs/phase-2/sprint-3-reconciliation-key-evidence.md`.
 - [x] Define the uniqueness scope for that key: `(partner, key)` or `(partner, reconciliation_date, key)`; do not include `source_file_id` unless replacement files represent different logical transactions. Sprint 3 uses `(partner, reconciliation_key)`.
 - [x] Audit partner and internal data for null/blank keys, duplicate keys, and conflicting fallback values before adding constraints. See the bounded Docker snapshot in the evidence document.
 - [x] Confirm the existing constraints are being used for the intended purpose: `ingestion_key` for ingest idempotency, versus `reconciliation_key` for business matching.

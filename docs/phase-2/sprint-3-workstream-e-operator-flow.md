@@ -56,6 +56,11 @@ POST /api/v1/quarantine/{record_id}/escalate
 POST /api/v1/quarantine/source-units/{source_unit_key}/resume
 ```
 
+After the active rows in a post-approval batch are clear, the parent packet
+also exposes `POST /api/v1/review-packets/{packet_id}/post-approve-run/continue`
+for an explicit operator Proceed action. It is CAS-bound and idempotent: a
+completed run returns `ALREADY_RECONCILED` without running reconciliation again.
+
 Mutation payloads carry `actionId` and `expectedStatus`. The actor is
 `operatorId` or the existing `X-Actor` header. `REJECT` and `ESCALATE` require
 a non-empty reason of at most 500 characters. `CORRECTED_ROW` requires
@@ -74,6 +79,29 @@ HTTP error mapping is stable: `400` for actor or payload contract errors,
 `404` for a missing record, `409` for stale/CAS/ownership/fingerprint/action
 conflicts, `422` for missing reason/corrected row/source evidence or
 validation outcomes, and `503` for bounded retryable dependency outcomes.
+
+## Scheduler-to-quarantine packet flow
+
+The operator path keeps the existing Review Packet as the parent of a
+post-approval quarantine batch:
+
+```text
+scheduler run → pending Review Packet → mapping quality gate → approve packet
+  → post-approval ingestion → quality gate
+      ├─ PASS → reconciliation continues
+      └─ REVIEW_REQUIRED → grouped quarantine packet
+           → resolve all active rows → parent packet shows Proceed
+           → operator selects Proceed → reconciliation continues
+```
+
+Each post-approval quarantine row carries the packet/run correlation. The
+queue groups rows by that correlation. Resolving the final active row leaves
+the post-approval run waiting; the parent packet exposes the existing
+compare-and-set continuation explicitly for the operator. The continuation is
+manual, idempotent, and does not create a second queue or bypass mapping
+approval. The local mock demo uses the
+existing scheduler endpoint with the `local` orchestrator when Airflow is not
+running; this is an execution adapter choice, not a new workflow contract.
 
 ## Priority, SLA, and escalation
 
@@ -135,5 +163,6 @@ constitute production sign-off or partner acceptance.
 
 ## Sprint 4 handoff
 
-Sprint 4 owns notification delivery, an operator dashboard, stage-level
-metrics, alerting, live environment evidence, and production acceptance.
+Workstream F owns live environment evidence, partner sign-off, and production
+acceptance. Sprint 4 owns notification delivery, an operator dashboard,
+stage-level metrics, alerting, and broader observability implementation.

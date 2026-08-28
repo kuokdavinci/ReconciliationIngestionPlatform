@@ -285,7 +285,8 @@ below, its measured 1M wall-clock throughput is 9.01% below the stored
 pre-Workstream-B baseline (8,955 vs 9,762 rows/s), which is within the roughly
 10% acceptance target. The duplicate lookup scale issue and the clean-path
 regression gate are therefore both closed for this benchmark environment;
-repeated environment measurements remain a Workstream F concern.
+repeated live data-quality measurements remain a Workstream F acceptance input,
+while stage-level observability benchmarking belongs to Sprint 4.
 
 ### Clean-path regression investigation — 2026-08-20
 
@@ -321,5 +322,6 @@ profiled separately so duplicate classification guarantees are not weakened.
 
 Workstream C owns the canonical timestamp and normalization contract. Workstream
 D owns quarantine lifecycle/reprocessing and operator evidence. Workstream F
-owns production dashboards, alerts, repeated environment benchmark evidence,
-and final partner acceptance.
+owns repeated live data-quality acceptance evidence and final partner
+acceptance. Sprint 4 owns production dashboards, alerts, stage-level
+observability, and its benchmark.

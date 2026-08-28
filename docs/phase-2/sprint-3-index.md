@@ -14,9 +14,12 @@ owns explicit operator actions over that lifecycle.
 | A | EDA, provenance, frozen baseline and controlled mutations | Implemented | [EDA review](sprint-3-eda-review.md) |
 | B | Quality contract, file/row gates, duplicate classification and bounded runtime outcome | Implemented | [Quality contract](sprint-3-workstream-b-quality-contract.md) |
 | C | Timestamp normalization, validation parity and v2 source mapping | Implemented; full-dataset v2 evidence captured | [Normalization contract](sprint-3-workstream-c-normalization-validation.md) |
-| D | Quarantine persistence, operator resolution, audit, retention and source-unit resume | Implemented at contract/application level; production acceptance pending | [Quarantine lifecycle](sprint-3-data-quality.md#d--quarantine-lifecycle--implemented) |
-| E | Operator ownership, approval and escalation workflow | Implemented at contract/application level; production acceptance pending | [Workstream E operator flow](sprint-3-workstream-e-operator-flow.md) |
-| F | Observability, partner sign-off and production acceptance | Handoff | [Sprint 3 overview](sprint-3-data-quality.md#f--observability-and-production-acceptance) |
+| D | Quarantine persistence, operator resolution, audit, retention and source-unit resume | Implemented at contract/application level; demo evidence available | [Quarantine lifecycle](sprint-3-data-quality.md#d--quarantine-lifecycle--implemented) |
+| E | Operator ownership, approval and escalation workflow | Implemented at contract/application level; demo evidence available | [Workstream E operator flow](sprint-3-workstream-e-operator-flow.md) |
+| F | Data-quality demo acceptance evidence and Sprint 4 handoff | `GO (demo-only)`; production acceptance out of scope | [Workstream F acceptance](sprint-3-workstream-f-production-acceptance.md) |
+
+The reconciliation contract closeout and bounded Docker data audit are recorded
+in [Reconciliation contract evidence](sprint-3-reconciliation-contract-evidence.md).
 
 This sprint does not promote fraud labels, amount outliers, entity
 consistency, coordinates or temporal volume into automatic rejection. Those
@@ -38,6 +41,14 @@ source file / API unit
   → operator/worker resolution
   → source-unit resume after all active blockers are terminal
 ```
+
+The operator demo starts at the scheduler: the scheduler creates a pending
+`ReviewPacket`, packet approval starts the post-approval run, and its quality
+gate either proceeds to reconciliation or opens one grouped quarantine packet.
+After the last active row is resolved, reconciliation continues from the
+waiting post-approval run only after the operator selects `Proceed to
+reconciliation`. The reconciliation tab also exposes the existing manual run
+control for the selected partner and current business date.
 
 ## 3. Ownership map
 
@@ -171,7 +182,7 @@ redaction. Run the focused E/D command in
 ## 8. Handoffs and acceptance boundary
 
 Workstreams C, the core B/D contracts, and the E operator workflow are
-implemented at contract/application level. Remaining Sprint 3 acceptance work
-is repeated live-environment evidence, dashboards/alerts, partner sign-off and
-production cutover. Sprint 4 owns notification, broader observability, stage
-metrics and the operator dashboard.
+implemented at contract/application level. The local mock-data acceptance for
+Sprint 3 is complete under Workstream F. Production-readiness, partner
+sign-off, and cutover are not claimed. Sprint 4 owns the implementation of
+notifications, dashboards/alerts, broader observability and stage metrics.

@@ -266,9 +266,12 @@ reconciliation chỉ chạy sau khi tất cả page hoàn tất.
 
 ### Nhật ký hardening được giữ lại trong tài liệu hợp nhất
 
-- Chuẩn hóa business key theo thứ tự `vspTransId` → `partner_id`, đồng thời
-  chuẩn hóa timestamp aware về UTC-naive trước khi ghi PostgreSQL; SQL status,
-  ordering và migration index đã được kiểm chứng.
+- Chuẩn hóa business key vào field nghiệp vụ `partner_trace` theo mapping của
+  từng partner; `vspTransId` chỉ là một source field của case ban đầu, không
+  phải canonical name toàn nền tảng. Legacy fallback vẫn là
+  `partner_metadata.vspTransId` → `partner_id`, đồng thời chuẩn hóa timestamp
+  aware về UTC-naive trước khi ghi PostgreSQL; SQL status, ordering và
+  migration index đã được kiểm chứng.
 - Review Mapping đọc `GET /api/v1/review-packets/{packet_id}/raw-records`
   theo trang giới hạn, giữ `streamRowIndex`, `rowIndex`, `page` và
   `sourceUnitKey`; browser không tải toàn bộ payload một lần.

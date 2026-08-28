@@ -175,6 +175,21 @@ queue summaries, stable error mapping, and redaction. It is contract evidence;
 it does not provide production sign-off. Sprint 4 owns notification,
 dashboard, stage metrics, and broader observability.
 
+The local Review Center demo uses the same API namespace and deterministic
+fixture:
+
+```bash
+make quarantine-demo-reset
+make quarantine-demo-run
+make quarantine-demo-fatal-run
+npm --prefix frontend-next run test:e2e -- e2e/quarantine-review.spec.ts --workers=1
+npm --prefix frontend-next run test:e2e -- e2e/quarantine-demo-live.spec.ts --workers=1
+```
+
+This proves local UI wiring and bounded redaction against mock data. The
+`DEMO1` command is the direct file-quality-gate fatal scenario; it is not
+staging or production sign-off.
+
 ### Analysis Eval
 
 ```bash

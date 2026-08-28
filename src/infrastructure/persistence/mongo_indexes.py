@@ -91,6 +91,14 @@ INDEXES: dict[str, list[IndexModel]] = {
             name="idx_quarantine_claimed_status",
         ),
         IndexModel(
+            [("postApprovalRunId", ASCENDING), ("status", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_quarantine_post_approval_group",
+        ),
+        IndexModel(
+            [("reviewPacketId", ASCENDING), ("status", ASCENDING), ("createdAt", ASCENDING)],
+            name="idx_quarantine_review_packet_group",
+        ),
+        IndexModel(
             [("resolutionHistory.actionId", ASCENDING)],
             sparse=True,
             name="idx_quarantine_resolution_action_id",

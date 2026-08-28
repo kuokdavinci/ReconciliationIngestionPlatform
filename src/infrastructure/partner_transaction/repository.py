@@ -502,7 +502,9 @@ class DataContainerRepository:
         Scope analysis only needs a compact key projection, not full partner
         transaction documents.  Keeping this query in the PostgreSQL adapter
         also ensures that the analysis uses the same key precedence as the
-        reconciliation engine: trace, ``vspTransId``, then partner id.
+        reconciliation engine: normalized trace, legacy ``vspTransId``, then
+        partner id. ``vspTransId`` is a partner-specific source fallback, not
+        the platform-wide canonical field.
         """
         start = as_utc_naive(start)
         end = as_utc_naive(end)

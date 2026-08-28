@@ -372,7 +372,10 @@ async def test_find_many_builds_structured_filters_and_stable_cursor():
     second, second_raw = _record()
     second_raw["_id"] = str(second.id)
     second_raw["createdAt"] = datetime(2026, 8, 26, tzinfo=UTC)
-    cursor = _AsyncCursor([first_raw, second_raw])
+    third, third_raw = _record()
+    third_raw["_id"] = str(third.id)
+    third_raw["createdAt"] = datetime(2026, 8, 27, tzinfo=UTC)
+    cursor = _AsyncCursor([first_raw, second_raw, third_raw])
     repository, collection = _repository()
     collection.find.return_value = cursor
 
@@ -402,9 +405,26 @@ async def test_find_many_builds_structured_filters_and_stable_cursor():
     assert query["createdAt"]["$gte"] == datetime(2026, 8, 1, tzinfo=UTC)
     assert query["createdAt"]["$lt"] == datetime(2026, 9, 1, tzinfo=UTC)
     assert cursor.sort_args == [("createdAt", 1), ("_id", 1)]
-    assert cursor.limit_value == 2
+    assert cursor.limit_value == 3
     assert len(records) == 2
     assert next_cursor is not None
+
+
+@pytest.mark.asyncio
+async def test_find_many_omits_cursor_when_page_is_not_full():
+    query_model = getattr(quarantine, "QuarantineQuery", None)
+    assert query_model is not None
+    record, raw = _record()
+    raw["_id"] = str(record.id)
+    repository, collection = _repository()
+    collection.find.return_value = _AsyncCursor([raw])
+
+    records, next_cursor = await repository.find_many(
+        query_model(partner="MOMO", limit=2)
+    )
+
+    assert len(records) == 1
+    assert next_cursor is None
 
 
 @pytest.mark.asyncio
@@ -433,6 +453,26 @@ async def test_find_many_adds_operator_priority_and_overdue_filters():
     assert query["priority"] == "HIGH"
     assert query["status"]["$in"] == ["PENDING", "REPROCESSING"]
     assert query["reviewDueAt"] == {"$lte": now}
+
+
+@pytest.mark.asyncio
+async def test_find_many_maps_issue_type_to_quality_codes():
+    query_model = getattr(quarantine, "QuarantineQuery", None)
+    issue_type_model = getattr(quarantine, "QuarantineIssueType", None)
+    assert query_model is not None
+    assert issue_type_model is not None
+
+    repository, collection = _repository()
+    collection.find.return_value = _AsyncCursor([])
+
+    await repository.find_many(
+        query_model(issueType=issue_type_model.DUPLICATE, limit=10)
+    )
+
+    query = collection.find.call_args.args[0]
+    assert query["errors.errorCode"] == {
+        "$in": ["EQUIVALENT_DUPLICATE", "CONFLICTING_DUPLICATE"]
+    }
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ from src.api.review_packets import (
     approve_activate_packet,
     approve_keep_current_packet,
     get_post_approve_run,
+    continue_post_approve_run,
     list_review_packets,
     save_draft_mapping_for_packet,
     validate_runtime_packet,
@@ -24,11 +25,17 @@ from src.api.review_packets import (
 )
 from src.domain.ingestion.quality import QualityRuleCode
 from src.domain.review.models import ReviewPacket
+from src.domain.review.models import PostApprovalRun, PostApprovalRunStage, PostApprovalRunStatus
 from src.application.review.runtime_validation import (
     run_runtime_validation,
     runtime_error_code,
 )
 from src.domain.mapping.models import MappingConfig
+from src.application.review.post_approval_reconciliation import (
+    _batch_fatal_quality_summary,
+    _persist_packet_quality_gate,
+)
+from src.domain.review.models import PostApprovalQualityGateStatus
 
 
 def _make_request(db: MagicMock, headers: dict | None = None):
@@ -785,6 +792,138 @@ async def test_get_post_approve_run():
     assert data["run"]["packetId"] == "pkt-activate-001"
     assert data["run"]["status"] == "RECONCILING"
     assert data["run"]["stage"] == "reconciliation"
+
+
+@pytest.mark.asyncio
+async def test_continue_post_approve_run_exposes_explicit_packet_proceed_action():
+    run = PostApprovalRun(
+        _id="run-waiting",
+        packetId="packet-parent",
+        partner="MOMO",
+        status=PostApprovalRunStatus.WAITING_REVIEW,
+        stage=PostApprovalRunStage.INGESTION,
+        qualityGateStatus="REVIEW_REQUIRED",
+        qualityGateSummary={"activeRows": 0},
+    )
+    repository = MagicMock()
+    repository.find_latest_by_packet_id = AsyncMock(return_value=run)
+    request = _make_request(_make_db(), headers={"x-actor": "demo-operator"})
+
+    with (
+        patch("src.api.review_packets.PostApprovalRunRepository", return_value=repository),
+        patch(
+            "src.api.review_packets.continue_waiting_post_approval_run",
+            new=AsyncMock(
+                return_value={
+                    "ok": True,
+                    "outcome": "RECONCILED_AFTER_QUARANTINE",
+                    "reconciliationCount": 4,
+                    "qualityGateStatus": "PASS",
+                    "qualityGateSummary": {"activeRows": 0},
+                }
+            ),
+        ) as continuation,
+    ):
+        result = await continue_post_approve_run(request, "packet-parent")
+
+    assert result["outcome"] == "RECONCILED_AFTER_QUARANTINE"
+    assert result["reconciliationCount"] == 4
+    continuation.assert_awaited_once_with(request.app.state.db, "run-waiting")
+
+
+@pytest.mark.asyncio
+async def test_packet_parent_persists_the_latest_post_approval_quality_gate():
+    review_collection = MagicMock()
+    review_collection.update_one = AsyncMock()
+    db = _make_db(review_collection=review_collection)
+    packet = SimpleNamespace(id="packet-parent")
+
+    await _persist_packet_quality_gate(
+        db,
+        packet,
+        "run-parent",
+        PostApprovalQualityGateStatus.PASS,
+        {"totalRows": 3, "activeRows": 0, "rejectedRows": 3},
+    )
+
+    assert packet.quality_gate_status is PostApprovalQualityGateStatus.PASS
+    assert packet.post_approval_run_id == "run-parent"
+    review_collection.update_one.assert_awaited_once_with(
+        {"_id": "packet-parent"},
+        {
+            "$set": {
+                "qualityGateStatus": "PASS",
+                "qualityGateSummary": {"totalRows": 3, "activeRows": 0, "rejectedRows": 3},
+                "postApprovalRunId": "run-parent",
+            }
+        },
+    )
+
+
+def test_batch_fatal_projection_keeps_only_bounded_quality_metadata():
+    ingestion_result = SimpleNamespace(
+        quality_decision="FAIL",
+        quality_summary=SimpleNamespace(
+            outcome_counts={"BATCH_FATAL": 1},
+            top_rule_codes=[f"RULE_{index}" for index in range(12)],
+        ),
+        stats=SimpleNamespace(total_rows=10, failed_rows=10),
+    )
+
+    summary = _batch_fatal_quality_summary(ingestion_result)
+
+    assert summary == {
+        "outcome": "BATCH_FATAL",
+        "errorCodes": [f"RULE_{index}" for index in range(10)],
+        "totalRows": 10,
+        "failedRows": 10,
+        "activeRows": 0,
+    }
+
+
+def test_non_fatal_failed_ingestion_is_not_projected_as_batch_fatal():
+    ingestion_result = SimpleNamespace(
+        quality_decision="REVIEW",
+        quality_summary=SimpleNamespace(
+            outcome_counts={"REJECT": 1},
+            top_rule_codes=["MISSING_REQUIRED_FIELD"],
+        ),
+        stats=SimpleNamespace(total_rows=1, failed_rows=1),
+    )
+
+    assert _batch_fatal_quality_summary(ingestion_result) is None
+
+
+@pytest.mark.asyncio
+async def test_completed_proceed_repairs_a_stale_packet_quality_gate_projection():
+    run = PostApprovalRun(
+        _id="run-completed",
+        packetId="packet-parent",
+        partner="MOMO",
+        status=PostApprovalRunStatus.COMPLETED,
+        stage=PostApprovalRunStage.RECONCILIATION,
+        qualityGateStatus="PASS",
+        qualityGateSummary={"activeRows": 0},
+        reconciliationCount=1,
+    )
+    post_repository = MagicMock()
+    post_repository.find_latest_by_packet_id = AsyncMock(return_value=run)
+    review_collection = MagicMock()
+    review_collection.update_one = AsyncMock()
+    request = _make_request(
+        _make_db(review_collection=review_collection),
+        headers={"x-actor": "demo-operator"},
+    )
+
+    with patch(
+        "src.api.review_packets.PostApprovalRunRepository",
+        return_value=post_repository,
+    ):
+        result = await continue_post_approve_run(request, "packet-parent")
+
+    assert result["outcome"] == "ALREADY_RECONCILED"
+    review_collection.update_one.assert_awaited_once()
+    assert review_collection.update_one.await_args.args[1]["$set"]["qualityGateStatus"] == "PASS"
 
 
 @pytest.mark.asyncio

@@ -16,15 +16,52 @@ import { BulkActionBar } from "@/components/reconciliation/bulk-action-bar";
 import { EvidenceDetailDialog } from "@/components/reconciliation/evidence-detail-dialog";
 import { InsightExplainDialog } from "@/components/reconciliation/insight-explain-dialog";
 import { BatchReviewDialog } from "@/components/reconciliation/batch-review-dialog";
+import { RunStatusPanel } from "@/components/reconciliation/run-status-panel";
 import { useReconciliationStore } from "@/lib/state/reconciliation-store";
 import { useToast } from "@/components/ui/toast";
 import * as api from "@/lib/api/reconciliation";
 import styles from "@/components/reconciliation/reconciliation.module.css";
 import { ReviewRecord, ReconciliationRow } from "@/types/reconciliation";
 
-const RECONCILIATION_PARTNERS = ["MOMO", "VNPAY", "ZALOPAY", "ACMEPAY", "VIETTELPAY"] as const;
-const PARTNER = "MOMO";
-const DATE = new Date().toISOString().slice(0, 10);
+const RECONCILIATION_PARTNERS = ["DEMO", "MOMO", "VNPAY", "ZALOPAY", "ACMEPAY", "VIETTELPAY"] as const;
+const PARTNER = "DEMO";
+
+function currentBusinessDate(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+const DATE = currentBusinessDate();
+
+function reconciliationRowKey(row: ReconciliationRow): string {
+  return row.partnerTxnId || row.internalTxnId || row.id;
+}
+
+function reviewableRowCount(rows: ReconciliationRow[]): number {
+  return new Set(
+    rows
+      .filter((row) => row.reconciliationStatus !== "MATCHED")
+      .map(reconciliationRowKey),
+  ).size;
+}
+
+function reviewedRowCount(rows: ReconciliationRow[]): number {
+  return new Set(
+    rows
+      .filter(
+        (row) =>
+          row.reconciliationStatus !== "MATCHED" &&
+          (row.reviewState?.reviewed || row.reviewState?.resolvedStatus),
+      )
+      .map(reconciliationRowKey),
+  ).size;
+}
 
 export default function ReconciliationPage() {
   const store = useReconciliationStore();
@@ -124,7 +161,7 @@ export default function ReconciliationPage() {
           (statsRes.byStatus["MULTIPLE_MISMATCH"] ?? 0) +
           (statsRes.byStatus["MISSING_PARTNER"] ?? 0) +
           (statsRes.byStatus["MISSING_INTERNAL"] ?? 0);
-        const reviewedCount = reviewRecords.filter((r: ReviewRecord) => r.reviewed || r.resolvedStatus).length;
+        const reviewedCount = reviewedRowCount(mappedResults);
 
         setStats({
           total: statsRes.total,
@@ -173,10 +210,8 @@ export default function ReconciliationPage() {
       // Recalculate stats locally
       setStats((prevStats) => {
         if (!prevStats) return null;
-        const totalReviewable = nextResults.filter((r: ReconciliationRow) => r.reconciliationStatus !== "MATCHED").length;
-        const reviewedCount = nextResults.filter((r: ReconciliationRow) => 
-          r.reconciliationStatus !== "MATCHED" && (r.reviewState?.reviewed || r.reviewState?.resolvedStatus)
-        ).length;
+        const totalReviewable = reviewableRowCount(nextResults);
+        const reviewedCount = reviewedRowCount(nextResults);
         return {
           ...prevStats,
           totalReviewable,
@@ -204,10 +239,8 @@ export default function ReconciliationPage() {
       // Recalculate stats locally
       setStats((prevStats) => {
         if (!prevStats) return null;
-        const totalReviewable = nextResults.filter((r: ReconciliationRow) => r.reconciliationStatus !== "MATCHED").length;
-        const reviewedCount = nextResults.filter((r: ReconciliationRow) => 
-          r.reconciliationStatus !== "MATCHED" && (r.reviewState?.reviewed || r.reviewState?.resolvedStatus)
-        ).length;
+        const totalReviewable = reviewableRowCount(nextResults);
+        const reviewedCount = reviewedRowCount(nextResults);
         return {
           ...prevStats,
           totalReviewable,
@@ -300,7 +333,7 @@ export default function ReconciliationPage() {
           (statsRes.byStatus["MULTIPLE_MISMATCH"] ?? 0) +
           (statsRes.byStatus["MISSING_PARTNER"] ?? 0) +
           (statsRes.byStatus["MISSING_INTERNAL"] ?? 0);
-        const reviewedCount = reviewRecords.filter((r: ReviewRecord) => r.reviewed || r.resolvedStatus).length;
+        const reviewedCount = reviewedRowCount(mappedResults);
 
         setStats({
           total: statsRes.total,
@@ -339,6 +372,16 @@ export default function ReconciliationPage() {
       setLoading(false);
     }
   }, [loadInsights, setInsights, setLoading, setPagination, setResults, setRunStatus, setStats, showToast]);
+
+  const handleTriggerRun = useCallback(async () => {
+    try {
+      await api.runReconciliation({ partner, date });
+      showToast(`Manual reconciliation queued for ${partner} on ${date}.`, "success");
+      await loadPage(partner, date);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Failed to start reconciliation.", "error");
+    }
+  }, [date, loadPage, partner, showToast]);
 
   useEffect(() => {
     let isSubscribed = true;
@@ -586,6 +629,7 @@ export default function ReconciliationPage() {
         ) : (
           <>
             <SummaryStrip stats={store.stats} />
+            <RunStatusPanel runStatus={store.runStatus} onTriggerRun={handleTriggerRun} />
             {previewRows.length > 0 && (
               <Panel
                 header={

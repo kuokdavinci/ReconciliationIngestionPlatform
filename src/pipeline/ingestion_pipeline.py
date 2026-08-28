@@ -530,6 +530,8 @@ class IngestionPipeline:
                 file_id=claimed.source_file_id,
                 fetch_unit_key=claimed.fetch_unit_key,
                 config_version=config.config_version or command.config_version,
+                review_packet_id=(command.fetch_unit_metadata or {}).get("reviewPacketId"),
+                post_approval_run_id=(command.fetch_unit_metadata or {}).get("postApprovalRunId"),
                 state=state,
                 emit_stage=lambda stage: self._emit_stage(
                     stage,

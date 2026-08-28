@@ -14,16 +14,17 @@ import { GuidedReviewDecisionStep } from "./guided-review-decision-step";
 import { useGuidedReview } from "./use-guided-review";
 import { resolveInternalReviewEvidence } from "./internal-review-evidence";
 
-const steps = ["Scope", "Mapping", "Validation", "Decision"];
+const steps = ["Scope", "Mapping", "Quality Gate", "Decision"];
 
 interface Props {
   packet: ReviewPacket | null;
   open: boolean;
   onClose: () => void;
   onRefresh: () => void;
+  onOpenQuarantine: (params: { packetId: string; postApprovalRunId?: string }) => void;
 }
 
-export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
+export function GuidedReviewModal({ packet, open, onClose, onRefresh, onOpenQuarantine }: Props) {
   const { showToast } = useToast();
   const [traceDetailSampleIndex, setTraceDetailSampleIndex] = useState<number | null>(null);
 
@@ -195,6 +196,7 @@ export function GuidedReviewModal({ packet, open, onClose, onRefresh }: Props) {
           }}
           onBack={() => setStep(3)}
           onClose={handleClose}
+          onOpenQuarantine={onOpenQuarantine}
         />
       )}
     </Dialog>

@@ -49,7 +49,8 @@ jobs:
         run: npm run playwright:install
 
       - name: Run frontend interaction tests
-        run: npm run test:e2e
+        # The scheduler-first demo test calls the real API and is run with the backend stack.
+        run: npm run test:e2e -- --grep-invert "@requires-backend"
 
       - name: Upload Playwright artifacts
         if: ${{ !cancelled() }}

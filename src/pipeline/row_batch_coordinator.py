@@ -40,6 +40,8 @@ class RowBatchContext:
     reconciliation_date: Any
     fetch_unit_key: str | None
     config_version: str | None
+    review_packet_id: str | None = None
+    post_approval_run_id: str | None = None
 
 
 async def flush_quarantine_records(
@@ -203,6 +205,8 @@ class RowBatchCoordinator:
                 IngestionQuarantineRecord(
                     sourceFileId=self._context.file_id,
                     sourceUnitKey=self._context.fetch_unit_key,
+                    reviewPacketId=self._context.review_packet_id,
+                    postApprovalRunId=self._context.post_approval_run_id,
                     partner=self._context.partner,
                     reconciliationDate=self._context.reconciliation_date,
                     rowNumber=row_number,
@@ -251,6 +255,8 @@ class RowBatchCoordinator:
         return IngestionQuarantineRecord(
             sourceFileId=self._context.file_id,
             sourceUnitKey=self._context.fetch_unit_key,
+            reviewPacketId=self._context.review_packet_id,
+            postApprovalRunId=self._context.post_approval_run_id,
             partner=self._context.partner,
             reconciliationDate=self._context.reconciliation_date,
             rowNumber=row_number,

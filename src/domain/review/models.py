@@ -20,6 +20,15 @@ class PostApprovalRunStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class PostApprovalQualityGateStatus(str, Enum):
+    """Bounded quality outcome for the post-approval ingestion batch."""
+
+    PENDING = "PENDING"
+    PASS = "PASS"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    FAIL = "FAIL"
+
+
 class PostApprovalRunStage(str, Enum):
     APPROVAL = "approval"
     INGESTION = "ingestion"
@@ -40,6 +49,14 @@ class PostApprovalRun(BaseModel):
     partner: str
     date: Optional[str] = None
     status: PostApprovalRunStatus = PostApprovalRunStatus.QUEUED
+    quality_gate_status: PostApprovalQualityGateStatus = Field(
+        default=PostApprovalQualityGateStatus.PENDING,
+        alias="qualityGateStatus",
+    )
+    quality_gate_summary: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="qualityGateSummary",
+    )
     stage: PostApprovalRunStage = PostApprovalRunStage.APPROVAL
     message: Optional[str] = None
     source_file_id: Optional[str] = Field(default=None, alias="sourceFileId")
@@ -154,6 +171,15 @@ class ReviewPacket(BaseModel):
     internal_preview: list[dict[str, Any]] = Field(default_factory=list, alias="internalPreview")
     risk_summary: dict[str, Any] = Field(default_factory=dict, alias="riskSummary")
     runtime_decision_hint: Optional[str] = Field(default=None, alias="runtimeDecisionHint")
+    quality_gate_status: PostApprovalQualityGateStatus = Field(
+        default=PostApprovalQualityGateStatus.PENDING,
+        alias="qualityGateStatus",
+    )
+    quality_gate_summary: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="qualityGateSummary",
+    )
+    post_approval_run_id: Optional[str] = Field(default=None, alias="postApprovalRunId")
     status: ReviewPacketStatus = ReviewPacketStatus.PENDING
     decision_mode: Optional[ReviewDecisionMode] = Field(default=None, alias="decisionMode")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), alias="createdAt")

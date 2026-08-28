@@ -58,9 +58,8 @@ duplicates or quarantine records. Source `timestamp` maps to required
 boundary. `fraud_type` remains intentionally unmapped.
 
 This run does not prove reconciliation correctness, conflicting-duplicate
-handling, invalid-row quarantine, Airflow acceptance, statistical/fraud
-semantics or partner production sign-off. Those require separate fixtures or
-acceptance environments.
+handling, invalid-row quarantine, Airflow acceptance, or statistical/fraud
+semantics. Those require separate fixtures or explicit business contracts.
 
 ## Reproduction
 

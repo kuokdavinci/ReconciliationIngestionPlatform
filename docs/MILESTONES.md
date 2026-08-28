@@ -1,6 +1,6 @@
 # Project Milestones
 
-**Cập nhật:** 2026-08-27
+**Cập nhật:** 2026-08-28
 
 ## Milestone 1 — Foundation
 
@@ -10,14 +10,14 @@
 
 ## Milestone 2 — Phase 2: Ingestion reliability
 
-**Trạng thái:** Sprint 1 và 2 đã triển khai; Sprint 2.5 đang ở trạng thái partial acceptance với 5 criteria còn pending; Sprint 3 đã triển khai lõi A/B/C/D nhưng còn acceptance vận hành; Sprint 4 là kế hoạch mở rộng.
+**Trạng thái:** Sprint 1 và 2 đã triển khai; Sprint 2.5 đang ở trạng thái partial acceptance với 5 criteria còn pending; Sprint 3 đã hoàn tất ở phạm vi local mock-data với quyết định `GO (demo-only)`; Sprint 4 là kế hoạch mở rộng.
 
 | Sprint | Phạm vi | Trạng thái evidence |
 |---|---|---|
 | 1 | Idempotency, duplicate protection, benchmark | Implemented + benchmark |
 | 2 | Incremental processing, checkpoint, recovery, backfill | Implemented + regression/demo |
 | 2.5 | Airflow integration + recovery hardening (gộp nội dung cũ của 2.6) | Partial acceptance: 6/11 đạt, 5 pending; local health verified, live business evidence còn phụ thuộc môi trường |
-| 3 | Data quality và quarantine | Core implemented; operator/production acceptance pending |
+| 3 | Data quality và quarantine | Implemented; local mock-data acceptance `GO (demo-only)` |
 | 4 | Observability | Planned |
 
 Đọc [Phase 2 Sprint Index](phase-2/INDEX.md) để xem toàn bộ plan, report, evaluation run và runbook của từng sprint.
@@ -29,6 +29,6 @@ Phase 2 ưu tiên fetchers, source units, checkpoint, ingestion pipeline, workfl
 ## Cách đọc trạng thái
 
 - **Implemented:** code và regression/evaluation tương ứng đã có.
-- **Pilot:** đã chạy local/Docker theo runbook, chưa đồng nghĩa production cutover.
+- **Pilot:** đã chạy local/Docker theo runbook.
 - **Automated verification:** test code đã pass; live service evidence có thể vẫn cần thu thập.
 - **Planned:** tài liệu thiết kế/plan đã có, chưa coi là acceptance hoàn tất.

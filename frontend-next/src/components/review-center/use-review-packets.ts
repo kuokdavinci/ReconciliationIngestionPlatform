@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api/review-center";
 import type { ReviewPacket } from "@/types/review-center";
 
-export function getPendingPackets(packets: ReviewPacket[]): ReviewPacket[] {
+export function getVisiblePackets(packets: ReviewPacket[]): ReviewPacket[] {
   return [...packets]
-    .filter((packet) => String(packet.status).toUpperCase() === "PENDING")
+    .filter((packet) => (
+      String(packet.status).toUpperCase() === "PENDING"
+      || String(packet.qualityGateStatus).toUpperCase() === "FAIL"
+    ))
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
 }
 
@@ -28,19 +31,20 @@ export function selectReviewPacketId({
   return packets[0]?._id ?? null;
 }
 
-export function useReviewPackets(requestedId?: string | null) {
+export function useReviewPackets(requestedId?: string | null, enabled = true) {
   const [packets, setPackets] = useState<ReviewPacket[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedPacketDetail, setSelectedPacketDetail] = useState<ReviewPacket | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refreshPackets = useCallback(async () => {
+    if (!enabled) return [];
     try {
       const response = await api.listReviewPackets();
-      const pending = getPendingPackets(response.packets ?? []);
-      setPackets(pending);
-      setSelectedId((current) => selectReviewPacketId({ packets: pending, currentId: current, requestedId }));
-      return pending;
+      const visible = getVisiblePackets(response.packets ?? []);
+      setPackets(visible);
+      setSelectedId((current) => selectReviewPacketId({ packets: visible, currentId: current, requestedId }));
+      return visible;
     } catch {
       setPackets([]);
       setSelectedId(null);
@@ -48,18 +52,21 @@ export function useReviewPackets(requestedId?: string | null) {
     } finally {
       setLoading(false);
     }
-  }, [requestedId]);
+  }, [enabled, requestedId]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     let cancelled = false;
 
     async function bootstrap() {
       try {
         const response = await api.listReviewPackets();
         if (cancelled) return;
-        const pending = getPendingPackets(response.packets ?? []);
-        setPackets(pending);
-        setSelectedId((current) => selectReviewPacketId({ packets: pending, currentId: current, requestedId }));
+        const visible = getVisiblePackets(response.packets ?? []);
+        setPackets(visible);
+        setSelectedId((current) => selectReviewPacketId({ packets: visible, currentId: current, requestedId }));
       } catch {
         if (cancelled) return;
         setPackets([]);
@@ -80,15 +87,15 @@ export function useReviewPackets(requestedId?: string | null) {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [requestedId, refreshPackets]);
+  }, [enabled, requestedId, refreshPackets]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (!enabled || !selectedId) return;
     const fallback = packets.find((packet) => packet._id === selectedId) ?? null;
     api.getReviewPacket(selectedId)
       .then((response) => setSelectedPacketDetail(response.packet))
       .catch(() => setSelectedPacketDetail(fallback));
-  }, [packets, selectedId]);
+  }, [enabled, packets, selectedId]);
 
   const selectedPacket = useMemo(() => {
     if (!selectedId) return null;

@@ -15,6 +15,8 @@ from src.domain.ingestion.quarantine import (
     QuarantineResolutionEvent,
     QuarantineStatus,
     assert_quarantine_transition,
+    quarantine_error_codes_for_issue_type,
+    quarantine_issue_type_for_error_code,
 )
 from src.config.settings import settings
 from src.infrastructure.persistence.mongo_repository import BaseRepository
@@ -147,10 +149,18 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             filters["sourceFileId"] = query.source_file_id
         if query.source_unit_key is not None:
             filters["sourceUnitKey"] = query.source_unit_key
+        if query.review_packet_id is not None:
+            filters["reviewPacketId"] = query.review_packet_id
+        if query.post_approval_run_id is not None:
+            filters["postApprovalRunId"] = query.post_approval_run_id
         if query.claimed_by is not None:
             filters["claimedBy"] = query.claimed_by
         if query.priority is not None:
             filters["priority"] = query.priority.value
+        if query.issue_type is not None:
+            filters["errors.errorCode"] = {
+                "$in": list(quarantine_error_codes_for_issue_type(query.issue_type))
+            }
         if query.overdue is not None:
             now = now or datetime.now(UTC)
             if query.overdue:
@@ -412,10 +422,12 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
 
         cursor = self.collection.find(filters).sort(
             [("createdAt", 1), ("_id", 1)]
-        ).limit(query.limit)
+        ).limit(query.limit + 1)
         records = [self._from_mongo(raw) async for raw in cursor]
         next_cursor = None
-        if records:
+        has_next_page = len(records) > query.limit
+        records = records[:query.limit]
+        if has_next_page and records:
             last = records[-1]
             next_cursor = f"{last.created_at.isoformat()}|{last.id}"
         return records, next_cursor
@@ -624,6 +636,71 @@ class IngestionQuarantineRepository(BaseRepository[IngestionQuarantineRecord]):
             else await count(overdue_filter),
             "highPriority": await count({"priority": QuarantinePriority.HIGH.value}),
         }
+
+    async def group_summaries(
+        self,
+        query: QuarantineQuery,
+        *,
+        now: datetime | None = None,
+        limit: int = 2000,
+    ) -> list[dict[str, Any]]:
+        """Return bounded packet/run groups for the operator queue.
+
+        The quarantine document remains the source of truth.  Grouping is a
+        read projection, capped so a malformed or very large batch cannot
+        turn the queue endpoint into an unbounded export.
+        """
+        now = now or datetime.now(UTC)
+        filters = self._query_filters(query.model_copy(update={"limit": 200, "cursor": None}), now=now)
+        cursor = self.collection.find(filters).sort([("createdAt", 1), ("_id", 1)]).limit(
+            _bounded_limit(limit, maximum=2000)
+        )
+        groups: dict[str, dict[str, Any]] = {}
+        async for raw in cursor:
+            record = self._from_mongo(raw)
+            key = (
+                record.post_approval_run_id
+                or record.review_packet_id
+                or record.source_file_id
+            )
+            group = groups.setdefault(
+                key,
+                {
+                    "groupKey": key,
+                    "reviewPacketId": record.review_packet_id,
+                    "postApprovalRunId": record.post_approval_run_id,
+                    "sourceFileId": record.source_file_id,
+                    "partner": record.partner,
+                    "total": 0,
+                    "pending": 0,
+                    "reprocessing": 0,
+                    "resolved": 0,
+                    "rejected": 0,
+                    "overdue": 0,
+                    "highPriority": 0,
+                    "issueTypes": set(),
+                },
+            )
+            group["total"] += 1
+            group[record.status.value.lower()] += 1
+            if (
+                record.status in {QuarantineStatus.PENDING, QuarantineStatus.REPROCESSING}
+                and record.review_due_at is not None
+                and _as_utc(record.review_due_at) <= now
+            ):
+                group["overdue"] += 1
+            if record.priority is QuarantinePriority.HIGH:
+                group["highPriority"] += 1
+            for error in record.errors:
+                code = error.get("errorCode") if isinstance(error, dict) else None
+                if code:
+                    group["issueTypes"].add(
+                        quarantine_issue_type_for_error_code(str(code)).value
+                    )
+        return [
+            {**group, "issueTypes": sorted(group["issueTypes"])}
+            for group in groups.values()
+        ]
 
     async def escalate(
         self,

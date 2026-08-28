@@ -1,4 +1,5 @@
 import type { RecoveryStatus, ScheduleJob } from "@/types/schedules";
+import { Badge } from "@/components/ui/badge";
 import { isActiveRuntimeStatus } from "./recovery-status";
 import styles from "./schedules.module.css";
 
@@ -23,6 +24,13 @@ function parseErrorSummary(lastError?: string | null, errorCode?: string | null)
   return line.length > 28 ? line.slice(0, 28) + "…" : line;
 }
 
+function statusSeverity(status: string): "neutral" | "critical" | "high" | "medium" | "low" {
+  if (["Failed", "Blocked", "Backfill Failed"].includes(status)) return "critical";
+  if (["Waiting Review", "Retrying", "Running", "Backfill", "Backfill Review"].includes(status)) return "medium";
+  if (["Ready", "Safe Duplicate"].includes(status)) return "low";
+  return "neutral";
+}
+
 export function ScheduleRecoverySummary({ job }: Props) {
   const recovery = job.recovery;
   const recoveryStatus = recovery?.status as RecoveryStatus | undefined;
@@ -33,6 +41,10 @@ export function ScheduleRecoverySummary({ job }: Props) {
   const isBlocked = job.status === "BLOCKED" || recoveryStatus === "BLOCKED";
   const isWaitingReview = job.status === "WAITING_REVIEW" || recoveryStatus === "WAITING_REVIEW";
   const isSafeDuplicate = job.status === "SAFE_DUPLICATE" || job.safeDuplicate === true || recovery?.safeDuplicate === true;
+  const runtimeStats = job.latestRuntimeRun?.stats || {};
+  const topRuleCodes = Array.isArray(runtimeStats.topRuleCodes) ? runtimeStats.topRuleCodes : [];
+  const batchFatalCode = topRuleCodes.find((code): code is string => typeof code === "string");
+  const isBatchFatal = isFailed && runtimeStats.qualityDecision === "FAIL" && Boolean(batchFatalCode);
   const backfillStatus = job.activeBackfill?.status;
   const hasBackfill = Boolean(job.activeBackfill);
   const backfillWaitingForReview = backfillStatus === "WAITING_CONFIG";
@@ -40,37 +52,20 @@ export function ScheduleRecoverySummary({ job }: Props) {
 
   // Primary Status
   let primaryLabel = "Ready";
-  let statusDotClass = styles.statusDotReady;
-  let textClass = styles.statusTextReady;
-
   if (hasBackfill) {
     primaryLabel = backfillFailed ? "Backfill Failed" : backfillWaitingForReview ? "Backfill Review" : "Backfill";
-    statusDotClass = backfillFailed ? styles.statusDotFailed : backfillWaitingForReview ? styles.statusDotWarning : styles.statusDotRunning;
-    textClass = backfillFailed ? styles.statusTextFailed : backfillWaitingForReview ? styles.statusTextWarning : styles.statusTextRunning;
   } else if (isFailed) {
     primaryLabel = "Failed";
-    statusDotClass = styles.statusDotFailed;
-    textClass = styles.statusTextFailed;
   } else if (isBlocked) {
     primaryLabel = "Blocked";
-    statusDotClass = styles.statusDotFailed;
-    textClass = styles.statusTextFailed;
   } else if (isRetrying) {
     primaryLabel = "Retrying";
-    statusDotClass = styles.statusDotRunning;
-    textClass = styles.statusTextRunning;
   } else if (isActive) {
     primaryLabel = "Running";
-    statusDotClass = styles.statusDotRunning;
-    textClass = styles.statusTextRunning;
   } else if (isWaitingReview) {
     primaryLabel = "Waiting Review";
-    statusDotClass = styles.statusDotWarning;
-    textClass = styles.statusTextWarning;
   } else if (isSafeDuplicate) {
     primaryLabel = "Safe Duplicate";
-    statusDotClass = styles.statusDotReady;
-    textClass = styles.statusTextReady;
   }
 
   // Secondary Line (Max 1 short line, ONLY when relevant)
@@ -79,7 +74,9 @@ export function ScheduleRecoverySummary({ job }: Props) {
     const label = String(backfillStatus || "ACTIVE").replaceAll("_", " ");
     subLine = `${label}${job.activeBackfill?.currentDate ? ` · ${job.activeBackfill.currentDate}` : ""}`;
   } else if (isFailed || isBlocked) {
-    if (recovery?.lastError || recovery?.errorCode) {
+    if (isBatchFatal) {
+      subLine = `BATCH_FATAL · ${batchFatalCode}`;
+    } else if (recovery?.lastError || recovery?.errorCode) {
       subLine = parseErrorSummary(recovery.lastError, recovery.errorCode);
     } else if (recoveryStatus === "FAILED") {
       subLine = "Recovery failed";
@@ -99,8 +96,7 @@ export function ScheduleRecoverySummary({ job }: Props) {
   return (
     <div className={styles.scheduleSummaryCompact} aria-label={ariaLabel}>
       <div className={styles.statusPrimaryRow}>
-        <span className={`${styles.statusIndicatorDot} ${statusDotClass}`} />
-        <span className={`${styles.statusPrimaryLabel} ${textClass}`}>{primaryLabel}</span>
+        <Badge severity={statusSeverity(primaryLabel)} shape="pill">{primaryLabel}</Badge>
       </div>
 
       {subLine && (

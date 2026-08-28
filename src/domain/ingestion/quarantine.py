@@ -27,6 +27,59 @@ class QuarantinePriority(StrEnum):
     HIGH = "HIGH"
 
 
+class QuarantineIssueType(StrEnum):
+    """Operator-facing category derived from the persisted quality code."""
+
+    SCHEMA = "SCHEMA"
+    REQUIRED_FIELD = "REQUIRED_FIELD"
+    FORMAT = "FORMAT"
+    DUPLICATE = "DUPLICATE"
+    RECOVERY = "RECOVERY"
+    OTHER = "OTHER"
+
+
+_ISSUE_TYPE_CODES: dict[QuarantineIssueType, tuple[str, ...]] = {
+    QuarantineIssueType.SCHEMA: (
+        "REQUIRED_SCHEMA_PATH",
+        "MISSING_REQUIRED_SOURCE_COLUMN",
+        "SCHEMA_CONFIG_DRIFT",
+        "SOURCE_STRUCTURE_UNREADABLE",
+        "CONFIG_VALIDATION",
+    ),
+    QuarantineIssueType.REQUIRED_FIELD: ("MISSING_REQUIRED_FIELD",),
+    QuarantineIssueType.FORMAT: (
+        "MALFORMED_ROW",
+        "INVALID_AMOUNT",
+        "NEGATIVE_AMOUNT",
+        "INVALID_TIMESTAMP",
+        "INVALID_STATUS",
+    ),
+    QuarantineIssueType.DUPLICATE: (
+        "EQUIVALENT_DUPLICATE",
+        "CONFLICTING_DUPLICATE",
+    ),
+    QuarantineIssueType.RECOVERY: ("SOURCE_UNIT_RECOVERY_REQUIRED",),
+}
+
+
+def quarantine_issue_type_for_error_code(error_code: str | None) -> QuarantineIssueType:
+    """Classify one stable quality code without persisting presentation data."""
+
+    normalized = str(error_code or "").upper()
+    for issue_type, codes in _ISSUE_TYPE_CODES.items():
+        if normalized in codes:
+            return issue_type
+    return QuarantineIssueType.OTHER
+
+
+def quarantine_error_codes_for_issue_type(
+    issue_type: QuarantineIssueType,
+) -> tuple[str, ...]:
+    """Return the persisted error codes covered by one operator category."""
+
+    return _ISSUE_TYPE_CODES.get(issue_type, ())
+
+
 class QuarantineTransitionError(ValueError):
     """Raised when a quarantine record attempts an invalid state change."""
 
@@ -113,8 +166,11 @@ class QuarantineQuery(BaseModel):
     error_code: str | None = Field(default=None, alias="errorCode")
     source_file_id: str | None = Field(default=None, alias="sourceFileId")
     source_unit_key: str | None = Field(default=None, alias="sourceUnitKey")
+    review_packet_id: str | None = Field(default=None, alias="reviewPacketId")
+    post_approval_run_id: str | None = Field(default=None, alias="postApprovalRunId")
     claimed_by: str | None = Field(default=None, alias="claimedBy")
     priority: QuarantinePriority | None = None
+    issue_type: QuarantineIssueType | None = Field(default=None, alias="issueType")
     overdue: bool | None = None
     from_date: datetime | None = Field(default=None, alias="fromDate")
     to_date: datetime | None = Field(default=None, alias="toDate")
@@ -130,6 +186,8 @@ class IngestionQuarantineRecord(BaseModel):
     id: UUID = Field(default_factory=uuid4, alias="_id")
     source_file_id: str = Field(alias="sourceFileId")
     source_unit_key: str | None = Field(default=None, alias="sourceUnitKey")
+    review_packet_id: str | None = Field(default=None, alias="reviewPacketId")
+    post_approval_run_id: str | None = Field(default=None, alias="postApprovalRunId")
     partner: str
     reconciliation_date: datetime = Field(alias="reconciliationDate")
     row_number: int | None = Field(default=None, alias="rowNumber")

@@ -40,6 +40,52 @@ test("operator can navigate across the dashboard routes", async ({ page }) => {
   }
 });
 
+test("review progress counts only unique reviewable reconciliation rows", async ({ page }) => {
+  const results = [
+    { id: "mismatch-1", partnerTxnId: "mismatch-1", reconciliationStatus: "MISSING_PARTNER" },
+    { id: "mismatch-2", partnerTxnId: "mismatch-2", reconciliationStatus: "MISSING_PARTNER" },
+  ];
+  const reviewRecords = [
+    { _id: "mismatch-1", recordKey: "mismatch-1", reviewed: true, notes: [], partner: "DEMO", date: "2026-08-28" },
+    { _id: "mismatch-2", recordKey: "mismatch-2", reviewed: true, notes: [], partner: "DEMO", date: "2026-08-28" },
+    { _id: "matched-1", recordKey: "matched-1", reviewed: true, notes: [], partner: "DEMO", date: "2026-08-28" },
+  ];
+
+  await page.route("**/api/v1/reconciliation/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() !== "GET") return route.fallback();
+    if (url.pathname.endsWith("/stats")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ partner: "DEMO", date: "2026-08-28", total: 20, byStatus: { MATCHED: 18, MISSING_PARTNER: 2 }, totalPartnerAmount: null, totalInternalAmount: null }),
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/results")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ results, total: results.length, limit: 100, offset: 0 }) });
+      return;
+    }
+    if (url.pathname.endsWith("/review-records")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ records: reviewRecords }) });
+      return;
+    }
+    if (url.pathname.endsWith("/run-status")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: null }) });
+      return;
+    }
+    if (url.pathname.endsWith("/insights")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto("/reconciliation");
+  await expect(page.getByText("2/2 (100%)", { exact: true })).toBeVisible();
+  await expect(page.getByText("3/2 (150%)", { exact: true })).toHaveCount(0);
+});
+
 test("operator can open Mapping Studio and switch mapping views", async ({ page }) => {
   await page.goto("/mapping-studio");
 

@@ -45,6 +45,565 @@
   color: var(--text-muted);
 }
 
+.reviewTabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 32px 20px;
+  padding: 4px;
+  width: fit-content;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.reviewTab {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.reviewTab:hover,
+.reviewTab:focus-visible,
+.reviewTabActive {
+  color: #fff;
+  background: rgba(240, 185, 11, 0.14);
+  outline: none;
+}
+
+.quarantineQueue {
+  display: grid;
+  gap: 16px;
+}
+
+.quarantineToolbar,
+.quarantineCardHeader,
+.quarantineCardFooter,
+.quarantineDialogActions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.quarantineActor,
+.quarantineFilters label,
+.quarantineActionForm label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.quarantineActor input,
+.quarantineFilters input,
+.quarantineFilters select,
+.quarantineActionForm input,
+.quarantineActionForm select,
+.quarantineActionForm textarea {
+  min-width: 150px;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.2);
+  font: inherit;
+  font-size: 12px;
+}
+
+.quarantineActionForm textarea {
+  min-width: 300px;
+  resize: vertical;
+}
+
+.quarantineSummary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.quarantineCardMeta span {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.quarantineFilters {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.quarantineCardBadges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.quarantineCardTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quarantineFilters input,
+.quarantineFilters select {
+  min-width: 130px;
+}
+
+.quarantineNotice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 10px;
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.08);
+  font-size: 12px;
+}
+
+.quarantineList {
+  display: grid;
+  gap: 10px;
+}
+
+.quarantineCard {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+}
+
+.quarantineBatch {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.quarantineBatchHeader,
+.quarantineBatchStats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.quarantineBatchStats { justify-content: flex-end; }
+
+.quarantineCardHeader h4 {
+  margin: 0;
+  color: #fff;
+  font-size: 14px;
+}
+
+.quarantineCardMeta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.quarantineCardFooter,
+.quarantinePagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.quarantineDialog {
+  width: min(760px, calc(100vw - 48px));
+  max-width: 760px;
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.quarantineDetail {
+  display: grid;
+  gap: 12px;
+}
+
+.quarantineDetailGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.quarantineDetailGrid span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.quarantineDetailGrid strong {
+  color: var(--text-primary);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.quarantineSectionHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.quarantineSectionTitle {
+  margin: 0;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.quarantineSectionCopy {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.quarantineDecisionCard {
+  border-color: rgba(240, 185, 11, 0.26);
+  background: linear-gradient(135deg, rgba(240, 185, 11, 0.1), rgba(255, 255, 255, 0.03));
+}
+
+.quarantineSampleCount {
+  flex: 0 0 auto;
+  color: var(--brand-primary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.quarantineInstruction {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.quarantineErrorReason {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.quarantineSampleTableWrap {
+  max-height: 270px;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.quarantineSampleTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.quarantineSampleTable th,
+.quarantineSampleTable td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  text-align: left;
+  vertical-align: top;
+}
+
+.quarantineSampleTable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #182127;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.quarantineSampleTable th:first-child {
+  width: 29%;
+}
+
+.quarantineSampleTable th:last-child {
+  width: 16%;
+}
+
+.quarantineSampleTable tbody tr:last-child th,
+.quarantineSampleTable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.quarantineSampleField {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.quarantineSampleCanonical {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.quarantineSampleValue {
+  color: #fff;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.quarantineSampleErrorRow {
+  background: rgba(180, 67, 67, 0.1);
+}
+
+.quarantineSampleErrorRow .quarantineSampleField {
+  color: #ffb4b4;
+}
+
+.quarantineSampleFlag,
+.quarantineSampleOkay {
+  display: inline-flex;
+  padding: 3px 7px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 999px;
+  background: rgba(248, 113, 113, 0.14);
+  color: #ffb4b4;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.quarantineSampleOkay {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.quarantineEmptySample {
+  margin: 0;
+  padding: 14px;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.quarantineMappingEvidence {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 9px;
+  background: rgba(96, 165, 250, 0.06);
+}
+
+.quarantineSubsectionHeading,
+.quarantineCompareStatus {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.quarantineSubsectionHeading h4 {
+  margin: 0;
+  color: #fff;
+  font-size: 12px;
+}
+
+.quarantineSubsectionHeading p,
+.quarantineObservedColumns {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.quarantineSubsectionHeading > span {
+  color: #93c5fd;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.quarantineCompareStatus {
+  align-items: center;
+  justify-content: flex-start;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.quarantineHistoryDetails {
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.quarantineHistoryDetails summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.quarantineHistoryDetails summary span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.quarantineHistoryDetails[open] .quarantineHistory {
+  margin-top: 12px;
+}
+
+.quarantineHistory {
+  display: grid;
+  gap: 8px;
+}
+
+.quarantineHistory > div {
+  display: grid;
+  gap: 2px;
+  padding: 9px 10px;
+  border-left: 2px solid rgba(240, 185, 11, 0.4);
+  background: rgba(0, 0, 0, 0.16);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.quarantineHistory strong {
+  color: #fff;
+}
+
+.quarantineHistory small {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.quarantineOwnerWarning,
+.quarantineHint,
+.quarantineFormError {
+  margin: 0;
+  color: #fbbf24;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.quarantineFormError {
+  color: #fca5a5;
+}
+
+.quarantineActionForm {
+  display: grid;
+  gap: 14px;
+}
+
+.quarantineRejectButton {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.42);
+}
+
+.quarantineRejectButton:hover {
+  color: #fff;
+  background: rgba(239, 68, 68, 0.28);
+  border-color: #ef4444;
+}
+
+@media (max-width: 900px) {
+  .reviewTabs {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+
+  .quarantineToolbar {
+    flex-direction: column;
+  }
+
+  .quarantineDetailGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .quarantineSummary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .quarantineDialog {
+    width: calc(100vw - 24px);
+  }
+
+  .quarantineSectionHeading {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .quarantineDetailGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .quarantineSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .quarantineSampleTable th,
+  .quarantineSampleTable td {
+    padding: 7px;
+  }
+}
+
 .packetCard {
   padding: 22px;
   border-radius: 18px;
@@ -332,6 +891,8 @@
 .metricCardSuccess .metricValue { color: #10b981; }
 .metricCardWarning { border-color: rgba(240, 185, 11, 0.3); }
 .metricCardWarning .metricValue { color: #f0b90b; }
+.metricCardReview { border-color: rgba(251, 146, 60, 0.3); }
+.metricCardReview .metricValue { color: #fb923c; }
 .metricCardDanger { border-color: rgba(239, 68, 68, 0.3); }
 .metricCardDanger .metricValue { color: #ef4444; }
 
@@ -341,6 +902,11 @@
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.01);
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.quarantineSummary .metricCard {
+  min-width: 0;
+  padding: 12px 8px;
 }
 
 .metricLabel {
@@ -406,11 +972,6 @@
   margin-bottom: 10px;
   font-size: 12px;
   color: #fff;
-}
-
-.reasonList {
-  display: grid;
-  gap: 8px;
 }
 
 .reasonItem {
@@ -495,34 +1056,6 @@
   font-size: 14px;
   color: #fff;
   font-weight: 700;
-}
-
-.mappingFacts {
-  display: grid;
-  gap: 10px;
-}
-
-.mappingFactRow {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.mappingFactKey {
-  display: block;
-  font-size: 13px;
-  color: #fff;
-}
-
-.mappingFactValue {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-muted);
 }
 
 .validationBanner {
@@ -745,54 +1278,6 @@
   margin-top: 12px;
 }
 
-.previewGrid {
-  display: grid;
-  gap: 10px;
-}
-
-.previewCard {
-  padding: 12px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.previewHeader {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.previewId {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.previewValues {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.previewKey {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  text-transform: uppercase;
-}
-
-.previewValue {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #fff;
-}
-
-.previewInvalid {
-  color: #ffb4b4;
-}
-
 .issuesList {
   display: grid;
   gap: 8px;
@@ -959,11 +1444,6 @@
 .progressSegmentGreen {
   height: 100%;
   background: #10B981;
-  transition: width 0.3s ease;
-}
-.progressSegmentAmber {
-  height: 100%;
-  background: #F59E0B;
   transition: width 0.3s ease;
 }
 .progressSegmentRed {
@@ -1247,7 +1727,6 @@
 @media (max-width: 720px) {
   .metricGrid,
   .constraintGrid,
-  .previewValues,
   .scopeOptionGrid {
     grid-template-columns: 1fr;
   }

@@ -3,25 +3,9 @@
 import { useCallback, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { ReviewPacket } from "@/types/review-center";
+import type { AiMappingData, FieldMappingItem, ReviewPacket } from "@/types/review-center";
 import { GuidedReviewRawStreamPanel } from "./guided-review-raw-stream-panel";
 import styles from "./review-center.module.css";
-
-export interface FieldMappingItem {
-  column?: number | string;
-  sourceField?: string;
-  type?: string;
-  path?: string;
-  constant?: string;
-  required?: boolean;
-  mapping?: Record<string, string>;
-}
-
-export interface AiMappingData {
-  configHealth?: {
-    reasoning?: string;
-  };
-}
 
 interface Props {
   packet: ReviewPacket;

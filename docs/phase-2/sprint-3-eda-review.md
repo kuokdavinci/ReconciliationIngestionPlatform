@@ -4,8 +4,8 @@
 
 Workstream A is complete for EDA discovery, the reproducible profile,
 provenance, the frozen ingestion baseline, controlled mutations, and the
-coverage handoff. It is not production approval: operator ownership,
-observability and production acceptance remain outside A.
+coverage handoff. Operator ownership, observability and runtime acceptance are
+outside A.
 
 The Kaggle notebook is unchanged and Kaggle-only. The suggestions below are
 not instructions to edit or run it locally. Workstream B and the deterministic
@@ -23,9 +23,9 @@ parts of Workstream C are now implemented; Workstreams D–F remain handoffs.
 - Focused profile coverage: `26` tests passing, including controlled mutation
   cases.
 
-This is evidence about this file and profile contract, not a production
-partner/business contract. The clean source data does not itself prove reject,
-quarantine, or conflict handling.
+This is evidence about this file and profile contract, not a partner/business
+contract. The clean source data does not itself prove reject, quarantine, or
+conflict handling.
 
 ## Profile boundary
 

@@ -1,6 +1,7 @@
 """Approval desk review packet endpoints."""
 
 import asyncio
+import inspect
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,9 @@ from src.application.review.actions import (
 )
 from src.application.review.proposal_creation import create_studio_handoff_review_packet
 from src.application.review.reprocessing import serialize_post_approval_run
+from src.application.review.post_approval_reconciliation import (
+    continue_waiting_post_approval_run,
+)
 from src.infrastructure.mapping.composition import build_config_loader
 from src.application.review.ai_mapping_context import resolve_ai_generation_context
 from src.application.review.runtime_validation import (
@@ -169,6 +173,35 @@ def _review_mapping_workflow(request: Request) -> ReviewMappingWorkflow:
         packet_serializer=_serialize,
         next_version=lambda partner: _next_pending_version(request, partner),
     )
+
+
+async def _completed_post_approval_response(request: Request, packet_id: str, run):
+    """Return an idempotent result and repair the packet parent projection."""
+    quality_gate_status = getattr(
+        run.quality_gate_status,
+        "value",
+        run.quality_gate_status,
+    )
+    quality_gate_summary = run.quality_gate_summary
+    packet_update = ReviewPacketRepository(_get_db(request)).collection.update_one(
+        {"_id": packet_id},
+        {
+            "$set": {
+                "qualityGateStatus": quality_gate_status,
+                "qualityGateSummary": quality_gate_summary,
+                "postApprovalRunId": str(run.id),
+            }
+        },
+    )
+    if inspect.isawaitable(packet_update):
+        await packet_update
+    return {
+        "ok": True,
+        "outcome": "ALREADY_RECONCILED",
+        "reconciliationCount": run.reconciliation_count,
+        "qualityGateStatus": quality_gate_status,
+        "qualityGateSummary": quality_gate_summary,
+    }
 
 
 def _scope_classification_service(request: Request) -> ScopeClassificationService:
@@ -356,6 +389,56 @@ async def get_post_approve_run(request: Request, packet_id: str):
     if run is None:
         raise HTTPException(status_code=404, detail="Post-approval run not found.")
     return {"run": serialize_post_approval_run(run)}
+
+
+@router.post("/{packet_id}/post-approve-run/continue")
+async def continue_post_approve_run(request: Request, packet_id: str):
+    """Let the packet parent explicitly proceed after quarantine is clear."""
+    require_actor(request)
+    db = _get_db(request)
+    repository = PostApprovalRunRepository(db)
+    run = await repository.find_latest_by_packet_id(packet_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Post-approval run not found.")
+
+    run_id = str(run.id)
+    status = getattr(run.status, "value", run.status)
+    if status == "COMPLETED":
+        return await _completed_post_approval_response(request, packet_id, run)
+    if status != "WAITING_REVIEW":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "errorCodes": ["POST_APPROVAL_NOT_READY"],
+                "reason": "Post-approval reconciliation is not waiting for quarantine review.",
+            },
+        )
+
+    result = await continue_waiting_post_approval_run(db, run_id)
+    if result is not None:
+        if result.get("outcome") in {
+            "CONTINUATION_UNAVAILABLE",
+            "RECONCILIATION_FAILED",
+        }:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "errorCodes": [result["outcome"]],
+                    "reason": "Post-approval reconciliation could not continue.",
+                },
+            )
+        return result
+
+    latest = await repository.find_latest_by_packet_id(packet_id)
+    if latest is not None and getattr(latest.status, "value", latest.status) == "COMPLETED":
+        return await _completed_post_approval_response(request, packet_id, latest)
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "errorCodes": ["POST_APPROVAL_STATE_CHANGED"],
+            "reason": "Post-approval state changed before continuation could start.",
+        },
+    )
 
 
 @router.get("/{packet_id}/post-approve-run/stream")

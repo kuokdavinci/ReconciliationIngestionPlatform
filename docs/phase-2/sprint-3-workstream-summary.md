@@ -4,7 +4,7 @@ Canonical navigation: [Sprint 3 index](sprint-3-index.md).
 
 Workstream A hoàn thành phần EDA/profile, provenance, controlled mutations,
 frozen ingestion baseline và coverage handoff. Tài liệu này chỉ giữ các
-quyết định và rule cần đối chiếu cùng EDA notebook; không phải production
+quyết định và rule cần đối chiếu cùng EDA notebook; không phải runtime
 quality-gate approval.
 
 > Đây là tài liệu handoff lịch sử của Workstream A. Mapping và timestamp
@@ -31,7 +31,7 @@ quality-gate approval.
 | `SCHEMA_DRIFT` | Profile phát hiện missing optional/unexpected columns | File quality gate phân biệt append-only warning với breaking/fatal drift | Required/breaking drift → `FATAL`; append-only drift → `WARNING/REVIEW` | `COVERED` — B/C |
 | `INVALID_TIMESTAMP`, `TIMESTAMP_TIMEZONE_REQUIRED` | 1M timestamp parse được, có timezone và second precision | Workstream C map `timestamp → transDate`, normalize ISO/offset values và giữ structured error | Parse fail → `RECORD` reject; không advance source unit khi quality hold | `COVERED` — C/D |
 | `TIMESTAMP_PRECISION_DRIFT` | Dataset có second precision ổn định | Chưa có partner precision contract | Chỉ `WARNING`/monitoring, không reject tự động | `DO_NOT_PROMOTE` — F/partner |
-| `UNIQUE_TRANSACTION_ID` | `transaction_id` unique trong file này | Runtime idempotency dùng PostgreSQL `(identify, ingestion_key)`; scope khác EDA | Không tạo constraint production chỉ từ file-local uniqueness; chốt canonical identity/reconciliation scope | `PARTIAL` — B |
+| `UNIQUE_TRANSACTION_ID` | `transaction_id` unique trong file này | Runtime idempotency dùng PostgreSQL `(identify, ingestion_key)`; scope khác EDA | Không tạo constraint chỉ từ file-local uniqueness; chốt canonical identity/reconciliation scope | `PARTIAL` — B |
 | `EQUIVALENT_DUPLICATE` | Clean file không có duplicate tự nhiên; mutation test có | PostgreSQL conflict-safe insert và payload fingerprint classification đã có | `DUPLICATE` outcome, skip/persist idempotently, tăng counter, không fail batch | `COVERED` — B |
 | `CONFLICTING_DUPLICATE` | Controlled mutation chứng minh cùng ID có thể khác payload | Bulk payload comparison, fingerprint evidence, quarantine và source-unit hold đã có | Compare payload; conflict → `REVIEW`/quarantine, giữ lineage/reason | `COVERED` — B/D |
 | `AMOUNT_DESCRIPTIVE_OVERFLOW` | IQR flag 87.583 rows, 8.7583%; false-positive risk cao | Không dùng IQR làm quality decision | Chỉ observation/monitoring; chỉ promote khi có business threshold | `DO_NOT_PROMOTE` — partner |
@@ -77,7 +77,7 @@ Mapping v2 chính: `transaction_id → id`, `amount → Decimal amount`,
 | B — Quality contract/gate | Identity scope, schema severity, timestamp contract, duplicate payload comparison |
 | C — Normalization/validation | Timezone-aware `transDate`, structured validation errors, required/amount rules; full-dataset v2 evidence pending |
 | D — Quarantine lifecycle | Conflicting duplicate, lineage, reason, reprocess evidence |
-| F — Observability/acceptance | Precision, temporal volume, monitoring baseline, production sign-off |
+| F — Observability/acceptance | Precision, temporal volume, monitoring baseline |
 
 Chi tiết: [Sprint 3 index](./sprint-3-index.md),
 [Sprint 3 data-quality](./sprint-3-data-quality.md),

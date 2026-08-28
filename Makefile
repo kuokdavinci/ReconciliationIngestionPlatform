@@ -3,7 +3,7 @@
 	momo-e2e-phase2-file momo-e2e-help momo-e2e-reset momo-e2e-phase2 momo-e2e-phase2-full \
 	momo-e2e-missing-partner-demo momo-sprint6-setup momo-sprint6-wave2 \
 	zalopay-e2e-reset viettelpay-sprint2-reset viettelpay-sprint2-phase2 viettelpay-sprint2-eval \
-	vnpay-backfill-reset api-quick-build
+	vnpay-backfill-reset api-quick-build quarantine-demo-reset quarantine-demo-run quarantine-demo-fatal-run quarantine-demo-help
 
 # ── Test ──────────────────────────────────────────────────────────
 test:
@@ -91,6 +91,22 @@ viettelpay-sprint2-eval:
 
 vnpay-backfill-reset:
 	docker compose exec -T api env PYTHONPATH=/app VNPAY_BACKFILL_FROM="$${VNPAY_BACKFILL_FROM:-}" VNPAY_BACKFILL_TO="$${VNPAY_BACKFILL_TO:-}" python -m scripts.demo.sprint2.seed_vnpay_filedrop_backfill reset
+
+# ── Quarantine operator UI demo ─────────────────────────────────
+quarantine-demo-reset:
+	docker compose exec -T api env PYTHONPATH=/app python -m scripts.demo.scenarios.seed_quarantine_demo reset
+
+quarantine-demo-run:
+	docker compose exec -T api python -c 'import json, urllib.request; request = urllib.request.Request("http://127.0.0.1:8000/api/v1/automation/jobs/DEMO/run", method="POST", headers={"X-Actor": "demo-operator"}); print(json.dumps(json.load(urllib.request.urlopen(request)), indent=2))'
+
+quarantine-demo-fatal-run:
+	docker compose exec -T api python -c 'import json, urllib.request; request = urllib.request.Request("http://127.0.0.1:8000/api/v1/automation/jobs/DEMO1/run", method="POST", headers={"X-Actor": "demo-operator"}); print(json.dumps(json.load(urllib.request.urlopen(request)), indent=2))'
+
+quarantine-demo-help:
+	@echo "Quarantine demo: run 'make quarantine-demo-reset' after the local Compose API is healthy."
+	@echo "Then run 'make quarantine-demo-run' for the DEMO scheduler-first flow."
+	@echo "Open Review Center → Review Packets, approve the DEMO mapping packet, then review the conflict duplicate and missing-amount row in Quarantine."
+	@echo "Run 'make quarantine-demo-fatal-run' to execute DEMO1 directly and see BATCH_FATAL in Schedules."
 
 # ── ZALOPAY E2E shortcuts ─────────────────────────────────────────
 zalopay-e2e-reset:

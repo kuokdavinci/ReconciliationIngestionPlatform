@@ -13,12 +13,11 @@ contract, deterministic file/row gate, duplicate classification, bounded
 source-unit result, and conflict quarantine routing. **Workstream C is
 `implemented; full-dataset v2 evidence captured`** for the normalization and
 validation contract. **Workstream D is implemented at the application,
-persistence, production composition, API, audit, and source-unit resume
-contract level; production
-acceptance remains pending.** Workstream E is implemented at the operator
-ownership, action, queue, bounded API, and audit-contract level; production
-acceptance remains pending. Workstream F remains a handoff. This document does
-not promote statistical or fraud semantics into automatic rejection.
+persistence, runtime composition, API, audit, and source-unit resume contract
+level.** Workstream E is implemented at the operator ownership, action, queue,
+bounded API, and audit-contract level. Workstream F demo acceptance is `GO`;
+this document does not promote statistical or fraud semantics into automatic
+rejection.
 
 The full-profile baseline is version `3`, SHA-256
 `e3895c988fe37efc76dabfe62d23f7ab75e89477bb17ba0c53092b008431caf6`, with
@@ -107,14 +106,14 @@ Workstream D now provides the complete contract for a routed quarantine row:
    `PENDING`; successful, equivalent, accepted-existing, and explicit-reject
    outcomes become terminal `RESOLVED` or `REJECTED` states.
 5. Active quarantine blockers hold a source unit. Once all blockers are
-   terminal, the production resume entry point reconstructs the durable raw
+   terminal, the runtime resume entry point reconstructs the durable raw
    unit, advances the checkpoint before cleanup, and reconciles an already
    ingested file without replaying the same conflicting row.
 6. Resolution history, bounded audit events, operation counters, API views, and
    terminal retention windows preserve the evidence needed for review.
 
 The implementation spans `src/domain/ingestion/quarantine.py`, the quarantine
-repository, the ingestion application services, production composition,
+repository, the ingestion application services, runtime composition,
 source-row/GridFS adapters, source-unit orchestration, Mongo indexes, and
 `/api/v1/quarantine`. The deterministic lifecycle fixture in
 `tests/test_quarantine_lifecycle.py` covers invalid input, correction,
@@ -123,8 +122,8 @@ unit hold/resume, checkpoint advancement, one-time reconciliation, and evidence
 retention. Runtime wiring and adapter coverage is in
 `tests/test_quarantine_runtime_wiring.py`, `tests/test_quarantine_adapters.py`,
 and `tests/test_quarantine_source_unit_resume.py`. Workstream D tests are
-unit/contract tests; live Mongo/PostgreSQL, Airflow, partner sign-off, and
-production acceptance remain Workstream F scope.
+unit/contract tests; local Compose mock-data acceptance is recorded by
+Workstream F.
 
 ### E — Operator and approval flow — implemented
 
@@ -145,14 +144,16 @@ enforce RBAC in Sprint 3. See the [Workstream E operator flow](sprint-3-workstre
 for the state/action matrix, payload/response contract, stable errors,
 idempotency scope, audit, and redaction policy.
 
-### F — Observability and production acceptance — pending
+### F — Data-quality demo acceptance and handoff — GO (demo-only)
 
-Define data-quality acceptance baselines and the handoff inputs for Sprint 4
-observability. Notifications, generic stage metrics, dashboards, alert
-delivery, live environment evidence, partner sign-off, and the 100k
-observability benchmark remain outside this Workstream E implementation.
-Statistical or semantic candidates must stay out of automatic rejection until
-that contract exists.
+Workstream F owns local mock-data evidence for the B/C/D/E data-quality and
+quarantine contracts and the handoff inputs for [Sprint 4 observability](sprint-4-observability.md).
+The
+[Workstream F demo acceptance record](sprint-3-workstream-f-demo-acceptance.md)
+defines the evidence matrix and decision rules. F does not implement metrics,
+structured logs, alerts, notifications, dashboards, stage observability, or the
+100k observability benchmark; those belong to Sprint 4. Statistical or semantic
+candidates must stay out of automatic rejection until that contract exists.
 
 ## Fixture and test guidance
 

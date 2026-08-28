@@ -29,7 +29,7 @@ Phạm vi chính: API pagination, FileDrop/SFTP source units, checkpoint sequenc
 
 ## Sprint 2.5 — Airflow integration và recovery hardening
 
-**Trạng thái:** Acceptance chưa hoàn tất: 6/11 criteria đã đạt; 5 criteria còn pending. Pilot/automated verification và local Compose service health đã có; live business-flow/production acceptance còn phụ thuộc môi trường.
+**Trạng thái:** Acceptance chưa hoàn tất: 6/11 criteria đã đạt; 5 criteria còn pending. Pilot/automated verification và local Compose service health đã có; live business-flow evidence còn phụ thuộc môi trường.
 
 - [Airflow integration, pilot và runbook migration](sprint-2.5-airflow-migration.md)
 - [Chỉ mục hàm core — Sprint 2 và Sprint 2.5](sprint-2-index.md)
@@ -50,9 +50,10 @@ Detection Dataset. Workstream B đã triển khai quality contract/gate,
 duplicate classification, conflict quarantine và bounded source-unit outcome;
 Workstream C đã triển khai normalization/validation contract và có full-dataset
 v2 evidence. Workstream D đã triển khai quarantine
-lifecycle, operator resolution contract, production row/fingerprint wiring,
+lifecycle, operator resolution contract, runtime row/fingerprint wiring,
 audit/counters, API và source-unit resume; Workstream E đã triển khai ở cấp
-contract/application; production acceptance và Workstream F vẫn còn pending.
+contract/application; Workstream F đã đạt `GO (demo-only)` bằng local mock-data
+acceptance.
 
 - [Chỉ mục Sprint 3 — Data Quality và Quarantine](sprint-3-index.md)
 - [Kế hoạch data quality và quarantine](sprint-3-data-quality.md)
@@ -61,11 +62,13 @@ contract/application; production acceptance và Workstream F vẫn còn pending.
 - [Workstream C — normalization và validation contract](sprint-3-workstream-c-normalization-validation.md)
 - [Workstream C — full-dataset v2 baseline](sprint-3-workstream-c-baseline.md)
 - [Workstream E — operator quarantine flow](sprint-3-workstream-e-operator-flow.md)
+- [Workstream F — demo acceptance and handoff](sprint-3-workstream-f-demo-acceptance.md)
+- [Reconciliation contract evidence](sprint-3-reconciliation-contract-evidence.md)
 - [Review EDA và rule candidates](sprint-3-eda-review.md)
 - [Workstream A decision matrix](sprint-3-workstream-summary.md)
 
-Phạm vi còn lại: production observability, partner sign-off và production
-acceptance. Notebook EDA vẫn không thay đổi và chỉ chạy trên Kaggle.
+Phạm vi demo còn lại của Sprint 3 đã được đóng bằng local mock-data acceptance.
+Notebook EDA vẫn không thay đổi và chỉ chạy trên Kaggle.
 
 ## Sprint 4 — Observability
 
@@ -73,7 +76,8 @@ acceptance. Notebook EDA vẫn không thay đổi và chỉ chạy trên Kaggle.
 
 - [Kế hoạch observability](sprint-4-observability.md)
 
-Phạm vi dự kiến: metrics, structured logs, alerting, dashboard operational signals và acceptance evidence.
+Phạm vi dự kiến: triển khai metrics, structured logs, alerting, notifications,
+dashboard operational signals, stage metrics và observability benchmark.
 
 ## Ma trận sprint
 
@@ -82,5 +86,5 @@ Phạm vi dự kiến: metrics, structured logs, alerting, dashboard operational
 | 1 | Idempotency | `sprint-1-index.md`, benchmark | Đã triển khai |
 | 2 | Incremental/recovery | `sprint-2-index.md`, `sprint-2-incremental-recovery.md` | Đã triển khai |
 | 2.5 | Airflow + recovery hardening | `sprint-2-index.md`, `sprint-2.5-airflow-migration.md` | Còn 5 tiêu chí acceptance |
-| 3 | Data quality/quarantine | `sprint-3-index.md`, Workstream B/C/D/E evidence | A/B/C/D/E implemented at contract level; F and production acceptance pending |
+| 3 | Data quality/quarantine | `sprint-3-index.md`, Workstream B/C/D/E/F evidence | A/B/C/D/E implemented; F `GO (demo-only)` |
 | 4 | Observability | `sprint-4-observability.md` | Kế hoạch |

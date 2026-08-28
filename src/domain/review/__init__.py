@@ -5,6 +5,7 @@ from .models import (
     CopilotActionStatus,
     CopilotActionType,
     PostApprovalRun,
+    PostApprovalQualityGateStatus,
     PostApprovalRunStage,
     PostApprovalRunStatus,
     ReconciliationReviewNote,
@@ -17,6 +18,7 @@ from .models import (
 
 __all__ = [
     "PostApprovalRun",
+    "PostApprovalQualityGateStatus",
     "PostApprovalRunStage",
     "PostApprovalRunStatus",
     "ReconciliationReviewNote",

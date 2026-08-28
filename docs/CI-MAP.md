@@ -149,7 +149,7 @@ uv run pytest \
 
 The lifecycle gate covers state transitions, source-row replay/correction,
 duplicate outcomes, source-unit hold/resume, checkpoint ordering, API bounds,
-audit metadata, counters, retention evidence, production composition wiring,
+audit metadata, counters, retention evidence, runtime composition wiring,
 authoritative source readers, and fingerprint verification. Use the Ingestion
 Pipeline workflow for live database and integration validation.
 
@@ -171,9 +171,23 @@ uv run pytest \
 This gate verifies explicit claim ownership, stale-status CAS, source-backed
 resolution, accept-existing verification, reject reason requirements,
 escalation cap, idempotent action replay, audit action uniqueness, bounded
-queue summaries, stable error mapping, and redaction. It is contract evidence;
-it does not provide production sign-off. Sprint 4 owns notification,
+queue summaries, stable error mapping, and redaction. It is bounded local
+contract evidence. Sprint 4 owns notification,
 dashboard, stage metrics, and broader observability.
+
+The local Review Center demo uses the same API namespace and deterministic
+fixture:
+
+```bash
+make quarantine-demo-reset
+make quarantine-demo-run
+make quarantine-demo-fatal-run
+npm --prefix frontend-next run test:e2e -- e2e/quarantine-review.spec.ts --workers=1
+npm --prefix frontend-next run test:e2e -- e2e/quarantine-demo-live.spec.ts --workers=1
+```
+
+This proves local UI wiring and bounded redaction against mock data. The
+`DEMO1` command is the direct file-quality-gate fatal scenario.
 
 ### Analysis Eval
 

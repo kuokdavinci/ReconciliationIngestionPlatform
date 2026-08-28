@@ -92,6 +92,44 @@ export interface RuntimeValidationResult {
   };
 }
 
+export interface FieldMappingItem {
+  column?: number | string;
+  sourceField?: string;
+  type?: string;
+  path?: string;
+  constant?: string;
+  required?: boolean;
+  mapping?: Record<string, string>;
+}
+
+export interface AiMappingData {
+  configHealth?: {
+    reasoning?: string;
+  };
+}
+
+export interface ScopeClassificationInfo {
+  recommendedScope?: string;
+  suggestedScope?: string;
+  confidence?: number;
+  reasons?: string[];
+  explanation?: string;
+  reasoning?: string;
+  probabilities?: Record<string, number>;
+  internalDbRecordCount?: number;
+  internalPreview?: InternalReviewPreviewRow[];
+  receivedRecordCount?: number;
+}
+
+export interface ValidationStateSummary {
+  hasValidation?: boolean;
+  canProceed?: boolean;
+  tone?: string;
+  title?: string;
+  text?: string;
+  status?: string;
+}
+
 export interface RawStreamRow {
   streamRowIndex: number | null;
   rowIndex: number;
@@ -157,6 +195,21 @@ export interface ReviewPacket {
   samplePreview?: RuntimeValidationPreviewRow[];
   internalRecordCount?: number;
   internalPreview?: InternalReviewPreviewRow[];
+  qualityGateStatus?: "PENDING" | "PASS" | "REVIEW_REQUIRED" | "FAIL";
+  qualityGateSummary?: {
+    outcome?: string;
+    errorCodes?: string[];
+    totalRows?: number;
+    failedRows?: number;
+    pendingRows?: number;
+    reprocessingRows?: number;
+    resolvedRows?: number;
+    rejectedRows?: number;
+    overdueRows?: number;
+    highPriorityRows?: number;
+    activeRows?: number;
+  };
+  postApprovalRunId?: string | null;
 }
 
 export interface PostApprovalRun {
@@ -164,7 +217,21 @@ export interface PostApprovalRun {
   packetId: string;
   partner: string;
   date?: string;
-  status: "QUEUED" | "INGESTING" | "RECONCILING" | "COMPLETED" | "FAILED";
+  status: "QUEUED" | "INGESTING" | "WAITING_REVIEW" | "RECONCILING" | "COMPLETED" | "FAILED";
+  qualityGateStatus?: "PENDING" | "PASS" | "REVIEW_REQUIRED" | "FAIL";
+  qualityGateSummary?: {
+    outcome?: string;
+    errorCodes?: string[];
+    totalRows?: number;
+    failedRows?: number;
+    pendingRows?: number;
+    reprocessingRows?: number;
+    resolvedRows?: number;
+    rejectedRows?: number;
+    overdueRows?: number;
+    highPriorityRows?: number;
+    activeRows?: number;
+  };
   stage: "approval" | "ingestion" | "reconciliation" | "cache_invalidation";
   message?: string;
   sourceFileId?: string;
@@ -177,6 +244,7 @@ export interface PostApprovalRun {
     failedRows?: number;
     resultCount?: number;
     reconciliationCount?: number;
+    qualityGate?: Record<string, number | string | string[]>;
   };
   errors?: any[];
   startedAt?: string;

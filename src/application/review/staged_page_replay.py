@@ -10,7 +10,11 @@ from src.config.settings import settings
 from src.core.utils import business_date, summarize_runtime_error
 from src.core.enums import ProcessingStatus
 from src.domain.ingestion.checkpoints import IngestionMode
-from src.domain.review.models import PostApprovalRunStage, PostApprovalRunStatus
+from src.domain.review.models import (
+    PostApprovalQualityGateStatus,
+    PostApprovalRunStage,
+    PostApprovalRunStatus,
+)
 from src.domain.runtime.models import PartnerRuntimeRunStatus
 from src.infrastructure.ingestion.composition import build_ingestion_pipeline
 from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
@@ -22,6 +26,9 @@ from src.infrastructure.partner_transaction.repository import DataContainerRepos
 from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
 from src.application.review.post_approval_reconciliation import (
+    _batch_fatal_quality_summary,
+    _persist_packet_quality_gate,
+    _quarantine_quality_gate,
     rebind_replacement_transactions as _rebind_replacement_transactions,
     update_post_approval_run as _update_post_approval_run,
 )
@@ -212,6 +219,8 @@ async def replay_staged_pages(
                 "sourceEndpoint": packet.file_name,
                 "sourceUnitKey": page.source_unit_key,
                 "rawStageKey": raw_stage_key,
+                "reviewPacketId": str(packet.id),
+                "postApprovalRunId": run_id,
                 "cursor": page.cursor_before,
                 "windowStart": page.reconciliation_date.isoformat(),
                 "windowEnd": page.reconciliation_date.isoformat(),
@@ -239,6 +248,7 @@ async def replay_staged_pages(
         ingestion_keys.extend(getattr(ingestion_result, "ingestion_keys", None) or [])
         if status != ProcessingStatus.COMPLETED.value:
             message = "Staged raw page ingestion failed after approval."
+            batch_fatal_summary = _batch_fatal_quality_summary(ingestion_result)
             ingestion_error = {
                 "errorCode": "staged_page_ingestion_failed",
                 "reason": message,
@@ -279,6 +289,16 @@ async def replay_staged_pages(
                 "actualRowCount": total_rows,
                 "sourceUnitKeys": source_unit_keys,
             }
+            if batch_fatal_summary is not None:
+                await _persist_packet_quality_gate(
+                    db,
+                    packet,
+                    run_id,
+                    PostApprovalQualityGateStatus.FAIL,
+                    batch_fatal_summary,
+                )
+                failure_stats["qualityGate"] = batch_fatal_summary
+                message = "Post-approval quality gate failed before reconciliation."
             await _mark_replay_checkpoint_failed(
                 db,
                 page,
@@ -304,8 +324,14 @@ async def replay_staged_pages(
                 output_file_id=logical_source_file_id,
                 stats=failure_stats,
                 errors=errors,
+                quality_gate_status=(
+                    PostApprovalQualityGateStatus.FAIL
+                    if batch_fatal_summary is not None
+                    else None
+                ),
+                quality_gate_summary=batch_fatal_summary,
             )
-            return {
+            result = {
                 "ok": False,
                 "stage": "ingestion",
                 "processingStatus": status,
@@ -313,6 +339,10 @@ async def replay_staged_pages(
                 "stats": failure_stats,
                 "errors": errors,
             }
+            if batch_fatal_summary is not None:
+                result["qualityGateStatus"] = PostApprovalQualityGateStatus.FAIL.value
+                result["qualityGateSummary"] = batch_fatal_summary
+            return result
 
         if file_record is None:
             raise RuntimeError("Ingestion did not return a source file record.")
@@ -337,6 +367,19 @@ async def replay_staged_pages(
             or getattr(ingestion_result, "outcome", None) == "WAITING_REVIEW"
         )
         if waiting_for_review:
+            quality_gate_status, quality_gate_summary = await _quarantine_quality_gate(
+                db,
+                packet_id=str(packet.id),
+                run_id=run_id,
+                source_file_id=logical_source_file_id,
+            )
+            await _persist_packet_quality_gate(
+                db,
+                packet,
+                run_id,
+                quality_gate_status,
+                quality_gate_summary,
+            )
             review_stats = {
                 "totalRows": total_rows,
                 "successRows": success_rows,
@@ -347,6 +390,7 @@ async def replay_staged_pages(
                 "expectedRowCount": expected_row_count,
                 "actualRowCount": total_rows,
                 "sourceUnitKeys": source_unit_keys,
+                "qualityGate": quality_gate_summary,
             }
             review_error = {
                 "errorCode": "conflicting_duplicate_review",
@@ -396,6 +440,8 @@ async def replay_staged_pages(
                 output_file_id=logical_source_file_id,
                 stats=review_stats,
                 errors=review_errors,
+                quality_gate_status=quality_gate_status,
+                quality_gate_summary=quality_gate_summary,
             )
             return {
                 "ok": False,
@@ -528,7 +574,7 @@ async def replay_staged_pages(
             "fetchUnitMetadata": batch_metadata,
         },
     )
-    stats_payload = {
+    stats_payload: dict[str, Any] = {
         "totalRows": total_rows,
         "successRows": success_rows,
         "duplicateRows": duplicate_rows,
@@ -539,6 +585,57 @@ async def replay_staged_pages(
         "actualRowCount": total_rows,
         "sourceUnitKeys": source_unit_keys,
     }
+    quality_gate_status, quality_gate_summary = await _quarantine_quality_gate(
+        db,
+        packet_id=str(packet.id),
+        run_id=run_id,
+        source_file_id=logical_source_file_id,
+    )
+    stats_payload["qualityGate"] = quality_gate_summary
+    await _persist_packet_quality_gate(
+        db,
+        packet,
+        run_id,
+        quality_gate_status,
+        quality_gate_summary,
+    )
+    if quality_gate_status.value == "REVIEW_REQUIRED":
+        active_rows = quality_gate_summary["activeRows"]
+        message = f"{active_rows} quarantine record(s) require review before reconciliation."
+        await updater(
+            db,
+            run_id,
+            status=PostApprovalRunStatus.WAITING_REVIEW,
+            stage=PostApprovalRunStage.INGESTION,
+            message=message,
+            output_file_id=logical_source_file_id,
+            stats=stats_payload,
+            errors=errors,
+            quality_gate_status=quality_gate_status,
+            quality_gate_summary=quality_gate_summary,
+        )
+        await runtime_updater(
+            db,
+            runtime_run_id,
+            status=PartnerRuntimeRunStatus.WAITING_REVIEW,
+            message=message,
+            source_file_id=logical_source_file_id,
+            stats=stats_payload,
+        )
+        return {
+            "ok": False,
+            "stage": "ingestion",
+            "outcome": "WAITING_REVIEW",
+            "waitingForReview": True,
+            "partner": config.partner,
+            "date": business_date(packet.reconciliation_date).isoformat(),
+            "processingStatus": ProcessingStatus.PROCESSING.value,
+            "fileId": logical_source_file_id,
+            "stats": stats_payload,
+            "errors": errors,
+            "qualityGateStatus": quality_gate_status.value,
+            "qualityGateSummary": quality_gate_summary,
+        }
     await updater(
         db,
         run_id,
@@ -548,6 +645,8 @@ async def replay_staged_pages(
         output_file_id=logical_source_file_id,
         stats=stats_payload,
         errors=errors,
+        quality_gate_status=quality_gate_status,
+        quality_gate_summary=quality_gate_summary,
     )
     await runtime_updater(
         db,

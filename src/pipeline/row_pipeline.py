@@ -38,6 +38,8 @@ class RowPipelineRequest:
     config_version: str | None
     state: IngestionRunState
     emit_stage: Callable[[IngestionStage], None]
+    review_packet_id: str | None = None
+    post_approval_run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,8 @@ class RowPipelineExecutor:
                     reconciliation_date=request.reconciliation_date,
                     fetch_unit_key=request.fetch_unit_key,
                     config_version=request.config_version,
+                    review_packet_id=request.review_packet_id,
+                    post_approval_run_id=request.post_approval_run_id,
                 ),
                 quarantine_repo=self._quarantine_repository,
                 emit_stage=request.emit_stage,

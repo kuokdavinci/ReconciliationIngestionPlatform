@@ -207,6 +207,30 @@ export function normalizeMappingConstraints(packet: Record<string, unknown>): Ma
   return constraints;
 }
 
+function normalizeQualityGateSummary(value: unknown): ReviewPacket["qualityGateSummary"] {
+  if (!value || typeof value !== "object") return undefined;
+  const summary = value as Record<string, unknown>;
+  const numberValue = (key: string) => {
+    const candidate = summary[key];
+    return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : undefined;
+  };
+  return {
+    outcome: typeof summary.outcome === "string" ? summary.outcome : undefined,
+    errorCodes: Array.isArray(summary.errorCodes)
+      ? summary.errorCodes.filter((code): code is string => typeof code === "string").slice(0, 10)
+      : undefined,
+    totalRows: numberValue("totalRows"),
+    failedRows: numberValue("failedRows"),
+    pendingRows: numberValue("pendingRows"),
+    reprocessingRows: numberValue("reprocessingRows"),
+    resolvedRows: numberValue("resolvedRows"),
+    rejectedRows: numberValue("rejectedRows"),
+    overdueRows: numberValue("overdueRows"),
+    highPriorityRows: numberValue("highPriorityRows"),
+    activeRows: numberValue("activeRows"),
+  };
+}
+
 export function normalizePacket(packet: Record<string, unknown>): ReviewPacket {
   const validationGates = Array.isArray(packet.validationGates)
     ? packet.validationGates.map((gate) => {
@@ -278,6 +302,11 @@ export function normalizePacket(packet: Record<string, unknown>): ReviewPacket {
           };
         })
       : [],
+    qualityGateStatus: packet.qualityGateStatus
+      ? String(packet.qualityGateStatus) as ReviewPacket["qualityGateStatus"]
+      : undefined,
+    qualityGateSummary: normalizeQualityGateSummary(packet.qualityGateSummary),
+    postApprovalRunId: packet.postApprovalRunId ? String(packet.postApprovalRunId) : null,
     mappingConstraints: normalizeMappingConstraints(packet),
     scopeRecommendation: normalizeScopeRecommendation(packet),
     runtimeValidation: normalizeRuntimeValidation(packet),

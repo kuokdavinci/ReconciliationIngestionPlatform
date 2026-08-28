@@ -5,7 +5,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("https://fonts.gstatic.com/**", (route) => route.abort());
 });
 
-test("scheduler-first DEMO flow creates a Review Packet for operator review", async ({ page }) => {
+test("@requires-backend scheduler-first DEMO flow creates a Review Packet for operator review", async ({ page }) => {
   const schedulerRun = await page.request.post("/api/v1/automation/jobs/DEMO/run", {
     headers: { "X-Actor": "demo-operator" },
   });

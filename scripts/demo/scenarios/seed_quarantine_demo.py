@@ -674,7 +674,7 @@ async def seed_demo() -> dict[str, Any]:
         encoding="utf-8",
     )
 
-    client = AsyncIOMotorClient(settings.mongodb_url)
+    client: AsyncIOMotorClient = AsyncIOMotorClient(settings.mongodb_url)
     db = client[settings.db_name]
     try:
         await _delete_demo_data(db)

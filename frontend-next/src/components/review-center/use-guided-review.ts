@@ -2,11 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api/review-center";
 import { getCurrentActor } from "@/lib/actor";
 import { getRuntimeValidationState } from "@/lib/review-runtime";
-import type { ReviewPacket, PostApprovalRun } from "@/types/review-center";
+import type {
+  AiMappingData,
+  FieldMappingItem,
+  PostApprovalRun,
+  ReviewPacket,
+  ScopeClassificationInfo,
+} from "@/types/review-center";
 import styles from "./review-center.module.css";
 import { usePostApprovalPolling } from "./use-post-approval-polling";
-import type { FieldMappingItem, AiMappingData } from "./guided-review-mapping-step";
-import type { ScopeClassificationInfo } from "./guided-review-scope-step";
 import { getBackfillRun } from "@/lib/api/automation";
 import type { BackfillRun } from "@/types/schedules";
 

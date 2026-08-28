@@ -425,8 +425,8 @@ test("quarantine details show type-specific review evidence", async ({ page }) =
   await reviewButton(page, "DEMO-ACCEPT-001").click();
   dialog = page.getByRole("dialog");
   await expect(dialog.getByText("Exact duplicate", { exact: true })).toBeVisible();
-  await expect(dialog.getByRole("table", { name: "Incoming and existing transaction comparison" })).toContainText("Timestamp");
-  await expect(dialog.getByRole("table", { name: "Incoming and existing transaction comparison" })).not.toContainText("Diff");
+  await expect(dialog.getByRole("table", { name: "Incoming and existing transaction comparison" })).toHaveCount(0);
+  await expect(dialog).toContainText("No differing fields");
   await dialog.getByText("Close", { exact: true }).click();
 
   await reviewButton(page, "DEMO-INVALID-001").click();

@@ -11,12 +11,11 @@ import type {
   RuntimeTraceSample,
   RuntimeFieldTrace,
   InternalReviewPreviewRow,
+  FieldMappingItem,
+  ValidationStateSummary,
 } from "@/types/review-center";
 import { RuntimeValidationState } from "@/lib/review-runtime";
-import type { FieldMappingItem } from "./guided-review-mapping-step";
 import styles from "./review-center.module.css";
-
-import { ValidationStateSummary } from "./guided-review-decision-step";
 
 interface ValidationSummaryStats {
   validRowsPercent?: number;

@@ -32,7 +32,7 @@ function ReviewCenterContent() {
     loading,
     setSelectedId,
     refreshPackets,
-  } = useReviewPackets(requestedId);
+  } = useReviewPackets(requestedId, !isQuarantine);
 
   const handleRefresh = async () => {
     try {

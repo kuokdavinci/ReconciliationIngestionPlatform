@@ -87,7 +87,6 @@ export interface QuarantineRecord {
   createdAt: string;
   updatedAt: string;
   retentionUntil?: string | null;
-  rawRow?: unknown;
   errors?: Array<Record<string, unknown>>;
   evidence?: QuarantineEvidence;
   resolutionHistory?: QuarantineResolutionEvent[];

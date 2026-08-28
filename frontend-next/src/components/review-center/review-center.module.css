@@ -192,10 +192,6 @@
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
 }
 
-.quarantineCardRequired { border-left: 3px solid #fbbf24; }
-.quarantineCardFormat { border-left: 3px solid #fb923c; }
-.quarantineCardDuplicate { border-left: 3px solid #f87171; }
-
 .quarantineBatch {
   display: grid;
   gap: 10px;
@@ -215,16 +211,6 @@
 }
 
 .quarantineBatchStats { justify-content: flex-end; }
-
-.issueTypeRequired,
-.issueTypeFormat,
-.issueTypeDuplicate {
-  border-width: 1px;
-}
-
-.issueTypeRequired { color: #fcd34d; background: rgba(251, 191, 36, 0.16); border-color: rgba(251, 191, 36, 0.45); }
-.issueTypeFormat { color: #fdba74; background: rgba(251, 146, 60, 0.16); border-color: rgba(251, 146, 60, 0.45); }
-.issueTypeDuplicate { color: #fca5a5; background: rgba(248, 113, 113, 0.16); border-color: rgba(248, 113, 113, 0.45); }
 
 .quarantineCardHeader h4 {
   margin: 0;
@@ -259,13 +245,6 @@
 .quarantineDetail {
   display: grid;
   gap: 12px;
-}
-
-.quarantineDetailTitle {
-  margin: 0;
-  color: #fff;
-  font-size: 16px;
-  font-weight: 700;
 }
 
 .quarantineDetailGrid {
@@ -995,11 +974,6 @@
   color: #fff;
 }
 
-.reasonList {
-  display: grid;
-  gap: 8px;
-}
-
 .reasonItem {
   padding: 12px 14px;
   border-radius: 10px;
@@ -1082,34 +1056,6 @@
   font-size: 14px;
   color: #fff;
   font-weight: 700;
-}
-
-.mappingFacts {
-  display: grid;
-  gap: 10px;
-}
-
-.mappingFactRow {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.mappingFactKey {
-  display: block;
-  font-size: 13px;
-  color: #fff;
-}
-
-.mappingFactValue {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-muted);
 }
 
 .validationBanner {
@@ -1332,54 +1278,6 @@
   margin-top: 12px;
 }
 
-.previewGrid {
-  display: grid;
-  gap: 10px;
-}
-
-.previewCard {
-  padding: 12px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.previewHeader {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.previewId {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.previewValues {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.previewKey {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  text-transform: uppercase;
-}
-
-.previewValue {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #fff;
-}
-
-.previewInvalid {
-  color: #ffb4b4;
-}
-
 .issuesList {
   display: grid;
   gap: 8px;
@@ -1546,11 +1444,6 @@
 .progressSegmentGreen {
   height: 100%;
   background: #10B981;
-  transition: width 0.3s ease;
-}
-.progressSegmentAmber {
-  height: 100%;
-  background: #F59E0B;
   transition: width 0.3s ease;
 }
 .progressSegmentRed {
@@ -1834,7 +1727,6 @@
 @media (max-width: 720px) {
   .metricGrid,
   .constraintGrid,
-  .previewValues,
   .scopeOptionGrid {
     grid-template-columns: 1fr;
   }

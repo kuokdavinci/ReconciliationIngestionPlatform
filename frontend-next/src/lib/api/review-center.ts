@@ -37,16 +37,8 @@ export async function approveActivate(packetId: string, reviewedBy: string, scop
   return post<ApiOkResponse>(`/review-packets/${packetId}/approve-activate`, { reviewedBy, scopeType });
 }
 
-export async function approveKeepCurrent(packetId: string, reviewedBy: string, scopeType?: string) {
-  return post<ApiOkResponse>(`/review-packets/${packetId}/approve-keep-current`, { reviewedBy, scopeType });
-}
-
 export async function rejectPacket(packetId: string, reviewedBy: string) {
   return post<ApiOkResponse>(`/review-packets/${packetId}/reject`, { reviewedBy });
-}
-
-export async function sendToStudio(packetId: string, reviewedBy: string) {
-  return post<ApiOkResponse>(`/review-packets/${packetId}/send-to-studio`, { reviewedBy });
 }
 
 export async function classifyScope(packetId: string) {
@@ -67,10 +59,6 @@ export async function generateAiMapping(packetId: string) {
 
 export async function getPostApproveRun(packetId: string) {
   return get<{ run: Record<string, unknown> | null }>(`/review-packets/${packetId}/post-approve-run`);
-}
-
-export function openPostApproveRunStream(packetId: string) {
-  return new EventSource(`/api/v1/review-packets/${packetId}/post-approve-run/stream`);
 }
 
 export async function saveDraftMapping(

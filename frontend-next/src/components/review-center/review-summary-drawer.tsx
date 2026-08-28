@@ -141,9 +141,6 @@ export function ReviewSummaryDrawer({ packet, onOpenReview }: Props) {
         <Button variant="primary" className={styles.fullButton} style={{ height: 44, fontWeight: 800 }} onClick={onOpenReview}>
           {isBatchFatal ? "View batch failure" : "Open Review"}
         </Button>
-        <Button variant="secondary" className={styles.fullButton}>
-          Open Mapping Studio
-        </Button>
       </div>
     </div>
   );

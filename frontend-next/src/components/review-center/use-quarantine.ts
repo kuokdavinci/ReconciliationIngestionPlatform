@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import * as api from "@/lib/api/quarantine";
 import type { QuarantineFilters, QuarantineListResponse, QuarantineRecord } from "@/types/quarantine";
 
@@ -8,8 +8,6 @@ export function useQuarantine(filters: QuarantineFilters) {
   const [selectedDetail, setSelectedDetail] = useState<QuarantineRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
-  const filterKey = useMemo(() => JSON.stringify(filters), [filters]);
-
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -62,7 +60,7 @@ export function useQuarantine(filters: QuarantineFilters) {
     return () => {
       cancelled = true;
     };
-  }, [filterKey, filters]);
+  }, [filters]);
 
   useEffect(() => {
     if (!selectedId) return;

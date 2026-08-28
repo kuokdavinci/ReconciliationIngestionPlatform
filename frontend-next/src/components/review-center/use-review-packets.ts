@@ -2,12 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api/review-center";
 import type { ReviewPacket } from "@/types/review-center";
 
-export function getPendingPackets(packets: ReviewPacket[]): ReviewPacket[] {
-  return [...packets]
-    .filter((packet) => String(packet.status).toUpperCase() === "PENDING")
-    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-}
-
 export function getVisiblePackets(packets: ReviewPacket[]): ReviewPacket[] {
   return [...packets]
     .filter((packet) => (
@@ -37,13 +31,14 @@ export function selectReviewPacketId({
   return packets[0]?._id ?? null;
 }
 
-export function useReviewPackets(requestedId?: string | null) {
+export function useReviewPackets(requestedId?: string | null, enabled = true) {
   const [packets, setPackets] = useState<ReviewPacket[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedPacketDetail, setSelectedPacketDetail] = useState<ReviewPacket | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refreshPackets = useCallback(async () => {
+    if (!enabled) return [];
     try {
       const response = await api.listReviewPackets();
       const visible = getVisiblePackets(response.packets ?? []);
@@ -57,9 +52,12 @@ export function useReviewPackets(requestedId?: string | null) {
     } finally {
       setLoading(false);
     }
-  }, [requestedId]);
+  }, [enabled, requestedId]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     let cancelled = false;
 
     async function bootstrap() {
@@ -89,15 +87,15 @@ export function useReviewPackets(requestedId?: string | null) {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [requestedId, refreshPackets]);
+  }, [enabled, requestedId, refreshPackets]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (!enabled || !selectedId) return;
     const fallback = packets.find((packet) => packet._id === selectedId) ?? null;
     api.getReviewPacket(selectedId)
       .then((response) => setSelectedPacketDetail(response.packet))
       .catch(() => setSelectedPacketDetail(fallback));
-  }, [packets, selectedId]);
+  }, [enabled, packets, selectedId]);
 
   const selectedPacket = useMemo(() => {
     if (!selectedId) return null;

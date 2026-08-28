@@ -92,6 +92,44 @@ export interface RuntimeValidationResult {
   };
 }
 
+export interface FieldMappingItem {
+  column?: number | string;
+  sourceField?: string;
+  type?: string;
+  path?: string;
+  constant?: string;
+  required?: boolean;
+  mapping?: Record<string, string>;
+}
+
+export interface AiMappingData {
+  configHealth?: {
+    reasoning?: string;
+  };
+}
+
+export interface ScopeClassificationInfo {
+  recommendedScope?: string;
+  suggestedScope?: string;
+  confidence?: number;
+  reasons?: string[];
+  explanation?: string;
+  reasoning?: string;
+  probabilities?: Record<string, number>;
+  internalDbRecordCount?: number;
+  internalPreview?: InternalReviewPreviewRow[];
+  receivedRecordCount?: number;
+}
+
+export interface ValidationStateSummary {
+  hasValidation?: boolean;
+  canProceed?: boolean;
+  tone?: string;
+  title?: string;
+  text?: string;
+  status?: string;
+}
+
 export interface RawStreamRow {
   streamRowIndex: number | null;
   rowIndex: number;

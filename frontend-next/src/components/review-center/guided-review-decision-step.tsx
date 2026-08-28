@@ -2,18 +2,9 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { PostApprovalRun } from "@/types/review-center";
+import type { PostApprovalRun, ValidationStateSummary } from "@/types/review-center";
 import type { BackfillRun } from "@/types/schedules";
 import styles from "./review-center.module.css";
-
-export interface ValidationStateSummary {
-  hasValidation?: boolean;
-  canProceed?: boolean;
-  tone?: string;
-  title?: string;
-  text?: string;
-  status?: string;
-}
 
 interface Props {
   postApprovalRun: PostApprovalRun | null;
@@ -302,14 +293,9 @@ export function GuidedReviewDecisionStep({
                 {isBatchFatal ? "Close" : "Return to Step 3"}
               </Button>
             ) : (
-              <>
-                {postApprovalRun?.qualityGateStatus === "REVIEW_REQUIRED" ? (
-                  <Button variant="primary" onClick={() => onOpenQuarantine({ packetId: postApprovalRun?.packetId ?? "", postApprovalRunId: postApprovalRun?.id })}>Open quarantine review</Button>
-                ) : null}
-                <Button variant="secondary" onClick={onClose}>
-                  {postApprovalRun?.status === "COMPLETED" ? "Close" : "Close and Keep Processing in Background"}
-                </Button>
-              </>
+              <Button variant="secondary" onClick={onClose}>
+                {postApprovalRun?.status === "COMPLETED" ? "Close" : "Close and Keep Processing in Background"}
+              </Button>
             )}
           </div>
         </div>

@@ -17,7 +17,7 @@
 | 1 | Idempotency, duplicate protection, benchmark | Implemented + benchmark |
 | 2 | Incremental processing, checkpoint, recovery, backfill | Implemented + regression/demo |
 | 2.5 | Airflow integration + recovery hardening (gộp nội dung cũ của 2.6) | Partial acceptance: 6/11 đạt, 5 pending; local health verified, live business evidence còn phụ thuộc môi trường |
-| 3 | Data quality và quarantine | Implemented; local mock-data acceptance `GO (demo-only)`; production acceptance out of scope |
+| 3 | Data quality và quarantine | Implemented; local mock-data acceptance `GO (demo-only)` |
 | 4 | Observability | Planned |
 
 Đọc [Phase 2 Sprint Index](phase-2/INDEX.md) để xem toàn bộ plan, report, evaluation run và runbook của từng sprint.
@@ -29,6 +29,6 @@ Phase 2 ưu tiên fetchers, source units, checkpoint, ingestion pipeline, workfl
 ## Cách đọc trạng thái
 
 - **Implemented:** code và regression/evaluation tương ứng đã có.
-- **Pilot:** đã chạy local/Docker theo runbook, chưa đồng nghĩa production cutover.
+- **Pilot:** đã chạy local/Docker theo runbook.
 - **Automated verification:** test code đã pass; live service evidence có thể vẫn cần thu thập.
 - **Planned:** tài liệu thiết kế/plan đã có, chưa coi là acceptance hoàn tất.

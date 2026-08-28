@@ -1,12 +1,11 @@
 # Workstream F — Data-quality demo acceptance and handoff
 
 **Status:** `GO (demo-only)`. The local Compose topology and mock-data
-acceptance gates pass. Production acceptance, partner sign-off, and cutover
-are outside this demo scope.
+acceptance gates pass.
 
 **Scope:** Workstream F is a demo acceptance and handoff gate. It validates the
 existing B/C/D/E contracts through the current CI and local Compose topology.
-It does not add runtime behavior or claim production readiness.
+It does not add runtime behavior.
 
 ## Ownership boundary
 
@@ -25,7 +24,7 @@ benchmark a new observability layer.
 Mapping approval remains on the existing `ReviewPacket` contract. Row-level
 quarantine approval does not approve a mapping, change reconciliation scope,
 or replace the existing review workflow. Sprint 2.5 acceptance gaps are
-dependencies for the environment gate, not implementation work in F.
+tracked separately and are not implementation work in F.
 
 ## Required inputs
 
@@ -52,11 +51,9 @@ Recorded at `2026-08-27T15:06:55Z` against commit
 | Compose configuration | Pass: `docker compose config --quiet` |
 | Full topology contract | Local Compose mock-data pass: `1 passed` in `17.64s` |
 | Demo acceptance decision | `GO` |
-| Production readiness decision | Not assessed; outside demo scope |
 
-No staging endpoint, production credential, or partner fixture is required for
-this demo. The topology fixture uses mock data and must remain local because it
-wipes MongoDB and PostgreSQL before seeding its test data.
+The demo uses mock data and must remain local because the topology fixture wipes
+MongoDB and PostgreSQL before seeding its test data.
 
 ## Local Review Center quarantine demo
 
@@ -101,7 +98,7 @@ The deterministic domain fixture `build_demo_quarantine_records()` remains
 available for isolated UI/action contract tests covering invalid rows,
 accept-existing, rejection, escalation, and source-unit recovery. It is not
 the scheduler-first live seed. Reset is scoped to partner `DEMO` and rewrites
-only local demo source and persistence fixtures for `DEMO` and `DEMO1`; it is not a production data
+only local demo source and persistence fixtures for `DEMO` and `DEMO1`; it is not a shared-environment data
 reset. The UI deliberately renders lifecycle metadata, stable error codes,
 sanitized evidence, and bounded resolution history only; raw rows, credentials,
 fingerprints, parsed timestamps, and full exceptions remain unavailable.
@@ -117,8 +114,7 @@ npm --prefix frontend-next run test:e2e -- e2e/quarantine-demo-live.spec.ts --wo
 ```
 
 The live demo test checks the real seeded API and the browser redaction
-boundary. It is local mock-data evidence only and must not be represented as
-staging or production acceptance.
+boundary. It is local mock-data evidence only.
 
 ## Acceptance matrix
 
@@ -129,8 +125,6 @@ staging or production acceptance.
 | D quarantine/recovery | Mock source-row replay, conflicting-duplicate hold, checkpoint-safe resume, and no duplicate persistence | Demo contract pass |
 | E operator flow | Claim race, stale status, wrong owner, reprocess, accept-existing, reject, escalation, idempotent replay, audit and redaction | Demo contract pass |
 | Runtime topology | Compose health, migration/index readiness, Airflow DAG readiness, source path and PostgreSQL/Mongo persistence | Local Compose pass |
-| Partner acceptance | Partner confirms expected quality outcomes | Not required for demo |
-| Cutover readiness | Production rollback, secret handling, and production owner | Out of scope |
 
 ## Required scenarios
 
@@ -192,8 +186,7 @@ sanitized correlation IDs, and audit counts.
 
 5. Complete the demo review. Record scope, decision, reviewer, timestamp,
    accepted outcomes, rejected assumptions, open blockers, and sanitized
-   evidence references. Production partner approval is not inferred from this
-   demo result.
+   evidence references.
 
 ## Decision rules
 
@@ -202,8 +195,6 @@ sanitized correlation IDs, and audit counts.
 - `NO-GO` is required for data loss, duplicate persistence, incorrect B/C
   outcome, broken checkpoint ordering, ownership bypass, sensitive-data
   exposure, or a failed demo flow.
-- Production `GO` requires a separate staging/production acceptance process;
-  this document does not provide that sign-off.
 
 ## Sprint 4 handoff
 
@@ -212,7 +203,7 @@ Deliver the sanitized F package with:
 - B/C/D/E outcomes, stable error codes, quality counters, and known baselines;
 - quarantine status, priority, SLA, escalation, audit, and redaction fields;
 - bounded identifiers needed to correlate a run, source unit, file, and action;
-- acceptance gaps and partner decisions that Sprint 4 must not infer;
+- acceptance gaps and unresolved decisions that Sprint 4 must not infer;
 - open observability decisions: alert thresholds, notification targets,
   dashboard views, stage metrics, and the 100k observability threshold.
 

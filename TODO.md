@@ -13,7 +13,7 @@
 The items below remain a follow-up migration backlog. They are intentionally
 not part of the Sprint 3 data-quality/quarantine closeout because they require
 PostgreSQL schema changes, duplicate remediation, rollout validation, and a
-benchmark decision before production enforcement.
+benchmark decision before enforcement.
 
 - [ ] Add a persisted normalized `reconciliation_key` to both transaction models, backfill it, and validate the backfill before enforcing constraints.
 - [ ] Add the appropriate unique constraint only after duplicate remediation; preserve a version/history model if internal transactions can legitimately be corrected or repeated.
@@ -31,4 +31,4 @@ benchmark decision before production enforcement.
 - [ ] Add unit and integration tests for currency mismatch, unknown status, null key, duplicate key, replacement scope, and concurrent runs.
 - [ ] Run `EXPLAIN (ANALYZE, BUFFERS)` on representative full-snapshot and incremental datasets after the schema/query changes.
 - [ ] Backfill and constraint migration must fail safely with a duplicate report; do not enable the unique constraint while unresolved duplicates remain.
-- [ ] Re-run the 1M-row benchmark and compare correctness counters as well as elapsed time/throughput before changing production defaults.
+- [ ] Re-run the 1M-row benchmark and compare correctness counters as well as elapsed time/throughput before changing runtime defaults.

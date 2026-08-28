@@ -16,7 +16,7 @@ owns explicit operator actions over that lifecycle.
 | C | Timestamp normalization, validation parity and v2 source mapping | Implemented; full-dataset v2 evidence captured | [Normalization contract](sprint-3-workstream-c-normalization-validation.md) |
 | D | Quarantine persistence, operator resolution, audit, retention and source-unit resume | Implemented at contract/application level; demo evidence available | [Quarantine lifecycle](sprint-3-data-quality.md#d--quarantine-lifecycle--implemented) |
 | E | Operator ownership, approval and escalation workflow | Implemented at contract/application level; demo evidence available | [Workstream E operator flow](sprint-3-workstream-e-operator-flow.md) |
-| F | Data-quality demo acceptance evidence and Sprint 4 handoff | `GO (demo-only)`; production acceptance out of scope | [Workstream F acceptance](sprint-3-workstream-f-production-acceptance.md) |
+| F | Data-quality demo acceptance evidence and Sprint 4 handoff | `GO (demo-only)` | [Workstream F demo acceptance](sprint-3-workstream-f-demo-acceptance.md) |
 
 The reconciliation contract closeout and bounded Docker data audit are recorded
 in [Reconciliation contract evidence](sprint-3-reconciliation-contract-evidence.md).
@@ -183,6 +183,5 @@ redaction. Run the focused E/D command in
 
 Workstreams C, the core B/D contracts, and the E operator workflow are
 implemented at contract/application level. The local mock-data acceptance for
-Sprint 3 is complete under Workstream F. Production-readiness, partner
-sign-off, and cutover are not claimed. Sprint 4 owns the implementation of
+Sprint 3 is complete under Workstream F. Sprint 4 owns the implementation of
 notifications, dashboards/alerts, broader observability and stage metrics.

@@ -1,8 +1,7 @@
 # Workstream E — Operator quarantine workflow
 
 **Status:** Implemented at the domain, application, persistence, API, and
-contract-test level. Production acceptance and partner sign-off remain outside
-this evidence document.
+contract-test level. Local mock-data evidence is recorded by Workstream F.
 
 Workstream E completes the row-level operator workflow for quarantine records
 in `REVIEW`. It extends the existing D quarantine document and resolution
@@ -158,11 +157,11 @@ keys.
 | Queue | Filter, cursor, page-independent summary, priority, and overdue tests |
 
 The focused E/D contract gate is run with the commands in the CI map and the
-Sprint 3 index. These tests are unit/contract evidence only; they do not
-constitute production sign-off or partner acceptance.
+Sprint 3 index. These tests are unit/contract evidence; local mock-data
+acceptance is recorded by Workstream F.
 
 ## Sprint 4 handoff
 
-Workstream F owns live environment evidence, partner sign-off, and production
-acceptance. Sprint 4 owns notification delivery, an operator dashboard,
-stage-level metrics, alerting, and broader observability implementation.
+Workstream F owns local demo acceptance. Sprint 4 owns notification delivery,
+an operator dashboard, stage-level metrics, alerting, and broader observability
+implementation.

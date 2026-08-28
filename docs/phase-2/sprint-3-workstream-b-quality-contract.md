@@ -323,5 +323,5 @@ profiled separately so duplicate classification guarantees are not weakened.
 Workstream C owns the canonical timestamp and normalization contract. Workstream
 D owns quarantine lifecycle/reprocessing and operator evidence. Workstream F
 owns repeated live data-quality acceptance evidence and final partner
-acceptance. Sprint 4 owns production dashboards, alerts, stage-level
-observability, and its benchmark.
+acceptance. Sprint 4 owns dashboards, alerts, stage-level observability, and
+its benchmark.

@@ -50,8 +50,8 @@ before the fixture reset on 2026-08-28:
 | Currency mismatches in reconciliation results | 0 |
 
 The one fallback conflict is resolved by the documented candidate precedence;
-no duplicate key group was observed. The snapshot is demo evidence, not
-partner acceptance or production data-quality sign-off.
+no duplicate key group was observed. The snapshot is bounded local demo
+evidence, not a broader business-data acceptance.
 
 ## Existing constraints and proposed access path
 
@@ -68,12 +68,12 @@ partner acceptance or production data-quality sign-off.
 No PostgreSQL/Alembic schema change is claimed in Sprint 3. This preserves the
 sprint boundary and avoids enforcing a unique constraint before remediation.
 
-## Verification and deployment evidence
+## Verification evidence
 
 - Full Python suite: `1346 passed, 18 skipped`.
 - Focused Sprint 3 regression: `239 passed`.
 - Ruff and mypy: pass (`207 source files`).
-- Frontend lint, typecheck and production build: pass.
+- Frontend lint, typecheck and optimized build: pass.
 - Playwright dashboard regression: `8 passed`.
 - Playwright live scheduler-first DEMO flow: `1 passed` after the demo fixture
   reset.
@@ -87,5 +87,4 @@ sprint boundary and avoids enforcing a unique constraint before remediation.
 The full Airflow topology pass recorded in Workstream F remains historical
 local evidence. It was not re-run in this closeout because the current Docker
 session uses the local mock orchestrator and only the API/MongoDB/PostgreSQL
-services are running. No staging or production deployment was exercised, and
-no production sign-off is claimed.
+services are running. This closeout records local mock-data execution only.

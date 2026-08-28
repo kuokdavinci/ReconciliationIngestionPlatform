@@ -84,8 +84,8 @@ flowchart LR
 | 2.5 | Airflow 3.3 control plane, REST Run Now/retry/backfill, correlation IDs, raw staging, full-stream review/replay, recovery hardening | Pilot implemented; 6/11 acceptance criteria đạt |
 | 3A | Data-quality baseline, provenance, frozen inputs, controlled validation và coverage handoff | Implemented |
 | 3B–C | Quality contract, bounded outcome, duplicate/conflict classification, timestamp normalization, validation parity | Implemented; full-dataset v2 evidence đã có |
-| 3D–E | Quarantine lifecycle, source-unit resume, operator claim/resolve/reject/escalate, audit/counters và API | Contract/application implemented; production acceptance pending |
-| 3F / 4 | Partner sign-off, production acceptance và observability mở rộng | Handoff / Planned |
+| 3D–E | Quarantine lifecycle, source-unit resume, operator claim/resolve/reject/escalate, audit/counters và API | Contract/application implemented; local demo verified |
+| 3F / 4 | Local demo acceptance và observability mở rộng | Handoff / Planned |
 
 ### Runtime outcome quan trọng
 

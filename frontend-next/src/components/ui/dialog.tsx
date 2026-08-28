@@ -9,9 +9,10 @@ interface DialogProps {
   title?: string;
   children: ReactNode;
   panelClassName?: string;
+  footer?: ReactNode;
 }
 
-export function Dialog({ open, onClose, title, children, panelClassName }: DialogProps) {
+export function Dialog({ open, onClose, title, children, panelClassName, footer }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -59,6 +60,7 @@ export function Dialog({ open, onClose, title, children, panelClassName }: Dialo
           </div>
         )}
         <div className={styles.body}>{children}</div>
+        {footer ? <div className={styles.footer}>{footer}</div> : null}
       </div>
     </dialog>
   );

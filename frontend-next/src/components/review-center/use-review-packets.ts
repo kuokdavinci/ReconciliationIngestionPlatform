@@ -8,6 +8,15 @@ export function getPendingPackets(packets: ReviewPacket[]): ReviewPacket[] {
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
 }
 
+export function getVisiblePackets(packets: ReviewPacket[]): ReviewPacket[] {
+  return [...packets]
+    .filter((packet) => (
+      String(packet.status).toUpperCase() === "PENDING"
+      || String(packet.qualityGateStatus).toUpperCase() === "FAIL"
+    ))
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+
 export function selectReviewPacketId({
   packets,
   currentId,
@@ -37,10 +46,10 @@ export function useReviewPackets(requestedId?: string | null) {
   const refreshPackets = useCallback(async () => {
     try {
       const response = await api.listReviewPackets();
-      const pending = getPendingPackets(response.packets ?? []);
-      setPackets(pending);
-      setSelectedId((current) => selectReviewPacketId({ packets: pending, currentId: current, requestedId }));
-      return pending;
+      const visible = getVisiblePackets(response.packets ?? []);
+      setPackets(visible);
+      setSelectedId((current) => selectReviewPacketId({ packets: visible, currentId: current, requestedId }));
+      return visible;
     } catch {
       setPackets([]);
       setSelectedId(null);
@@ -57,9 +66,9 @@ export function useReviewPackets(requestedId?: string | null) {
       try {
         const response = await api.listReviewPackets();
         if (cancelled) return;
-        const pending = getPendingPackets(response.packets ?? []);
-        setPackets(pending);
-        setSelectedId((current) => selectReviewPacketId({ packets: pending, currentId: current, requestedId }));
+        const visible = getVisiblePackets(response.packets ?? []);
+        setPackets(visible);
+        setSelectedId((current) => selectReviewPacketId({ packets: visible, currentId: current, requestedId }));
       } catch {
         if (cancelled) return;
         setPackets([]);

@@ -38,7 +38,16 @@ export function RunStatusPanel({ runStatus, onTriggerRun }: Props) {
   }
 
   const isCompleted = runStatus.status === "COMPLETED";
-  const isProcessing = runStatus.status === "PROCESSING" || runStatus.status === "INGESTING";
+  const isWaitingForReview = ["WAITING_REVIEW", "WAITING_RECONCILE"].includes(runStatus.status);
+  const isProcessing = [
+    "PROCESSING",
+    "INGESTING",
+    "RECONCILING",
+    "RUNNING",
+    "QUEUED",
+    "WAITING_REVIEW",
+    "WAITING_RECONCILE",
+  ].includes(runStatus.status);
 
   return (
     <Panel>
@@ -46,7 +55,7 @@ export function RunStatusPanel({ runStatus, onTriggerRun }: Props) {
         <div className={styles.statusPanelRow} style={{ justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <p className={styles.statusPanelMeta} style={{ margin: "0 0 4px 0", fontSize: 13, color: "var(--text-muted)" }}>
-              Pipeline Ingestion Run: <strong>{runStatus.completedAt ?? runStatus.startedAt ?? "Just now"}</strong>
+              Reconciliation run: <strong>{runStatus.completedAt ?? runStatus.startedAt ?? "Just now"}</strong>
             </p>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <span className={styles.statusPanelState} style={{ color: isCompleted ? "var(--status-matched)" : "var(--status-warning)", fontWeight: 700, fontSize: 16 }}>
@@ -60,10 +69,16 @@ export function RunStatusPanel({ runStatus, onTriggerRun }: Props) {
           {onTriggerRun && (
             <Button 
               variant="secondary" 
-              disabled={running || isProcessing} 
+              disabled={running || isProcessing}
               onClick={handleRun}
             >
-              {running || isProcessing ? "🔄 Ingesting..." : "⚡ Re-run Pipeline Execution"}
+              {isWaitingForReview
+                ? "Resolve quarantine first"
+                : running || isProcessing
+                  ? "🔄 Reconciling..."
+                  : isCompleted
+                    ? "⚡ Run Reconciliation Again"
+                    : "⚡ Run Reconciliation"}
             </Button>
           )}
         </div>

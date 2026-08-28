@@ -7,7 +7,7 @@ const initialFilters = { amountMin: "", amountMax: "", dateFrom: "", dateTo: "" 
 const initialPagination = { limit: 25, offset: 0 };
 
 export function useReconciliationStore() {
-  const [partner, setPartner] = useState("MOMO");
+  const [partner, setPartner] = useState("DEMO");
   const [date, setDate] = useState("");
   const [reconStatus, setReconStatus] = useState("");
   const [filters, setFilters] = useState(initialFilters);

@@ -1,12 +1,14 @@
 const ACTOR_STORAGE_KEY = "actor";
-const DEFAULT_ACTOR = "Administrator";
+const DEFAULT_ACTOR = "demo-operator";
+const LEGACY_DEFAULT_ACTOR = "Administrator";
 
 export function getCurrentActor(): string {
   if (typeof window === "undefined") return DEFAULT_ACTOR;
 
   try {
     const stored = window.sessionStorage.getItem(ACTOR_STORAGE_KEY);
-    return stored?.trim() || DEFAULT_ACTOR;
+    const actor = stored?.trim();
+    return !actor || actor === LEGACY_DEFAULT_ACTOR ? DEFAULT_ACTOR : actor;
   } catch {
     return DEFAULT_ACTOR;
   }

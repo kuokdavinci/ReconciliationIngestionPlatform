@@ -26,6 +26,7 @@ interface Props {
   onReject: () => void;
   onBack: () => void;
   onClose: () => void;
+  onOpenQuarantine: (params: { packetId: string; postApprovalRunId?: string }) => void;
 }
 
 export function GuidedReviewDecisionStep({
@@ -39,7 +40,10 @@ export function GuidedReviewDecisionStep({
   onReject,
   onBack,
   onClose,
+  onOpenQuarantine,
 }: Props) {
+  const isBatchFatal = postApprovalRun?.qualityGateStatus === "FAIL";
+  const batchFatalCodes = postApprovalRun?.qualityGateSummary?.errorCodes?.join(" · ") || "BATCH_FATAL";
   const stageOrder = ["approval", "ingestion", "reconciliation", "cache_invalidation"] as const;
   const currentStageIndex = postApprovalRun?.stage ? stageOrder.indexOf(postApprovalRun.stage) : -1;
   const stageItems = [
@@ -239,6 +243,31 @@ export function GuidedReviewDecisionStep({
             </div>
           </div>
 
+          {isBatchFatal && (
+            <div className={`${styles.recommendPanel} ${styles.validationFailed}`} style={{ marginTop: 12 }}>
+              <strong className={styles.recommendLabel}>BATCH FATAL — quality gate failed</strong>
+              <p className={styles.recommendText}>
+                Processing stopped during the file quality gate. No row-level quarantine was created and reconciliation did not start.
+              </p>
+              <div className={styles.evidenceRow}>
+                <span>Error codes</span>
+                <strong>{batchFatalCodes}</strong>
+              </div>
+            </div>
+          )}
+
+          {postApprovalRun?.qualityGateStatus === "REVIEW_REQUIRED" && (
+            <div className={`${styles.recommendPanel} ${styles.validationFailed}`} style={{ marginTop: 12 }}>
+              <strong className={styles.recommendLabel}>Quality gate requires review</strong>
+              <p className={styles.recommendText}>
+                {postApprovalRun.qualityGateSummary?.activeRows ?? 0} quarantine record(s) must be resolved before reconciliation can continue.
+              </p>
+              <Button variant="primary" onClick={() => onOpenQuarantine({ packetId: postApprovalRun?.packetId ?? "", postApprovalRunId: postApprovalRun?.id })}>
+                Open quarantine review
+              </Button>
+            </div>
+          )}
+
           {stageItems.map((item, index) => {
             const isCurrent = postApprovalRun?.stage === item.key && postApprovalRun?.status !== "COMPLETED" && postApprovalRun?.status !== "FAILED";
             const isDone = postApprovalRun?.status === "COMPLETED" || (currentStageIndex >= 0 && index < currentStageIndex);
@@ -251,7 +280,9 @@ export function GuidedReviewDecisionStep({
                     <h5 className={styles.progressTitle}>{item.title}</h5>
                     <p className={styles.progressCopy}>{item.description}</p>
                   </div>
-                  {isFailed ? (
+                  {postApprovalRun?.status === "WAITING_REVIEW" && item.key === "ingestion" ? (
+                    <Badge severity="medium">Review required</Badge>
+                  ) : isFailed ? (
                     <Badge severity="critical">Failed</Badge>
                   ) : isCurrent ? (
                     <div className={styles.spinner} />
@@ -267,11 +298,18 @@ export function GuidedReviewDecisionStep({
 
           <div className={styles.actionRow} style={{ justifyContent: "center", marginTop: 12 }}>
             {postApprovalRun?.status === "FAILED" ? (
-              <Button variant="secondary" onClick={onBack}>Return to Step 3</Button>
-            ) : (
-              <Button variant="secondary" onClick={onClose}>
-                {postApprovalRun?.status === "COMPLETED" ? "Close" : "Close and Keep Processing in Background"}
+              <Button variant="secondary" onClick={isBatchFatal ? onClose : onBack}>
+                {isBatchFatal ? "Close" : "Return to Step 3"}
               </Button>
+            ) : (
+              <>
+                {postApprovalRun?.qualityGateStatus === "REVIEW_REQUIRED" ? (
+                  <Button variant="primary" onClick={() => onOpenQuarantine({ packetId: postApprovalRun?.packetId ?? "", postApprovalRunId: postApprovalRun?.id })}>Open quarantine review</Button>
+                ) : null}
+                <Button variant="secondary" onClick={onClose}>
+                  {postApprovalRun?.status === "COMPLETED" ? "Close" : "Close and Keep Processing in Background"}
+                </Button>
+              </>
             )}
           </div>
         </div>

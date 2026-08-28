@@ -40,6 +40,8 @@ export function ReviewSummaryDrawer({ packet, onOpenReview }: Props) {
 
   const summary = summarizeReviewPacket(packet);
   const riskSev = packet.riskSummary?.severity ?? "medium";
+  const isBatchFatal = packet.qualityGateStatus === "FAIL";
+  const batchFatalCodes = packet.qualityGateSummary?.errorCodes?.join(" · ") || "BATCH_FATAL";
   const sevMap: Record<string, "low" | "medium" | "high" | "critical"> = {
     low: "low", medium: "medium", high: "high", critical: "critical",
   };
@@ -47,6 +49,7 @@ export function ReviewSummaryDrawer({ packet, onOpenReview }: Props) {
   return (
     <div>
       <div className={styles.summaryBadges}>
+        {isBatchFatal && <Badge severity="critical">BATCH FATAL</Badge>}
         <Badge severity={sevMap[riskSev]}>{riskSev.toUpperCase()} RISK</Badge>
         {summary.runtimeValidated
           ? <Badge severity="low">Runtime validated</Badge>
@@ -95,6 +98,29 @@ export function ReviewSummaryDrawer({ packet, onOpenReview }: Props) {
         </div>
       </div>
 
+      {isBatchFatal && (
+        <div className={`${styles.recommendPanel} ${styles.validationFailed}`}>
+          <strong className={styles.recommendLabel}>Batch processing stopped</strong>
+          <p className={styles.recommendText}>
+            The file quality gate failed before row-level quarantine and reconciliation. No quarantine records were created.
+          </p>
+          <div className={styles.metaGrid}>
+            <div className={styles.metaRow}>
+              <strong className={styles.metaLabel}>Outcome:</strong>
+              <span className={styles.metaValue}>BATCH_FATAL</span>
+            </div>
+            <div className={styles.metaRow}>
+              <strong className={styles.metaLabel}>Error codes:</strong>
+              <span className={styles.metaValue}>{batchFatalCodes}</span>
+            </div>
+            <div className={styles.metaRow}>
+              <strong className={styles.metaLabel}>Failed rows:</strong>
+              <span className={styles.metaValue}>{packet.qualityGateSummary?.failedRows ?? 0}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Validation gates */}
       {packet.validationGates.length > 0 && (
         <div className={styles.gateList}>
@@ -113,7 +139,7 @@ export function ReviewSummaryDrawer({ packet, onOpenReview }: Props) {
 
       <div className={styles.ctaStack}>
         <Button variant="primary" className={styles.fullButton} style={{ height: 44, fontWeight: 800 }} onClick={onOpenReview}>
-          Open Review
+          {isBatchFatal ? "View batch failure" : "Open Review"}
         </Button>
         <Button variant="secondary" className={styles.fullButton}>
           Open Mapping Studio

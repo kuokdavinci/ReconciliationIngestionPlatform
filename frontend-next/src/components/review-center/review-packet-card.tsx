@@ -20,6 +20,7 @@ interface Props {
 export function ReviewPacketCard({ packet, isSelected, onSelect }: Props) {
   const riskSev = sevMap[packet.riskSummary?.severity ?? "medium"];
   const passCount = packet.validationGates.filter((g) => g.status === "pass").length;
+  const isBatchFatal = packet.qualityGateStatus === "FAIL";
 
   return (
     <div
@@ -27,6 +28,7 @@ export function ReviewPacketCard({ packet, isSelected, onSelect }: Props) {
       className={`${styles.packetCard} ${isSelected ? styles.packetCardSelected : ""}`}
     >
       <div className={styles.packetCardHeader}>
+        {isBatchFatal ? <Badge severity="critical">BATCH FATAL</Badge> : null}
         <Badge severity={riskSev}>{packet.riskSummary?.severity ?? "MEDIUM"} RISK</Badge>
         <span className={styles.packetChecks}>{passCount}/{packet.validationGates.length} checks</span>
       </div>

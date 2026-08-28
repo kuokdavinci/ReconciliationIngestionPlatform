@@ -14,6 +14,8 @@ const entityColors: Record<string, "low" | "medium" | "high" | "critical"> = {
   DISCREPANCY_REVIEW: "medium",
   MAPPING_CONFIG: "high",
   RECONCILIATION_RUN: "low",
+  INGESTION_QUARANTINE: "high",
+  INGESTION_QUARANTINE_SOURCE_UNIT: "high",
 };
 
 const actionColors: Record<string, "low" | "medium" | "high" | "critical"> = {
@@ -25,6 +27,13 @@ const actionColors: Record<string, "low" | "medium" | "high" | "critical"> = {
   REJECT: "high",
   COMPLETED: "low",
   FAILED: "critical",
+  QUARANTINE_CLAIMED: "medium",
+  QUARANTINE_REPROCESSED: "low",
+  QUARANTINE_ACCEPTED_EXISTING: "low",
+  QUARANTINE_REJECTED: "critical",
+  QUARANTINE_RETRY_SCHEDULED: "medium",
+  QUARANTINE_ESCALATED: "medium",
+  QUARANTINE_SOURCE_UNIT_RESUMED: "low",
 };
 
 export function AuditTable({ events, onSelect }: Props) {

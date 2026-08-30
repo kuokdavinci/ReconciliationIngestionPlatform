@@ -134,6 +134,40 @@ class TestListResults:
         assert data["limit"] == 25
         assert data["offset"] == 0
 
+    def test_timestamp_status_filter_is_forwarded(self):
+        app, _ = _create_test_app()
+        mock_find_page = AsyncMock(return_value=([], 0))
+
+        with patch(
+            "src.api.reconciliation.ReconciliationResultRepository.find_page_by_partner_and_date",
+            mock_find_page,
+        ):
+            response = TestClient(app).get(
+                "/api/v1/reconciliation/results",
+                params={
+                    "partner": "MOMO",
+                    "date": "2024-07-07",
+                    "timestampStatus": "MISMATCH",
+                },
+            )
+
+        assert response.status_code == 200
+        assert mock_find_page.await_args.kwargs["timestamp_status"] == "MISMATCH"
+
+    def test_invalid_timestamp_status_returns_400(self):
+        app, _ = _create_test_app()
+        response = TestClient(app).get(
+            "/api/v1/reconciliation/results",
+            params={
+                "partner": "MOMO",
+                "date": "2024-07-07",
+                "timestampStatus": "INVALID",
+            },
+        )
+
+        assert response.status_code == 400
+        assert "Invalid timestampStatus" in response.json()["detail"]
+
     def test_limit_and_offset_work(self):
         app, mock_collection = _create_test_app()
         from src.domain.reconciliation.models import ReconciliationResult
@@ -261,6 +295,34 @@ class TestStats:
             assert data["total"] == 100
             assert data["byStatus"]["MATCHED"] == 80
             assert data["byStatus"]["AMOUNT_MISMATCH"] == 20
+
+    def test_stats_include_timestamp_evidence(self):
+        app, _ = _create_test_app()
+        mock_count = AsyncMock(return_value={"MATCHED": 80, "MISMATCH": 20})
+        mock_totals = AsyncMock(
+            return_value={"total_partner_amount": 1000000, "total_internal_amount": 950000}
+        )
+        mock_timestamp_count = AsyncMock(
+            return_value={"MATCHED": 70, "MISMATCH": 10, "NOT_AVAILABLE": 5, "NOT_EVALUATED": 15}
+        )
+
+        with (
+            patch("src.api.reconciliation.ReconciliationResultRepository.count_by_status", mock_count),
+            patch("src.api.reconciliation.ReconciliationResultRepository.get_total_amounts", mock_totals),
+            patch("src.api.reconciliation.ReconciliationResultRepository.count_by_timestamp_status", mock_timestamp_count),
+        ):
+            response = TestClient(app).get(
+                "/api/v1/reconciliation/stats",
+                params={"partner": "MOMO", "date": "2024-07-07"},
+            )
+
+        assert response.status_code == 200
+        evidence = response.json()["timestampEvidence"]
+        assert evidence["matched"] == 70
+        assert evidence["mismatch"] == 10
+        assert evidence["notAvailable"] == 5
+        assert evidence["notEvaluated"] == 15
+        assert evidence["mismatchRate"] == 10 / 80
 
     def test_missing_partner_returns_400(self):
         app, _ = _create_test_app()

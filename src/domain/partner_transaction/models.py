@@ -23,6 +23,7 @@ class PartnerData(BaseModel):
     amount: Decimal
     currency: str
     trans_date: Optional[datetime] = Field(default=None, alias="transDate")
+    timestamp_basis: str = Field(default="LEGACY_STORED", alias="timestampBasis")
     extra: dict[str, Any] = {}
 
     @field_validator("amount", mode="before")
@@ -49,6 +50,7 @@ class FastPartnerData:
     currency: str
     trans_date: Optional[datetime]
     extra: dict[str, Any]
+    timestamp_basis: str = "LEGACY_STORED"
 
 
 @dataclass(slots=True)

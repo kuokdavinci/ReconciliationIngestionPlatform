@@ -5,6 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { PaginationBar } from "./pagination-bar";
 import styles from "./reconciliation.module.css";
 
+function formatTimestamp(value?: string): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
 interface Props {
   rows: ReconciliationRow[];
   total: number;
@@ -21,6 +27,10 @@ interface Props {
   onSelectEvidence?: (id: string) => void;
 }
 
+function isReviewable(row: ReconciliationRow): boolean {
+  return !["MATCHED", "UNMAPPED_SKIPPED"].includes(row.reconciliationStatus);
+}
+
 export function EvidenceTable({
   rows,
   total,
@@ -35,7 +45,7 @@ export function EvidenceTable({
   onToggleCheck,
   onSetVisibleSelection,
 }: Props) {
-  const selectableRows = rows.filter((r) => r.reconciliationStatus !== "MATCHED");
+  const selectableRows = rows.filter(isReviewable);
   const allVisibleSelected = selectableRows.length > 0 && selectableRows.every(
     (r) => r.reconciliationStatus === "MATCHED" || selectedRows[r.partnerTxnId || r.internalTxnId || r.id]
   );
@@ -61,6 +71,7 @@ export function EvidenceTable({
             </th>
             <th className={styles.ledgerHeadCell}>Severity</th>
             <th className={styles.ledgerHeadCell}>Status</th>
+            <th className={styles.ledgerHeadCell}>Timestamp Evidence</th>
             <th className={styles.ledgerHeadCell}>Review</th>
             <th className={styles.ledgerHeadCell}>Txn ID</th>
             <th className={styles.ledgerHeadCell}>Internal Status</th>
@@ -89,7 +100,7 @@ export function EvidenceTable({
                 className={`${styles.ledgerRow} ${isSelected ? styles.ledgerRowSelected : ""}`}
               >
                 <td className={styles.ledgerCell} style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
-                  {row.reconciliationStatus !== "MATCHED" && (
+                  {isReviewable(row) && (
                     <input type="checkbox" checked={isChecked} onChange={() => onToggleCheck(id)} />
                   )}
                 </td>
@@ -100,7 +111,24 @@ export function EvidenceTable({
                   <Badge severity={row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium"}>{row.reconciliationStatus}</Badge>
                 </td>
                 <td className={styles.ledgerCell}>
-                  {row.reconciliationStatus === "MATCHED" ? (
+                  <Badge severity={row.timestampStatus === "MISMATCH" ? "medium" : row.timestampStatus === "MATCHED" ? "low" : "neutral"}>
+                    {row.timestampStatus ?? "NOT_EVALUATED"}
+                  </Badge>
+                  {row.timestampDeltaSeconds != null && (
+                    <small style={{ display: "block", color: "var(--text-muted)", marginTop: 4 }}>
+                      Δ {row.timestampDeltaSeconds}s / ≤ {row.timestampToleranceSeconds ?? "—"}s
+                    </small>
+                  )}
+                  {(row.partnerTransDate || row.internalTransactionTime) && (
+                    <small style={{ display: "block", color: "var(--text-muted)", marginTop: 4 }}>
+                      P {formatTimestamp(row.partnerTransDate)}<br />I {formatTimestamp(row.internalTransactionTime)}
+                    </small>
+                  )}
+                </td>
+                <td className={styles.ledgerCell}>
+                  {row.reconciliationStatus === "UNMAPPED_SKIPPED" ? (
+                    <Badge severity="neutral">QUALITY SKIPPED</Badge>
+                  ) : row.reconciliationStatus === "MATCHED" ? (
                     <Badge severity="neutral">Auto-matched</Badge>
                   ) : resolvedStatus ? (
                     <Badge severity="low">RESOLVED: {resolvedStatus}</Badge>
@@ -173,7 +201,7 @@ export function EvidenceTable({
             >
               <div className={styles.mobileHeader}>
                 <div className={styles.mobileHeaderLeft}>
-                  {row.reconciliationStatus !== "MATCHED" && (
+                  {isReviewable(row) && (
                     <input checked={isChecked} onChange={() => onToggleCheck(id)} onClick={(e) => e.stopPropagation()} type="checkbox" />
                   )}
                   <Badge severity={sev as "low" | "medium" | "high" | "critical"}>{sev}</Badge>
@@ -183,7 +211,10 @@ export function EvidenceTable({
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ display: "flex", gap: 6 }}>
                   <Badge severity={row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium"}>{row.reconciliationStatus}</Badge>
-                  {row.reconciliationStatus !== "MATCHED" && (
+                  {row.timestampStatus === "MISMATCH" && <Badge severity="medium">Timestamp warning</Badge>}
+                  {row.reconciliationStatus === "UNMAPPED_SKIPPED" ? (
+                    <Badge severity="neutral">Quality skipped</Badge>
+                  ) : isReviewable(row) && (
                     resolvedStatus ? (
                       <Badge severity="low">RESOLVED: {resolvedStatus}</Badge>
                     ) : isReviewed ? (
@@ -208,6 +239,10 @@ export function EvidenceTable({
                   <div>{row.partnerStatus ? <Badge severity={String(row.partnerStatus).toUpperCase() !== "MISSING" ? "low" : "medium"}>{row.partnerStatus}</Badge> : <Badge severity="high">MISSING</Badge>}</div>
                   <div className={styles.compareAmount}>{row.partnerAmount != null ? `${row.partnerAmount.toLocaleString()}` : "-"}</div>
                 </div>
+              </div>
+              <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-muted)" }}>
+                Timestamp: {row.timestampStatus ?? "NOT_EVALUATED"}
+                {row.timestampDeltaSeconds != null ? ` · Δ ${row.timestampDeltaSeconds}s / ≤ ${row.timestampToleranceSeconds ?? "—"}s` : ""}
               </div>
             </div>
           );

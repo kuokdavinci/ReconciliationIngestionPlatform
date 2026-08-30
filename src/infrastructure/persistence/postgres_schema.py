@@ -41,6 +41,7 @@ class PartnerTransactionTable(Base):  # type: ignore[misc, valid-type]
     partner_amount = Column(Numeric(20, 4), nullable=False)
     partner_currency = Column(String(50), nullable=False)
     partner_trans_date = Column(DateTime, nullable=True)
+    timestamp_basis = Column(String(32), nullable=False, default="LEGACY_STORED")
     partner_metadata = Column(JSONB, default=dict)
     created_by = Column(String(255), default="system")
     created_date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -74,6 +75,12 @@ class ReconciliationResultTable(Base):  # type: ignore[misc, valid-type]
             "date",
             "reconciliation_status",
         ),
+        Index(
+            "ix_reconciliation_result_partner_date_timestamp_status",
+            "partner",
+            "date",
+            "timestamp_status",
+        ),
     )
 
     id = Column(String(255), primary_key=True)
@@ -92,6 +99,16 @@ class ReconciliationResultTable(Base):  # type: ignore[misc, valid-type]
     mapping_version = Column(String(50), nullable=True)
     partner_record_id = Column(String(255), nullable=True)
     internal_record_id = Column(String(255), nullable=True)
+    reconciliation_key = Column(String(255), nullable=True)
+    partner_trans_date = Column(DateTime, nullable=True)
+    internal_transaction_time = Column(DateTime, nullable=True)
+    timestamp_status = Column(String(20), nullable=False, default="NOT_EVALUATED")
+    timestamp_delta_seconds = Column(Numeric(20, 6), nullable=True)
+    timestamp_tolerance_seconds = Column(Numeric(20, 0), nullable=True)
+    timestamp_timezone = Column(String(64), nullable=True)
+    timestamp_basis = Column(String(32), nullable=False, default="LEGACY_STORED")
+    ambiguous_partner_record_ids = Column(JSONB, nullable=False, default=list)
+    ambiguous_internal_record_ids = Column(JSONB, nullable=False, default=list)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 

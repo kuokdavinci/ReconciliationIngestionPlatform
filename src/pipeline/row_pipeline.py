@@ -106,7 +106,10 @@ class RowPipelineExecutor:
         return RowPipelineResult(read_file_ms=read_file_ms, row_metrics=row_metrics)
 
     def _build_row_processor(self, request: RowPipelineRequest) -> RowProcessor:
-        normalizer = TransactionNormalizer(request.config.field_mappings)
+        normalizer = TransactionNormalizer(
+            request.config.field_mappings,
+            timestamp_policy=request.config.timestamp_policy,
+        )
         # Duplicate authority belongs to the atomic database write. Keeping
         # validation here side-effect free also prevents one lookup per row.
         validator = Validator()

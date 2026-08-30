@@ -19,6 +19,13 @@ class ReconciliationRunStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class TimestampStatus(str, Enum):
+    MATCHED = "MATCHED"
+    MISMATCH = "MISMATCH"
+    NOT_AVAILABLE = "NOT_AVAILABLE"
+    NOT_EVALUATED = "NOT_EVALUATED"
+
+
 class ReconciliationRun(BaseModel):
     """State of a manual reconciliation run."""
 
@@ -58,6 +65,7 @@ class ReconciliationResult(BaseModel):
     partner: str = Field(alias="partner")
     date: str = Field(alias="date")
     partner_txn_id: str = Field(alias="partnerTxnId")
+    reconciliation_key: Optional[str] = Field(default=None, alias="reconciliationKey")
     internal_txn_id: Optional[str] = Field(default=None, alias="internalTxnId")
     partner_amount: Optional[Decimal] = Field(default=None, alias="partnerAmount")
     internal_amount: Optional[Decimal] = Field(default=None, alias="internalAmount")
@@ -70,6 +78,27 @@ class ReconciliationResult(BaseModel):
     mapping_version: Optional[str] = Field(default=None, alias="mappingVersion")
     partner_record_id: Optional[str] = Field(default=None, alias="partnerRecordId")
     internal_record_id: Optional[str] = Field(default=None, alias="internalRecordId")
+    partner_trans_date: Optional[datetime] = Field(default=None, alias="partnerTransDate")
+    internal_transaction_time: Optional[datetime] = Field(
+        default=None, alias="internalTransactionTime"
+    )
+    timestamp_status: TimestampStatus = Field(
+        default=TimestampStatus.NOT_EVALUATED, alias="timestampStatus"
+    )
+    timestamp_delta_seconds: Optional[Decimal] = Field(
+        default=None, alias="timestampDeltaSeconds"
+    )
+    timestamp_tolerance_seconds: Optional[int] = Field(
+        default=None, alias="timestampToleranceSeconds"
+    )
+    timestamp_timezone: Optional[str] = Field(default=None, alias="timestampTimezone")
+    timestamp_basis: str = Field(default="LEGACY_STORED", alias="timestampBasis")
+    ambiguous_partner_record_ids: list[str] = Field(
+        default_factory=list, alias="ambiguousPartnerRecordIds"
+    )
+    ambiguous_internal_record_ids: list[str] = Field(
+        default_factory=list, alias="ambiguousInternalRecordIds"
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), alias="createdAt"
     )
@@ -77,6 +106,7 @@ class ReconciliationResult(BaseModel):
 
 __all__ = [
     "ReconciliationRunStatus",
+    "TimestampStatus",
     "ReconciliationRun",
     "ReconciliationResult",
 ]

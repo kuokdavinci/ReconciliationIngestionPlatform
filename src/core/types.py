@@ -49,6 +49,7 @@ class CanonicalTransaction(BaseModel):
     currency: str
     status: TransactionStatus
     transDate: Optional[datetime] = None
+    timestampBasis: str = "LEGACY_STORED"
     extra: dict[str, Any] = {}
 
     @field_validator("amount", mode="before")

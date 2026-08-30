@@ -7,8 +7,10 @@ from src.domain.partner_transaction.models import (
     FastDataContainer,
     PartnerData,
 )
+from src.domain.mapping.models import ReconciliationPolicy
 from src.infrastructure.persistence.mongo_values import normalize_document_aliases
 from src.infrastructure.persistence.time import as_utc_naive
+from src.normalizer.timestamps import normalize_transaction_timestamp
 
 
 _DATA_CONTAINER_ALIASES = {
@@ -31,9 +33,18 @@ _DATA_CONTAINER_ALIASES = {
 _PARTNER_DATA_ALIASES = {"_id": "id", "transDate": "trans_date"}
 
 
-def data_container_to_row(doc: DataContainer | FastDataContainer) -> dict[str, Any]:
+def data_container_to_row(
+    doc: DataContainer | FastDataContainer,
+    *,
+    timestamp_policy: ReconciliationPolicy | None = None,
+) -> dict[str, Any]:
     """Map a domain transaction to PostgreSQL column names."""
     pd = doc.partner_data
+    partner_trans_date = pd.trans_date
+    if timestamp_policy is not None and partner_trans_date is not None:
+        partner_trans_date = normalize_transaction_timestamp(
+            partner_trans_date, timestamp_policy.timestamp_timezone
+        )
     return {
         "id": doc.id,
         "request_id": doc.request_id,
@@ -51,7 +62,10 @@ def data_container_to_row(doc: DataContainer | FastDataContainer) -> dict[str, A
         "partner_status": pd.status,
         "partner_amount": pd.amount,
         "partner_currency": pd.currency,
-        "partner_trans_date": as_utc_naive(pd.trans_date),
+        "partner_trans_date": as_utc_naive(partner_trans_date),
+        "timestamp_basis": (
+            "CANONICAL_UTC" if timestamp_policy is not None else pd.timestamp_basis
+        ),
         "partner_metadata": pd.extra or {},
         "created_by": doc.created_by,
         "created_date": as_utc_naive(doc.created_date),
@@ -82,6 +96,7 @@ def row_to_data_container(row: Any) -> DataContainer:
             amount=data["partner_amount"],
             currency=data["partner_currency"],
             transDate=data["partner_trans_date"],
+            timestampBasis=data.get("timestamp_basis", "LEGACY_STORED"),
             extra=data["partner_metadata"] or {},
         ),
         createdBy=data["created_by"],

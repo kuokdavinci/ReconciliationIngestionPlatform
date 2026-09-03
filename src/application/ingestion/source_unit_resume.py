@@ -155,6 +155,7 @@ async def resume_quarantined_source_unit(
                 checkpoint.partner,
                 reconciliation_date,
                 source_file_id=str(source_file.id),
+                mapping_version=mapping_version,
             )
             return {
                 "success": True,

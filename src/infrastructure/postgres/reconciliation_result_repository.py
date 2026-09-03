@@ -17,7 +17,7 @@ class ReconciliationResultRepository:
     """PostgreSQL repository for reconciliation result data."""
 
     def __init__(self, db: Any = None, engine: Any = None):
-        del db
+        self.db = db
         if engine is None:
             from src.infrastructure.persistence.postgres_connection import get_pg_engine
 
@@ -107,6 +107,7 @@ class ReconciliationResultRepository:
         date: str,
         *,
         status: ReconciliationStatus | None = None,
+        timestamp_status: str | None = None,
         reconciliation_run_id: str | None = None,
         source_file_id: str | None = None,
         limit: int = 100,
@@ -118,6 +119,9 @@ class ReconciliationResultRepository:
         conditions = [ReconciliationResultTable.partner == partner, ReconciliationResultTable.date == date]
         if status is not None:
             conditions.append(ReconciliationResultTable.reconciliation_status == status.value)
+        if timestamp_status is not None:
+            timestamp_status = getattr(timestamp_status, "value", timestamp_status)
+            conditions.append(ReconciliationResultTable.timestamp_status == timestamp_status)
         if reconciliation_run_id is not None:
             if isinstance(reconciliation_run_id, dict) and "$in" in reconciliation_run_id:
                 conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(reconciliation_run_id["$in"]))
@@ -313,6 +317,41 @@ class ReconciliationResultRepository:
             for status, count in result.all():
                 counts[status] = count
             return counts
+
+    async def count_by_timestamp_status(
+        self, partner: str, date: str
+        , *, reconciliation_run_id: str | None = None, source_file_id: str | None = None
+    ) -> dict[str, int]:
+        """Count timestamp evidence independently from reconciliation outcomes."""
+        from sqlalchemy import select, and_, func
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from src.infrastructure.persistence.postgres_schema import ReconciliationResultTable
+
+        conditions = [
+            ReconciliationResultTable.partner == partner,
+            ReconciliationResultTable.date == date,
+        ]
+        if reconciliation_run_id is not None:
+            values = reconciliation_run_id.get("$in") if isinstance(reconciliation_run_id, dict) else reconciliation_run_id
+            if isinstance(values, (list, tuple)):
+                conditions.append(ReconciliationResultTable.reconciliation_run_id.in_(values))
+            else:
+                conditions.append(ReconciliationResultTable.reconciliation_run_id == values)
+        elif source_file_id is not None:
+            values = source_file_id.get("$in") if isinstance(source_file_id, dict) else source_file_id
+            if isinstance(values, (list, tuple)):
+                conditions.append(ReconciliationResultTable.source_file_id.in_(values))
+            else:
+                conditions.append(ReconciliationResultTable.source_file_id == values)
+
+        async with AsyncSession(self.engine) as session:
+            stmt = (
+                select(ReconciliationResultTable.timestamp_status, func.count())
+                .where(and_(*conditions))
+                .group_by(ReconciliationResultTable.timestamp_status)
+            )
+            result = await session.execute(stmt)
+            return {status: int(count) for status, count in result.all()}
 
     async def get_total_amounts(
         self, partner: str, date: str

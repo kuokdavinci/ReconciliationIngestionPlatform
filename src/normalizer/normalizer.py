@@ -20,7 +20,12 @@ from src.domain.ingestion.quality import (
     QualityViolation,
     quality_violation,
 )
-from src.normalizer.timestamps import TimestampParseError, parse_transaction_timestamp
+from src.domain.mapping.models import ReconciliationPolicy
+from src.normalizer.timestamps import (
+    TimestampParseError,
+    normalize_transaction_timestamp,
+    parse_transaction_timestamp,
+)
 
 
 _REQUIRED_CANONICAL_FIELDS = frozenset({"id", "amount", "currency", "status"})
@@ -88,7 +93,11 @@ class TransactionNormalizer:
     objects; unexpected exceptions propagate to the caller.
     """
 
-    def __init__(self, field_mappings: list[FieldMapping]) -> None:
+    def __init__(
+        self,
+        field_mappings: list[FieldMapping],
+        timestamp_policy: ReconciliationPolicy | None = None,
+    ) -> None:
         """Initialize with a list of field mappings.
 
         Args:
@@ -100,6 +109,7 @@ class TransactionNormalizer:
         if not field_mappings:
             raise ValueError("field_mappings must not be empty")
         self._field_mappings = field_mappings
+        self._timestamp_policy = timestamp_policy
 
     def normalize(
         self,
@@ -150,12 +160,17 @@ class TransactionNormalizer:
                     error = source_value
                     source_value = None
                 elif source_value is None:
-                    error = _normalization_violation(
-                        code=_missing_value_code(fm),
-                        field=fm.path,
-                        message="source field value is None",
-                        row=row_number,
-                    )
+                    if not (
+                        fm.path == "transDate"
+                        and not fm.required
+                        and self._timestamp_policy is not None
+                    ):
+                        error = _normalization_violation(
+                            code=_missing_value_code(fm),
+                            field=fm.path,
+                            message="source field value is None",
+                            row=row_number,
+                        )
                 elif fm.type == FieldMappingType.STRING:
                     value, error = self._convert_string(source_value, fm, row_number)
                 elif fm.type == FieldMappingType.DECIMAL:
@@ -199,6 +214,9 @@ class TransactionNormalizer:
                 result.errors.append(error)
             elif value is not None:
                 result.data[fm.path] = value
+
+        if self._timestamp_policy is not None:
+            result.data["timestampBasis"] = "CANONICAL_UTC"
 
         return result, traces
 
@@ -407,6 +425,8 @@ class TransactionNormalizer:
     ) -> tuple[datetime | None, QualityViolation | None]:
         """Convert a source value to a canonical transaction timestamp."""
         if value is None:
+            if fm.path == "transDate" and not fm.required and self._timestamp_policy:
+                return None, None
             return None, _normalization_violation(
                 code=_missing_value_code(fm),
                 field=fm.path,
@@ -414,7 +434,20 @@ class TransactionNormalizer:
                 row=row_number,
             )
 
+        if (
+            fm.path == "transDate"
+            and not fm.required
+            and self._timestamp_policy
+            and isinstance(value, str)
+            and not value.strip()
+        ):
+            return None, None
+
         try:
+            if self._timestamp_policy is not None:
+                return normalize_transaction_timestamp(
+                    value, self._timestamp_policy.timestamp_timezone
+                ), None
             return parse_transaction_timestamp(value), None
         except TimestampParseError:
             return None, _normalization_violation(
@@ -507,7 +540,15 @@ class TransactionNormalizer:
         dict. Dot-separated paths like ``"extra.service"`` become
         ``extra["service"]``.
         """
-        canonical_keys = {"id", "trace", "amount", "currency", "status", "transDate"}
+        canonical_keys = {
+            "id",
+            "trace",
+            "amount",
+            "currency",
+            "status",
+            "transDate",
+            "timestampBasis",
+        }
         extra: dict[str, Any] = {}
         for k, v in data.items():
             if k in canonical_keys:
@@ -596,6 +637,7 @@ class TransactionNormalizer:
             "amount": data["amount"],
             "currency": str(data["currency"]),
             "transDate": data.get("transDate"),
+            "timestampBasis": data.get("timestampBasis", "LEGACY_STORED"),
             "extra": extra,
         }
 
@@ -670,6 +712,7 @@ class TransactionNormalizer:
             currency=str(data["currency"]),
             status=status_enum,
             transDate=data.get("transDate"),
+            timestampBasis=data.get("timestampBasis", "LEGACY_STORED"),
             extra=extra,
         )
 

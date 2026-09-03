@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Protocol, TypeAlias
 
 from src.core.enums import ReconciliationScopeType
+from src.domain.mapping.models import ReconciliationPolicy
 from src.domain.reconciliation.models import ReconciliationResult
 
 
@@ -30,6 +31,7 @@ class ReconciliationExecutor(Protocol):
         source_file_id: str | None = None,
         reconciliation_run_id: str | None = None,
         mapping_version: str | None = None,
+        timestamp_policy: ReconciliationPolicy | None = None,
         started_at: float | None = None,
     ) -> list[ReconciliationOutput]:
         """Execute reconciliation for the supplied business-day scope."""

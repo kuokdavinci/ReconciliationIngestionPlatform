@@ -18,7 +18,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.asyncio
 async def test_existing_revision_0001_is_upgraded_to_head():
-    """Startup must apply 0002 when an existing database is at revision 0001."""
+    """Startup must apply all additive migrations when an existing database is at 0001."""
     configured_url = await postgres_dsn_if_available(settings.postgres_url)
     if configured_url is None:
         pytest.skip(f"PostgreSQL is not available at {settings.postgres_url}")
@@ -74,7 +74,7 @@ async def test_existing_revision_0001_is_upgraded_to_head():
                 )
             )
 
-        assert revision == "0003"
+        assert revision == "0004"
         assert has_ingestion_key is True
         assert has_unique_constraint is True
     finally:

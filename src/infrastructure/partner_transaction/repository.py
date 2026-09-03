@@ -46,6 +46,7 @@ _PARTNER_TRANSACTION_COLUMNS = (
     "partner_amount",
     "partner_currency",
     "partner_trans_date",
+    "timestamp_basis",
     "partner_metadata",
     "created_by",
     "created_date",
@@ -75,10 +76,11 @@ def _row_to_copy_tuple(row: dict, incoming_ordinal: int) -> tuple:
         incoming_ordinal,
         *(row[column] for column in _PARTNER_TRANSACTION_COLUMNS[:16]),
         row["partner_trans_date"],
+        row["timestamp_basis"],
         json.dumps(row["partner_metadata"])
         if isinstance(row["partner_metadata"], (dict, list))
         else row["partner_metadata"],
-        *(row[column] for column in _PARTNER_TRANSACTION_COLUMNS[18:]),
+        *(row[column] for column in _PARTNER_TRANSACTION_COLUMNS[19:]),
     )
 
 

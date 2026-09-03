@@ -197,7 +197,10 @@ async def run_runtime_validation(db, packet, config) -> dict:
             },
         }
 
-    normalizer = TransactionNormalizer(config.field_mappings)
+    normalizer = TransactionNormalizer(
+        config.field_mappings,
+        timestamp_policy=config.timestamp_policy,
+    )
     preserves_object_rows = any(
         getattr(mapping, "sourceField", None)
         for mapping in config.field_mappings

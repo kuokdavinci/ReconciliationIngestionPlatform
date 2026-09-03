@@ -45,8 +45,8 @@ function reconciliationRowKey(row: ReconciliationRow): string {
 
 function reviewableRowCount(rows: ReconciliationRow[]): number {
   return new Set(
-    rows
-      .filter((row) => row.reconciliationStatus !== "MATCHED")
+      rows
+      .filter((row) => !["MATCHED", "UNMAPPED_SKIPPED"].includes(row.reconciliationStatus))
       .map(reconciliationRowKey),
   ).size;
 }
@@ -56,7 +56,7 @@ function reviewedRowCount(rows: ReconciliationRow[]): number {
     rows
       .filter(
         (row) =>
-          row.reconciliationStatus !== "MATCHED" &&
+          !["MATCHED", "UNMAPPED_SKIPPED"].includes(row.reconciliationStatus) &&
           (row.reviewState?.reviewed || row.reviewState?.resolvedStatus),
       )
       .map(reconciliationRowKey),
@@ -115,7 +115,7 @@ export default function ReconciliationPage() {
     { value: "resolved", label: "Resolved" },
   ];
 
-  const statusOptions = ["", "MATCHED", "AMOUNT_MISMATCH", "MISSING_PARTNER", "MISSING_INTERNAL", "STATUS_MISMATCH"];
+  const statusOptions = ["", "MATCHED", "AMOUNT_MISMATCH", "MISSING_PARTNER", "MISSING_INTERNAL", "STATUS_MISMATCH", "MULTIPLE_MISMATCH", "AMBIGUOUS_KEY", "UNMAPPED_SKIPPED"];
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handle404OrThrow = (defaultValue: any) => (err: any) => {
@@ -159,6 +159,7 @@ export default function ReconciliationPage() {
           (statsRes.byStatus["AMOUNT_MISMATCH"] ?? 0) +
           (statsRes.byStatus["STATUS_MISMATCH"] ?? 0) +
           (statsRes.byStatus["MULTIPLE_MISMATCH"] ?? 0) +
+          (statsRes.byStatus["AMBIGUOUS_KEY"] ?? 0) +
           (statsRes.byStatus["MISSING_PARTNER"] ?? 0) +
           (statsRes.byStatus["MISSING_INTERNAL"] ?? 0);
         const reviewedCount = reviewedRowCount(mappedResults);
@@ -172,6 +173,7 @@ export default function ReconciliationPage() {
           matchRate: statsRes.total > 0 ? Math.round((statsRes.byStatus["MATCHED"] ?? 0) / statsRes.total * 10000) / 100 : 0,
           totalReviewable,
           reviewedCount,
+          timestampEvidence: statsRes.timestampEvidence,
         });
       } else {
         setStats(null);
@@ -331,6 +333,7 @@ export default function ReconciliationPage() {
           (statsRes.byStatus["AMOUNT_MISMATCH"] ?? 0) +
           (statsRes.byStatus["STATUS_MISMATCH"] ?? 0) +
           (statsRes.byStatus["MULTIPLE_MISMATCH"] ?? 0) +
+          (statsRes.byStatus["AMBIGUOUS_KEY"] ?? 0) +
           (statsRes.byStatus["MISSING_PARTNER"] ?? 0) +
           (statsRes.byStatus["MISSING_INTERNAL"] ?? 0);
         const reviewedCount = reviewedRowCount(mappedResults);
@@ -344,6 +347,7 @@ export default function ReconciliationPage() {
           matchRate: statsRes.total > 0 ? Math.round((statsRes.byStatus["MATCHED"] ?? 0) / statsRes.total * 10000) / 100 : 0,
           totalReviewable,
           reviewedCount,
+          timestampEvidence: statsRes.timestampEvidence,
         });
       } else {
         setStats(null);
@@ -510,17 +514,17 @@ export default function ReconciliationPage() {
     if (tableType === "matched") {
       items = items.filter((r) => r.reconciliationStatus === "MATCHED");
     } else if (tableType === "unmatched") {
-      items = items.filter((r) => r.reconciliationStatus === "AMOUNT_MISMATCH" || r.reconciliationStatus === "STATUS_MISMATCH");
+      items = items.filter((r) => ["AMOUNT_MISMATCH", "STATUS_MISMATCH", "MULTIPLE_MISMATCH", "AMBIGUOUS_KEY"].includes(r.reconciliationStatus));
     } else if (tableType === "missing") {
       items = items.filter((r) => r.reconciliationStatus === "MISSING_PARTNER" || r.reconciliationStatus === "MISSING_INTERNAL");
     }
     
     if (reviewFilter === "pending") {
-      items = items.filter((r) => r.reconciliationStatus !== "MATCHED" && !r.reviewState?.resolvedStatus && !r.reviewState?.reviewed);
+      items = items.filter((r) => !["MATCHED", "UNMAPPED_SKIPPED"].includes(r.reconciliationStatus) && !r.reviewState?.resolvedStatus && !r.reviewState?.reviewed);
     } else if (reviewFilter === "reviewed") {
-      items = items.filter((r) => r.reconciliationStatus !== "MATCHED" && r.reviewState?.reviewed && !r.reviewState?.resolvedStatus);
+      items = items.filter((r) => !["MATCHED", "UNMAPPED_SKIPPED"].includes(r.reconciliationStatus) && r.reviewState?.reviewed && !r.reviewState?.resolvedStatus);
     } else if (reviewFilter === "resolved") {
-      items = items.filter((r) => r.reconciliationStatus !== "MATCHED" && r.reviewState?.resolvedStatus);
+      items = items.filter((r) => !["MATCHED", "UNMAPPED_SKIPPED"].includes(r.reconciliationStatus) && r.reviewState?.resolvedStatus);
     }
 
     if (reconStatus) {

@@ -27,10 +27,14 @@ export function EvidenceDetailDialog({ row, partner, date, open, onClose, onRefr
   if (!row) return null;
 
   const isMissing = /MISSING_/.test(row.reconciliationStatus);
+  const isUnmapped = row.reconciliationStatus === "UNMAPPED_SKIPPED";
   const sev = isMissing ? "high" : row.reconciliationStatus === "MATCHED" ? "low" : "medium" as const;
   const delta = row.delta ?? Math.abs(Number(row.internalAmount ?? 0) - Number(row.partnerAmount ?? 0));
   const traceId = row.partnerTxnId || row.internalTxnId || row.id;
   const deltaDirection = Number((row.partnerAmount ?? 0) - (row.internalAmount ?? 0)) > 0 ? "Partner higher" : "Internal higher";
+  const timestampMismatch = row.timestampStatus === "MISMATCH";
+  const isReviewable = !["MATCHED", "UNMAPPED_SKIPPED"].includes(row.reconciliationStatus);
+  const formatTimestamp = (value?: string) => value ? new Date(value).toISOString() : "—";
 
   const handleAddNote = async () => {
     if (!noteText.trim()) return;
@@ -113,7 +117,10 @@ export function EvidenceDetailDialog({ row, partner, date, open, onClose, onRefr
       <div className={styles.dialogBadgeRow}>
         <Badge severity={sev}>{sev.toUpperCase()} RISK</Badge>
         <Badge severity={row.reconciliationStatus === "MATCHED" ? "low" : row.reconciliationStatus.startsWith("MISSING") ? "high" : "medium"}>{row.reconciliationStatus}</Badge>
-        {resolvedState ? (
+        {timestampMismatch && <Badge severity="medium">TIMESTAMP WARNING</Badge>}
+        {isUnmapped ? (
+          <Badge severity="neutral">QUALITY SKIPPED</Badge>
+        ) : resolvedState ? (
           <Badge severity="low">RESOLVED: {resolvedState}</Badge>
         ) : (
           <Badge severity="high">PENDING REVIEW</Badge>
@@ -125,8 +132,12 @@ export function EvidenceDetailDialog({ row, partner, date, open, onClose, onRefr
         <section className={styles.dialogSection}>
           <strong className={styles.dialogHeading}>Summary</strong>
           <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--text-primary)" }}>
-            {isMissing
+            {isUnmapped
+              ? "The canonical key is blank, so this record was skipped from matching and retained as a data-quality outcome."
+              : isMissing
               ? "This transaction exists on only one side of the ledger and needs review before the batch can be considered complete."
+              : timestampMismatch
+                ? `Canonical key, amount and status reconciled. Timestamp evidence is outside the configured tolerance by ${row.timestampDeltaSeconds ?? "—"} seconds.`
               : `A monetary discrepancy was detected for this transaction. ${deltaDirection} by ${delta.toLocaleString()}.`}
           </p>
         </section>
@@ -146,13 +157,20 @@ export function EvidenceDetailDialog({ row, partner, date, open, onClose, onRefr
               <span>{row.internalStatus ?? "—"}</span>
               <span>{row.partnerStatus ?? "—"}</span>
             </div>
+            <div className={styles.evidenceCompareRow}>
+              <span>{formatTimestamp(row.internalTransactionTime)}</span>
+              <span>{formatTimestamp(row.partnerTransDate)}</span>
+            </div>
             {delta > 0 && (
               <div className={styles.evidenceDelta}>Delta: {delta.toLocaleString()}</div>
             )}
+            <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 12 }}>
+              Timestamp: {row.timestampStatus ?? "NOT_EVALUATED"} · Delta: {row.timestampDeltaSeconds ?? "—"}s · Tolerance: {row.timestampToleranceSeconds ?? "—"}s · Timezone: {row.timestampTimezone ?? "—"} · Basis: {row.timestampBasis ?? "LEGACY_STORED"}
+            </div>
           </div>
         </section>
 
-        {row.reconciliationStatus !== "MATCHED" && (
+        {isReviewable && (
           <section className={styles.dialogSection} style={{ gridColumn: "1 / -1", borderTop: "1px solid var(--border-subtle)", paddingTop: 16 }}>
             <strong className={styles.dialogHeading}>Discrepancy Actions</strong>
             <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>

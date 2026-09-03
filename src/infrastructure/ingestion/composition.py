@@ -115,7 +115,10 @@ def build_quarantine_resolution_service(
             from src.validators.validator import Validator
 
             return RowProcessor(
-                normalizer=TransactionNormalizer(config.field_mappings),
+                normalizer=TransactionNormalizer(
+                    config.field_mappings,
+                    timestamp_policy=config.timestamp_policy,
+                ),
                 validator=Validator(),
                 fast_mode=fast_mode,
                 partner=record.partner,

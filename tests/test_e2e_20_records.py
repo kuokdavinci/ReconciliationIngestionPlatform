@@ -11,7 +11,7 @@ Requires:
 - --e2e flag: pytest tests/test_e2e_20_records.py -v --e2e
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -150,6 +150,7 @@ async def _seed_internal(db, partner: str, num_records: int) -> int:
     await repository.delete_by_partner(partner)
     now = datetime.now(timezone.utc)
     day = datetime.strptime(TEST_DATE, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    canonical_partner_time = day + timedelta(hours=5)
     prefix = "MOMO_TXN_" if partner == PARTNER_MOMO else "ZALO_TXN_"
     docs: list[InternalTransaction] = []
     for i in range(1, num_records + 1):
@@ -162,7 +163,8 @@ async def _seed_internal(db, partner: str, num_records: int) -> int:
             amount=amount,
             currency="VND",
             status=TransactionStatus.SUCCESS,
-            transactionTime=day,
+            # Partner fixture uses 12:00 Asia/Ho_Chi_Minh, which is 05:00 UTC.
+            transactionTime=canonical_partner_time,
             createdAt=now,
             updatedAt=now,
         ))

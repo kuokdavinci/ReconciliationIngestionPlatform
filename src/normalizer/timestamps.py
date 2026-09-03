@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 import re
 from typing import Final
+from zoneinfo import ZoneInfo
 
 
 LEGACY_TIMESTAMP_FORMATS: Final[tuple[str, ...]] = (
@@ -70,4 +71,19 @@ def parse_transaction_timestamp(value: object) -> datetime:
     raise TimestampParseError("unsupported timestamp")
 
 
-__all__ = ["TimestampParseError", "parse_transaction_timestamp"]
+def normalize_transaction_timestamp(value: object, timezone_name: str) -> datetime:
+    """Parse a timestamp and interpret naive values in the partner timezone."""
+    parsed = parse_transaction_timestamp(value)
+    if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+        return parsed.astimezone(UTC)
+    try:
+        return parsed.replace(tzinfo=ZoneInfo(timezone_name)).astimezone(UTC)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise TimestampParseError("unsupported timestamp") from error
+
+
+__all__ = [
+    "TimestampParseError",
+    "parse_transaction_timestamp",
+    "normalize_transaction_timestamp",
+]

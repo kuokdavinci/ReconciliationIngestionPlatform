@@ -175,6 +175,7 @@ class RowProcessor:
                     amount=txn["amount"],
                     currency=txn["currency"],
                     trans_date=txn["transDate"],
+                    timestamp_basis=txn.get("timestampBasis", "LEGACY_STORED"),
                     extra=txn["extra"],
                 ),
                 created_by="system",
@@ -190,6 +191,7 @@ class RowProcessor:
             amount=txn.amount,
             currency=txn.currency,
             transDate=txn.transDate,
+            timestampBasis=txn.timestampBasis,
             extra=txn.extra,
         )
         return DataContainer(

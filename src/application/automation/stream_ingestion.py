@@ -274,6 +274,7 @@ def build_source_unit_ingestor(
             reconciliation_date,
             source_file_id=str(file_record.id),
             reconciliation_run_id=reconciliation_run_id,
+            mapping_version=mapping_config_version,
         )
         stats["reconciliationCount"] += len(reconciliation_results)
         return {

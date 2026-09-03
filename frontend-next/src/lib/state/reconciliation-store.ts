@@ -42,7 +42,7 @@ export function useReconciliationStore() {
   const selectAll = useCallback((rows: ReconciliationRow[], onlyUnmatched = true) => {
     const selection: Record<string, boolean> = {};
     for (const row of rows) {
-      if (onlyUnmatched && row.reconciliationStatus === "MATCHED") continue;
+      if (onlyUnmatched && ["MATCHED", "UNMAPPED_SKIPPED"].includes(row.reconciliationStatus)) continue;
       const id = row.partnerTxnId || row.internalTxnId || row.id;
       selection[id] = true;
     }
@@ -57,7 +57,7 @@ export function useReconciliationStore() {
     setSelectedRows((prev) => {
       const next = { ...prev };
       for (const row of rows) {
-        if (onlyUnmatched && row.reconciliationStatus === "MATCHED") continue;
+        if (onlyUnmatched && ["MATCHED", "UNMAPPED_SKIPPED"].includes(row.reconciliationStatus)) continue;
         const id = row.partnerTxnId || row.internalTxnId || row.id;
         if (selected) next[id] = true;
         else delete next[id];

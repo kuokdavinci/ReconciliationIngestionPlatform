@@ -18,6 +18,16 @@ export interface ReconciliationStats {
   matchRate: number;
   reviewedCount?: number;
   totalReviewable?: number;
+  timestampEvidence?: TimestampEvidence;
+}
+
+export interface TimestampEvidence {
+  byStatus: Record<string, number>;
+  matched: number;
+  mismatch: number;
+  notAvailable: number;
+  notEvaluated: number;
+  mismatchRate: number;
 }
 
 export interface ReviewNote {
@@ -48,6 +58,16 @@ export interface ReconciliationRow {
   partnerAmount?: number;
   delta?: number;
   severity?: string;
+  reconciliationKey?: string;
+  partnerTransDate?: string;
+  internalTransactionTime?: string;
+  timestampStatus?: "MATCHED" | "MISMATCH" | "NOT_AVAILABLE" | "NOT_EVALUATED" | string;
+  timestampDeltaSeconds?: number;
+  timestampToleranceSeconds?: number;
+  timestampTimezone?: string;
+  timestampBasis?: "CANONICAL_UTC" | "LEGACY_STORED" | string;
+  ambiguousPartnerRecordIds?: string[];
+  ambiguousInternalRecordIds?: string[];
   reviewState?: ReviewRecord | null;
 }
 

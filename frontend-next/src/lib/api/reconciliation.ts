@@ -30,6 +30,14 @@ export interface ReconciliationStatsResponse {
   byStatus: Record<string, number>;
   totalPartnerAmount: string | null;
   totalInternalAmount: string | null;
+  timestampEvidence?: {
+    byStatus: Record<string, number>;
+    matched: number;
+    mismatch: number;
+    notAvailable: number;
+    notEvaluated: number;
+    mismatchRate: number;
+  };
 }
 
 export interface ReconciliationResultsResponse {
@@ -54,12 +62,13 @@ export async function getStats(partner: string, date: string) {
 export async function getResults(
   partner: string,
   date: string,
-  params: { status?: string; limit?: number; offset?: number } = {}
+  params: { status?: string; timestampStatus?: string; limit?: number; offset?: number } = {}
 ) {
   return get<ReconciliationResultsResponse>("/reconciliation/results", {
     partner,
     date,
     status: params.status,
+    timestampStatus: params.timestampStatus,
     limit: params.limit ?? 25,
     offset: params.offset ?? 0,
   });

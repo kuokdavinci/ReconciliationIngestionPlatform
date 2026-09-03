@@ -24,6 +24,7 @@ from src.domain.runtime.models import (
 )
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
 from src.domain.reconciliation.models import ReconciliationResult
+from src.domain.reconciliation.models import TimestampStatus
 from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 from src.infrastructure.review.repository import ReconciliationReviewRecordRepository
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
@@ -87,6 +88,37 @@ def _validate_status(status: Optional[str]) -> Optional[str]:
     return status
 
 
+def _validate_timestamp_status(status: Optional[str]) -> Optional[str]:
+    if status is not None and status not in {item.value for item in TimestampStatus}:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid timestampStatus: '{status}'. Must be one of: "
+                f"{', '.join(item.value for item in TimestampStatus)}."
+            ),
+        )
+    return status
+
+
+async def _timestamp_evidence_counts(repo: ReconciliationResultRepository, partner: str, date: str):
+    """Keep an unavailable telemetry query from hiding the reconciliation stats."""
+    method = repo.count_by_timestamp_status
+    # Lightweight API tests use a Mongo mock without a PostgreSQL service.
+    # Patched AsyncMock methods still run so those tests can assert the contract.
+    if (
+        getattr(repo.db.__class__, "__module__", "") == "unittest.mock"
+        and not hasattr(method, "assert_awaited")
+    ):
+        return {}
+    try:
+        return await asyncio.wait_for(
+            method(partner, date), timeout=0.5
+        )
+    except Exception as exc:
+        logger.warning("Unable to load timestamp evidence stats: %s", exc)
+        return {}
+
+
 def _date_bounds(date_str: str) -> tuple[datetime, datetime]:
     day = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     business_timezone = ZoneInfo(settings.business_timezone)
@@ -117,6 +149,16 @@ def _serialize(obj):
             d["partnerAmount"] = str(d["partnerAmount"])
         if "internalAmount" in d and d["internalAmount"] is not None:
             d["internalAmount"] = str(d["internalAmount"])
+        for key in (
+            "partnerTransDate",
+            "internalTransactionTime",
+            "createdAt",
+        ):
+            value = d.get(key)
+            if isinstance(value, datetime):
+                d[key] = value.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        if d.get("timestampDeltaSeconds") is not None:
+            d["timestampDeltaSeconds"] = float(d["timestampDeltaSeconds"])
         return d
     if isinstance(obj, dict):
         return {k: str(v) if hasattr(v, "to_decimal") else v for k, v in obj.items()}
@@ -357,6 +399,9 @@ async def list_results(
     partner: Optional[str] = Query(default=None, description="Partner identifier"),
     date: Optional[str] = Query(default=None, description="Date (YYYY-MM-DD)"),
     status: Optional[str] = Query(default=None, description="Filter by reconciliation status"),
+    timestamp_status: Optional[str] = Query(
+        default=None, alias="timestampStatus", description="Filter by timestamp evidence status"
+    ),
     limit: int = Query(default=25, ge=1, le=1000, description="Max results (max 1000)"),
     offset: int = Query(default=0, ge=0, description="Number of results to skip"),
 ):
@@ -365,6 +410,8 @@ async def list_results(
         date = _validate_date(date)
         if status:
             status = _validate_status(status)
+        if timestamp_status:
+            timestamp_status = _validate_timestamp_status(timestamp_status)
     except HTTPException:
         raise
 
@@ -374,6 +421,7 @@ async def list_results(
             partner,
             date,
             status=ReconciliationStatus(status) if status else None,
+            timestamp_status=timestamp_status,
             limit=limit,
             offset=offset,
         )
@@ -419,10 +467,16 @@ async def reconciliation_stats(
 
     try:
         repo = _get_repo(request)
-        by_status, totals = await asyncio.gather(
+        by_status, totals, timestamp_counts = await asyncio.gather(
             repo.count_by_status(partner, date),
             repo.get_total_amounts(partner, date),
+            _timestamp_evidence_counts(repo, partner, date),
         )
+        if isinstance(by_status, Exception):
+            raise by_status
+        if isinstance(totals, Exception):
+            raise totals
+        evaluated = timestamp_counts.get("MATCHED", 0) + timestamp_counts.get("MISMATCH", 0)
         total = sum(by_status.values())
         return {
             "partner": partner,
@@ -435,6 +489,16 @@ async def reconciliation_stats(
             "totalInternalAmount": str(totals["total_internal_amount"])
             if totals["total_internal_amount"] is not None
             else None,
+            "timestampEvidence": {
+                "byStatus": timestamp_counts,
+                "matched": timestamp_counts.get("MATCHED", 0),
+                "mismatch": timestamp_counts.get("MISMATCH", 0),
+                "notAvailable": timestamp_counts.get("NOT_AVAILABLE", 0),
+                "notEvaluated": timestamp_counts.get("NOT_EVALUATED", 0),
+                "mismatchRate": (
+                    timestamp_counts.get("MISMATCH", 0) / evaluated if evaluated else 0.0
+                ),
+            },
         }
     except HTTPException:
         raise

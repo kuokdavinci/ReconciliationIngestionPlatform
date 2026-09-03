@@ -43,10 +43,16 @@ export interface DraftMappingConfig {
   startRow?: number;
   configVersion?: string;
   fieldMappings?: FieldMapping[];
+  reconciliationPolicy?: ReconciliationPolicy;
   configHealth?: { confidence?: number; reasoning?: string; stale?: boolean; status?: string };
   _id?: string;
   approvedAt?: string;
   supersededByConfigId?: string;
+}
+
+export interface ReconciliationPolicy {
+  timestampToleranceSeconds?: number;
+  timestampTimezone?: string;
 }
 
 // Response from aiGenerateMapping

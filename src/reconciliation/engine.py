@@ -2,11 +2,13 @@
 
 import time
 from datetime import datetime
+from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from src.core.utils import business_date, utc_business_day_bounds
 from src.core.enums import ReconciliationScopeType
+from src.domain.mapping.models import ReconciliationPolicy
 from src.domain.reconciliation.ports import ReconciliationExecutor, ReconciliationOutput
 from src.logging import StructuredLogger, get_structured_logger
 from src.reconciliation.postgres_executor import PostgresReconciliationExecutor
@@ -23,9 +25,15 @@ class ReconciliationEngine:
         db: AsyncIOMotorDatabase,
         *,
         executor: ReconciliationExecutor | None = None,
+        mapping_repository: Any | None = None,
     ) -> None:
         """Initialize the engine with the PostgreSQL executor."""
         self._db = db
+        if mapping_repository is None:
+            from src.infrastructure.mapping.config_repository import MappingConfigRepository
+
+            mapping_repository = MappingConfigRepository(db)
+        self._mapping_repository = mapping_repository
         self._logger: StructuredLogger = get_structured_logger()
         if executor is None:
             result_repo = ReconciliationResultRepository(db)
@@ -59,6 +67,7 @@ class ReconciliationEngine:
         start_of_day, end_of_day = self._business_day_bounds(reconciliation_date)
         date_str = business_date(reconciliation_date).isoformat()
         scope_type = await self._resolve_scope_type(source_file_id)
+        timestamp_policy = await self._resolve_timestamp_policy(partner, mapping_version)
         return await self._executor.execute(
             partner=partner,
             start_of_day=start_of_day,
@@ -68,8 +77,22 @@ class ReconciliationEngine:
             source_file_id=source_file_id,
             reconciliation_run_id=reconciliation_run_id,
             mapping_version=mapping_version,
+            timestamp_policy=timestamp_policy,
             started_at=t_start,
         )
+
+    async def _resolve_timestamp_policy(
+        self, partner: str, mapping_version: str | None
+    ) -> ReconciliationPolicy:
+        if not mapping_version:
+            return ReconciliationPolicy()
+        try:
+            config = await self._mapping_repository.find_by_version(partner, mapping_version)
+        except Exception:
+            # A legacy/incomplete config projection must not block reconciliation;
+            # use the documented default until a valid versioned policy is available.
+            config = None
+        return getattr(config, "timestamp_policy", None) or ReconciliationPolicy()
 
     async def _resolve_scope_type(
         self,

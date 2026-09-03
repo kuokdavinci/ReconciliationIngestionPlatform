@@ -1,5 +1,6 @@
 """Unit contracts for versioned timestamp evidence."""
 
+import inspect
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -87,3 +88,14 @@ def test_scoped_delete_reuses_canonical_key_expression_and_sql_hardening():
     assert "partner_trace" in sql
     assert "partner_metadata->>'vspTransId'" in sql
     assert "partner_id" in sql
+
+
+def test_evidence_id_arrays_are_cast_to_jsonb_at_insert_boundary():
+    executor_source = inspect.getsource(PostgresReconciliationExecutor.execute)
+
+    # The INSERT is assembled inside execute; keep this contract focused on the
+    # SQL expression that prevents PostgreSQL JSONB/array type mismatches.
+    assert "to_jsonb(COALESCE(pg.record_ids, ARRAY[]::VARCHAR[]))" in executor_source
+    assert "to_jsonb(COALESCE(ig.record_ids, ARRAY[]::VARCHAR[]))" in executor_source
+    assert "to_jsonb(ARRAY[CAST(p.id AS VARCHAR)])" in executor_source
+    assert "to_jsonb(ARRAY[CAST(i.id AS VARCHAR)])" in executor_source

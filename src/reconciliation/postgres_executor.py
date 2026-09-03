@@ -169,8 +169,8 @@ class PostgresReconciliationExecutor:
                 'NOT_EVALUATED' AS timestamp_status,
                 NULL::NUMERIC AS timestamp_delta_seconds,
                 COALESCE(pg.timestamp_basis, 'LEGACY_STORED') AS timestamp_basis,
-                COALESCE(pg.record_ids, ARRAY[]::VARCHAR[]) AS ambiguous_partner_record_ids,
-                COALESCE(ig.record_ids, ARRAY[]::VARCHAR[]) AS ambiguous_internal_record_ids,
+                to_jsonb(COALESCE(pg.record_ids, ARRAY[]::VARCHAR[])) AS ambiguous_partner_record_ids,
+                to_jsonb(COALESCE(ig.record_ids, ARRAY[]::VARCHAR[])) AS ambiguous_internal_record_ids,
                 COALESCE(pg.row_count, 0) > 0 AS has_partner_source
             FROM key_space k
             LEFT JOIN partner_groups pg ON pg.reconciliation_key = k.reconciliation_key
@@ -222,8 +222,8 @@ class PostgresReconciliationExecutor:
                     ELSE NULL
                 END AS timestamp_delta_seconds,
                 COALESCE(p.timestamp_basis, 'LEGACY_STORED') AS timestamp_basis,
-                ARRAY[]::VARCHAR[] AS ambiguous_partner_record_ids,
-                ARRAY[]::VARCHAR[] AS ambiguous_internal_record_ids,
+                to_jsonb(ARRAY[]::VARCHAR[]) AS ambiguous_partner_record_ids,
+                to_jsonb(ARRAY[]::VARCHAR[]) AS ambiguous_internal_record_ids,
                 p.source_file_id IS NOT NULL AS has_partner_source
             FROM key_space k
             LEFT JOIN partner_groups pg ON pg.reconciliation_key = k.reconciliation_key
@@ -254,8 +254,8 @@ class PostgresReconciliationExecutor:
                 'NOT_EVALUATED' AS timestamp_status,
                 NULL::NUMERIC AS timestamp_delta_seconds,
                 COALESCE(p.timestamp_basis, 'LEGACY_STORED') AS timestamp_basis,
-                ARRAY[CAST(p.id AS VARCHAR)] AS ambiguous_partner_record_ids,
-                ARRAY[]::VARCHAR[] AS ambiguous_internal_record_ids,
+                to_jsonb(ARRAY[CAST(p.id AS VARCHAR)]) AS ambiguous_partner_record_ids,
+                to_jsonb(ARRAY[]::VARCHAR[]) AS ambiguous_internal_record_ids,
                 TRUE AS has_partner_source
             FROM partner_raw p
             WHERE p.reconciliation_key IS NULL
@@ -276,8 +276,8 @@ class PostgresReconciliationExecutor:
                 'NOT_EVALUATED' AS timestamp_status,
                 NULL::NUMERIC AS timestamp_delta_seconds,
                 'LEGACY_STORED' AS timestamp_basis,
-                ARRAY[]::VARCHAR[] AS ambiguous_partner_record_ids,
-                ARRAY[CAST(i.id AS VARCHAR)] AS ambiguous_internal_record_ids,
+                to_jsonb(ARRAY[]::VARCHAR[]) AS ambiguous_partner_record_ids,
+                to_jsonb(ARRAY[CAST(i.id AS VARCHAR)]) AS ambiguous_internal_record_ids,
                 FALSE AS has_partner_source
             FROM internal_eligible i
             WHERE i.reconciliation_key IS NULL

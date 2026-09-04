@@ -1,34 +1,34 @@
-## Reconciliation logic alignment
+## Đồng bộ reconciliation logic
 
-### Sprint 3 — finalize the contract
+### Sprint 3 — chốt contract
 
-- [x] Define the canonical normalized `reconciliation_key` used by both sides; document that `partner_trace`/`partner_txn_id` are semantic fields and `vspTransId` is only a partner-specific source input. See `docs/phase-2/sprint-3-reconciliation-key-evidence.md`.
-- [x] Define the uniqueness scope for that key: `(partner, key)` or `(partner, reconciliation_date, key)`; do not include `source_file_id` unless replacement files represent different logical transactions. Sprint 3 uses `(partner, reconciliation_key)`.
-- [x] Audit partner and internal data for null/blank keys, duplicate keys, and conflicting fallback values before adding constraints. See the bounded Docker snapshot in the evidence document.
-- [x] Confirm the existing constraints are being used for the intended purpose: `ingestion_key` for ingest idempotency, versus `reconciliation_key` for business matching.
-- [x] Record the duplicate rate, invalid-key rate, and proposed constraint/index contract as Sprint 3 acceptance evidence.
+- [x] Xác định canonical normalized `reconciliation_key` dùng cho cả hai phía; ghi rõ `partner_trace`/`partner_txn_id` là semantic field còn `vspTransId` chỉ là source input riêng của partner. Xem `docs/phase-2/sprint-3-reconciliation-key-evidence.md`.
+- [x] Xác định uniqueness scope của key: `(partner, key)` hoặc `(partner, reconciliation_date, key)`; không thêm `source_file_id` nếu replacement file chỉ đại diện cho cùng logical transaction. Sprint 3 dùng `(partner, reconciliation_key)`.
+- [x] Audit dữ liệu partner và internal cho key null/blank, duplicate key và fallback value conflict trước khi thêm constraint. Xem bounded Docker snapshot trong evidence document.
+- [x] Xác nhận constraint hiện tại dùng đúng mục đích: `ingestion_key` cho ingest idempotency, `reconciliation_key` cho business matching.
+- [x] Ghi duplicate rate, invalid-key rate và contract constraint/index đề xuất làm Sprint 3 acceptance evidence.
 
-### Post-Sprint 3 — implement the aligned reconciliation path
+### Sau Sprint 3 — triển khai reconciliation path đã thống nhất
 
-The items below remain a follow-up migration backlog. They are intentionally
-not part of the Sprint 3 data-quality/quarantine closeout because they require
-PostgreSQL schema changes, duplicate remediation, rollout validation, and a
-benchmark decision before enforcement.
+Các mục dưới đây vẫn là follow-up migration backlog. Chúng không thuộc
+closeout data-quality/quarantine của Sprint 3 vì cần thay đổi PostgreSQL
+schema, remediation duplicate, rollout validation và benchmark decision trước
+khi enforcement.
 
-- [ ] Add a persisted normalized `reconciliation_key` to both transaction models, backfill it, and validate the backfill before enforcing constraints.
-- [ ] Add the appropriate unique constraint only after duplicate remediation; preserve a version/history model if internal transactions can legitimately be corrected or repeated.
-- [ ] Add indexes for the actual access path, at minimum partner/date/key on both transaction tables.
-- [ ] Update the PostgreSQL reconciliation query to join on the canonical key rather than recomputing fallback logic inside the query.
-- [ ] Compare currency together with amount and status; add an explicit `CURRENCY_MISMATCH` result when required.
-- [ ] Separate `PENDING` from unknown/invalid statuses; unknown statuses must not become a successful `MATCHED` result.
-- [ ] Route blank/invalid keys to an explicit invalid-key or quarantine outcome instead of treating them only as missing-side records.
-- [ ] Detect duplicate keys before the join and return an `AMBIGUOUS_MATCH`/duplicate-key outcome; do not silently resolve duplicates with `ROW_NUMBER()` unless the business rule explicitly says “latest wins”.
-- [ ] Add reconciliation-run isolation using `reconciliation_run_id` plus a lock or equivalent concurrency control for the same partner/date scope.
-- [ ] Narrow the CTE projections and avoid loading the entire result set into memory when the result can be paginated or streamed.
+- [ ] Thêm normalized `reconciliation_key` được persist vào cả hai transaction model, backfill và validate backfill trước khi enforce constraint.
+- [ ] Chỉ thêm unique constraint sau duplicate remediation; giữ version/history model nếu internal transaction có thể được correction hoặc lặp hợp lệ.
+- [ ] Thêm index cho access path thực tế, tối thiểu partner/date/key trên cả hai transaction table.
+- [ ] Cập nhật PostgreSQL reconciliation query để join bằng canonical key thay vì tính lại fallback logic trong query.
+- [ ] So sánh currency cùng amount và status; thêm kết quả `CURRENCY_MISMATCH` khi cần.
+- [ ] Tách `PENDING` khỏi status unknown/invalid; status unknown không được trở thành kết quả `MATCHED` thành công.
+- [ ] Đưa key blank/invalid vào invalid-key hoặc quarantine outcome rõ ràng thay vì chỉ coi là missing-side record.
+- [ ] Phát hiện duplicate key trước join và trả outcome `AMBIGUOUS_MATCH`/duplicate-key; không âm thầm dùng `ROW_NUMBER()` nếu business rule không quy định “latest wins”.
+- [ ] Cô lập reconciliation run bằng `reconciliation_run_id` cùng lock hoặc concurrency control tương đương cho cùng partner/date scope.
+- [ ] Thu hẹp CTE projection và không load toàn bộ result set vào memory nếu có thể paginate hoặc stream.
 
-### Verification and rollout
+### Verification và rollout
 
-- [ ] Add unit and integration tests for currency mismatch, unknown status, null key, duplicate key, replacement scope, and concurrent runs.
-- [ ] Run `EXPLAIN (ANALYZE, BUFFERS)` on representative full-snapshot and incremental datasets after the schema/query changes.
-- [ ] Backfill and constraint migration must fail safely with a duplicate report; do not enable the unique constraint while unresolved duplicates remain.
-- [ ] Re-run the 1M-row benchmark and compare correctness counters as well as elapsed time/throughput before changing runtime defaults.
+- [ ] Thêm unit/integration test cho currency mismatch, unknown status, null key, duplicate key, replacement scope và concurrent runs.
+- [ ] Chạy `EXPLAIN (ANALYZE, BUFFERS)` trên dataset full-snapshot và incremental đại diện sau thay đổi schema/query.
+- [ ] Backfill và constraint migration phải fail safely với duplicate report; không bật unique constraint khi duplicate chưa được xử lý.
+- [ ] Chạy lại benchmark 1M rows và so sánh correctness counters cùng elapsed time/throughput trước khi đổi runtime default.

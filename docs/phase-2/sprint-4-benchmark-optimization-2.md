@@ -1,4 +1,4 @@
-# Sprint 4 — Performance decision
+# Sprint 4 — Quyết định performance
 
 **Trạng thái:** `completed — baseline retained`
 
@@ -16,7 +16,7 @@ nào đủ điều kiện promote; production defaults giữ nguyên.
 
 ## A/B decision
 
-| Variant | Median ms | MAD ms | RSS max | Valid | Promote |
+| Variant | Median ms | MAD ms | RSS max | Hợp lệ | Promote |
 |---|---:|---:|---:|---|---|
 | `control-20k-w1` | 11928.661 | 345.709 | 230612992 | True | False |
 | `current-20k-w2` | 10703.181 | 153.013 | 360980480 | True | False |

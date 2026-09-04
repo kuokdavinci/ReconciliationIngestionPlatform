@@ -46,7 +46,7 @@ Bản đồ này bám theo package và symbol trong CodeGraph hiện tại.
 | `automation.py` | `/api/v1/automation` |
 | `operations.py`, `copilot.py`, `audit.py` | `/api/v1/operations`, `/api/v1/copilot`, `/api/v1/audit` |
 
-## Tests và tools
+## Test và tool
 
 - `tests/`: unit, API/architecture contract, integration, evaluation và E2E.
 - `scripts/demo/`, `scripts/seeding/`, `scripts/tools/`: demo, seed và inspection helpers.

@@ -1,8 +1,8 @@
 # Docker Services
 
-## Compose Services
+## Các service Compose
 
-`docker-compose.yml` currently defines:
+`docker-compose.yml` hiện định nghĩa:
 
 - `postgres`
 - `mongodb`
@@ -14,28 +14,29 @@
 - `airflow-dag-processor`
 - `viettelpay-mock`
 
-## Start
+## Khởi động
 
 ```bash
 docker compose up -d
 ```
 
-Bring up a smaller local set:
+Khởi động một nhóm service local nhỏ hơn:
 
 ```bash
 docker compose up -d mongodb sftp mongo-express
 ```
 
-`mongo-express` is intentionally configured as a local-only convenience service.
-The current Compose file sets `ME_CONFIG_BASICAUTH: "false"`, so keep it bound to localhost and do not treat that setting as a production default.
+`mongo-express` được cấu hình có chủ đích như một convenience service chỉ dùng
+local. Compose hiện đặt `ME_CONFIG_BASICAUTH: "false"`, vì vậy hãy bind service
+ở localhost và không coi thiết lập này là production default.
 
-## Stop
+## Dừng
 
 ```bash
 docker compose down
 ```
 
-Remove volumes:
+Xóa volume:
 
 ```bash
 docker compose down -v
@@ -48,7 +49,7 @@ docker compose down -v
 - database: `reconciliation`
 - init script: `docker/init-mongo.js`
 
-Credentials come from `.env`:
+Credential lấy từ `.env`:
 
 - `MONGO_ROOT_USER`
 - `MONGO_ROOT_PASSWORD`
@@ -60,16 +61,16 @@ Credentials come from `.env`:
 - user/password from `.env`
 - local folder `./sftp_data` is mounted to `/home/${SFTP_USER}/upload`
 
-## API Container
+## API container
 
 - container: `reconciliation-api`
 - exposed port: `8000`
 - startup command: `uvicorn src.api:create_app --factory --host 0.0.0.0 --port 8000`
 
-## Notes
+## Ghi chú
 
-- Airflow is the only workflow owner. `airflow-scheduler` executes DAG scheduling and task orchestration; it does not start a second application scheduler.
-- `api` and `airflow-scheduler` receive an `APP_MONGODB_URL` override pointing at the Compose MongoDB service.
-- `airflow-scheduler` also overrides `SFTP_HOST=sftp`.
-- `viettelpay-mock` uses `Dockerfile.viettelpay-mock`, exposes port `8001`, and keeps its state under the mounted `mock_data` directory.
-- `mongo-express` is meant for local inspection only unless you add auth and network restrictions explicitly.
+- Airflow là workflow owner duy nhất. `airflow-scheduler` thực hiện DAG scheduling và task orchestration, không khởi động application scheduler thứ hai.
+- `api` và `airflow-scheduler` nhận override `APP_MONGODB_URL` trỏ tới Compose MongoDB service.
+- `airflow-scheduler` cũng override `SFTP_HOST=sftp`.
+- `viettelpay-mock` dùng `Dockerfile.viettelpay-mock`, expose port `8001` và giữ state trong thư mục `mock_data` được mount.
+- `mongo-express` chỉ dành cho local inspection, trừ khi được bổ sung auth và network restriction rõ ràng.

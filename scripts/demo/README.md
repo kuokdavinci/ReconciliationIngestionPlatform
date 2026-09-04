@@ -1,22 +1,22 @@
 # Demo scripts
 
-All runnable demo fixtures, scenario seeds, and evaluation commands live here.
-Production modules stay under `src/`; automated tests stay under `tests/`;
-benchmark and generic data-generation scripts stay outside this directory.
+Mọi demo fixture có thể chạy, scenario seed và evaluation command nằm ở đây.
+Production module nằm trong `src/`; automated test nằm trong `tests/`; benchmark
+và generic data-generation script nằm ngoài thư mục này.
 
-## Layout
+## Cấu trúc
 
 - `sprint1/` — MOMO E2E/idempotency demo seed.
 - `sprint2/` — ViettelPay pagination, checkpoint recovery fixture, evaluation,
-  reset command, and the VNPAY FileDrop ordered-backfill fixture.
-- `scenarios/` — ACMEPAY scheduler, VNPAY audit-flow, ZaloPay AI, and healthy
-  dashboard demo seeds.
+  reset command và VNPAY FileDrop ordered-backfill fixture.
+- `scenarios/` — ACMEPAY scheduler, VNPAY audit-flow, ZaloPay AI và healthy
+  dashboard demo seed.
 
-Typical commands are exposed through the Makefile. Direct execution from the
-repository root uses `PYTHONPATH=.`.
+Command thường dùng được expose qua Makefile. Chạy trực tiếp từ repository root
+dùng `PYTHONPATH=.`.
 
-The API image packages demo scripts at build time. After changing or adding a
-fixture, rebuild the image once before running the reset target:
+API image đóng gói demo script lúc build. Sau khi thay đổi hoặc thêm fixture,
+rebuild image một lần trước khi chạy reset target:
 
 ```bash
 docker compose build api
@@ -25,8 +25,7 @@ docker compose up -d --no-build api
 
 ## VNPAY FileDrop backfill
 
-Reset the deterministic fixture, optionally overriding the inclusive business
-date range:
+Reset deterministic fixture, có thể override inclusive business-date range:
 
 ```bash
 VNPAY_BACKFILL_FROM=2026-08-07 \
@@ -34,8 +33,7 @@ VNPAY_BACKFILL_TO=2026-08-12 \
 make vnpay-backfill-reset
 ```
 
-Then open the Schedules UI, start VNPAY Backfill, approve the pending mapping in
-Guided Review, and follow the ordered day progress panel. The packet includes
-three internal PostgreSQL preview rows for the first working day. The FileDrop
-pattern is date-scoped so a later delivery is not consumed before its backfill
-day.
+Sau đó mở Schedules UI, start VNPAY Backfill, approve mapping đang pending
+trong Guided Review và theo dõi ordered day progress panel. Packet gồm ba
+internal PostgreSQL preview row cho working day đầu tiên. FileDrop pattern có
+scope theo ngày nên delivery của ngày sau không bị consume trước backfill day.

@@ -4,7 +4,7 @@
 
 Tài liệu này map thay đổi source → workflow kiểm chứng. Workflow thật nằm trong `.github/workflows/`; command dưới đây là local equivalent để chạy trước commit.
 
-## Workflow overview
+## Tổng quan workflow
 
 ```mermaid
 flowchart LR
@@ -26,7 +26,7 @@ flowchart LR
     F --> Gate
 ```
 
-## Workflow matrix
+## Ma trận workflow
 
 | Workflow | Trigger chính | Validation | Source scope |
 |---|---|---|---|
@@ -41,7 +41,7 @@ Backend/Eval/Ingestion dùng Python 3.11, `uv sync --all-extras --dev` và Postg
 
 `CI / CI gate` là check duy nhất cần đặt thành required status check trên branch protection. Scope không bị ảnh hưởng sẽ được skip ở job level và vẫn được tổng hợp thành trạng thái thành công; thay đổi workflow, dependency, Compose hoặc nightly/manual run sẽ mở toàn bộ scope.
 
-## Local commands
+## Các command local
 
 ### Backend Quality
 
@@ -97,9 +97,9 @@ uv run python scripts/benchmark_quality_contract.py \
   --output /tmp/workstream-b-quality-benchmark.json
 ```
 
-The quality microbenchmark is CPU/memory evidence and is separate from the
-full-dataset ingestion benchmark. It may take substantially longer than the
-focused contract tests because it measures three scenarios with `tracemalloc`.
+Quality microbenchmark là evidence về CPU/memory, tách biệt với full-dataset
+ingestion benchmark. Lệnh này có thể lâu hơn đáng kể so với focused contract
+test vì đo ba scenario bằng `tracemalloc`.
 
 ### Workstream C — Normalization and validation
 
@@ -120,9 +120,9 @@ uv run pytest \
 uv run python scripts/benchmark_fraud_detection.py --full-only
 ```
 
-The current focused C run passed 242 tests. The full-dataset command requires
-the Docker-backed MongoDB/PostgreSQL services and cleans its benchmark records
-and temporary mapping after completion.
+Focused C run hiện tại đã pass 242 test. Full-dataset command cần MongoDB/
+PostgreSQL service chạy qua Docker và sẽ dọn benchmark record cùng temporary
+mapping sau khi hoàn tất.
 
 ### Workstream D — Quarantine lifecycle
 
@@ -147,11 +147,11 @@ uv run pytest \
   -v --tb=short
 ```
 
-The lifecycle gate covers state transitions, source-row replay/correction,
-duplicate outcomes, source-unit hold/resume, checkpoint ordering, API bounds,
-audit metadata, counters, retention evidence, runtime composition wiring,
-authoritative source readers, and fingerprint verification. Use the Ingestion
-Pipeline workflow for live database and integration validation.
+Lifecycle gate bao phủ state transition, source-row replay/correction, duplicate
+outcome, source-unit hold/resume, checkpoint ordering, API bound, audit metadata,
+counter, retention evidence, runtime composition wiring, authoritative source
+reader và fingerprint verification. Dùng Ingestion Pipeline workflow cho live
+database và integration validation.
 
 ### Workstream E — Operator quarantine flow
 
@@ -168,15 +168,13 @@ uv run pytest \
   -q --tb=short
 ```
 
-This gate verifies explicit claim ownership, stale-status CAS, source-backed
-resolution, accept-existing verification, reject reason requirements,
-escalation cap, idempotent action replay, audit action uniqueness, bounded
-queue summaries, stable error mapping, and redaction. It is bounded local
-contract evidence. Sprint 4 owns notification,
-dashboard, stage metrics, and broader observability.
+Gate này kiểm tra explicit claim ownership, stale-status CAS, source-backed
+resolution, accept-existing verification, yêu cầu reject reason, escalation
+cap, idempotent action replay, audit action uniqueness, bounded queue summary,
+stable error mapping và redaction. Đây là bounded local contract evidence.
+Sprint 4 sở hữu notification, dashboard, stage metrics và observability mở rộng.
 
-The local Review Center demo uses the same API namespace and deterministic
-fixture:
+Local Review Center demo dùng cùng API namespace và deterministic fixture:
 
 ```bash
 make quarantine-demo-reset
@@ -186,8 +184,8 @@ npm --prefix frontend-next run test:e2e -- e2e/quarantine-review.spec.ts --worke
 npm --prefix frontend-next run test:e2e -- e2e/quarantine-demo-live.spec.ts --workers=1
 ```
 
-This proves local UI wiring and bounded redaction against mock data. The
-`DEMO1` command is the direct file-quality-gate fatal scenario.
+Điều này chứng minh local UI wiring và bounded redaction trên mock data.
+Command `DEMO1` là scenario file-quality-gate fatal trực tiếp.
 
 ### Analysis Eval
 
@@ -207,7 +205,7 @@ npm --prefix frontend-next run playwright:install
 npm --prefix frontend-next run test:e2e
 ```
 
-## Blast-radius guide
+## Hướng dẫn blast radius
 
 | Thay đổi | Chạy trước | Kiểm tra thêm |
 |---|---|---|
@@ -242,9 +240,10 @@ uv run pytest tests/test_topology_contract.py --e2e -v --tb=short
 docker compose down -v --remove-orphans
 ```
 
-PR chỉ chạy contract này khi thay đổi chạm topology/runtime boundary. Nightly lúc `02:17 UTC` và manual dispatch chạy full matrix để bắt drift giữa Compose services.
+PR chỉ chạy contract này khi thay đổi chạm topology/runtime boundary. Nightly lúc
+`02:17 UTC` và manual dispatch chạy full matrix để bắt drift giữa Compose services.
 
-## Airflow-specific verification
+## Kiểm tra riêng cho Airflow
 
 Khi thay đổi DAG, gateway, orchestration contract hoặc Compose:
 
@@ -262,9 +261,10 @@ docker compose exec airflow-api-server airflow dags list-import-errors
 docker compose logs --tail 120 airflow-scheduler airflow-dag-processor
 ```
 
-Acceptance phải chứng minh Run Now, page failure/resume, Retry now trong cùng `dagRunId`, review packet, ordered backfill và PostgreSQL row counts.
+Acceptance phải chứng minh Run Now, page failure/resume, Retry now trong cùng
+`dagRunId`, review packet, ordered backfill và PostgreSQL row counts.
 
-## Review sequence
+## Trình tự review
 
 1. Kiểm tra `codegraph status` và symbol/dependency của file đổi.
 2. Chọn workflow theo bảng blast radius.

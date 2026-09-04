@@ -6,7 +6,7 @@
 - Boundary: `IngestionPipeline.process_file`.
 - PostgreSQL persistence: `LOGGED`; không đổi schema/index.
 
-| Variant | Median ms | MAD ms | RSS max | Valid | Promote |
+| Variant | Median ms | MAD ms | RSS max | Hợp lệ | Promote |
 |---|---:|---:|---:|---|---|
 | `control-20k-w1` | 11599.917 | 210.602 | 243965952 | True | False |
 | `current-20k-w2` | 11346.105 | 36.118 | 387424256 | True | False |

@@ -43,5 +43,5 @@
 
 - Thu thập live acceptance evidence đầy đủ cho Sprint 2.5.
 - Theo dõi độ ổn định và thời lượng của nightly full-topology contract.
-- Hoàn thiện kế hoạch Sprint 3 data quality/quarantine và Sprint 4 observability.
+- Theo dõi closeout evidence của Sprint 4; observability đã đóng với quyết định `closed — no candidate promoted`.
 - Giữ `TODO.md` làm nguồn công việc sản phẩm chưa giải quyết.

@@ -6,7 +6,7 @@
 - Quality score: 100.0
 - Decision: **PASS**
 
-## Quality Summary
+## Tóm tắt quality
 
 - Rejected rows: 0
 - Duplicate rows: 0
@@ -19,7 +19,7 @@
 - Rows with second precision: 1,000,000
 - Rows with timezone: 1,000,000
 
-## Amount observations
+## Quan sát amount
 
 - min: 1.0
 - q1: 9.86
@@ -34,9 +34,9 @@
 - outlier_count: 87583
 - outlier_rate: 0.087583
 
-## Rule Results
+## Kết quả rule
 
-| Rule | Severity | Result | Actual | Expected | Action |
+| Rule | Severity | Result | Thực tế | Kỳ vọng | Action |
 |---|---|---|---|---|---|
 | `SCHEMA_REQUIRED_COLUMNS` | FATAL | PASS | `{"duplicate_headers": [], "missing_required": []}` | `{"duplicate_headers": [], "missing_required": []}` | CONTINUE |
 | `SCHEMA_DRIFT` | WARNING | PASS | `{"missing_optional": [], "unexpected": []}` | `{"missing_optional": [], "unexpected": []}` | CONTINUE |
@@ -54,8 +54,8 @@
 | `AMOUNT_DESCRIPTIVE_OVERFLOW` | WARNING | PASS | `0` | `0` | ACCEPT |
 | `INVALID_NUMERIC_VALUES` | WARNING | PASS | `{"by_field": {"merchant_latitude": 0, "merchant_longitude": 0}, "rows": 0}` | `0` | ACCEPT |
 
-## Limitations
+## Giới hạn
 
-- Statistical observations are descriptive and do not establish business thresholds.
-- Duplicate behavior is scoped to this file; persistence idempotency needs its own contract.
-- Required fields, timestamp precision, and negative-amount policy require source-contract approval.
+- Các quan sát thống kê chỉ mang tính mô tả, không thiết lập business threshold.
+- Duplicate behavior chỉ nằm trong scope của file này; persistence idempotency cần contract riêng.
+- Required fields, timestamp precision và negative-amount policy cần source-contract approval.

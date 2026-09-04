@@ -24,6 +24,7 @@ from src.config.cache import ConfigCache
 from src.config.loader import ConfigLoader
 from src.config.settings import settings
 from src.config.validator import ConfigValidator
+from src.core.utils import sanitize_runtime_error
 from src.infrastructure.fetch_config.repository import FetchConfigRepository
 from src.infrastructure.backfill.repository import BackfillRunRepository
 from src.infrastructure.mapping.config_repository import MappingConfigRepository
@@ -40,6 +41,7 @@ SUCCESS_OUTCOMES = {
     ExecuteStreamOutcome.NO_DATA,
     ExecuteStreamOutcome.ALREADY_PROCESSED,
     ExecuteStreamOutcome.SAFE_DUPLICATE,
+    ExecuteStreamOutcome.PARTIAL,
     # Missing/changed mapping configuration is an operator gate, not a task
     # failure.  The application runtime remains WAITING_REVIEW and the
     # generated review packet is the source of truth for the next action.
@@ -214,25 +216,38 @@ async def _mark_runtime_retrying(payload: dict, result: dict) -> None:
     client: AsyncIOMotorClient[dict[str, Any]] = AsyncIOMotorClient(settings.mongodb_url)
     try:
         db = client[settings.db_name]
+        summary = result.get("stageSummary") or {}
+        attempt = payload.get("orchestration", {}).get("tryNumber", 1)
+        error_code = sanitize_runtime_error(
+            result.get("errorCode") or "stream_execution_failed", max_length=96
+        )
+        message = "Transient source failure; Airflow retry is scheduled."
+        event = {
+            "eventId": f"{runtime_run_id}:retrying:{attempt}",
+            "status": "RETRYING",
+            "timestamp": pendulum.now("UTC").to_iso8601_string(),
+            "attempt": max(1, int(attempt)),
+            "stage": summary.get("currentStage") or "FINALIZING",
+            "sourceUnitKey": result.get("stoppedAt") or summary.get("currentUnitKey"),
+            "page": result.get("currentPage") or result.get("page") or summary.get("currentPage"),
+            "durationMs": summary.get("durationMs"),
+            "counters": result.get("counters") or {},
+            "checkpointBefore": summary.get("checkpointBefore"),
+            "checkpointAfter": result.get("checkpoint") or summary.get("checkpointAfter"),
+            "errorCode": error_code,
+            "message": message,
+        }
         await update_runtime_run(
             db,
             str(runtime_run_id),
             status=PartnerRuntimeRunStatus.QUEUED,
-            message="Transient source failure; Airflow retry is scheduled.",
-            stats={
-                "errorCode": result.get("errorCode") or "stream_execution_failed",
-                "retryable": True,
-                **(result.get("counters") or {}),
-            },
-            attempt_event={
-                "eventId": f"{runtime_run_id}:retrying:{payload.get('orchestration', {}).get('tryNumber', 1)}",
-                "status": "RETRYING",
-                "timestamp": pendulum.now("UTC").to_iso8601_string(),
-                "attempt": payload.get("orchestration", {}).get("tryNumber", 1),
-                "errorCode": result.get("errorCode") or "stream_execution_failed",
-                "message": "Transient source failure; Airflow retry is scheduled.",
-            },
+            message=message,
+            stats={"errorCode": error_code, "retryable": True, **(result.get("counters") or {})},
+            stage_summary=summary,
+            attempt_event=event,
         )
+    except Exception:
+        logger.warning("runtime_observability_write_failed runtimeRunId=%s", runtime_run_id)
     finally:
         client.close()
 
@@ -251,22 +266,36 @@ async def _mark_runtime_failed(
     client: AsyncIOMotorClient[dict[str, Any]] = AsyncIOMotorClient(settings.mongodb_url)
     try:
         db = client[settings.db_name]
+        safe_message = sanitize_runtime_error(message)
+        safe_error_code = sanitize_runtime_error(error_code, max_length=96)
+        summary = payload.get("stageSummary") or {}
+        attempt = payload.get("orchestration", {}).get("tryNumber", 1)
         await update_runtime_run(
             db,
             str(runtime_run_id),
             status=PartnerRuntimeRunStatus.FAILED,
-            message=message,
-            stats={"errorCode": error_code, "retryable": False},
+            message=safe_message,
+            stats={"errorCode": safe_error_code, "retryable": False},
+            stage_summary=summary,
             finished_at=pendulum.now("UTC"),
             attempt_event={
                 "eventId": f"{runtime_run_id}:failed:{pendulum.now('UTC').int_timestamp}",
                 "status": "FAILED",
                 "timestamp": pendulum.now("UTC").to_iso8601_string(),
-                "attempt": payload.get("orchestration", {}).get("tryNumber", 1),
-                "errorCode": error_code,
-                "message": message,
+                "attempt": max(1, int(attempt)),
+                "stage": summary.get("currentStage") or "FINALIZING",
+                "sourceUnitKey": summary.get("currentUnitKey"),
+                "page": summary.get("currentPage"),
+                "durationMs": summary.get("durationMs"),
+                "counters": {},
+                "checkpointBefore": summary.get("checkpointBefore"),
+                "checkpointAfter": summary.get("checkpointAfter"),
+                "errorCode": safe_error_code,
+                "message": safe_message,
             },
         )
+    except Exception:
+        logger.warning("runtime_observability_write_failed runtimeRunId=%s", runtime_run_id)
     finally:
         client.close()
 
@@ -371,9 +400,10 @@ def reconciliation_ingestion():
                     _execute_stream(command.model_dump(by_alias=True, mode="json", exclude_none=True))
                 )
         except Exception as exc:
-            logger.exception(
-                "stream_execution_exception %s",
+            logger.error(
+                "stream_execution_exception %s error=%s",
                 stream_context,
+                sanitize_runtime_error(exc),
             )
             if not isinstance(exc, ValueError) and task_instance.try_number <= AIRFLOW_TASK_RETRIES:
                 asyncio.run(
@@ -391,7 +421,7 @@ def reconciliation_ingestion():
                     _mark_runtime_failed(
                         command.model_dump(by_alias=True, mode="json", exclude_none=True),
                         error_code="STREAM_EXECUTION_EXCEPTION",
-                        message=f"Airflow stream execution failed: {str(exc)[:400]}",
+                        message=f"Airflow stream execution failed: {sanitize_runtime_error(exc)}",
                     )
                 )
             if isinstance(exc, ValueError):

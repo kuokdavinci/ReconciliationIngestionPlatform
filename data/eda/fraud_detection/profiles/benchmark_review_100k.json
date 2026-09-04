@@ -1,0 +1,1387 @@
+{
+  "baseline": {
+    "aggregate": {
+      "batch_metrics": {
+        "copyMs": {
+          "mad": 5.945791999693029,
+          "median": 445.5048630006786,
+          "samples": [
+            483.9843270056008,
+            441.5566140014562,
+            439.55907100098557,
+            458.3426770004735,
+            445.5048630006786
+          ]
+        },
+        "dbWriteCount": {
+          "mad": 0.0,
+          "median": 5.0,
+          "samples": [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0
+          ]
+        },
+        "insertClassifyMs": {
+          "mad": 46.28295199654531,
+          "median": 3206.618891999824,
+          "samples": [
+            3160.3359400032787,
+            3206.618891999824,
+            3370.7748939996236,
+            2921.782533001533,
+            3245.9326749994943
+          ]
+        },
+        "mappingMs": {
+          "mad": 19.34147700376343,
+          "median": 418.043204001151,
+          "samples": [
+            396.29748700463097,
+            440.4222560078779,
+            427.456686993537,
+            418.043204001151,
+            398.7017269973876
+          ]
+        },
+        "persistenceWindowMs": {
+          "mad": 165.72046099827276,
+          "median": 10166.724583999894,
+          "samples": [
+            9743.38414000158,
+            10332.445044998167,
+            10166.724583999894,
+            9728.543124998396,
+            10255.232159997831
+          ]
+        },
+        "slowestBatchMs": {
+          "mad": 27.714859003026504,
+          "median": 1072.6845400022285,
+          "samples": [
+            993.2279329987068,
+            1122.9916990014317,
+            1044.969680999202,
+            1072.6845400022285,
+            1087.1549309995316
+          ]
+        },
+        "stageSetupMs": {
+          "mad": 1.2834279987146147,
+          "median": 16.804424001747975,
+          "samples": [
+            15.859515999181895,
+            15.232873996865237,
+            16.804424001747975,
+            18.08785200046259,
+            19.477473997540073
+          ]
+        },
+        "totalBatchWallMs": {
+          "mad": 170.63110900926404,
+          "median": 4750.992212997517,
+          "samples": [
+            4700.2739859999565,
+            4921.623322006781,
+            4932.934172004025,
+            4473.097323996626,
+            4750.992212997517
+          ]
+        },
+        "transactionOverheadMs": {
+          "mad": 4.390804024296813,
+          "median": 89.73532798336237,
+          "samples": [
+            89.73532798336237,
+            215.19132599132718,
+            94.12613200765918,
+            85.99528500053566,
+            85.20031901207403
+          ]
+        },
+        "tupleMaterializationMs": {
+          "mad": 15.248307001456851,
+          "median": 554.6867139964888,
+          "samples": [
+            536.8472320005822,
+            588.2312879984966,
+            569.9350209979457,
+            554.6867139964888,
+            542.5128679926274
+          ]
+        }
+      },
+      "peak_rss_bytes": {
+        "mad": 98304.0,
+        "max": 244420608,
+        "median": 243941376,
+        "samples": [
+          244039680,
+          243871744,
+          244420608,
+          243941376,
+          243548160
+        ]
+      },
+      "sample_count": 5,
+      "throughput_rows_per_second": {
+        "mad": 245.1860000000015,
+        "median": 8634.745,
+        "samples": [
+          9055.592,
+          8470.223,
+          8634.745,
+          8881.438,
+          8389.559
+        ]
+      },
+      "wall_clock_ms": {
+        "mad": 321.679235999909,
+        "median": 11581.117418998474,
+        "samples": [
+          11042.90067400143,
+          11806.064128002618,
+          11581.117418998474,
+          11259.438182998565,
+          11919.577720000234
+        ]
+      }
+    },
+    "samples": [
+      {
+        "batchMetrics": {
+          "copyMs": 483.9843270056008,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 3160.3359400032787,
+          "mappingMs": 396.29748700463097,
+          "persistenceWindowMs": 9743.38414000158,
+          "slowestBatchMs": 993.2279329987068,
+          "stageSetupMs": 15.859515999181895,
+          "totalBatchWallMs": 4700.2739859999565,
+          "transactionOverheadMs": 89.73532798336237,
+          "tupleMaterializationMs": 536.8472320005822
+        },
+        "batch_metrics": {
+          "copyMs": 483.9843270056008,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 3160.3359400032787,
+          "mappingMs": 396.29748700463097,
+          "persistenceWindowMs": 9743.38414000158,
+          "slowestBatchMs": 993.2279329987068,
+          "stageSetupMs": 15.859515999181895,
+          "totalBatchWallMs": 4700.2739859999565,
+          "transactionOverheadMs": 89.73532798336237,
+          "tupleMaterializationMs": 536.8472320005822
+        },
+        "correctness": {
+          "counter_invariant": true,
+          "persisted_rows_match": true
+        },
+        "duplicate_rows": 0,
+        "elapsed_seconds": 11.042901,
+        "errors": [],
+        "failed_rows": 0,
+        "file_record_id": "5aefeabf-57bf-471b-ad46-def350ea601a",
+        "input_rows": 100000,
+        "orchestration_action": "CONTINUE",
+        "outcome": "INGESTED",
+        "peak_rss_bytes": 244039680,
+        "persisted_rows": 100000,
+        "quality_counters": {
+          "duplicateRows": 0,
+          "failedRows": 0,
+          "inputRows": 100000,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quarantinedRows": 0,
+          "rejectedRows": 0
+        },
+        "quality_decision": "PASS",
+        "quarantined_rows": 0,
+        "requested_rows": 100000,
+        "rss_peak_bytes": 244039680,
+        "stageSummary": {
+          "batchMetrics": {
+            "copyMs": 483.9843270056008,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 3160.3359400032787,
+            "mappingMs": 396.29748700463097,
+            "persistenceWindowMs": 9743.38414000158,
+            "slowestBatchMs": 993.2279329987068,
+            "stageSetupMs": 15.859515999181895,
+            "totalBatchWallMs": 4700.2739859999565,
+            "transactionOverheadMs": 89.73532798336237,
+            "tupleMaterializationMs": 536.8472320005822
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 2,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 11038.28549500031,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:20:31.682948+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 38.349894999555545,
+            "CONFIGURING": 1.8513300019549206,
+            "FINALIZING": 0.1619769973331131,
+            "PERSISTING": 9764.43310400282,
+            "PROCESSING": 1233.0939099992975,
+            "READING": 0.3573260000848677
+          },
+          "startedAt": "2026-09-03T09:20:20.644655+00:00",
+          "wallClockMs": 11038.28549500031
+        },
+        "stage_summary": {
+          "batchMetrics": {
+            "copyMs": 483.9843270056008,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 3160.3359400032787,
+            "mappingMs": 396.29748700463097,
+            "persistenceWindowMs": 9743.38414000158,
+            "slowestBatchMs": 993.2279329987068,
+            "stageSetupMs": 15.859515999181895,
+            "totalBatchWallMs": 4700.2739859999565,
+            "transactionOverheadMs": 89.73532798336237,
+            "tupleMaterializationMs": 536.8472320005822
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 2,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 11038.28549500031,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:20:31.682948+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 38.349894999555545,
+            "CONFIGURING": 1.8513300019549206,
+            "FINALIZING": 0.1619769973331131,
+            "PERSISTING": 9764.43310400282,
+            "PROCESSING": 1233.0939099992975,
+            "READING": 0.3573260000848677
+          },
+          "startedAt": "2026-09-03T09:20:20.644655+00:00",
+          "wallClockMs": 11038.28549500031
+        },
+        "throughput_rows_per_second": 9055.592,
+        "wallClockMs": 11042.90067400143,
+        "wall_clock_ms": 11042.90067400143
+      },
+      {
+        "batchMetrics": {
+          "copyMs": 441.5566140014562,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 3206.618891999824,
+          "mappingMs": 440.4222560078779,
+          "persistenceWindowMs": 10332.445044998167,
+          "slowestBatchMs": 1122.9916990014317,
+          "stageSetupMs": 15.232873996865237,
+          "totalBatchWallMs": 4921.623322006781,
+          "transactionOverheadMs": 215.19132599132718,
+          "tupleMaterializationMs": 588.2312879984966
+        },
+        "batch_metrics": {
+          "copyMs": 441.5566140014562,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 3206.618891999824,
+          "mappingMs": 440.4222560078779,
+          "persistenceWindowMs": 10332.445044998167,
+          "slowestBatchMs": 1122.9916990014317,
+          "stageSetupMs": 15.232873996865237,
+          "totalBatchWallMs": 4921.623322006781,
+          "transactionOverheadMs": 215.19132599132718,
+          "tupleMaterializationMs": 588.2312879984966
+        },
+        "correctness": {
+          "counter_invariant": true,
+          "persisted_rows_match": true
+        },
+        "duplicate_rows": 0,
+        "elapsed_seconds": 11.806064,
+        "errors": [],
+        "failed_rows": 0,
+        "file_record_id": "7832a6e9-21de-4d72-9249-1b8e7ce2304e",
+        "input_rows": 100000,
+        "orchestration_action": "CONTINUE",
+        "outcome": "INGESTED",
+        "peak_rss_bytes": 243871744,
+        "persisted_rows": 100000,
+        "quality_counters": {
+          "duplicateRows": 0,
+          "failedRows": 0,
+          "inputRows": 100000,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quarantinedRows": 0,
+          "rejectedRows": 0
+        },
+        "quality_decision": "PASS",
+        "quarantined_rows": 0,
+        "requested_rows": 100000,
+        "rss_peak_bytes": 243871744,
+        "stageSummary": {
+          "batchMetrics": {
+            "copyMs": 441.5566140014562,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 3206.618891999824,
+            "mappingMs": 440.4222560078779,
+            "persistenceWindowMs": 10332.445044998167,
+            "slowestBatchMs": 1122.9916990014317,
+            "stageSetupMs": 15.232873996865237,
+            "totalBatchWallMs": 4921.623322006781,
+            "transactionOverheadMs": 215.19132599132718,
+            "tupleMaterializationMs": 588.2312879984966
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 3,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 11801.564495999628,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:20:44.724911+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 34.912587001599604,
+            "CONFIGURING": 1.6685070004314184,
+            "FINALIZING": 0.16570400111959316,
+            "PERSISTING": 10353.565782999794,
+            "PROCESSING": 1410.8630699993228,
+            "READING": 0.3505809982016217
+          },
+          "startedAt": "2026-09-03T09:20:32.923338+00:00",
+          "wallClockMs": 11801.564495999628
+        },
+        "stage_summary": {
+          "batchMetrics": {
+            "copyMs": 441.5566140014562,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 3206.618891999824,
+            "mappingMs": 440.4222560078779,
+            "persistenceWindowMs": 10332.445044998167,
+            "slowestBatchMs": 1122.9916990014317,
+            "stageSetupMs": 15.232873996865237,
+            "totalBatchWallMs": 4921.623322006781,
+            "transactionOverheadMs": 215.19132599132718,
+            "tupleMaterializationMs": 588.2312879984966
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 3,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 11801.564495999628,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:20:44.724911+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 34.912587001599604,
+            "CONFIGURING": 1.6685070004314184,
+            "FINALIZING": 0.16570400111959316,
+            "PERSISTING": 10353.565782999794,
+            "PROCESSING": 1410.8630699993228,
+            "READING": 0.3505809982016217
+          },
+          "startedAt": "2026-09-03T09:20:32.923338+00:00",
+          "wallClockMs": 11801.564495999628
+        },
+        "throughput_rows_per_second": 8470.223,
+        "wallClockMs": 11806.064128002618,
+        "wall_clock_ms": 11806.064128002618
+      },
+      {
+        "batchMetrics": {
+          "copyMs": 439.55907100098557,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 3370.7748939996236,
+          "mappingMs": 427.456686993537,
+          "persistenceWindowMs": 10166.724583999894,
+          "slowestBatchMs": 1044.969680999202,
+          "stageSetupMs": 16.804424001747975,
+          "totalBatchWallMs": 4932.934172004025,
+          "transactionOverheadMs": 94.12613200765918,
+          "tupleMaterializationMs": 569.9350209979457
+        },
+        "batch_metrics": {
+          "copyMs": 439.55907100098557,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 3370.7748939996236,
+          "mappingMs": 427.456686993537,
+          "persistenceWindowMs": 10166.724583999894,
+          "slowestBatchMs": 1044.969680999202,
+          "stageSetupMs": 16.804424001747975,
+          "totalBatchWallMs": 4932.934172004025,
+          "transactionOverheadMs": 94.12613200765918,
+          "tupleMaterializationMs": 569.9350209979457
+        },
+        "correctness": {
+          "counter_invariant": true,
+          "persisted_rows_match": true
+        },
+        "duplicate_rows": 0,
+        "elapsed_seconds": 11.581117,
+        "errors": [],
+        "failed_rows": 0,
+        "file_record_id": "5828c1d8-ed54-47ad-876a-a06dc53020e5",
+        "input_rows": 100000,
+        "orchestration_action": "CONTINUE",
+        "outcome": "INGESTED",
+        "peak_rss_bytes": 244420608,
+        "persisted_rows": 100000,
+        "quality_counters": {
+          "duplicateRows": 0,
+          "failedRows": 0,
+          "inputRows": 100000,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quarantinedRows": 0,
+          "rejectedRows": 0
+        },
+        "quality_decision": "PASS",
+        "quarantined_rows": 0,
+        "requested_rows": 100000,
+        "rss_peak_bytes": 244420608,
+        "stageSummary": {
+          "batchMetrics": {
+            "copyMs": 439.55907100098557,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 3370.7748939996236,
+            "mappingMs": 427.456686993537,
+            "persistenceWindowMs": 10166.724583999894,
+            "slowestBatchMs": 1044.969680999202,
+            "stageSetupMs": 16.804424001747975,
+            "totalBatchWallMs": 4932.934172004025,
+            "transactionOverheadMs": 94.12613200765918,
+            "tupleMaterializationMs": 569.9350209979457
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 4,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 11576.765432000684,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:20:57.721189+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 34.799789002136094,
+            "CONFIGURING": 2.100650999636855,
+            "FINALIZING": 0.16455099830636755,
+            "PERSISTING": 10187.11535800685,
+            "PROCESSING": 1352.2065819997806,
+            "READING": 0.34329400295973755
+          },
+          "startedAt": "2026-09-03T09:20:46.144416+00:00",
+          "wallClockMs": 11576.765432000684
+        },
+        "stage_summary": {
+          "batchMetrics": {
+            "copyMs": 439.55907100098557,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 3370.7748939996236,
+            "mappingMs": 427.456686993537,
+            "persistenceWindowMs": 10166.724583999894,
+            "slowestBatchMs": 1044.969680999202,
+            "stageSetupMs": 16.804424001747975,
+            "totalBatchWallMs": 4932.934172004025,
+            "transactionOverheadMs": 94.12613200765918,
+            "tupleMaterializationMs": 569.9350209979457
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 4,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 11576.765432000684,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:20:57.721189+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 34.799789002136094,
+            "CONFIGURING": 2.100650999636855,
+            "FINALIZING": 0.16455099830636755,
+            "PERSISTING": 10187.11535800685,
+            "PROCESSING": 1352.2065819997806,
+            "READING": 0.34329400295973755
+          },
+          "startedAt": "2026-09-03T09:20:46.144416+00:00",
+          "wallClockMs": 11576.765432000684
+        },
+        "throughput_rows_per_second": 8634.745,
+        "wallClockMs": 11581.117418998474,
+        "wall_clock_ms": 11581.117418998474
+      },
+      {
+        "batchMetrics": {
+          "copyMs": 458.3426770004735,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 2921.782533001533,
+          "mappingMs": 418.043204001151,
+          "persistenceWindowMs": 9728.543124998396,
+          "slowestBatchMs": 1072.6845400022285,
+          "stageSetupMs": 18.08785200046259,
+          "totalBatchWallMs": 4473.097323996626,
+          "transactionOverheadMs": 85.99528500053566,
+          "tupleMaterializationMs": 554.6867139964888
+        },
+        "batch_metrics": {
+          "copyMs": 458.3426770004735,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 2921.782533001533,
+          "mappingMs": 418.043204001151,
+          "persistenceWindowMs": 9728.543124998396,
+          "slowestBatchMs": 1072.6845400022285,
+          "stageSetupMs": 18.08785200046259,
+          "totalBatchWallMs": 4473.097323996626,
+          "transactionOverheadMs": 85.99528500053566,
+          "tupleMaterializationMs": 554.6867139964888
+        },
+        "correctness": {
+          "counter_invariant": true,
+          "persisted_rows_match": true
+        },
+        "duplicate_rows": 0,
+        "elapsed_seconds": 11.259438,
+        "errors": [],
+        "failed_rows": 0,
+        "file_record_id": "6cfb5e4b-618e-4dc5-8b57-6b3154d339cb",
+        "input_rows": 100000,
+        "orchestration_action": "CONTINUE",
+        "outcome": "INGESTED",
+        "peak_rss_bytes": 243941376,
+        "persisted_rows": 100000,
+        "quality_counters": {
+          "duplicateRows": 0,
+          "failedRows": 0,
+          "inputRows": 100000,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quarantinedRows": 0,
+          "rejectedRows": 0
+        },
+        "quality_decision": "PASS",
+        "quarantined_rows": 0,
+        "requested_rows": 100000,
+        "rss_peak_bytes": 243941376,
+        "stageSummary": {
+          "batchMetrics": {
+            "copyMs": 458.3426770004735,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 2921.782533001533,
+            "mappingMs": 418.043204001151,
+            "persistenceWindowMs": 9728.543124998396,
+            "slowestBatchMs": 1072.6845400022285,
+            "stageSetupMs": 18.08785200046259,
+            "totalBatchWallMs": 4473.097323996626,
+            "transactionOverheadMs": 85.99528500053566,
+            "tupleMaterializationMs": 554.6867139964888
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 5,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 11254.061809999257,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:21:10.255351+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 39.16894899884937,
+            "CONFIGURING": 1.5280070001608692,
+            "FINALIZING": 0.2140420001524035,
+            "PERSISTING": 9750.237213003857,
+            "PROCESSING": 1462.577753001824,
+            "READING": 0.3073010011576116
+          },
+          "startedAt": "2026-09-03T09:20:59.001285+00:00",
+          "wallClockMs": 11254.061809999257
+        },
+        "stage_summary": {
+          "batchMetrics": {
+            "copyMs": 458.3426770004735,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 2921.782533001533,
+            "mappingMs": 418.043204001151,
+            "persistenceWindowMs": 9728.543124998396,
+            "slowestBatchMs": 1072.6845400022285,
+            "stageSetupMs": 18.08785200046259,
+            "totalBatchWallMs": 4473.097323996626,
+            "transactionOverheadMs": 85.99528500053566,
+            "tupleMaterializationMs": 554.6867139964888
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 5,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 11254.061809999257,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:21:10.255351+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 39.16894899884937,
+            "CONFIGURING": 1.5280070001608692,
+            "FINALIZING": 0.2140420001524035,
+            "PERSISTING": 9750.237213003857,
+            "PROCESSING": 1462.577753001824,
+            "READING": 0.3073010011576116
+          },
+          "startedAt": "2026-09-03T09:20:59.001285+00:00",
+          "wallClockMs": 11254.061809999257
+        },
+        "throughput_rows_per_second": 8881.438,
+        "wallClockMs": 11259.438182998565,
+        "wall_clock_ms": 11259.438182998565
+      },
+      {
+        "batchMetrics": {
+          "copyMs": 445.5048630006786,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 3245.9326749994943,
+          "mappingMs": 398.7017269973876,
+          "persistenceWindowMs": 10255.232159997831,
+          "slowestBatchMs": 1087.1549309995316,
+          "stageSetupMs": 19.477473997540073,
+          "totalBatchWallMs": 4750.992212997517,
+          "transactionOverheadMs": 85.20031901207403,
+          "tupleMaterializationMs": 542.5128679926274
+        },
+        "batch_metrics": {
+          "copyMs": 445.5048630006786,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 3245.9326749994943,
+          "mappingMs": 398.7017269973876,
+          "persistenceWindowMs": 10255.232159997831,
+          "slowestBatchMs": 1087.1549309995316,
+          "stageSetupMs": 19.477473997540073,
+          "totalBatchWallMs": 4750.992212997517,
+          "transactionOverheadMs": 85.20031901207403,
+          "tupleMaterializationMs": 542.5128679926274
+        },
+        "correctness": {
+          "counter_invariant": true,
+          "persisted_rows_match": true
+        },
+        "duplicate_rows": 0,
+        "elapsed_seconds": 11.919578,
+        "errors": [],
+        "failed_rows": 0,
+        "file_record_id": "15504d9b-615a-4ab6-b0e5-5dc9b5b67b58",
+        "input_rows": 100000,
+        "orchestration_action": "CONTINUE",
+        "outcome": "INGESTED",
+        "peak_rss_bytes": 243548160,
+        "persisted_rows": 100000,
+        "quality_counters": {
+          "duplicateRows": 0,
+          "failedRows": 0,
+          "inputRows": 100000,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quarantinedRows": 0,
+          "rejectedRows": 0
+        },
+        "quality_decision": "PASS",
+        "quarantined_rows": 0,
+        "requested_rows": 100000,
+        "rss_peak_bytes": 243548160,
+        "stageSummary": {
+          "batchMetrics": {
+            "copyMs": 445.5048630006786,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 3245.9326749994943,
+            "mappingMs": 398.7017269973876,
+            "persistenceWindowMs": 10255.232159997831,
+            "slowestBatchMs": 1087.1549309995316,
+            "stageSetupMs": 19.477473997540073,
+            "totalBatchWallMs": 4750.992212997517,
+            "transactionOverheadMs": 85.20031901207403,
+            "tupleMaterializationMs": 542.5128679926274
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 6,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 11915.727567000431,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:21:23.615727+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 38.470051000331296,
+            "CONFIGURING": 2.1268579985189717,
+            "FINALIZING": 0.15809600154170766,
+            "PERSISTING": 10276.024046001112,
+            "PROCESSING": 1598.4789920003095,
+            "READING": 0.4333809993113391
+          },
+          "startedAt": "2026-09-03T09:21:11.699994+00:00",
+          "wallClockMs": 11915.727567000431
+        },
+        "stage_summary": {
+          "batchMetrics": {
+            "copyMs": 445.5048630006786,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 3245.9326749994943,
+            "mappingMs": 398.7017269973876,
+            "persistenceWindowMs": 10255.232159997831,
+            "slowestBatchMs": 1087.1549309995316,
+            "stageSetupMs": 19.477473997540073,
+            "totalBatchWallMs": 4750.992212997517,
+            "transactionOverheadMs": 85.20031901207403,
+            "tupleMaterializationMs": 542.5128679926274
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 6,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 11915.727567000431,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:21:23.615727+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 38.470051000331296,
+            "CONFIGURING": 2.1268579985189717,
+            "FINALIZING": 0.15809600154170766,
+            "PERSISTING": 10276.024046001112,
+            "PROCESSING": 1598.4789920003095,
+            "READING": 0.4333809993113391
+          },
+          "startedAt": "2026-09-03T09:21:11.699994+00:00",
+          "wallClockMs": 11915.727567000431
+        },
+        "throughput_rows_per_second": 8389.559,
+        "wallClockMs": 11919.577720000234,
+        "wall_clock_ms": 11919.577720000234
+      }
+    ],
+    "valid": true,
+    "variant": {
+      "batch_size": 20000,
+      "fast_mode": false,
+      "name": "control-20k-w1",
+      "write_workers": 1
+    },
+    "warmup_samples": [
+      {
+        "batchMetrics": {
+          "copyMs": 499.52030000349623,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 2167.5370070006466,
+          "mappingMs": 424.96400700110826,
+          "persistenceWindowMs": 9190.410015999078,
+          "slowestBatchMs": 835.9039659990231,
+          "stageSetupMs": 16.05216600728454,
+          "totalBatchWallMs": 3743.7440250032523,
+          "transactionOverheadMs": 88.73450699320529,
+          "tupleMaterializationMs": 534.3853550002677
+        },
+        "batch_metrics": {
+          "copyMs": 499.52030000349623,
+          "dbWriteCount": 5,
+          "insertClassifyMs": 2167.5370070006466,
+          "mappingMs": 424.96400700110826,
+          "persistenceWindowMs": 9190.410015999078,
+          "slowestBatchMs": 835.9039659990231,
+          "stageSetupMs": 16.05216600728454,
+          "totalBatchWallMs": 3743.7440250032523,
+          "transactionOverheadMs": 88.73450699320529,
+          "tupleMaterializationMs": 534.3853550002677
+        },
+        "correctness": {
+          "counter_invariant": true,
+          "persisted_rows_match": true
+        },
+        "duplicate_rows": 0,
+        "elapsed_seconds": 10.738918,
+        "errors": [],
+        "failed_rows": 0,
+        "file_record_id": "9a559604-80c9-4a49-b9c4-2a4b5bfe5008",
+        "input_rows": 100000,
+        "orchestration_action": "CONTINUE",
+        "outcome": "INGESTED",
+        "peak_rss_bytes": 244105216,
+        "persisted_rows": 100000,
+        "quality_counters": {
+          "duplicateRows": 0,
+          "failedRows": 0,
+          "inputRows": 100000,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quarantinedRows": 0,
+          "rejectedRows": 0
+        },
+        "quality_decision": "PASS",
+        "quarantined_rows": 0,
+        "requested_rows": 100000,
+        "rss_peak_bytes": 244105216,
+        "stageSummary": {
+          "batchMetrics": {
+            "copyMs": 499.52030000349623,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 2167.5370070006466,
+            "mappingMs": 424.96400700110826,
+            "persistenceWindowMs": 9190.410015999078,
+            "slowestBatchMs": 835.9039659990231,
+            "stageSetupMs": 16.05216600728454,
+            "totalBatchWallMs": 3743.7440250032523,
+            "transactionOverheadMs": 88.73450699320529,
+            "tupleMaterializationMs": 534.3853550002677
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 1,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 10734.866765000334,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:20:19.558315+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 34.138450002501486,
+            "CONFIGURING": 1.6573970024182927,
+            "FINALIZING": 0.15739899754407816,
+            "PERSISTING": 9210.684495010355,
+            "PROCESSING": 1487.9728199994133,
+            "READING": 0.21905399989918806
+          },
+          "startedAt": "2026-09-03T09:20:08.823441+00:00",
+          "wallClockMs": 10734.866765000334
+        },
+        "stage_summary": {
+          "batchMetrics": {
+            "copyMs": 499.52030000349623,
+            "dbWriteCount": 5,
+            "insertClassifyMs": 2167.5370070006466,
+            "mappingMs": 424.96400700110826,
+            "persistenceWindowMs": 9190.410015999078,
+            "slowestBatchMs": 835.9039659990231,
+            "stageSetupMs": 16.05216600728454,
+            "totalBatchWallMs": 3743.7440250032523,
+            "transactionOverheadMs": 88.73450699320529,
+            "tupleMaterializationMs": 534.3853550002677
+          },
+          "checkpointAfter": {},
+          "checkpointBefore": {},
+          "currentPage": 1,
+          "currentStage": "FINALIZING",
+          "currentUnitKey": null,
+          "duplicateRows": 0,
+          "durationMs": 10734.866765000334,
+          "errorCount": 0,
+          "errorSamplesDropped": 0,
+          "failedRows": 0,
+          "finishedAt": "2026-09-03T09:20:19.558315+00:00",
+          "inputRows": 100000,
+          "lastError": null,
+          "lastErrorCode": null,
+          "persistedRows": 100000,
+          "persistenceFailedRows": 0,
+          "quality": {
+            "action": "CONTINUE",
+            "decision": "PASS",
+            "outcomeCounts": {
+              "VALID": 100001
+            },
+            "ruleCounts": {},
+            "topRuleCodes": []
+          },
+          "quarantinedRows": 0,
+          "rejectedRows": 0,
+          "stageDurationsMs": {
+            "CLAIMING": 34.138450002501486,
+            "CONFIGURING": 1.6573970024182927,
+            "FINALIZING": 0.15739899754407816,
+            "PERSISTING": 9210.684495010355,
+            "PROCESSING": 1487.9728199994133,
+            "READING": 0.21905399989918806
+          },
+          "startedAt": "2026-09-03T09:20:08.823441+00:00",
+          "wallClockMs": 10734.866765000334
+        },
+        "throughput_rows_per_second": 9311.926,
+        "wallClockMs": 10738.917512000626,
+        "wall_clock_ms": 10738.917512000626
+      }
+    ]
+  },
+  "baseline_after_optimize": {
+    "aggregate": {
+      "batch_metrics": {
+        "copyMs": {
+          "mad": 5.945791999693029,
+          "median": 445.5048630006786,
+          "samples": [
+            483.9843270056008,
+            441.5566140014562,
+            439.55907100098557,
+            458.3426770004735,
+            445.5048630006786
+          ]
+        },
+        "dbWriteCount": {
+          "mad": 0.0,
+          "median": 5.0,
+          "samples": [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0
+          ]
+        },
+        "insertClassifyMs": {
+          "mad": 46.28295199654531,
+          "median": 3206.618891999824,
+          "samples": [
+            3160.3359400032787,
+            3206.618891999824,
+            3370.7748939996236,
+            2921.782533001533,
+            3245.9326749994943
+          ]
+        },
+        "mappingMs": {
+          "mad": 19.34147700376343,
+          "median": 418.043204001151,
+          "samples": [
+            396.29748700463097,
+            440.4222560078779,
+            427.456686993537,
+            418.043204001151,
+            398.7017269973876
+          ]
+        },
+        "persistenceWindowMs": {
+          "mad": 165.72046099827276,
+          "median": 10166.724583999894,
+          "samples": [
+            9743.38414000158,
+            10332.445044998167,
+            10166.724583999894,
+            9728.543124998396,
+            10255.232159997831
+          ]
+        },
+        "slowestBatchMs": {
+          "mad": 27.714859003026504,
+          "median": 1072.6845400022285,
+          "samples": [
+            993.2279329987068,
+            1122.9916990014317,
+            1044.969680999202,
+            1072.6845400022285,
+            1087.1549309995316
+          ]
+        },
+        "stageSetupMs": {
+          "mad": 1.2834279987146147,
+          "median": 16.804424001747975,
+          "samples": [
+            15.859515999181895,
+            15.232873996865237,
+            16.804424001747975,
+            18.08785200046259,
+            19.477473997540073
+          ]
+        },
+        "totalBatchWallMs": {
+          "mad": 170.63110900926404,
+          "median": 4750.992212997517,
+          "samples": [
+            4700.2739859999565,
+            4921.623322006781,
+            4932.934172004025,
+            4473.097323996626,
+            4750.992212997517
+          ]
+        },
+        "transactionOverheadMs": {
+          "mad": 4.390804024296813,
+          "median": 89.73532798336237,
+          "samples": [
+            89.73532798336237,
+            215.19132599132718,
+            94.12613200765918,
+            85.99528500053566,
+            85.20031901207403
+          ]
+        },
+        "tupleMaterializationMs": {
+          "mad": 15.248307001456851,
+          "median": 554.6867139964888,
+          "samples": [
+            536.8472320005822,
+            588.2312879984966,
+            569.9350209979457,
+            554.6867139964888,
+            542.5128679926274
+          ]
+        }
+      },
+      "peak_rss_bytes": {
+        "mad": 98304.0,
+        "max": 244420608,
+        "median": 243941376,
+        "samples": [
+          244039680,
+          243871744,
+          244420608,
+          243941376,
+          243548160
+        ]
+      },
+      "sample_count": 5,
+      "throughput_rows_per_second": {
+        "mad": 245.1860000000015,
+        "median": 8634.745,
+        "samples": [
+          9055.592,
+          8470.223,
+          8634.745,
+          8881.438,
+          8389.559
+        ]
+      },
+      "wall_clock_ms": {
+        "mad": 321.679235999909,
+        "median": 11581.117418998474,
+        "samples": [
+          11042.90067400143,
+          11806.064128002618,
+          11581.117418998474,
+          11259.438182998565,
+          11919.577720000234
+        ]
+      }
+    },
+    "artifact": "data/eda/fraud_detection/profiles/benchmark_review_100k.json",
+    "valid": true
+  },
+  "baseline_before": {
+    "artifact": "data/eda/fraud_detection/profiles/benchmark_results_workstream_c.json",
+    "measurement_compatible": false,
+    "reason": "Sprint 3 used in-process timing and a different full-file row count; not a baseline for this gate."
+  },
+  "benchmark_version": 3,
+  "boundary": "IngestionPipeline.process_file",
+  "cleanup": "benchmark records and mapping removed",
+  "configuration": {
+    "batch_size": 20000,
+    "config_version": "sprint3-fraud-detection-v2",
+    "fast_mode": false,
+    "ordered_insert": false,
+    "write_workers": 1
+  },
+  "dataset": {
+    "evaluation_rows": 100000,
+    "evaluation_sha256": "f9251981e9d7a65877ea6f6a093b2e6d15abc3d618afaf4954876469ec989433",
+    "path": "data/eda/fraud_detection/raw/Fraud Detection Dataset.csv",
+    "sha256": "e3895c988fe37efc76dabfe62d23f7ab75e89477bb17ba0c53092b008431caf6",
+    "size_bytes": 175509007
+  },
+  "environment": {
+    "db_name": "reconciliation",
+    "mongodb_url": "mongodb://admin:***@localhost:27017/reconciliation?authSource=admin",
+    "postgres_persistence_expected": "LOGGED"
+  },
+  "kind": "review",
+  "measurement": {
+    "measured_samples": 5,
+    "peak_rss_cap_bytes": 1073741824,
+    "process_per_sample": true,
+    "tracemalloc_in_latency_timer": false,
+    "warmup_samples": 1
+  },
+  "optimization": {
+    "reason": "Instrumentation and bounded tracing only; no runtime change is promoted without the measurement gate.",
+    "runtime_optimization_applied": false
+  },
+  "postgresql": {
+    "active_writes": [],
+    "explain_analyze_buffers": [
+      {
+        "Execution Time": 0.384,
+        "Plan": {
+          "Actual Loops": 1,
+          "Actual Rows": 0,
+          "Actual Startup Time": 0.371,
+          "Actual Total Time": 0.372,
+          "Async Capable": false,
+          "Local Dirtied Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Written Blocks": 0,
+          "Node Type": "Limit",
+          "Parallel Aware": false,
+          "Plan Rows": 4,
+          "Plan Width": 41,
+          "Plans": [
+            {
+              "Actual Loops": 1,
+              "Actual Rows": 0,
+              "Actual Startup Time": 0.37,
+              "Actual Total Time": 0.37,
+              "Alias": "partner_transaction",
+              "Async Capable": false,
+              "Filter": "((identify)::text = 'SPRINT3_FRAUD_EDA_BASELINE'::text)",
+              "Index Cond": "(reconciliation_date = '2025-01-01 00:00:00'::timestamp without time zone)",
+              "Index Name": "ix_partner_transaction_reconciliation_date",
+              "Local Dirtied Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Written Blocks": 0,
+              "Node Type": "Index Scan",
+              "Parallel Aware": false,
+              "Parent Relationship": "Outer",
+              "Plan Rows": 4,
+              "Plan Width": 41,
+              "Relation Name": "partner_transaction",
+              "Rows Removed by Filter": 0,
+              "Rows Removed by Index Recheck": 0,
+              "Scan Direction": "Forward",
+              "Shared Dirtied Blocks": 0,
+              "Shared Hit Blocks": 1,
+              "Shared Read Blocks": 1,
+              "Shared Written Blocks": 0,
+              "Startup Cost": 0.29,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0,
+              "Total Cost": 12.39
+            }
+          ],
+          "Shared Dirtied Blocks": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 1,
+          "Shared Written Blocks": 0,
+          "Startup Cost": 0.29,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0,
+          "Total Cost": 12.39
+        },
+        "Planning": {
+          "Local Dirtied Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Written Blocks": 0,
+          "Shared Dirtied Blocks": 2,
+          "Shared Hit Blocks": 125,
+          "Shared Read Blocks": 21,
+          "Shared Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0
+        },
+        "Planning Time": 0.791,
+        "Triggers": []
+      }
+    ],
+    "read_only": true,
+    "table_persistence": "LOGGED"
+  },
+  "profile": "         46631519 function calls (46631072 primitive calls) in 21.204 seconds\n\n   Ordered by: cumulative time\n   List reduced from 1407 to 30 due to restriction <30>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n      121    0.001    0.000   41.345    0.342 /usr/lib/python3.12/asyncio/base_events.py:1910(_run_once)\n      185    0.357    0.002   38.655    0.209 /usr/lib/python3.12/asyncio/events.py:86(_run)\n        2    0.000    0.000   19.761    9.880 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/.venv/lib/python3.12/site-packages/pymongo/synchronous/pool.py:335(_next_reply)\n        4    0.000    0.000   19.741    4.935 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/.venv/lib/python3.12/site-packages/pymongo/synchronous/pool.py:450(receive_message)\n      185    0.000    0.000   17.986    0.097 {method 'run' of '_contextvars.Context' objects}\n       54    0.000    0.000   17.980    0.333 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/scripts/benchmark_fraud_detection.py:604(run)\n       54    0.000    0.000   17.980    0.333 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/scripts/benchmark_fraud_detection.py:428(_run_case)\n       55    1.611    0.029   17.979    0.327 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/pipeline/ingestion_pipeline.py:363(process_file)\n       55    0.019    0.000   15.776    0.287 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/pipeline/ingestion_pipeline.py:347(execute)\n       55    0.003    0.000   14.880    0.271 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/pipeline/ingestion_pipeline.py:666(_process_file)\n       42    0.000    0.000   14.742    0.351 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/pipeline/ingestion_pipeline.py:565(_run_row_phase)\n   100000    0.395    0.000   10.482    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/pipeline/row_processor.py:88(process)\n   100000    0.034    0.000    3.776    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/normalizer/normalizer.py:114(normalize)\n   100000    1.166    0.000    3.742    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/normalizer/normalizer.py:139(_normalize)\n   300015    0.316    0.000    3.320    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/.venv/lib/python3.12/site-packages/pydantic/main.py:253(__init__)\n   100000    0.254    0.000    3.162    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/pipeline/row_processor.py:153(_build_data_container)\n300016/300015    0.725    0.000    3.004    0.000 {method 'validate_python' of 'pydantic_core._pydantic_core.SchemaValidator' objects}\n100092/100070    0.029    0.000    2.994    0.000 {built-in method builtins.next}\n   100001    0.253    0.000    2.964    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/readers/csv_reader.py:120(iter_rows)\n   100000    1.515    0.000    2.706    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/readers/csv_reader.py:106(_should_skip_row)\n   200002    0.151    0.000    1.951    0.000 /usr/lib/python3.12/uuid.py:723(uuid4)\n   100000    0.301    0.000    1.662    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/normalizer/normalizer.py:646(build_canonical)\n    61/51    1.457    0.024    1.456    0.029 {method 'recv_into' of '_socket.socket' objects}\n  1600000    0.777    0.000    1.242    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/normalizer/normalizer.py:223(_resolve_source)\n   100000    0.124    0.000    1.181    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/validators/validator.py:35(validate)\n 13600013    1.091    0.000    1.091    0.000 {method 'lower' of 'str' objects}\n      121    0.001    0.000    1.078    0.009 /usr/lib/python3.12/selectors.py:451(select)\n      121    1.017    0.008    1.017    0.008 {method 'poll' of 'select.epoll' objects}\n   200002    0.990    0.000    0.990    0.000 {built-in method posix.urandom}\n   100000    0.250    0.000    0.875    0.000 /home/vsf-quoclta-u/Documents/ReconciliationIngestionPlatform/src/infrastructure/partner_transaction/repository.py:74(_row_to_copy_tuple)\n\n\n",
+  "status": "completed"
+}

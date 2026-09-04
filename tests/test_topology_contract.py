@@ -271,7 +271,25 @@ async def test_full_ingestion_topology_contract() -> None:
         response.raise_for_status()
         runtime_run_id = response.json()["runtimeRunId"]
         _log(f"phase=runtime_triggered run_id={runtime_run_id}")
-        await _wait_for_runtime_status(client, runtime_run_id, "WAITING_REVIEW")
+        waiting_runtime = await _wait_for_runtime_status(
+            client, runtime_run_id, "WAITING_REVIEW"
+        )
+        waiting_summary = waiting_runtime.get("stageSummary") or {}
+        assert waiting_summary.get("stageDurationsMs") is not None
+        assert waiting_summary.get("currentStage") in {
+            "CLAIMING",
+            "CONFIGURING",
+            "READING",
+            "PROCESSING",
+            "PERSISTING",
+            "QUARANTINING",
+            "FINALIZING",
+        }
+        assert waiting_runtime.get("attemptHistory")
+        assert all(
+            event.get("attempt") and event.get("timestamp") and event.get("stage")
+            for event in waiting_runtime["attemptHistory"]
+        )
 
         _log("phase=prepare_review_packet")
         review_client = AsyncIOMotorClient(settings.mongodb_url)
@@ -311,7 +329,15 @@ async def test_full_ingestion_topology_contract() -> None:
         )
         approval.raise_for_status()
         _log(f"phase=review_approved packet_id={packet_id}")
-        await _wait_for_post_approval_completion(client)
+        post_approval_runtime = await _wait_for_post_approval_completion(client)
+        post_summary = post_approval_runtime.get("stageSummary") or {}
+        assert post_summary.get("stageDurationsMs") is not None
+        assert post_summary.get("durationMs") is not None
+        assert post_approval_runtime.get("attemptHistory")
+        assert all(
+            event.get("attempt") and event.get("timestamp") and event.get("stage")
+            for event in post_approval_runtime["attemptHistory"]
+        )
 
     _log("phase=verify_persistence")
     verification_client = AsyncIOMotorClient(settings.mongodb_url)

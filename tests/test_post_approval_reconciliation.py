@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.application.ingestion.contracts import IngestionResult
-from src.application.review.post_approval_reconciliation import reconcile_approved_packet
+from src.application.review.post_approval_reconciliation import (
+    continue_waiting_post_approval_run,
+    reconcile_approved_packet,
+)
 from src.core.enums import ProcessingStatus
 from src.core.types import ProcessingStats
 from src.domain.ingestion.quality import QualityDecision, QualitySummary
@@ -110,3 +113,117 @@ async def test_post_approval_batch_fatal_is_projected_before_generic_failed_retu
     assert final_update["quality_gate_status"] is PostApprovalQualityGateStatus.FAIL
     assert final_update["quality_gate_summary"] == expected_summary
     assert final_update["stats"]["qualityGate"] == expected_summary
+
+
+@pytest.mark.asyncio
+async def test_quarantine_continuation_completes_checkpoint_and_persists_runtime_outcome():
+    reconciliation_date = datetime(2026, 8, 28, tzinfo=timezone.utc)
+    run = SimpleNamespace(
+        packet_id="packet-quarantine",
+        output_file_id="output-file-1",
+        source_file_id="staged-file-1",
+        stats={},
+    )
+    run_repository = MagicMock()
+    run_repository.collection.find_one_and_update = AsyncMock(return_value={"_id": "run-1"})
+    run_repository._from_mongo = MagicMock(return_value=run)
+    packet = SimpleNamespace(
+        id="packet-quarantine",
+        draft_mapping_id="mapping-1",
+        active_runtime_config_id=None,
+    )
+    packet_repository = MagicMock()
+    packet_repository.find_one = AsyncMock(return_value=packet)
+    config = SimpleNamespace(
+        id="mapping-1",
+        partner="DEMO",
+        config_version="DEMO-v1",
+    )
+    config_repository = MagicMock()
+    config_repository.find_one = AsyncMock(return_value=config)
+    source_file = SimpleNamespace(
+        id="output-file-1",
+        reconciliation_date=reconciliation_date,
+        processing_status=ProcessingStatus.PARTIAL,
+        fetch_unit_metadata={
+            "sourceFileId": "staged-file-1",
+            "sourceUnitKeys": ["demo-unit-1"],
+        },
+        stage_summary={"currentStage": "FINALIZING"},
+    )
+    file_repository = MagicMock()
+    file_repository.find_one = AsyncMock(return_value=source_file)
+    runtime_repository = MagicMock()
+    runtime_repository.collection.find_one = AsyncMock(return_value={"_id": "runtime-1"})
+    checkpoint = SimpleNamespace(
+        current_unit_key=None,
+        last_completed_unit_key=None,
+        unit_timeline=[SimpleNamespace(unit_key="demo-unit-1", page=1, cursor_before=None, cursor_after=None)],
+    )
+    checkpoint_repository = MagicMock()
+    checkpoint_repository.find_one = AsyncMock(return_value=checkpoint)
+    checkpoint_repository.mark_stream_completed_after_review = AsyncMock(return_value=True)
+    reconciliation = MagicMock()
+    reconciliation.reconcile = AsyncMock(return_value=[object(), object()])
+
+    with (
+        patch(
+            "src.application.review.post_approval_reconciliation.PostApprovalRunRepository",
+            return_value=run_repository,
+        ),
+        patch(
+            "src.application.review.post_approval_reconciliation.ReviewPacketRepository",
+            return_value=packet_repository,
+        ),
+        patch(
+            "src.application.review.post_approval_reconciliation.MappingConfigRepository",
+            return_value=config_repository,
+        ),
+        patch(
+            "src.application.review.post_approval_reconciliation.IngestionCheckpointRepository",
+            return_value=checkpoint_repository,
+        ),
+        patch(
+            "src.application.review.post_approval_reconciliation.update_post_approval_run",
+            new=AsyncMock(),
+        ),
+        patch(
+            "src.application.review.post_approval_reconciliation.update_runtime_run",
+            new=AsyncMock(),
+        ) as runtime_update,
+        patch(
+            "src.application.review.post_approval_reconciliation._persist_packet_quality_gate",
+            new=AsyncMock(),
+        ),
+        patch(
+            "src.application.review.post_approval_reconciliation._quarantine_quality_gate",
+            new=AsyncMock(
+                return_value=(
+                    PostApprovalQualityGateStatus.PASS,
+                    {"totalRows": 1, "activeRows": 0},
+                )
+            ),
+        ),
+    ):
+        result = await continue_waiting_post_approval_run(
+            MagicMock(),
+            "run-1",
+            packet_repository_factory=lambda _: packet_repository,
+            config_repository_factory=lambda _: config_repository,
+            run_repository_factory=lambda _: run_repository,
+            runtime_repository_factory=lambda _: runtime_repository,
+            file_repository_factory=lambda _: file_repository,
+            reconciliation_service_builder=lambda _: reconciliation,
+            cache_invalidator=AsyncMock(),
+        )
+
+    assert result["outcome"] == "RECONCILED_AFTER_QUARANTINE"
+    checkpoint_query = checkpoint_repository.find_one.await_args.args[0]
+    assert {"sourceFileId": "staged-file-1"} in checkpoint_query["$or"]
+    checkpoint_repository.mark_stream_completed_after_review.assert_awaited_once_with(
+        checkpoint,
+        unit_key="demo-unit-1",
+        completed_units=[{"unitKey": "demo-unit-1", "page": 1}],
+    )
+    runtime_kwargs = runtime_update.await_args.kwargs
+    assert runtime_kwargs["stats"]["outcome"] == "PARTIAL"

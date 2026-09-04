@@ -7,6 +7,7 @@ from typing import Any
 from src.domain.ingestion.checkpoints import CheckpointRepository, IngestionMode
 from src.domain.ingestion.source_units import IngestionOutcome, SourceUnitMetadata
 from src.domain.ingestion.retry_policy import RetryPolicy
+from src.core.utils import sanitize_runtime_error
 
 
 async def process_source_units(
@@ -19,6 +20,7 @@ async def process_source_units(
     max_attempts: int | None = None,
     retry_policy: RetryPolicy | None = None,
     on_unit_completed: Callable[[SourceUnitMetadata], Awaitable[None]] | None = None,
+    on_unit_observed: Callable[[SourceUnitMetadata, Any, Any], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Process source units in order and stop at the first failed unit.
 
@@ -31,6 +33,7 @@ async def process_source_units(
     failed = 0
     replayed = 0
     skipped = 0
+    partial_outcome = False
     duplicate_outcomes: list[str] = []
     previous_unit_key = stream_identity.get("lastCompletedUnitKey")
     attempt_limit = retry_policy.max_attempts if retry_policy else max_attempts
@@ -59,13 +62,32 @@ async def process_source_units(
             max_attempts=attempt_limit,
             config_version=stream_identity.get("configVersion"),
             source_endpoint=stream_identity.get("sourceEndpoint"),
-            stream_metadata=stream_identity.get("streamMetadata") or {},
+            stream_metadata={
+                **(stream_identity.get("streamMetadata") or {}),
+                "page": unit.page,
+            },
+            runtime_run_id=stream_identity.get("runtimeRunId"),
+            source_file_id=stream_identity.get("sourceFileId"),
+            attempt=stream_identity.get("attempt"),
         )
 
         if not won_claim:
             if checkpoint.last_completed_unit_key == unit_key:
                 replayed += 1
                 previous_unit_key = unit_key
+                if on_unit_observed is not None:
+                    try:
+                        await on_unit_observed(
+                            unit,
+                            {
+                                "success": True,
+                                "outcome": "FETCH_UNIT_REPLAY",
+                                "replayed": True,
+                            },
+                            checkpoint,
+                        )
+                    except Exception:
+                        pass
                 continue
             return {
                 "success": False,
@@ -82,6 +104,12 @@ async def process_source_units(
                     "attemptCount": checkpoint.attempt_count,
                 },
             }
+
+        if on_unit_observed is not None:
+            try:
+                await on_unit_observed(unit, {"outcome": "CLAIMED"}, checkpoint)
+            except Exception:
+                pass
 
         resolution_metadata = getattr(checkpoint, "resolution_metadata", {})
         if (
@@ -106,6 +134,19 @@ async def process_source_units(
                 }
             skipped += 1
             previous_unit_key = unit_key
+            if on_unit_observed is not None:
+                try:
+                    await on_unit_observed(
+                        unit,
+                        {
+                            "success": True,
+                            "outcome": "FETCH_UNIT_REPLAY",
+                            "skipped": True,
+                        },
+                        checkpoint,
+                    )
+                except Exception:
+                    pass
             continue
 
         try:
@@ -115,9 +156,7 @@ async def process_source_units(
             # Airflow may retry the same runtime immediately, and a live claim
             # would otherwise make that retry look like a second concurrent
             # run ("claim was not acquired") until the stale-claim timeout.
-            error = str(exc).strip() or exc.__class__.__name__
-            if len(error) > 500:
-                error = error[:497] + "..."
+            error = sanitize_runtime_error(exc)
             await checkpoint_repo.mark_failed(
                 checkpoint,
                 unit_key=unit_key,
@@ -128,20 +167,50 @@ async def process_source_units(
                 max_attempts=attempt_limit,
                 error_metadata={"exceptionType": exc.__class__.__name__},
             )
+            if on_unit_observed is not None:
+                try:
+                    await on_unit_observed(
+                        unit,
+                        {
+                            "success": False,
+                            "outcome": "FAILED",
+                            "error": error,
+                            "errorCode": "source_runtime_error",
+                        },
+                        checkpoint,
+                    )
+                except Exception:
+                    pass
             raise
         raw_outcome = (
             ingestion_result.get("outcome")
             if isinstance(ingestion_result, Mapping)
             else getattr(ingestion_result, "outcome", None)
         )
+        source_file_id = (
+            ingestion_result.get("sourceFileId")
+            if isinstance(ingestion_result, Mapping)
+            else None
+        )
+        update_source_context = getattr(checkpoint_repo, "update_source_context", None)
+        if source_file_id is not None and callable(update_source_context):
+            try:
+                await update_source_context(
+                    checkpoint,
+                    source_file_id=str(source_file_id),
+                    runtime_run_id=stream_identity.get("runtimeRunId"),
+                )
+            except Exception:
+                pass
         if raw_outcome in {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY"}:
             duplicate_outcomes.append(raw_outcome)
         outcome = IngestionOutcome.from_result(ingestion_result)
         if outcome.waiting_for_review:
+            review_reason = sanitize_runtime_error(outcome.error)
             released = await checkpoint_repo.release_for_review(
                 checkpoint,
                 unit_key=unit_key,
-                reason=outcome.error,
+                reason=review_reason,
             )
             if not released:
                 return {
@@ -158,7 +227,7 @@ async def process_source_units(
                 "stoppedAt": unit_key,
                 "outcome": "WAITING_REVIEW",
                 "waitingForReview": True,
-                "error": outcome.error,
+                "error": review_reason,
             }
             if outcome.quality_decision is not None:
                 result.update(
@@ -169,6 +238,22 @@ async def process_source_units(
                         "topRuleCodes": list(outcome.top_rule_codes[:10]),
                     }
                 )
+            if on_unit_observed is not None:
+                try:
+                    await on_unit_observed(
+                        unit,
+                        {
+                            **result,
+                            "errorCode": getattr(
+                                ingestion_result, "error_code", None
+                            )
+                            if not isinstance(ingestion_result, Mapping)
+                            else ingestion_result.get("errorCode"),
+                        },
+                        checkpoint,
+                    )
+                except Exception:
+                    pass
             return result
         if not outcome.success:
             quality_failure = outcome.orchestration_action == "FAIL"
@@ -193,8 +278,8 @@ async def process_source_units(
             await checkpoint_repo.mark_failed(
                 checkpoint,
                 unit_key=unit_key,
-                error=outcome.error,
-                error_code=outcome.error_code,
+                error=sanitize_runtime_error(outcome.error),
+                error_code=sanitize_runtime_error(outcome.error_code, max_length=96),
                 retryable=failure_retryable,
                 next_retry_at=failure_next_retry_at,
                 max_attempts=failure_max_attempts,
@@ -205,7 +290,7 @@ async def process_source_units(
                 "processed": processed,
                 "failed": failed + 1,
                 "stoppedAt": unit_key,
-                "error": outcome.error,
+                "error": sanitize_runtime_error(outcome.error),
             }
             if outcome.quality_decision is not None:
                 result.update(
@@ -216,7 +301,22 @@ async def process_source_units(
                         "topRuleCodes": list(outcome.top_rule_codes[:10]),
                     }
                 )
+            if on_unit_observed is not None:
+                try:
+                    await on_unit_observed(
+                        unit,
+                        {
+                            **result,
+                            "errorCode": sanitize_runtime_error(
+                                outcome.error_code, max_length=96
+                            ),
+                        },
+                        checkpoint,
+                    )
+                except Exception:
+                    pass
             return result
+        partial_outcome = partial_outcome or raw_outcome == "PARTIAL"
 
         completed = await checkpoint_repo.mark_completed(
             checkpoint,
@@ -236,6 +336,22 @@ async def process_source_units(
                 max_attempts=max_attempts,
                 error_metadata={},
             )
+            if on_unit_observed is not None:
+                try:
+                    await on_unit_observed(
+                        unit,
+                        {
+                            "success": False,
+                            "processed": processed,
+                            "failed": failed + 1,
+                            "stoppedAt": unit_key,
+                            "error": error,
+                            "errorCode": "checkpoint_advance_error",
+                        },
+                        checkpoint,
+                    )
+                except Exception:
+                    pass
             return {
                 "success": False,
                 "processed": processed,
@@ -246,6 +362,23 @@ async def process_source_units(
 
         advanced = await checkpoint_repo.advance(checkpoint, unit_key=unit_key)
         if not advanced:
+            error = "Checkpoint advance update failed"
+            if on_unit_observed is not None:
+                try:
+                    await on_unit_observed(
+                        unit,
+                        {
+                            "success": False,
+                            "processed": processed,
+                            "failed": failed + 1,
+                            "stoppedAt": unit_key,
+                            "error": error,
+                            "errorCode": "checkpoint_advance_error",
+                        },
+                        checkpoint,
+                    )
+                except Exception:
+                    pass
             return {
                 "success": False,
                 "processed": processed,
@@ -253,6 +386,11 @@ async def process_source_units(
                 "stoppedAt": unit_key,
                 "error": "Checkpoint advance update failed",
             }
+        if on_unit_observed is not None:
+            try:
+                await on_unit_observed(unit, ingestion_result, checkpoint)
+            except Exception:
+                pass
         if on_unit_completed is not None:
             await on_unit_completed(unit)
         previous_unit_key = unit_key
@@ -272,6 +410,8 @@ async def process_source_units(
             duplicate_outcomes[0] if len(set(duplicate_outcomes)) == 1 else "FETCH_UNIT_REPLAY"
         )
         summary_result["reconciliationSkipped"] = True
+    elif partial_outcome:
+        summary_result["outcome"] = "PARTIAL"
     return summary_result
 
 
@@ -287,6 +427,7 @@ async def resume_held_source_unit(
     max_attempts: int | None = None,
     retry_policy: RetryPolicy | None = None,
     on_unit_completed: Callable[[SourceUnitMetadata], Awaitable[None]] | None = None,
+    on_unit_observed: Callable[[SourceUnitMetadata, Any, Any], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Resume one held unit through the existing checkpoint state machine.
 
@@ -319,4 +460,5 @@ async def resume_held_source_unit(
         max_attempts=max_attempts,
         retry_policy=retry_policy,
         on_unit_completed=on_unit_completed,
+        on_unit_observed=on_unit_observed,
     )

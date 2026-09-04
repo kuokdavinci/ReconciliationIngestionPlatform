@@ -78,6 +78,7 @@ async def run_file_stream(
         mode=context.mode,
         retry_policy=context.retry_policy,
         on_unit_completed=context.cleanup_unit,
+        on_unit_observed=context.on_unit_observed,
     )
 
 

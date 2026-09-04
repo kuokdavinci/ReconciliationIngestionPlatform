@@ -9,6 +9,7 @@ class ProcessingStatus(StrEnum):
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
+    PARTIAL = "PARTIAL"
     FAILED = "FAILED"
 
 

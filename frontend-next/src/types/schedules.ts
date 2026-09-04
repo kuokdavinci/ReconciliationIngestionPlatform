@@ -6,6 +6,7 @@ export const RECOVERY_STATUSES = [
   "BLOCKED",
   "WAITING_REVIEW",
   "COMPLETED",
+  "PARTIAL",
   "REPLAYED",
 ] as const;
 
@@ -80,6 +81,64 @@ export interface RecoverySummary {
   events: RecoveryEvent[];
 }
 
+export interface IngestionBatchMetrics {
+  parseRowsMs?: number | null;
+  normalizeMs?: number | null;
+  validateMs?: number | null;
+  totalBatchWallMs?: number | null;
+  persistenceWindowMs?: number | null;
+  mappingMs?: number | null;
+  copyMs?: number | null;
+  insertClassifyMs?: number | null;
+  transactionOverheadMs?: number | null;
+  stageSetupMs?: number | null;
+  tupleMaterializationMs?: number | null;
+  dbWriteCount?: number | null;
+  slowestBatchMs?: number | null;
+}
+
+export interface IngestionStageSummary {
+  currentStage?: string | null;
+  stageDurationsMs?: Record<string, number | null> | null;
+  inputRows?: number | null;
+  persistedRows?: number | null;
+  rejectedRows?: number | null;
+  duplicateRows?: number | null;
+  persistenceFailedRows?: number | null;
+  quarantinedRows?: number | null;
+  currentUnitKey?: string | null;
+  currentPage?: number | null;
+  checkpointBefore?: Record<string, unknown> | null;
+  checkpointAfter?: Record<string, unknown> | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  updatedAt?: string | null;
+  durationMs?: number | null;
+  wallClockMs?: number | null;
+  batchMetrics?: IngestionBatchMetrics | null;
+  errorCount?: number | null;
+  errorSamplesDropped?: number | null;
+  lastErrorCode?: string | null;
+  lastError?: string | null;
+  quality?: {
+    decision?: string | null;
+    action?: string | null;
+    topRuleCodes?: string[];
+    ruleCounts?: Record<string, number>;
+    outcomeCounts?: Record<string, number>;
+  } | null;
+}
+
+export interface LatestFileSummary {
+  id: string;
+  fileName?: string | null;
+  processingStatus?: string | null;
+  stageSummary?: IngestionStageSummary | null;
+  reconciliationDate?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
 export interface ScheduleJob {
   partner: string;
   fetchMethod: string;
@@ -87,6 +146,7 @@ export interface ScheduleJob {
   destination: string;
   enabled: boolean;
   status: string;
+  updatedAt?: string | null;
   statusMessage?: string;
   duplicateOutcome?: "FILE_DUPLICATE" | "FETCH_UNIT_REPLAY" | "NO_NEW_FILE" | "SAFE_DUPLICATE";
   safeDuplicate?: boolean;
@@ -97,6 +157,7 @@ export interface ScheduleJob {
   latestRuntimeRun?: RuntimeRunSummary | null;
   recentRuntimeRuns?: RuntimeRunSummary[];
   activeRuntimeRun?: RuntimeRunSummary | null;
+  latestFile?: LatestFileSummary | null;
   recovery?: RecoverySummary | null;
   activeBackfill?: BackfillRun | null;
   recentPackets?: RecentPacket[];
@@ -109,10 +170,13 @@ export interface RuntimeRunSummary {
   date?: string;
   status?: string;
   message?: string;
+  sourceFileId?: string | null;
   stats?: Record<string, unknown>;
   reconciliationCount?: number | null;
   startedAt?: string | null;
   finishedAt?: string | null;
+  updatedAt?: string | null;
+  stageSummary?: IngestionStageSummary | null;
   attemptHistory?: Array<{
     eventId: string;
     status: string;

@@ -93,6 +93,8 @@ class IngestionCheckpoint(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC), alias="updatedAt")
     config_version: Optional[str] = Field(default=None, alias="configVersion")
     source_endpoint: Optional[str] = Field(default=None, alias="sourceEndpoint")
+    runtime_run_id: Optional[str] = Field(default=None, alias="runtimeRunId")
+    source_file_id: Optional[str] = Field(default=None, alias="sourceFileId")
     stream_metadata: dict[str, Any] = Field(default_factory=dict, alias="streamMetadata")
     unit_timeline: list[SourceUnitSummary] = Field(default_factory=list, alias="unitTimeline")
     recovery_events: list[dict[str, Any]] = Field(default_factory=list, alias="recoveryEvents")
@@ -116,6 +118,9 @@ class CheckpointRepository(Protocol):
         config_version: Optional[str] = None,
         source_endpoint: Optional[str] = None,
         stream_metadata: Optional[dict[str, Any]] = None,
+        runtime_run_id: Optional[str] = None,
+        source_file_id: Optional[str] = None,
+        attempt: Optional[int] = None,
         claim_timeout_seconds: int = 900,
     ) -> tuple[IngestionCheckpoint, bool]: ...
 
@@ -158,6 +163,7 @@ class CheckpointRepository(Protocol):
         unit_key: str,
         cursor_after: Optional[str] = None,
         high_water_mark: Optional[dict[str, Any]] = None,
+        completed_units: Optional[list[dict[str, Any]]] = None,
     ) -> bool: ...
 
     async def mark_stream_failed_after_review(

@@ -13,6 +13,8 @@ from src.domain.ingestion.checkpoints import (
 )
 
 _REPLAY_OUTCOMES = {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY", "NO_NEW_FILE", "SAFE_DUPLICATE"}
+_CONFIGURATION_REVIEW_ERROR_CODE = "configuration_approval_required"
+_TERMINAL_SUCCESS_STATUSES = {"COMPLETED", "PARTIAL"}
 _ACTIVE_RUNTIME_STATUSES = {
     "QUEUED",
     "FETCHING",
@@ -60,6 +62,10 @@ def _latest_run_status(latest_run: Mapping[str, Any] | None) -> str | None:
     return status.value if hasattr(status, "value") else str(status)
 
 
+def _is_terminal_success(latest_run: Mapping[str, Any] | None) -> bool:
+    return _latest_run_status(latest_run) in _TERMINAL_SUCCESS_STATUSES
+
+
 def _duplicate_count(latest_run: Mapping[str, Any] | None) -> int:
     stats = (latest_run or {}).get("stats") or {}
     for key in ("duplicateRows", "duplicateCount", "duplicates"):
@@ -89,6 +95,14 @@ def _recovery_events(
         event_ids.add(event_id)
         if default_status is not None:
             event.setdefault("status", default_status)
+        if (
+            str(event.get("status") or "").upper() == "UNIT_FAILED"
+            and (
+                event.get("outcome") == "WAITING_REVIEW"
+                or event.get("errorCode") == _CONFIGURATION_REVIEW_ERROR_CODE
+            )
+        ):
+            event["status"] = SourceUnitStatus.WAITING_REVIEW.value
         if event.get("message") is not None:
             event["message"] = _safe_error(str(event["message"]))
         if event.get("reason") is not None:
@@ -311,6 +325,54 @@ def build_recovery_view(
             ],
         )
     )
+    configuration_review_resolved = _is_terminal_success(latest_run) and (
+        checkpoint is not None
+        and (
+            checkpoint.error_code == _CONFIGURATION_REVIEW_ERROR_CODE
+            or any(
+                unit.status == SourceUnitStatus.WAITING_REVIEW
+                and unit.error_code == _CONFIGURATION_REVIEW_ERROR_CODE
+                for unit in units
+            )
+        )
+    )
+    unit_payloads = [_serialize_unit(unit) for unit in units]
+    if configuration_review_resolved:
+        for unit in unit_payloads:
+            if unit.get("status") != SourceUnitStatus.WAITING_REVIEW.value:
+                continue
+            unit.update(
+                {
+                    "status": SourceUnitStatus.COMPLETED.value,
+                    "lastError": None,
+                    "errorCode": None,
+                    "retryable": None,
+                    "nextRetryAt": None,
+                }
+            )
+        resolved_review_units: set[str] = set()
+        compacted_events: list[dict[str, Any]] = []
+        for event in events:
+            if event.get("status") != SourceUnitStatus.WAITING_REVIEW.value:
+                compacted_events.append(event)
+                continue
+            event_unit = str(event.get("unitKey") or "stream")
+            if event_unit in resolved_review_units:
+                continue
+            resolved_review_units.add(event_unit)
+            event.update(
+                {
+                    "status": "RESOLVED",
+                    "action": event.get("action") or "CONFIGURATION_REVIEW",
+                    "errorCode": None,
+                    "message": "Configuration approval completed; ingestion resumed.",
+                }
+            )
+            compacted_events.append(event)
+        events = compacted_events
+    if configuration_review_resolved:
+        error_code = None
+        last_error = None
     duplicate_message = (
         latest_run.get("message")
         if latest_run is not None
@@ -342,15 +404,15 @@ def build_recovery_view(
         "nextRetryAt": _iso(next_retry_at),
         "errorCode": error_code,
         "lastError": _safe_error(last_error),
-        "units": [_serialize_unit(unit) for unit in units],
+        "units": unit_payloads,
         "completedUnitCount": sum(
-            unit.status
+            unit.get("status")
             in {
-                SourceUnitStatus.COMPLETED,
-                SourceUnitStatus.SKIPPED,
-                SourceUnitStatus.REPLAYED,
+                SourceUnitStatus.COMPLETED.value,
+                SourceUnitStatus.SKIPPED.value,
+                SourceUnitStatus.REPLAYED.value,
             }
-            for unit in units
+            for unit in unit_payloads
         ),
         "fetchedUnitCount": fetched_unit_count,
         "totalUnitCount": total_unit_count,

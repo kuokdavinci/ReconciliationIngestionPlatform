@@ -92,6 +92,10 @@ class IngestionOutcome:
         return value in {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY"}
 
     @staticmethod
+    def _completed_status(value: Any) -> bool:
+        return value in {"COMPLETED", "PARTIAL"}
+
+    @staticmethod
     def _first(payload: Mapping[str, Any], *keys: str, default: Any = None) -> Any:
         for key in keys:
             if key in payload and payload[key] is not None:
@@ -122,6 +126,7 @@ class IngestionOutcome:
             return cls(success=result)
         if isinstance(result, Mapping):
             accepted_duplicate = cls._accepted_duplicate(result.get("outcome"))
+            partial = result.get("outcome") == "PARTIAL"
             orchestration_action = cls._first(
                 result,
                 "orchestrationAction",
@@ -150,7 +155,8 @@ class IngestionOutcome:
                 )
             return cls(
                 success=(
-                    bool(result.get("success", False) or accepted_duplicate) and not quality_failed
+                    bool(result.get("success", False) or accepted_duplicate or partial)
+                    and not quality_failed
                 ),
                 error=error,
                 error_code=(
@@ -206,7 +212,7 @@ class IngestionOutcome:
                 else cls.error
             )
         return cls(
-            success=(status == "COMPLETED" or accepted_duplicate) and not quality_failed,
+            success=(cls._completed_status(status) or accepted_duplicate) and not quality_failed,
             error=error,
             error_code=(
                 "quality_batch_fatal"

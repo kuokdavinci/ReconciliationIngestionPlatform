@@ -92,6 +92,23 @@ def _extract_duplicate_key_value(text: str) -> str | None:
     return raw_value.strip('"').strip("'")
 
 
+_SENSITIVE_ERROR_PATTERN = re.compile(
+    r"(?i)\b(password|passwd|token|secret|api[_-]?key|authorization|credential|fingerprint)\b"
+    r"\s*[:=]\s*(?:bearer\s+)?[^\s,;]+"
+)
+_CREDENTIAL_URL_PATTERN = re.compile(r"(?i)(https?://)[^/\s:@]+:[^/\s@]+@")
+
+
+def sanitize_runtime_error(value: object, *, max_length: int = 220) -> str:
+    """Return a bounded error string without credentials or full exceptions."""
+    text = str(value or "").strip() or "Unexpected runtime error."
+    text = _CREDENTIAL_URL_PATTERN.sub(r"\1[REDACTED]@", text)
+    text = _SENSITIVE_ERROR_PATTERN.sub(r"\1=[REDACTED]", text)
+    if len(text) > max_length:
+        return text[: max_length - 3].rstrip() + "..."
+    return text
+
+
 __all__ = [
     "interpolate_date",
     "business_date",
@@ -99,4 +116,5 @@ __all__ = [
     "utc_business_day_bounds",
     "compute_file_hash",
     "summarize_runtime_error",
+    "sanitize_runtime_error",
 ]

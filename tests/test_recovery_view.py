@@ -215,6 +215,50 @@ def test_waiting_review_is_not_mapped_to_failure():
     assert view["retryable"] is None
 
 
+def test_terminal_run_projects_configuration_review_as_resolved():
+    checkpoint = _checkpoint(
+        status=CheckpointStatus.DISCOVERED,
+        error_code="configuration_approval_required",
+        last_error="Ingestion is waiting for configuration approval.",
+        unit_timeline=[
+            SourceUnitSummary(
+                unit_key="page:1",
+                status=SourceUnitStatus.WAITING_REVIEW,
+                error_code="configuration_approval_required",
+                last_error="Ingestion is waiting for configuration approval.",
+            )
+        ],
+    )
+
+    view = build_recovery_view(
+        checkpoint=checkpoint,
+        latest_run={
+            "status": "PARTIAL",
+            "stats": {"outcome": "PARTIAL"},
+            "attemptHistory": [
+                {
+                    "eventId": "config-review",
+                    "status": "UNIT_FAILED",
+                    "outcome": "WAITING_REVIEW",
+                    "timestamp": "2026-09-04T01:00:00+00:00",
+                },
+                {
+                    "eventId": "terminal",
+                    "status": "PARTIAL",
+                    "timestamp": "2026-09-04T01:01:00+00:00",
+                },
+            ],
+        },
+        max_attempts=3,
+    )
+
+    assert view["errorCode"] is None
+    assert view["lastError"] is None
+    assert view["units"][0]["status"] == "COMPLETED"
+    assert view["units"][0]["errorCode"] is None
+    assert view["events"][0]["status"] == "RESOLVED"
+
+
 def test_replay_is_distinguished_from_failure_without_checkpoint():
     view = build_recovery_view(
         checkpoint=None,

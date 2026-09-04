@@ -104,6 +104,16 @@ class BatchWriteResult(BaseModel):
     conflicting_duplicates: int = Field(default=0, ge=0)
     failed: int = Field(default=0, ge=0)
     duplicate_details: list[DuplicateDetail] = Field(default_factory=list)
+    # Optional observability data; persistence callers may ignore it.
+    timings_ms: dict[str, float] = Field(default_factory=dict)
+
+    def __eq__(self, other: object) -> bool:
+        """Keep legacy result comparisons independent of observability fields."""
+        if not isinstance(other, BatchWriteResult):
+            return NotImplemented
+        return self.model_dump(exclude={"timings_ms"}) == other.model_dump(
+            exclude={"timings_ms"}
+        )
 
     @model_validator(mode="after")
     def validate_duplicate_accounting(self) -> "BatchWriteResult":

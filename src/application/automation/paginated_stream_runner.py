@@ -13,6 +13,7 @@ from src.application.automation.stream_lifecycle import StreamRunContext
 from src.application.ingestion.source_unit_orchestrator import resume_held_source_unit
 from src.config.config_health import ConfigurationApprovalRequiredError
 from src.core.enums import FileType
+from src.core.utils import sanitize_runtime_error
 from src.domain.ingestion.source_units import SourceUnitMetadata
 
 logger = logging.getLogger("reconciliation.automation.paginated_stream_runner")
@@ -51,6 +52,7 @@ async def resume_paginated_source_unit(
         mode=context.mode,
         retry_policy=context.retry_policy,
         on_unit_completed=consume_after_checkpoint,
+        on_unit_observed=getattr(context, "on_unit_observed", None),
     )
 
 
@@ -110,7 +112,7 @@ async def run_paginated_stream(
                     failed_unit.cursor_before or "-",
                     failed_unit.status_code or "-",
                     failed_unit.error_code or "-",
-                    fetch_result.error or failed_unit.error or "-",
+                    sanitize_runtime_error(fetch_result.error or failed_unit.error or "-"),
                 )
 
                 async def fetch_failure(_: SourceUnitMetadata) -> dict[str, Any]:
@@ -141,6 +143,7 @@ async def run_paginated_stream(
                         mode=context.mode,
                         retry_policy=retry_policy,
                         on_unit_completed=context.cleanup_unit,
+                        on_unit_observed=getattr(context, "on_unit_observed", None),
                     )
                 error = (
                     fetch_result.error
@@ -170,7 +173,7 @@ async def run_paginated_stream(
                 context.runtime_run_id or "-",
                 identity["streamKey"],
                 error_code,
-                fetch_error,
+                sanitize_runtime_error(fetch_error),
             )
             return paginated_fetch_failure_result(
                 error=fetch_error,
@@ -226,6 +229,7 @@ async def run_paginated_stream(
                 mode=context.mode,
                 retry_policy=retry_policy,
                 on_unit_completed=context.cleanup_unit,
+                on_unit_observed=getattr(context, "on_unit_observed", None),
             )
             if (
                 not unit_result["success"]
@@ -290,13 +294,39 @@ async def run_paginated_stream(
                 config_version=identity["configVersion"],
                 source_endpoint=identity["sourceEndpoint"],
                 stream_metadata={"page": first_staged_unit.page},
+                runtime_run_id=context.runtime_run_id,
+                attempt=max(
+                    1,
+                    int(
+                        getattr(
+                            getattr(context.run, "orchestration", None),
+                            "try_number",
+                            1,
+                        )
+                    ),
+                ),
             )
             if won_review_claim:
                 await checkpoint_repo.release_for_review(
                     review_checkpoint,
                     unit_key=first_staged_unit.source_unit_key or "",
-                    reason=str(approval_exc),
+                    reason=sanitize_runtime_error(approval_exc),
                 )
+            if getattr(context, "on_unit_observed", None) is not None:
+                try:
+                    await context.on_unit_observed(
+                        first_staged_unit,
+                        {
+                            "success": True,
+                            "outcome": "WAITING_REVIEW",
+                            "waitingForReview": True,
+                            "error": sanitize_runtime_error(approval_exc),
+                            "errorCode": "configuration_approval_required",
+                        },
+                        review_checkpoint,
+                    )
+                except Exception:
+                    pass
             return {
                 "success": True,
                 "processed": 0,
@@ -306,7 +336,7 @@ async def run_paginated_stream(
                 "stoppedAt": first_staged_unit.source_unit_key,
                 "outcome": "WAITING_REVIEW",
                 "waitingForReview": True,
-                "error": str(approval_exc),
+                "error": sanitize_runtime_error(approval_exc),
                 "errorCode": "configuration_approval_required",
                 "rawStageKey": stage_key,
             }
@@ -314,7 +344,7 @@ async def run_paginated_stream(
             logger.warning(
                 "Preflight mapping check failed for staged stream %s: %s",
                 stage_key,
-                exc,
+                sanitize_runtime_error(exc),
             )
 
         if active_runtime_config is not None:
@@ -343,6 +373,17 @@ async def run_paginated_stream(
                 config_version=identity["configVersion"],
                 source_endpoint=identity["sourceEndpoint"],
                 stream_metadata={"page": first_staged_unit.page},
+                runtime_run_id=context.runtime_run_id,
+                attempt=max(
+                    1,
+                    int(
+                        getattr(
+                            getattr(context.run, "orchestration", None),
+                            "try_number",
+                            1,
+                        )
+                    ),
+                ),
             )
             if won_review_claim:
                 await checkpoint_repo.release_for_review(
@@ -350,6 +391,19 @@ async def run_paginated_stream(
                     unit_key=first_staged_unit.source_unit_key or "",
                     reason="Complete paginated API stream awaits scope review.",
                 )
+            if getattr(context, "on_unit_observed", None) is not None:
+                try:
+                    await context.on_unit_observed(
+                        first_staged_unit,
+                        {
+                            "success": True,
+                            "outcome": "WAITING_REVIEW",
+                            "waitingForReview": True,
+                        },
+                        review_checkpoint,
+                    )
+                except Exception:
+                    pass
             return {
                 "success": True,
                 "processed": 0,
@@ -375,6 +429,7 @@ async def run_paginated_stream(
         mode=context.mode,
         retry_policy=retry_policy,
         on_unit_completed=mark_page_consumed,
+        on_unit_observed=getattr(context, "on_unit_observed", None),
     )
     result["fetchedUnitCount"] = len(staged_units)
     result["totalUnitCount"] = len(staged_units)

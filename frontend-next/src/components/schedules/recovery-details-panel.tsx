@@ -3,7 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { RecoveryStatus, RecoveryUnitSummary, ScheduleJob } from "@/types/schedules";
+import type {
+  IngestionBatchMetrics,
+  IngestionStageSummary,
+  RecoveryStatus,
+  RecoveryUnitSummary,
+  ScheduleJob,
+} from "@/types/schedules";
 import { RecoveryCountdown } from "./recovery-countdown";
 import styles from "./schedules.module.css";
 
@@ -20,7 +26,7 @@ interface Props {
 function statusSeverity(status: RecoveryStatus) {
   if (status === "FAILED" || status === "BLOCKED") return "critical" as const;
   if (status === "PROCESSING" || status === "PENDING" || status === "WAITING_REVIEW") return "medium" as const;
-  if (status === "COMPLETED" || status === "REPLAYED") return "low" as const;
+  if (status === "COMPLETED" || status === "PARTIAL" || status === "REPLAYED") return "low" as const;
   return "neutral" as const;
 }
 
@@ -32,7 +38,7 @@ function unitSymbol(status: RecoveryUnitSummary["status"]) {
 
 function eventSymbol(status: string) {
   const normalized = status.toUpperCase();
-  if (["COMPLETED", "SKIPPED", "REPLAYED"].includes(normalized)) return "✓";
+  if (["COMPLETED", "SKIPPED", "REPLAYED", "RESOLVED"].includes(normalized)) return "✓";
   if (["FAILED", "BLOCKED"].includes(normalized)) return "!";
   if (["PROCESSING", "PENDING", "WAITING_REVIEW"].includes(normalized)) return "•";
   return "○";
@@ -48,6 +54,52 @@ function formatDateTime(value?: string | null) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function formatDuration(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return `${value.toFixed(2)} ms`;
+}
+
+function formatCount(value?: number | null) {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "—";
+}
+
+function formatStageName(value: string) {
+  return value.replaceAll("_", " ");
+}
+
+function displayStage(currentStage: string | null | undefined, status: string | null | undefined) {
+  if (status === "COMPLETED") return "COMPLETED";
+  if (status === "PARTIAL") return "COMPLETED WITH REJECTS";
+  if (status === "FAILED" || status === "BLOCKED") return status;
+  return currentStage || "—";
+}
+
+function hasSnapshot(value?: IngestionStageSummary | null): value is IngestionStageSummary {
+  return Boolean(value && Object.keys(value).length > 0);
+}
+
+function runtimeStatusSeverity(status?: string | null) {
+  if (status === "FAILED" || status === "BLOCKED") return "critical" as const;
+  if (status === "COMPLETED" || status === "PARTIAL" || status === "SAFE_DUPLICATE") return "low" as const;
+  if (status) return "medium" as const;
+  return "neutral" as const;
+}
+
+function timingEntries(metrics?: IngestionBatchMetrics | null) {
+  if (!metrics) return [];
+  return [
+    ["Parse rows", metrics.parseRowsMs],
+    ["Normalize", metrics.normalizeMs],
+    ["Validate", metrics.validateMs],
+    ["COPY", metrics.copyMs],
+    ["Insert / classify", metrics.insertClassifyMs],
+    ["Transaction", metrics.transactionOverheadMs],
+    ["Batch wall time", metrics.totalBatchWallMs],
+    ["Persistence window", metrics.persistenceWindowMs],
+    ["Slowest batch", metrics.slowestBatchMs],
+  ] as const;
+}
+
 export function RecoveryDetailsPanel({
   job,
   onClose,
@@ -59,10 +111,17 @@ export function RecoveryDetailsPanel({
 }: Props) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [resolutionDraft, setResolutionDraft] = useState({ partner: "", reason: "" });
-  const isOpen = Boolean(job?.recovery);
+  const isOpen = Boolean(job && (job.recovery || job.latestRuntimeRun || job.latestFile?.stageSummary));
   const recovery = job?.recovery;
   const runtimeRun = job?.latestRuntimeRun;
   const runtimeStats = runtimeRun?.stats || {};
+  const stageSummary = runtimeRun
+    ? (hasSnapshot(runtimeRun.stageSummary) ? runtimeRun.stageSummary : null)
+    : (hasSnapshot(job?.latestFile?.stageSummary) ? job.latestFile?.stageSummary : null);
+  const runtimeStatus = runtimeRun?.status || job?.status;
+  const configurationReviewRequired = recovery?.errorCode === "configuration_approval_required";
+  const configurationReviewResolved = configurationReviewRequired
+    && ["COMPLETED", "PARTIAL", "REPLAYED"].includes(recovery?.status || "");
   const isSafeDuplicate = job?.safeDuplicate === true
     || recovery?.safeDuplicate === true
     || runtimeStats.safeDuplicate === true
@@ -104,7 +163,7 @@ export function RecoveryDetailsPanel({
     };
   }, [isOpen, onClose]);
 
-  if (!job || !recovery) return null;
+  if (!job || !isOpen) return null;
 
   return (
     <div className={styles.recoveryOverlay} onMouseDown={(event) => {
@@ -118,7 +177,7 @@ export function RecoveryDetailsPanel({
       >
         <div className={styles.recoveryPanelHeader}>
           <div>
-            <p className={styles.recoveryPanelEyebrow}>{job.fetchMethod} · {recovery.mode || "SCHEDULED"}</p>
+            <p className={styles.recoveryPanelEyebrow}>{job.fetchMethod} · {recovery?.mode || "SCHEDULED"}</p>
             <h2 id="recovery-details-title" className={styles.recoveryPanelTitle}>{job.partner}</h2>
           </div>
           <button ref={closeButtonRef} type="button" className={styles.recoveryClose} onClick={onClose} aria-label="Close recovery details">
@@ -128,10 +187,10 @@ export function RecoveryDetailsPanel({
 
         <div className={styles.recoveryPanelBody}>
           <div className={styles.recoveryStatusHeader}>
-            <Badge severity={isSafeDuplicate ? "low" : statusSeverity(recovery.status)}>
-              {isSafeDuplicate ? "SAFE DUPLICATE" : recovery.status}
+            <Badge severity={isSafeDuplicate ? "low" : recovery ? statusSeverity(recovery.status) : runtimeStatusSeverity(runtimeStatus)}>
+              {isSafeDuplicate ? "SAFE DUPLICATE" : recovery?.status || runtimeStatus || "—"}
             </Badge>
-            <span className={styles.recoveryStreamKey}>{recovery.streamKey || "No stream identity"}</span>
+            <span className={styles.recoveryStreamKey}>{recovery?.streamKey || runtimeRun?.id || "No stream identity"}</span>
           </div>
 
           {runtimeRun && (
@@ -154,6 +213,74 @@ export function RecoveryDetailsPanel({
             </section>
           )}
 
+          <section className={styles.observabilitySection} aria-labelledby="ingestion-observability-title">
+            <div className={styles.observabilityHeader}>
+              <h3 id="ingestion-observability-title" className={styles.recoverySectionTitle}>Ingestion observability</h3>
+              <span className={styles.observabilityNote}>Source-unit / terminal boundary snapshot</span>
+            </div>
+            {!stageSummary ? (
+              <p className={styles.recoveryEmpty}>No persisted snapshot yet.</p>
+            ) : (
+              <>
+                <dl className={styles.recoveryMetaGrid}>
+                  <div><dt>Stage / outcome</dt><dd>{displayStage(stageSummary.currentStage, runtimeStatus)}</dd></div>
+                  <div><dt>Status</dt><dd>{runtimeStatus || "—"}</dd></div>
+                  <div><dt>Last persisted snapshot</dt><dd>{formatDateTime(stageSummary.updatedAt || runtimeRun?.updatedAt || job.latestFile?.updatedAt)}</dd></div>
+                  <div><dt>Total duration</dt><dd>{formatDuration(stageSummary.durationMs ?? stageSummary.wallClockMs)}</dd></div>
+                  <div><dt>Current unit</dt><dd>{stageSummary.currentUnitKey || recovery?.currentUnitKey || "—"}</dd></div>
+                  <div><dt>Current page</dt><dd>{formatCount(stageSummary.currentPage ?? recovery?.currentPage)}</dd></div>
+                  <div><dt>Runtime ID</dt><dd>{runtimeRun?.id || runtimeRun?._id || "—"}</dd></div>
+                  <div><dt>Source file ID</dt><dd>{runtimeRun?.sourceFileId || job.latestFile?.id || "—"}</dd></div>
+                </dl>
+
+                <div className={styles.observabilitySubsection}>
+                  <h4 className={styles.observabilitySubheading}>Stage durations</h4>
+                  {Object.entries(stageSummary.stageDurationsMs || {}).length === 0 ? (
+                    <p className={styles.recoveryEmpty}>No stage timings persisted.</p>
+                  ) : (
+                    <dl className={styles.observabilityMetricGrid}>
+                      {Object.entries(stageSummary.stageDurationsMs || {}).map(([stage, value]) => (
+                        <div key={stage}><dt>{formatStageName(stage)}</dt><dd>{formatDuration(value)}</dd></div>
+                      ))}
+                    </dl>
+                  )}
+                </div>
+
+                <div className={styles.observabilitySubsection}>
+                  <h4 className={styles.observabilitySubheading}>Row counters</h4>
+                  <dl className={styles.observabilityMetricGrid}>
+                    <div><dt>Input rows</dt><dd>{formatCount(stageSummary.inputRows)}</dd></div>
+                    <div><dt>Persisted</dt><dd>{formatCount(stageSummary.persistedRows)}</dd></div>
+                    <div><dt>Rejected</dt><dd>{formatCount(stageSummary.rejectedRows)}</dd></div>
+                    <div><dt>Duplicate</dt><dd>{formatCount(stageSummary.duplicateRows)}</dd></div>
+                    <div><dt>Persistence failed</dt><dd>{formatCount(stageSummary.persistenceFailedRows)}</dd></div>
+                    <div><dt>Quarantined</dt><dd>{formatCount(stageSummary.quarantinedRows)}</dd></div>
+                  </dl>
+                </div>
+
+                <div className={styles.observabilitySubsection}>
+                  <h4 className={styles.observabilitySubheading}>Batch timing</h4>
+                  <dl className={styles.observabilityMetricGrid}>
+                    {timingEntries(stageSummary.batchMetrics).map(([label, value]) => (
+                      <div key={label}><dt>{label}</dt><dd>{formatDuration(value)}</dd></div>
+                    ))}
+                    <div><dt>DB writes</dt><dd>{formatCount(stageSummary.batchMetrics?.dbWriteCount)}</dd></div>
+                  </dl>
+                </div>
+
+                <div className={styles.observabilitySubsection}>
+                  <h4 className={styles.observabilitySubheading}>Quality and errors</h4>
+                  <dl className={styles.recoveryMetaGrid}>
+                    <div><dt>Quality decision</dt><dd>{stageSummary.quality?.decision || "—"}</dd></div>
+                    <div><dt>Top rule codes</dt><dd>{stageSummary.quality?.topRuleCodes?.join(", ") || "—"}</dd></div>
+                    <div className={styles.observabilityWideItem}><dt>Last error</dt><dd>{stageSummary.lastErrorCode ? `${stageSummary.lastErrorCode}${stageSummary.lastError ? ` · ${stageSummary.lastError}` : ""}` : stageSummary.lastError || "—"}</dd></div>
+                  </dl>
+                </div>
+              </>
+            )}
+          </section>
+
+          {recovery && <>
           <dl className={styles.recoveryMetaGrid}>
             <div><dt>Last completed</dt><dd>{recovery.lastCompletedUnitKey || "-"}</dd></div>
             <div><dt>Current unit</dt><dd>{recovery.currentUnitKey || "-"}</dd></div>
@@ -201,10 +328,10 @@ export function RecoveryDetailsPanel({
                       </span>
                       <div className={styles.recoveryEventCopy}>
                         <strong>
-                          Request {event.requestAttempt || 1}/{recovery.maxAttempts} · {event.status}{event.action ? ` · ${event.action}` : ""}
+                          {event.status}{event.action ? ` · ${event.action}` : ""}
                         </strong>
                         <span>
-                          {event.unitKey || "stream"} · {formatDateTime(event.timestamp)}
+                          {event.unitKey || "stream"} · Request {event.requestAttempt || 1}/{recovery.maxAttempts} · {formatDateTime(event.timestamp)}
                           {event.actor ? ` · ${event.actor}` : ""}
                         </span>
                         {(event.errorCode || event.reason || event.message) && (
@@ -218,9 +345,16 @@ export function RecoveryDetailsPanel({
             )}
           </section>
 
-          {(recovery.errorCode || recovery.lastError) && (
+          {configurationReviewRequired && !configurationReviewResolved && (
+            <section className={styles.recoveryReviewPanel} aria-labelledby="recovery-review-title">
+              <h3 id="recovery-review-title" className={styles.recoverySectionTitle}>Review required</h3>
+              <p>Configuration approval is required before ingestion can continue.</p>
+            </section>
+          )}
+
+          {(recovery.errorCode || recovery.lastError) && !configurationReviewRequired && !configurationReviewResolved && (
             <section className={styles.recoveryErrorPanel} aria-labelledby="recovery-error-title">
-              <h3 id="recovery-error-title" className={styles.recoverySectionTitle}>Error</h3>
+              <h3 id="recovery-error-title" className={styles.recoverySectionTitle}>Active error</h3>
               {recovery.errorCode && <code>{recovery.errorCode}</code>}
               {recovery.lastError && <p>{recovery.lastError}</p>}
             </section>
@@ -256,9 +390,10 @@ export function RecoveryDetailsPanel({
               </div>
             </section>
           )}
+          </>}
 
           <div className={styles.recoveryActions}>
-            {onRetry && recovery.retryable && (
+            {recovery && onRetry && recovery.retryable && (
               <Button variant="primary" onClick={onRetry} disabled={retrying}>
                 {retrying ? "Retrying…" : "Retry now"}
               </Button>

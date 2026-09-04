@@ -39,6 +39,7 @@ export function RunStatusPanel({ runStatus, onTriggerRun }: Props) {
 
   const isCompleted = runStatus.status === "COMPLETED";
   const isWaitingForReview = ["WAITING_REVIEW", "WAITING_RECONCILE"].includes(runStatus.status);
+  const isPartial = runStatus.status === "PARTIAL";
   const isProcessing = [
     "PROCESSING",
     "INGESTING",
@@ -101,7 +102,13 @@ export function RunStatusPanel({ runStatus, onTriggerRun }: Props) {
 
           <div style={{ padding: "10px 14px", background: "rgba(59,130,246,0.05)", borderRadius: 6 }}>
             <div style={{ fontSize: 18, fontWeight: 700, color: "var(--brand-accent-blue)" }}>
-              {isCompleted ? "0.45s (~44 rec/s)" : "Pending Review"}
+              {isWaitingForReview
+                ? "Pending Review"
+                : isCompleted
+                  ? "0.45s (~44 rec/s)"
+                  : isPartial
+                    ? "Completed with rejects"
+                    : "Not available"}
             </div>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Ingestion Throughput</div>
           </div>

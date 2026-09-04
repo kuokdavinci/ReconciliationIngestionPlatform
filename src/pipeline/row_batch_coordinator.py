@@ -29,6 +29,48 @@ class RowBatchMetrics:
     db_insert_ms: float = 0.0
     db_write_count: int = 0
     slowest_batch_ms: float = 0.0
+    total_batch_wall_ms: float = 0.0
+    persistence_window_ms: float = 0.0
+    mapping_ms: float = 0.0
+    copy_ms: float = 0.0
+    insert_classify_ms: float = 0.0
+    transaction_overhead_ms: float = 0.0
+    stage_setup_ms: float = 0.0
+    tuple_materialization_ms: float = 0.0
+
+    def record_batch_result(self, result: BatchWriteResult) -> None:
+        """Aggregate optional repository timings without changing row accounting."""
+        timings = result.timings_ms
+        self.total_batch_wall_ms += max(0.0, float(timings.get("batch_wall_ms", 0.0)))
+        self.mapping_ms += max(0.0, float(timings.get("mapping_ms", 0.0)))
+        self.copy_ms += max(0.0, float(timings.get("copy_ms", 0.0)))
+        self.insert_classify_ms += max(
+            0.0, float(timings.get("insert_classify_ms", 0.0))
+        )
+        self.transaction_overhead_ms += max(
+            0.0, float(timings.get("transaction_overhead_ms", 0.0))
+        )
+        self.stage_setup_ms += max(0.0, float(timings.get("stage_setup_ms", 0.0)))
+        self.tuple_materialization_ms += max(
+            0.0, float(timings.get("tuple_materialization_ms", 0.0))
+        )
+
+    def as_dict(self) -> dict[str, float | int]:
+        return {
+            "parseRowsMs": self.parse_rows_ms,
+            "normalizeMs": self.normalize_ms,
+            "validateMs": self.validate_ms,
+            "totalBatchWallMs": self.total_batch_wall_ms,
+            "persistenceWindowMs": self.persistence_window_ms,
+            "mappingMs": self.mapping_ms,
+            "copyMs": self.copy_ms,
+            "insertClassifyMs": self.insert_classify_ms,
+            "transactionOverheadMs": self.transaction_overhead_ms,
+            "stageSetupMs": self.stage_setup_ms,
+            "tupleMaterializationMs": self.tuple_materialization_ms,
+            "dbWriteCount": self.db_write_count,
+            "slowestBatchMs": self.slowest_batch_ms,
+        }
 
 
 @dataclass(frozen=True)
@@ -119,12 +161,13 @@ class RowBatchCoordinator:
                     if len(quarantine_buffer) >= self._batch_size:
                         await self._flush_quarantine(quarantine_buffer)
                         quarantine_buffer = []
-                self._logger.emit_row_failed(
-                    self._context.file_id,
-                    row_number,
-                    row_result.failure_trace or f"row:{row_number}",
-                    row_result.failure_reason or "Row processing failed",
-                )
+                if self._state.should_log_row_error():
+                    self._logger.emit_row_failed(
+                        self._context.file_id,
+                        row_number,
+                        row_result.failure_trace or f"row:{row_number}",
+                        row_result.failure_reason or "Row processing failed",
+                    )
                 continue
 
             batch_buffer.append(row_result.data_container)
@@ -158,12 +201,13 @@ class RowBatchCoordinator:
         if pending_results:
             db_end_wall = time.perf_counter()
         for result in pending_results:
-            self._state.record_batch_result(result)
+            self._record_batch_result(result, metrics)
             await self._quarantine_conflicts(result)
         if quarantine_buffer:
             await self._flush_quarantine(quarantine_buffer)
         if db_start_wall > 0.0:
             metrics.db_insert_ms = (db_end_wall - db_start_wall) * 1000
+            metrics.persistence_window_ms = metrics.db_insert_ms
         return metrics
 
     async def _flush_batch(
@@ -185,9 +229,17 @@ class RowBatchCoordinator:
         if results:
             db_end_wall = time.perf_counter()
             for result in results:
-                self._state.record_batch_result(result)
+                self._record_batch_result(result, metrics)
                 await self._quarantine_conflicts(result)
         return db_start_wall, db_end_wall
+
+    def _record_batch_result(
+        self,
+        result: BatchWriteResult,
+        metrics: RowBatchMetrics,
+    ) -> None:
+        self._state.record_batch_result(result)
+        metrics.record_batch_result(result)
 
     async def _quarantine_conflicts(self, result: BatchWriteResult) -> None:
         if self._quarantine_repo is None or not result.duplicate_details:

@@ -86,6 +86,65 @@ test("review progress counts only unique reviewable reconciliation rows", async 
   await expect(page.getByText("3/2 (150%)", { exact: true })).toHaveCount(0);
 });
 
+test("does not label a terminal partial reconciliation as pending review", async ({ page }) => {
+  await page.route("**/api/v1/reconciliation/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() !== "GET") return route.fallback();
+    if (url.pathname.endsWith("/run-status")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          run: {
+            status: "PARTIAL",
+            message: "Reconciliation completed after quarantine review.",
+            stats: { outcome: "PARTIAL", resultCount: 20 },
+          },
+        }),
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/stats")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          partner: "DEMO",
+          date: "2026-08-28",
+          total: 20,
+          byStatus: { MATCHED: 18, MISSING_PARTNER: 2 },
+          totalPartnerAmount: null,
+          totalInternalAmount: null,
+        }),
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/results")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ results: [], total: 0, limit: 100, offset: 0 }),
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/review-records")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ records: [] }) });
+      return;
+    }
+    if (url.pathname.endsWith("/insights")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto("/reconciliation");
+  await expect(page.getByText("● PARTIAL", { exact: true })).toBeVisible();
+  const throughput = page.getByText("Ingestion Throughput", { exact: true }).locator("..");
+  await expect(throughput.getByText("Completed with rejects", { exact: true })).toBeVisible();
+  await expect(throughput.getByText("Pending Review", { exact: true })).toHaveCount(0);
+});
+
 test("operator can open Mapping Studio and switch mapping views", async ({ page }) => {
   await page.goto("/mapping-studio");
 
@@ -601,4 +660,111 @@ test("operator can start a VNPAY backfill and see its approval progress", async 
   await expect(progressDialog).toContainText("0/3 days");
   await expect(progressDialog).toContainText("Mapping approval required");
   await expect(progressDialog.getByRole("button", { name: "Open Guided Review", exact: true })).toBeVisible();
+});
+
+test("operator can inspect persisted ingestion observability from runtime details", async ({ page }) => {
+  await page.route("**/api/v1/automation/jobs**", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        jobs: [{
+          partner: "MOMO",
+          fetchMethod: "FILEDROP",
+          schedule: "0 7 * * *",
+          destination: "MOMO_SETTLEMENT",
+          enabled: true,
+          status: "PARTIAL",
+          latestRuntimeRun: {
+            id: "runtime-observability-1",
+            status: "PARTIAL",
+            sourceFileId: "file-observability-1",
+            updatedAt: "2026-09-03T07:00:03Z",
+            stageSummary: {
+              currentStage: "PERSISTING",
+              stageDurationsMs: { READING: 12.5, PROCESSING: 34.25, PERSISTING: 8.75 },
+              inputRows: 100,
+              persistedRows: 92,
+              rejectedRows: 5,
+              duplicateRows: 2,
+              persistenceFailedRows: 1,
+              quarantinedRows: 5,
+              currentUnitKey: "settlement-2026-09-03",
+              currentPage: 2,
+              durationMs: 987.6,
+              batchMetrics: {
+                parseRowsMs: 4.5,
+                normalizeMs: 8.25,
+                validateMs: 6.75,
+                copyMs: 11.5,
+                insertClassifyMs: 18.25,
+                transactionOverheadMs: 2.5,
+                totalBatchWallMs: 32.25,
+                persistenceWindowMs: 28.5,
+              },
+              quality: { decision: "REVIEW", topRuleCodes: ["INVALID_AMOUNT", "DUPLICATE_KEY"] },
+              lastErrorCode: "source_persist_error",
+              lastError: "One batch could not be persisted.",
+            },
+          },
+          recovery: null,
+        }],
+      }),
+    });
+  });
+
+  await page.goto("/schedules");
+  const row = page.getByRole("row", { name: /MOMO/ });
+  await row.getByRole("button", { name: /More options for MOMO/ }).click();
+  await row.getByRole("menuitem", { name: /View runtime details/ }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Ingestion observability", exact: true })).toBeVisible();
+  await expect(dialog).toContainText("COMPLETED WITH REJECTS");
+  await expect(dialog).toContainText("PERSISTING");
+  await expect(dialog).toContainText("987.60 ms");
+  await expect(dialog).toContainText("Input rows");
+  await expect(dialog).toContainText("100");
+  await expect(dialog).toContainText("Parse rows");
+  await expect(dialog).toContainText("4.50 ms");
+  await expect(dialog).toContainText("COPY");
+  await expect(dialog).toContainText("REVIEW");
+  await expect(dialog).toContainText("INVALID_AMOUNT, DUPLICATE_KEY");
+  await expect(dialog).toContainText("Last persisted snapshot");
+});
+
+test("legacy runtime details show no persisted snapshot instead of zero counters", async ({ page }) => {
+  await page.route("**/api/v1/automation/jobs**", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        jobs: [{
+          partner: "VNPAY",
+          fetchMethod: "API",
+          schedule: "0 7 * * *",
+          destination: "VNPAY_SETTLEMENT",
+          enabled: true,
+          status: "HEALTHY",
+          latestRuntimeRun: {
+            id: "legacy-runtime-1",
+            status: "COMPLETED",
+            updatedAt: "2026-09-03T07:00:03Z",
+          },
+          recovery: null,
+        }],
+      }),
+    });
+  });
+
+  await page.goto("/schedules");
+  const row = page.getByRole("row", { name: /VNPAY/ });
+  await row.getByRole("button", { name: /More options for VNPAY/ }).click();
+  await row.getByRole("menuitem", { name: /View runtime details/ }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("No persisted snapshot yet.");
+  await expect(dialog.getByText("Input rows", { exact: true })).toHaveCount(0);
 });

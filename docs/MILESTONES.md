@@ -10,7 +10,7 @@
 
 ## Milestone 2 — Phase 2: Ingestion reliability
 
-**Trạng thái:** Sprint 1 và 2 đã triển khai; Sprint 2.5 đang ở trạng thái partial acceptance với 5 criteria còn pending; Sprint 3 đã hoàn tất ở phạm vi local mock-data với quyết định `GO (demo-only)`; Sprint 4 là kế hoạch mở rộng.
+**Trạng thái:** Sprint 1 và 2 đã triển khai; Sprint 2.5 đang ở trạng thái partial acceptance với 5 criteria còn pending; Sprint 3 đã hoàn tất ở phạm vi local mock-data với quyết định `GO (demo-only)`; Sprint 4 đã chốt observability trên Schedules với quyết định `closed — no candidate promoted`.
 
 | Sprint | Phạm vi | Trạng thái evidence |
 |---|---|---|
@@ -18,7 +18,7 @@
 | 2 | Incremental processing, checkpoint, recovery, backfill | Implemented + regression/demo |
 | 2.5 | Airflow integration + recovery hardening (gộp nội dung cũ của 2.6) | Partial acceptance: 6/11 đạt, 5 pending; local health verified, live business evidence còn phụ thuộc môi trường |
 | 3 | Data quality và quarantine | Implemented; local mock-data acceptance `GO (demo-only)` |
-| 4 | Observability | Planned |
+| 4 | Observability | `closed — no candidate promoted`; Schedules UI và telemetry hardening đã chốt |
 
 Đọc [Phase 2 Sprint Index](phase-2/INDEX.md) để xem toàn bộ plan, report, evaluation run và runbook của từng sprint.
 

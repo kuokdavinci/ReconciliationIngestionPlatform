@@ -24,6 +24,7 @@ class PartnerRuntimeRunStatus(str, Enum):
     WAITING_RECONCILE = "WAITING_RECONCILE"
     RECONCILING = "RECONCILING"
     COMPLETED = "COMPLETED"
+    PARTIAL = "PARTIAL"
     FAILED = "FAILED"
 
 
@@ -64,6 +65,7 @@ class PartnerRuntimeRun(BaseModel):
     orchestration: Optional[RuntimeOrchestrationContext] = None
     attempt_history: list[dict[str, Any]] = Field(default_factory=list, alias="attemptHistory")
     stats: dict[str, Any] = Field(default_factory=dict)
+    stage_summary: dict[str, Any] = Field(default_factory=dict, alias="stageSummary")
     reconciliation_count: Optional[int] = Field(default=None, alias="reconciliationCount")
     started_at: Optional[datetime] = Field(default=None, alias="startedAt")
     finished_at: Optional[datetime] = Field(default=None, alias="finishedAt")

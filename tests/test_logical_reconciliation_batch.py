@@ -317,6 +317,26 @@ async def test_successful_staged_replay_finalizes_scheduled_checkpoint():
         "contentHash": "hash-3",
         "hasMore": False,
     }
+    assert kwargs["completed_units"] == [
+        {
+            "unitKey": "unit-1",
+            "page": 1,
+            "cursorBefore": "cursor-0",
+            "cursorAfter": "cursor-1",
+        },
+        {
+            "unitKey": "unit-2",
+            "page": 2,
+            "cursorBefore": "cursor-1",
+            "cursorAfter": "cursor-2",
+        },
+        {
+            "unitKey": "unit-3",
+            "page": 3,
+            "cursorBefore": "cursor-2",
+            "cursorAfter": None,
+        },
+    ]
 
 
 @pytest.mark.asyncio

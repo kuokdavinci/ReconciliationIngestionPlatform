@@ -196,6 +196,42 @@ class TestIngestionCheckpointRepository:
         assert update["$push"]["recoveryEvents"]["status"] == "FAILED"
 
     @pytest.mark.asyncio
+    async def test_mark_stream_completed_after_review_completes_all_replayed_units(self):
+        collection = AsyncMock()
+        collection.update_one.return_value = MagicMock(modified_count=1)
+        repo = _repo(collection)
+        checkpoint = _checkpoint(
+            status=CheckpointStatus.DISCOVERED,
+            unit_timeline=[
+                SourceUnitSummary(
+                    unitKey="page-1",
+                    page=1,
+                    status=SourceUnitStatus.WAITING_REVIEW,
+                    errorCode="configuration_approval_required",
+                )
+            ],
+        )
+
+        await repo.mark_stream_completed_after_review(
+            checkpoint,
+            unit_key="page-3",
+            completed_units=[
+                {"unitKey": "page-1", "page": 1},
+                {"unitKey": "page-2", "page": 2},
+                {"unitKey": "page-3", "page": 3},
+            ],
+        )
+
+        timeline = collection.update_one.await_args.args[1]["$set"]["unitTimeline"]
+        assert [item["unitKey"] for item in timeline] == [
+            "page-1",
+            "page-2",
+            "page-3",
+        ]
+        assert all(item["status"] == SourceUnitStatus.COMPLETED.value for item in timeline)
+        assert all(item["lastError"] is None for item in timeline)
+
+    @pytest.mark.asyncio
     async def test_create_or_get_resolves_unique_stream_race(self):
         collection = AsyncMock()
         collection.insert_one.side_effect = DuplicateKeyError("duplicate stream")

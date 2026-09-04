@@ -269,9 +269,9 @@ async def _run_100k_flow(
     )
 
     # Seed
-    t0 = time.monotonic()
+    t0 = time.perf_counter()
     inserted = await seed_fn(db, expected_internal)
-    t1 = time.monotonic()
+    t1 = time.perf_counter()
     timings["seed_seconds"] = round(t1 - t0, 3)
 
     # Run ingestion with optimized batch sizes
@@ -289,7 +289,7 @@ async def _run_100k_flow(
         write_workers=2,
         ordered_insert=False,
     )
-    t0 = time.monotonic()
+    ingest_started = time.perf_counter()
     ingestion_result = await pipeline.process_file(
         str(partner_file),
         partner,
@@ -297,14 +297,13 @@ async def _run_100k_flow(
         FileType.SETTLEMENT,
         reconciliation_date,
     )
-    t1 = time.monotonic()
-    timings["ingest_seconds"] = round(t1 - t0, 3)
+    timings["ingest_seconds"] = round(time.perf_counter() - ingest_started, 3)
 
     # Run the PostgreSQL reconciliation path.
     engine = ReconciliationEngine(db=db)
-    t0 = time.monotonic()
+    t0 = time.perf_counter()
     result = await engine.reconcile(partner, reconciliation_date)
-    t1 = time.monotonic()
+    t1 = time.perf_counter()
     timings["recon_seconds"] = round(t1 - t0, 3)
 
     total_seconds = timings["seed_seconds"] + timings["ingest_seconds"] + timings["recon_seconds"]
@@ -316,6 +315,11 @@ async def _run_100k_flow(
         "ingestion_total": ingestion_result.stats.total_rows,
         "ingestion_success": ingestion_result.stats.success_rows,
         "ingestion_errors": ingestion_result.quality_counters.get("failedRows", 0),
+        "ingestion_stage_summary": (
+            ingestion_result.file_record.stage_summary
+            if ingestion_result.file_record is not None
+            else {}
+        ),
         **_reconciliation_summary(result),
         "timing_seconds": timings,
         "total_seconds": round(total_seconds, 3),
@@ -364,6 +368,7 @@ async def test_e2e_100k_momo():
         print(f"    Seed: {summary['timing_seconds']['seed_seconds']}s")
         print(f"    Ingest: {summary['timing_seconds']['ingest_seconds']}s "
               f"({summary['records_per_sec_ingest']} rec/s)")
+        print(f"    Ingest stages: {summary['ingestion_stage_summary'].get('stageDurationsMs', {})}")
         print(f"    Recon: {summary['timing_seconds']['recon_seconds']}s "
               f"({summary['records_per_sec_recon']} rec/s)")
         print(f"    Total: {summary['total_seconds']}s")
@@ -416,6 +421,7 @@ async def test_e2e_100k_zalopay():
         print(f"    Seed: {summary['timing_seconds']['seed_seconds']}s")
         print(f"    Ingest: {summary['timing_seconds']['ingest_seconds']}s "
               f"({summary['records_per_sec_ingest']} rec/s)")
+        print(f"    Ingest stages: {summary['ingestion_stage_summary'].get('stageDurationsMs', {})}")
         print(f"    Recon: {summary['timing_seconds']['recon_seconds']}s "
               f"({summary['records_per_sec_recon']} rec/s)")
         print(f"    Total: {summary['total_seconds']}s")

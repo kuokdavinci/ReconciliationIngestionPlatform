@@ -214,6 +214,7 @@ class AutomationJobQueryService:
                     "id": str(latest_file_raw.get("_id")),
                     "fileName": latest_file_raw.get("fileName"),
                     "processingStatus": latest_file_raw.get("processingStatus"),
+                    "stageSummary": latest_file_raw.get("stageSummary") or {},
                     "reconciliationDate": (
                         latest_file_raw.get("reconciliationDate").isoformat()
                         if isinstance(latest_file_raw.get("reconciliationDate"), datetime)
@@ -223,6 +224,11 @@ class AutomationJobQueryService:
                         latest_file_raw.get("createdAt").isoformat()
                         if isinstance(latest_file_raw.get("createdAt"), datetime)
                         else str(latest_file_raw.get("createdAt") or "")
+                    ),
+                    "updatedAt": (
+                        latest_file_raw.get("updatedAt").isoformat()
+                        if isinstance(latest_file_raw.get("updatedAt"), datetime)
+                        else str(latest_file_raw.get("updatedAt") or "")
                     ),
                 }
 
@@ -281,6 +287,9 @@ class AutomationJobQueryService:
             elif latest_run_data and latest_run_data.get("status") == PartnerRuntimeRunStatus.FAILED.value:
                 status = "FAILED"
                 status_message = latest_run_data.get("message") or "Latest runtime run failed."
+            elif latest_run_data and latest_run_data.get("status") == PartnerRuntimeRunStatus.PARTIAL.value:
+                status = "PARTIAL"
+                status_message = latest_run_data.get("message") or "Latest runtime run completed with partial records."
             elif airflow_terminal_retry:
                 status = "FAILED"
                 status_message = "Airflow task failed; Retry will clear the task in the existing DAG run."

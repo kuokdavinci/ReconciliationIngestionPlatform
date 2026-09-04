@@ -57,3 +57,4 @@ data/eda/fraud_detection/raw/*
 !data/eda/fraud_detection/raw/.gitkeep
 data/eda/fraud_detection/interim/*
 !data/eda/fraud_detection/interim/.gitkeep
+data/eda/fraud_detection/profiles/*.json

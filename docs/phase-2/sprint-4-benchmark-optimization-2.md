@@ -7,7 +7,8 @@ nào đủ điều kiện promote; production defaults giữ nguyên.
 
 ## SQL và candidate review
 
-- SQL plan có sẵn trong [SQL profile](../../data/eda/fraud_detection/profiles/benchmark_sql_profile_100k.json).
+- SQL profile được sinh tại `data/eda/fraud_detection/profiles/benchmark_sql_profile_100k.json`;
+  đây là artifact local và được ignore khỏi repository.
 - Không rewrite SQL khi chưa có bottleneck an toàn từ EXPLAIN.
 - Candidate `stream-copy-generator` hợp lệ về correctness nhưng không đạt
   optimization gate: wall-clock median/MAD `13570.957/641.711 ms`, peak RSS

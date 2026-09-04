@@ -1,10 +1,11 @@
 # Adapter Dashboard (Next.js)
 
-Active frontend for the Reconciliation Ingestion Platform — built with Next.js 16 App Router, React 19, TypeScript 5, and Tailwind CSS v4.
+Frontend active của Reconciliation Ingestion Platform — xây dựng bằng Next.js
+16 App Router, React 19, TypeScript 5 và Tailwind CSS v4.
 
-## Pages
+## Các page
 
-| Route | Description |
+| Route | Mô tả |
 |-------|-------------|
 | `/` | Overview / dashboard home |
 | `/reconciliation` | Reconciliation results, stats, and insights |
@@ -16,19 +17,21 @@ Active frontend for the Reconciliation Ingestion Platform — built with Next.js
 ## Quick Start
 
 ```bash
-# Install dependencies
+# Cài dependency
 npm install
 
-# Start dev server (proxies API to localhost:8000)
+# Chạy dev server (proxy API tới localhost:8000)
 npm run dev
 
-# Build for production
+# Build production
 npm run build
 ```
 
-The repository's `build` script already uses the verified Webpack path (`next build --webpack`).
+Script `build` của repository đã dùng Webpack path đã được xác minh
+(`next build --webpack`).
 
-The dev server runs on `http://localhost:3000` and proxies `/api/*` requests to `http://localhost:8000` (configured in `next.config.ts`).
+Dev server chạy tại `http://localhost:3000` và proxy request `/api/*` tới
+`http://localhost:8000` (cấu hình trong `next.config.ts`).
 
 ## Tech Stack
 
@@ -42,15 +45,17 @@ The dev server runs on `http://localhost:3000` and proxies `/api/*` requests to 
 ```bash
 npm run lint        # ESLint
 npm run typecheck   # Type check
-npx prettier --check src/  # Format check
-npm run build # Production build used by CI
-npm run playwright:install # Install the local test browser
+npx prettier --check src/  # Kiểm tra format
+npm run build # Production build dùng trong CI
+npm run playwright:install # Cài browser test local
 npm run test:e2e     # Playwright interaction smoke tests
 ```
 
-The browser smoke tests start the production Next.js server and mock `/api/**` requests, so they run without the backend service. From a clean checkout, build first with `npm run build` before running `npm run test:e2e` locally.
+Browser smoke tests khởi động production Next.js server và mock request
+`/api/**`, nên không cần backend service. Từ checkout mới, chạy `npm run build`
+trước `npm run test:e2e` local.
 
-## Project Structure
+## Cấu trúc project
 
 ```
 src/

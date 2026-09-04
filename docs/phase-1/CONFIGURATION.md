@@ -2,7 +2,7 @@
 
 **Cập nhật:** 2026-08-27
 
-Source of truth là `src/config/settings.py`, `src/analysis/config.py`, `.env.example` và `docker-compose.yml`.
+Nguồn dữ liệu chuẩn là `src/config/settings.py`, `src/analysis/config.py`, `.env.example` và `docker-compose.yml`.
 
 ```bash
 cp .env.example .env

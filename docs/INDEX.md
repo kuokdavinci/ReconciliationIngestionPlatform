@@ -25,6 +25,7 @@ theo Phase/Sprint.
 | [Known issues](KNOWN_ISSUES.md) | Pilot constraints và follow-up | Theo dõi giới hạn và việc còn lại |
 | [Phase 2 index](phase-2/INDEX.md) | Danh sách tài liệu theo Sprint | Tìm nhanh tài liệu của từng Sprint |
 | [Sprint 3 index](phase-2/sprint-3-index.md) | Danh sách file, Workstream và phạm vi | Tìm đúng tài liệu cho data quality/quarantine |
+| [Sprint 4 index](phase-2/sprint-4-index.md) | Observability trên Schedules và benchmark decision | Tìm contract và evidence của Sprint 4 |
 
 Các report/evaluation trong `docs/phase-2/` là evidence chi tiết. Khi cần xác
 định behavior hiện tại, ưu tiên runtime code, test và các tài liệu trong mục

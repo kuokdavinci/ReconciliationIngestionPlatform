@@ -101,27 +101,25 @@ AIRFLOW_GLOBAL_SCHEDULE=none
 
 ### Contract path FileDrop/SFTP trong Airflow
 
-Airflow task execution uses `/opt/airflow/app` as its working directory. This
-matches the Airflow task mounts in `docker-compose.yml`:
+Airflow task execution dùng `/opt/airflow/app` làm working directory. Điều này
+khớp với các Airflow task mount trong `docker-compose.yml`:
 
 - `./mock_data` → `/opt/airflow/app/mock_data`
 - `./sftp_data` → `/opt/airflow/app/sftp_data`
 - `./downloads` → `/opt/airflow/app/downloads`
 
-Therefore the existing MOMO demo config (`filedrop.directory=./mock_data`) is
-valid for the API (`/app`) and Airflow (`/opt/airflow/app`). The
-fetchers also resolve relative paths from the application root, so task cwd
-changes cannot redirect the lookup to `/opt/airflow/mock_data` or another
-unmounted directory. The same contract applies to FileDrop/SFTP streams using
-`./sftp_data` and the default SFTP download directory `./downloads`.
-Compose runs `airflow-volume-permissions` before `airflow-init` so the
-non-root Airflow worker (UID 50000, group 0) can write those bind mounts. If a
-host ACL or an externally managed volume overrides the permissions, verify
-that `downloads/` and `sftp_data/` are group-writable before starting the
-Airflow services.
-FileDrop/SFTP source units are still processed sequentially at file boundary;
-mapping review is evaluated per file, not as one API-style paginated stream
-packet.
+Vì vậy MOMO demo config hiện tại (`filedrop.directory=./mock_data`) hợp lệ cho
+API (`/app`) và Airflow (`/opt/airflow/app`). Fetcher cũng resolve relative path
+từ application root, nên thay đổi task cwd không thể chuyển lookup sang
+`/opt/airflow/mock_data` hoặc thư mục chưa mount khác. Contract tương tự áp dụng
+cho FileDrop/SFTP stream dùng `./sftp_data` và SFTP download directory mặc định
+`./downloads`.
+Compose chạy `airflow-volume-permissions` trước `airflow-init` để non-root
+Airflow worker (UID 50000, group 0) có thể write bind mount. Nếu host ACL hoặc
+volume được quản lý bên ngoài override permission, hãy kiểm tra `downloads/` và
+`sftp_data/` có group-writable trước khi start Airflow service.
+FileDrop/SFTP source unit vẫn được xử lý tuần tự ở file boundary; mapping review
+được đánh giá theo từng file, không gộp thành một API-style paginated stream packet.
 
 `AIRFLOW_JWT_SECRET` phải có ít nhất 64 ký tự ngẫu nhiên và giống nhau trên API server, scheduler và DAG processor. Không dùng giá trị local-development mặc định khi triển khai production.
 
@@ -173,8 +171,7 @@ docker logs reconciliation-airflow-scheduler 2>&1 \
 
 ### Demo manual retry ViettelPay có thể tái lập
 
-Use these settings for the UI demo (the values are also present in
-`.env.example`):
+Dùng các setting này cho UI demo (giá trị cũng có trong `.env.example`):
 
 ```dotenv
 APP_AUTOMATION_ORCHESTRATOR=airflow
@@ -183,24 +180,22 @@ AIRFLOW_TASK_RETRIES=0
 AIRFLOW_TASK_RETRY_DELAY_SECONDS=300
 ```
 
-Rebuild the API and Airflow image after changing the DAG or gateway code, then
-make sure the DAG is unpaused. Trigger one ViettelPay run from the UI. When
-the mock injects a page-2 failure, the expected flow is:
+Sau khi đổi DAG hoặc gateway code, rebuild API và Airflow image, rồi bảo đảm DAG
+đã unpause. Trigger một ViettelPay run từ UI. Khi mock inject page-2 failure,
+flow kỳ vọng là:
 
-1. The UI and Airflow show the same `runtimeRunId`/`dagRunId`; no second run is
-   created.
-2. The UI reads
+1. UI và Airflow hiển thị cùng `runtimeRunId`/`dagRunId`, không tạo run thứ hai.
+2. UI đọc
    `GET /api/v2/dags/reconciliation_ingestion/dagRuns/{dagRunId}/taskInstances/run_stream/{mapIndex}`.
-3. Clicking **Manual retry** calls
+3. Click **Manual retry** gọi
    `POST /api/v2/dags/reconciliation_ingestion/clearTaskInstances` with
-   `dry_run=false`, `only_failed=false`, `dag_run_id` and the mapped task pair.
-4. Airflow schedules a new try of that same task instance. The UI keeps the
-   same `runtimeRunId`, resumes from the checkpoint, and eventually shows the
-   complete review/reconciliation result.
+   `dry_run=false`, `only_failed=false`, `dag_run_id` và mapped task pair.
+4. Airflow schedule try mới cho cùng task instance. UI giữ `runtimeRunId`,
+   resume từ checkpoint và cuối cùng hiển thị review/reconciliation result đầy đủ.
 
-If the state read fails, the API now returns `409` without creating a new DAG
-run and writes the Airflow endpoint details to the API log. This is an
-orchestration/configuration error to fix, not a reason to use **Run Now**.
+Nếu state read thất bại, API trả `409` mà không tạo DAG run mới và ghi chi tiết
+Airflow endpoint vào API log. Đây là orchestration/configuration error cần sửa,
+không phải lý do để dùng **Run Now**.
 
 ### Raw staging bền vững cho API stream lớn
 
@@ -400,16 +395,16 @@ chưa phải acceptance đầy đủ cho multi-file/SFTP recovery.
 
 ### Ma trận evidence checklist — 2026-08-14
 
-| Checklist | Current evidence | Status before business acceptance |
+| Checklist | Evidence hiện tại | Trạng thái trước business acceptance |
 |---|---|---|
-| FileDrop/SFTP ordering and source retention | `65` focused FileDrop/SFTP/ingestion tests pass; current-image VNPAY FileDrop source was retained. Multi-fingerprint recovery and a live SFTP run are still missing. | Partial |
-| Bounded Airflow/application retry | `80` retry/checkpoint/automation/stream tests pass; deployment uses `AIRFLOW_TASK_RETRIES=0`. Full live timeout/exhaustion matrix is still missing. | Partial |
-| `BLOCKED`, resolve/skip, `WAITING_REVIEW` | Contract and API tests cover the transitions; live ViettelPay recovery covers operator retry. A live terminal-blocked resolve/skip and mapping-gated review run are still missing. | Partial |
-| Scheduled checkpoint isolation | Backfill completed on the current image and Mongo contains separate `SCHEDULED` and `BACKFILL` checkpoint records; the scheduled record retained `scheduled-baseline-unit`. The scheduled record was a seeded baseline, not a concurrent scheduled execution. | Partial |
-| Per-partner rollback without reset | Runbook and pause/previous-artifact procedure exist, but no partner-scoped deployment rollback rehearsal was run. | Pending |
+| FileDrop/SFTP ordering và source retention | `65` focused FileDrop/SFTP/ingestion test pass; current-image VNPAY FileDrop source được giữ lại. Multi-fingerprint recovery và live SFTP run vẫn thiếu. | Partial |
+| Bounded Airflow/application retry | `80` retry/checkpoint/automation/stream test pass; deployment dùng `AIRFLOW_TASK_RETRIES=0`. Full live timeout/exhaustion matrix vẫn thiếu. | Partial |
+| `BLOCKED`, resolve/skip, `WAITING_REVIEW` | Contract và API test bao phủ transition; live ViettelPay recovery bao phủ operator retry. Live terminal-blocked resolve/skip và mapping-gated review run vẫn thiếu. | Partial |
+| Scheduled checkpoint isolation | Backfill hoàn tất trên image hiện tại và Mongo có checkpoint `SCHEDULED`/`BACKFILL` riêng; scheduled record giữ `scheduled-baseline-unit`. Đây là seeded baseline, chưa phải scheduled execution đồng thời. | Partial |
+| Rollback theo partner không reset | Runbook và pause/previous-artifact procedure đã có, nhưng chưa diễn tập partner-scoped deployment rollback. | Pending |
 
-The five checkboxes below remain unchecked intentionally: the missing portions
-are environment/rollout evidence, not a reason to weaken the acceptance bar.
+Năm checkbox dưới đây cố ý vẫn chưa đánh dấu: phần còn thiếu là environment/
+rollout evidence, không phải lý do hạ acceptance bar.
 
 ### Scheduling ownership
 
@@ -557,5 +552,5 @@ Tổng hợp hiện tại: **6/11 đạt**, **5/11 còn pending**. Các mục `[
 - [Airflow scheduler](https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/scheduler.html)
 - [Airflow production deployment](https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/production-deployment.html)
 - [Airflow pools and task concurrency](https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/pools.html)
-- [Repository application boundaries](../../README.md#architectural-boundaries)
+- [Repository application boundaries](../phase-1/ARCHITECTURE.md#application-boundaries)
 - [Sprint 2 incremental processing and recovery](sprint-2-incremental-recovery.md)

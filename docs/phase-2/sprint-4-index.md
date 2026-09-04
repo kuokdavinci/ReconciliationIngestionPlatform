@@ -7,10 +7,10 @@ giữ nguyên ingestion semantics, recovery/retry và production defaults.
 
 | Tài liệu | Vai trò | Nội dung |
 |---|---|---|
-| [Observability](sprint-4-observability.md) | Main | Runtime contract, Schedules UI, warning hardening và acceptance. |
-| [Baseline review 100k](sprint-4-benchmark-review-100k.md) | Evidence | Baseline latency/RSS và component medians. |
+| [Observability](sprint-4-observability.md) | Chính | Runtime contract, Schedules UI, warning hardening và acceptance. |
+| [Baseline review 100k](sprint-4-benchmark-review-100k.md) | Evidence | Baseline latency/RSS và component median. |
 | [A/B benchmark 100k](sprint-4-benchmark-ab-100k.md) | Evidence | Ma trận variant và correctness/promotion decision. |
-| [Performance decision](sprint-4-benchmark-optimization-2.md) | Decision | SQL review, memory gate và baseline handoff. |
+| [Quyết định performance](sprint-4-benchmark-optimization-2.md) | Quyết định | SQL review, memory gate và baseline handoff. |
 
 ## Kết quả chính
 

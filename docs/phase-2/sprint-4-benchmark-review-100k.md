@@ -16,7 +16,7 @@
 - Wall-clock median/MAD: `11581.117/321.679 ms`
 - Peak RSS median/max: `243941376/244420608 bytes`
 
-## Components
+## Component
 
 | Component | Median (ms) |
 |---|---:|
@@ -31,5 +31,5 @@
 | `tupleMaterializationMs` | 554.687 |
 
 `db_insert_ms` vẫn là persistence window tương thích ngược, không phải
-SQL-only time. Raw samples và correctness counters được giữ trong JSON
-benchmark artifact.
+SQL-only time. Raw sample và correctness counter được giữ trong JSON benchmark
+artifact.

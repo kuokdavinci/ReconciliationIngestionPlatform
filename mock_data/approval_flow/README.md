@@ -1,16 +1,16 @@
-Approval flow test fixtures.
+Fixture test cho approval flow.
 
-Files:
+File:
 - `VNPAY_baseline_approved.csv`
-  - Matches the seeded `VNPAY` approved config in `docker/init-mongo.js`
-  - Use this first if your current `VNPAY` config has never had a `structureSignature` bootstrapped
+  - Khớp với approved config `VNPAY` được seed trong `docker/init-mongo.js`
+  - Dùng file này trước nếu `VNPAY` config hiện tại chưa từng được bootstrap `structureSignature`
 - `VNPAY_structure_changed_pending_approval.csv`
-  - Same business data shape, but different header names and one extra `Channel` column
-  - Use this after the baseline run to trigger a `PENDING_APPROVAL` proposal while the existing approved config remains the runtime config
+  - Cùng business data shape nhưng header name khác và thêm một column `Channel`
+  - Dùng sau baseline run để trigger proposal `PENDING_APPROVAL`, trong khi approved config hiện tại vẫn là runtime config
 - `ACMEPAY_no_approved_config.csv`
-  - Use with partner `ACMEPAY` to test the deterministic blocked path when no approved config exists
+  - Dùng với partner `ACMEPAY` để test deterministic blocked path khi chưa có approved config
 
-Suggested order:
-1. Run or upload `VNPAY_baseline_approved.csv` with partner `VNPAY`
-2. Then run `VNPAY_structure_changed_pending_approval.csv` with partner `VNPAY`
-3. Then run `ACMEPAY_no_approved_config.csv` with partner `ACMEPAY`
+Thứ tự khuyến nghị:
+1. Chạy hoặc upload `VNPAY_baseline_approved.csv` với partner `VNPAY`
+2. Sau đó chạy `VNPAY_structure_changed_pending_approval.csv` với partner `VNPAY`
+3. Cuối cùng chạy `ACMEPAY_no_approved_config.csv` với partner `ACMEPAY`

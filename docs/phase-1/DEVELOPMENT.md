@@ -48,7 +48,7 @@ uv run python run.py --reconcile 2024-07-07 --partner MOMO
 
 Không dùng `run.py --data/--config` cho flow vận hành hiện tại; hai flag này còn tồn tại trong CLI nhưng composition repository của local-file path chưa được hoàn thiện. Xem [Known Issues](../KNOWN_ISSUES.md).
 
-## Tests và quality gates
+## Test và quality gate
 
 ```bash
 uv run ruff check src dags scripts cli

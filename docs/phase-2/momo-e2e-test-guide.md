@@ -1,22 +1,24 @@
 # MOMO Reconciliation E2E Test & Mocking Guide
 
-This guide defines a safer E2E plan for **MOMO** so the mock data matches the reconciliation logic that is actually running in the system.
+Guide này định nghĩa E2E plan an toàn hơn cho **MOMO**, để mock data khớp với
+reconciliation logic đang thực sự chạy trong hệ thống.
 
-The key rule is simple:
+Quy tắc chính rất đơn giản:
 
-* `Command Center` reads from `reconciliation_result`, not directly from `internal_transaction`.
-* `reconciliation_result` is produced from **partner rows ingested for the day** plus **internal rows in finalized states** (`SUCCESS`, `FAILED`, `REVERSED`).
-* If you seed more finalized internal rows than the partner file actually contains, the engine will correctly generate `MISSING_PARTNER`.
+* `Command Center` đọc từ `reconciliation_result`, không đọc trực tiếp từ `internal_transaction`.
+* `reconciliation_result` được tạo từ **partner row đã ingest trong ngày** và **internal row ở finalized state** (`SUCCESS`, `FAILED`, `REVERSED`).
+* Nếu seed nhiều finalized internal row hơn số row thực tế trong partner file, engine sẽ tạo `MISSING_PARTNER` đúng theo contract.
 
-That means a "green" scenario must never preload unrelated finalized internal rows for the same `partner + date`.
+Vì vậy scenario "green" không được preload finalized internal row không liên
+quan cho cùng `partner + date`.
 
 ---
 
 ## Quick Start
 
-The canonical seed script is [`scripts/demo/sprint1/seed_momo_e2e.py`](../../scripts/demo/sprint1/seed_momo_e2e.py). Do **not** use the legacy `seed_momo_scheduler_green.py`.
+Canonical seed script là [`scripts/demo/sprint1/seed_momo_e2e.py`](../../scripts/demo/sprint1/seed_momo_e2e.py). **Không** dùng legacy `seed_momo_scheduler_green.py`.
 
-### Happy path — exact retry steps
+### Happy path — các bước chạy lại chính xác
 
 1. Reset Phase 1 data:
 
@@ -24,84 +26,80 @@ The canonical seed script is [`scripts/demo/sprint1/seed_momo_e2e.py`](../../scr
 make momo-e2e-reset
 ```
 
-2. Trigger automation so the missing config creates a pending review packet:
+2. Trigger automation để missing config tạo pending review packet:
 
 ```bash
 make momo-e2e-run
 ```
 
-3. In the UI, open the MOMO packet in `Review Queue` and approve it.
-   Scope expectation:
+3. Trong UI, mở MOMO packet ở `Review Queue` và approve. Scope kỳ vọng:
    `FULL_SNAPSHOT`
 
-4. Verify Phase 1 result.
-   Expected:
+4. Kiểm tra Phase 1 result. Kỳ vọng:
    * `20 MATCHED`
    * `0 MISSING_PARTNER`
 
-5. Prepare Phase 2 data:
+5. Chuẩn bị Phase 2 data:
 
 ```bash
 make momo-e2e-phase2-full
 ```
 
-`momo-e2e-phase2-full` is the standard incremental happy path: it keeps the
-approved runtime mapping and publishes only the 20 Wave 2 keys.
+`momo-e2e-phase2-full` là incremental happy path chuẩn: giữ approved runtime
+mapping và chỉ publish 20 Wave 2 key.
 
-6. Trigger automation again:
+6. Trigger automation lần nữa:
 
 ```bash
 make momo-e2e-run
 ```
 
-7. Verify Phase 2 result.
-   Scope expectation:
+7. Kiểm tra Phase 2 result. Scope kỳ vọng:
    `INCREMENTAL_APPEND`
 
-   Expected:
-   * current run reconciles only wave2 keys `MOMO_TXN_9100..MOMO_TXN_9119`
+   Kỳ vọng:
+   * current run chỉ reconcile wave2 key `MOMO_TXN_9100..MOMO_TXN_9119`
    * `20 MATCHED`
    * `0 MISSING_PARTNER`
 
-For the separate duplicate/review-visibility demo, use
-`make momo-e2e-phase2` instead. That target publishes a new delivery file with
-20 Wave 1 + 10 Wave 2 rows and deliberately removes the approved runtime
-mapping, so the next Run Now is expected to become `WAITING_REVIEW` and create
-a new pending packet.
+Với duplicate/review-visibility demo riêng, dùng `make momo-e2e-phase2`. Target
+này publish delivery file mới gồm 20 Wave 1 + 10 Wave 2 row và cố ý xóa approved
+runtime mapping, nên Run Now tiếp theo sẽ thành `WAITING_REVIEW` và tạo packet
+pending mới.
 
-Use this to inspect the job after each run if needed:
+Dùng command này để kiểm tra job sau mỗi run khi cần:
 
 ```bash
 make momo-e2e-job
 ```
 
-### File-ingestion failure demo
+### Demo file-ingestion failure
 
-Prepare a valid internal baseline with an approved MOMO mapping and a readable
-partner `.xlsx` file whose rows omit both source identity columns:
+Chuẩn bị internal baseline hợp lệ với approved MOMO mapping và partner `.xlsx`
+có thể đọc, trong đó row thiếu cả hai source identity column:
 
 ```bash
 make momo-e2e-fail
 ```
 
-The command also pins the approved mapping to this fixture's structure, so the
-config-health gate does not pause the demo for mapping review.
+Command cũng pin approved mapping vào structure của fixture, nên config-health
+gate không pause demo để mapping review.
 
-After changing backend code, rebuild the API and Airflow containers once:
+Sau khi đổi backend code, rebuild API và Airflow container một lần:
 
 ```bash
 make momo-e2e-rebuild
 ```
 
-Then click `Run Now` in the UI, or run `make momo-e2e-run`. The Schedules view
-should show runtime `FAILED`, a `BLOCKED` recovery checkpoint, and the precise
-`ingestion_key_error` and `BLOCKED` recovery. Replace the file with one that
-contains both `msTransId` and `msMaHDon`, then use `Resolve for retry` with an
-operator reason before running the job again.
+Sau đó click `Run Now` trong UI hoặc chạy `make momo-e2e-run`. Schedules view
+cần hiển thị runtime `FAILED`, recovery checkpoint `BLOCKED` và đúng
+`ingestion_key_error` cùng `BLOCKED` recovery. Thay file bằng file có cả
+`msTransId` và `msMaHDon`, rồi dùng `Resolve for retry` với operator reason
+trước khi chạy job lại.
 
-### Missing-partner demo
+### Demo missing-partner
 
-1. Prepare the baseline and anomaly:
+1. Chuẩn bị baseline và anomaly:
 
 ```bash
 make momo-e2e-reset
@@ -114,323 +112,323 @@ make momo-e2e-missing-partner-demo
 make momo-e2e-run
 ```
 
-3. In the UI, approve the packet and keep the proposed scope as:
+3. Trong UI, approve packet và giữ proposed scope là:
    `FULL_SNAPSHOT`
 
-4. Expected:
+4. Kỳ vọng:
    * `20 MATCHED`
    * `1 MISSING_PARTNER`
    * missing key: `MOMO_TXN_90_MISSING_PARTNER`
 
-### Fast checks
+### Kiểm tra nhanh
 
-- If you see unexpected `MISSING_PARTNER` rows right after `make momo-e2e-reset`, you are likely still running the old seed flow or approving with the wrong packet/file.
-- If Phase 2 still shows wave1 rows in the current run, verify the packet/file scope is `INCREMENTAL_APPEND`.
-- For the full target list, run `make momo-e2e-help`.
+- Nếu thấy `MISSING_PARTNER` row ngoài dự kiến ngay sau `make momo-e2e-reset`, có thể bạn vẫn đang chạy seed flow cũ hoặc approve nhầm packet/file.
+- Nếu Phase 2 vẫn hiển thị wave1 row trong current run, kiểm tra packet/file scope là `INCREMENTAL_APPEND`.
+- Muốn xem đầy đủ target, chạy `make momo-e2e-help`.
 
 ---
 
-## 1. What Went Wrong In The Old Plan
+## 1. Vấn đề của plan cũ
 
-The previous plan seeded:
+Plan trước đã seed:
 
-* `40` finalized internal records for the same day
-* but the first partner file only contained `19` rows
+* `40` finalized internal record cho cùng ngày
+* nhưng partner file đầu tiên chỉ có `19` row
 
-That setup does **not** represent "20/20 reconciled". It represents:
+Thiết lập đó **không** đại diện cho "20/20 reconciled". Nó đại diện cho:
 
 * `19` partner-side rows available for reconciliation
 * `21` internal finalized rows with no partner-side match
 
-So the engine correctly produces a mixed snapshot such as:
+Vì vậy engine tạo mixed snapshot một cách chính xác, gồm:
 
 * `MATCHED`
 * `AMOUNT_MISMATCH`
 * `MISSING_PARTNER`
 
-If the test goal is "green dashboard after approval", the seed must be aligned with the exact file content for that phase.
+Nếu mục tiêu test là "green dashboard after approval", seed phải khớp chính xác
+với nội dung file của phase đó.
 
 ---
 
-## 2. Correct E2E Modes
+## 2. E2E mode đúng
 
-Use one of these modes explicitly. Do not mix them.
+Dùng rõ ràng một trong các mode sau, không trộn các mode với nhau.
 
 ### Mode A: Green Baseline
 
-Goal:
+Mục tiêu:
 
-* partner file and internal DB represent the same transaction set
-* after approval and immediate reconciliation, `Command Center` should show only the intended outcomes for that exact set
+* partner file và internal DB đại diện cho cùng một transaction set
+* sau approval và reconciliation ngay lập tức, `Command Center` chỉ hiển thị outcome dự kiến của đúng set đó
 
-Rules:
+Quy tắc:
 
-* seed only the internal rows that exist in the current partner file
-* do not preload the next wave into finalized internal state
-* do not include internal-only anomaly rows unless the test explicitly needs them
+* chỉ seed internal row tồn tại trong partner file hiện tại
+* không preload wave tiếp theo vào finalized internal state
+* không thêm internal-only anomaly row trừ khi test cần rõ ràng
 
-Expected result:
+Kết quả kỳ vọng:
 
-* total reconciliation count matches the file dataset for that wave
+* tổng reconciliation count khớp với file dataset của wave đó
 
 ### Mode B: Incremental Wave
 
-Goal:
+Mục tiêu:
 
-* verify a second file can be ingested after config approval without going back through review
+* xác minh file thứ hai có thể ingest sau config approval mà không quay lại review
 
 Rules:
 
-* Phase 1: seed internal rows only for Wave 1
-* approve config and reconcile Wave 1
-* Phase 2: add the Wave 2 internal rows, replace the file with the Wave 2 partner rows, then run automation again
-* each wave must remain internally consistent with its own file
+* Phase 1: chỉ seed internal row cho Wave 1
+* approve config và reconcile Wave 1
+* Phase 2: thêm Wave 2 internal row, thay file bằng Wave 2 partner row rồi chạy automation lần nữa
+* mỗi wave phải nhất quán nội bộ với file tương ứng
 
-Expected result:
+Kết quả kỳ vọng:
 
-* after each run, reconciliation reflects the currently seeded and intended dataset, not unrelated future rows
-* the result view is batch-only: Phase 2 shows Wave 2 rows only, while Phase 1 results remain stored separately
+* sau mỗi run, reconciliation phản ánh dataset đã seed và được chỉ định hiện tại, không gồm future row không liên quan
+* result view chỉ theo batch: Phase 2 chỉ hiện Wave 2 row, còn Phase 1 result vẫn được lưu riêng
 
 ### Scope classification rule
 
-Scope is inferred from business keys, not from the filename. A file containing
-only new keys is `INCREMENTAL_APPEND`. A file containing the historical key set
-and additional new keys is `REPLACEMENT`, because it supersedes the previous
-delivery. If overlap evidence is incomplete or contradictory, the packet stays
-`UNCONFIRMED` and requires operator selection.
+Scope được suy ra từ business key, không từ filename. File chỉ chứa key mới là
+`INCREMENTAL_APPEND`. File chứa historical key set cùng key mới là
+`REPLACEMENT` vì thay thế delivery trước. Nếu overlap evidence thiếu hoặc mâu
+thuẫn, packet giữ `UNCONFIRMED` và cần operator chọn.
 
 ### Mode C: Intentional Missing Partner
 
-Goal:
+Mục tiêu:
 
-* verify that internal-only finalized transactions become `MISSING_PARTNER`
+* xác minh finalized transaction chỉ có ở internal trở thành `MISSING_PARTNER`
 
 Rules:
 
-* add internal finalized rows that are intentionally absent from the partner file
-* document those keys explicitly in the scenario
+* thêm finalized internal row cố ý không có trong partner file
+* ghi rõ các key đó trong scenario
 
-Expected result:
+Kết quả kỳ vọng:
 
-* `MISSING_PARTNER` is expected and should appear in both `Reconciliation` and `Command Center`
-
----
-
-## 3. Ground Truth Rules For Mock Data
-
-These rules must hold for every MOMO E2E setup.
-
-1. Partner file keys and internal keys must come from the same planned key range.
-2. A "green" run must not preload extra finalized internal keys for the same day.
-3. If you want to simulate future internal records, keep them out of the current reconciliation slice.
-4. `PENDING` internal transactions are ignored upstream by `ReconciliationEngine`, so they are safe if you need placeholders that must not produce `MISSING_PARTNER`.
-5. Any internal row in `SUCCESS`, `FAILED`, or `REVERSED` is eligible for reconciliation on that day.
+* `MISSING_PARTNER` là kết quả dự kiến và phải xuất hiện ở cả `Reconciliation` và `Command Center`
 
 ---
 
-## 4. Recommended Data Shapes
+## 3. Ground truth rule cho mock data
+
+Các quy tắc này phải đúng với mọi MOMO E2E setup.
+
+1. Partner file key và internal key phải đến từ cùng planned key range.
+2. Run "green" không được preload finalized internal key dư cho cùng ngày.
+3. Nếu cần mô phỏng future internal record, hãy đưa chúng ra khỏi reconciliation slice hiện tại.
+4. `PENDING` internal transaction bị `ReconciliationEngine` bỏ qua ở upstream, nên an toàn khi dùng làm placeholder không tạo `MISSING_PARTNER`.
+5. Mọi internal row ở `SUCCESS`, `FAILED` hoặc `REVERSED` đều eligible cho reconciliation trong ngày đó.
+
+---
+
+## 4. Data shape khuyến nghị
 
 ### Green Baseline Dataset
 
-Use one exact range for both sources:
+Dùng cùng một range chính xác cho cả hai source:
 
-* partner file: `MOMO_TXN_9000` to `MOMO_TXN_9019`
-* internal DB: `MOMO_TXN_9000` to `MOMO_TXN_9019`
+* partner file: `MOMO_TXN_9000` đến `MOMO_TXN_9019`
+* internal DB: `MOMO_TXN_9000` đến `MOMO_TXN_9019`
 
-Optional:
+Tùy chọn:
 
-* include `1` intentional amount mismatch inside the same range
-* if you do, the expected total is still `20`, but the status breakdown is no longer fully matched
+* có thể gồm `1` intentional amount mismatch trong cùng range
+* nếu có, tổng kỳ vọng vẫn là `20`, nhưng status breakdown không còn toàn bộ là matched
 
-Do not include:
+Không thêm:
 
-* `MOMO_TXN_9100` to `MOMO_TXN_9119`
+* `MOMO_TXN_9100` đến `MOMO_TXN_9119`
 * `MOMO_TXN_90_MISSING_PARTNER`
 
 ### Incremental Two-Wave Dataset
 
 Wave 1:
 
-* partner file: `MOMO_TXN_9000` to `MOMO_TXN_9019`
-* internal DB: `MOMO_TXN_9000` to `MOMO_TXN_9019`
+* partner file: `MOMO_TXN_9000` đến `MOMO_TXN_9019`
+* internal DB: `MOMO_TXN_9000` đến `MOMO_TXN_9019`
 
 Wave 2:
 
-* partner file: `MOMO_TXN_9100` to `MOMO_TXN_9119`
-* internal DB: `MOMO_TXN_9100` to `MOMO_TXN_9119`
+* partner file: `MOMO_TXN_9100` đến `MOMO_TXN_9119`
+* internal DB: `MOMO_TXN_9100` đến `MOMO_TXN_9119`
 
-Important:
+Quan trọng:
 
-* do not seed Wave 2 internal rows during Wave 1 if the test expectation is a clean Wave 1 dashboard
+* không seed Wave 2 internal row trong Wave 1 nếu test kỳ vọng Wave 1 dashboard sạch
 
 ### Intentional Missing Partner Dataset
 
 Base set:
 
-* partner file: `MOMO_TXN_9000` to `MOMO_TXN_9019`
-* internal DB: `MOMO_TXN_9000` to `MOMO_TXN_9019`
+* partner file: `MOMO_TXN_9000` đến `MOMO_TXN_9019`
+* internal DB: `MOMO_TXN_9000` đến `MOMO_TXN_9019`
 
-Add anomaly:
+Thêm anomaly:
 
-* internal DB only: `MOMO_TXN_90_MISSING_PARTNER`
+* chỉ có trong internal DB: `MOMO_TXN_90_MISSING_PARTNER`
 
-Expected:
+Kỳ vọng:
 
-* total reconciliation count becomes `21`
-* one row is `MISSING_PARTNER`
+* tổng reconciliation count trở thành `21`
+* một row là `MISSING_PARTNER`
 
 ---
 
-## 5. Seed Script Guidance
+## 5. Hướng dẫn seed script
 
 Canonical script:
 
 * [scripts/demo/sprint1/seed_momo_e2e.py](../../scripts/demo/sprint1/seed_momo_e2e.py)
 
-This is the single source of truth for MOMO E2E seed data. It supports three explicit modes:
+Đây là source of truth duy nhất cho MOMO E2E seed data. Script hỗ trợ các mode rõ ràng:
 
-* `reset` — wipe MOMO internal rows, seed the 20 wave1 rows (`MOMO_TXN_9000`..`MOMO_TXN_9019`), and write a partner xlsx with the same 20 keys. Use this for a clean Phase 1 baseline.
-* `phase2` — add the 20 wave2 internal rows (`MOMO_TXN_9100`..`MOMO_TXN_9119`) and **overwrite** the partner file with the wave2 keys. Combined with `reset`, this is the 2-command happy path described in the Quick Start.
-* `phase2_duplicate` — add 10 new wave2 internal rows, publish a distinct `*_phase2.xlsx` delivery containing 20 existing wave1 + 10 new wave2 rows, and remove the approved runtime mapping so the next run exercises the review gate.
-* `missing_partner_demo` — insert a single `MOMO_TXN_90_MISSING_PARTNER` internal row (50000 VND, `SUCCESS`, same day) and write a wave1-only partner xlsx. A subsequent `FULL_SNAPSHOT` ingestion produces exactly `20 MATCHED + 1 MISSING_PARTNER`.
+* `reset` — xóa MOMO internal row, seed 20 wave1 row (`MOMO_TXN_9000`..`MOMO_TXN_9019`) và ghi partner xlsx có cùng 20 key. Dùng cho Phase 1 baseline sạch.
+* `phase2` — thêm 20 wave2 internal row (`MOMO_TXN_9100`..`MOMO_TXN_9119`) và **overwrite** partner file bằng wave2 key. Kết hợp với `reset`, đây là happy path hai command trong Quick Start.
+* `phase2_duplicate` — thêm 10 wave2 internal row mới, publish delivery `*_phase2.xlsx` riêng gồm 20 wave1 cũ + 10 wave2 mới, rồi xóa approved runtime mapping để run kế tiếp đi qua review gate.
+* `missing_partner_demo` — insert một internal row `MOMO_TXN_90_MISSING_PARTNER` (50000 VND, `SUCCESS`, cùng ngày) và ghi partner xlsx chỉ có wave1. Ingestion `FULL_SNAPSHOT` tiếp theo tạo đúng `20 MATCHED + 1 MISSING_PARTNER`.
 
-The corresponding `make` targets (`momo-e2e-reset`, `momo-e2e-phase2-full`, `momo-e2e-phase2`, `momo-e2e-missing-partner-demo`) wrap each mode and are the recommended entry points — see the Quick Start above.
+Các `make` target tương ứng (`momo-e2e-reset`, `momo-e2e-phase2-full`, `momo-e2e-phase2`, `momo-e2e-missing-partner-demo`) bọc từng mode và là entrypoint khuyến nghị — xem Quick Start ở trên.
 
-### Legacy script — do not use
+### Legacy script — không dùng
 
-The former `seed_momo_scheduler_green.py` flow is removed. If a stale E2E fixture still references it, replace that invocation with the canonical script above.
+Flow cũ `seed_momo_scheduler_green.py` đã bị xóa. Nếu E2E fixture stale vẫn tham chiếu file này, thay invocation bằng canonical script ở trên.
 
 ---
 
-## 6. Recommended E2E Flow
+## 6. E2E flow khuyến nghị
 
 ### Scenario 1: Config Approval + Clean Reconciliation
 
-Goal:
+Mục tiêu:
 
-* validate mapping approval flow
-* validate immediate reconciliation after approval
-* validate `Command Center` totals against the partner file dataset only
+* kiểm tra mapping approval flow
+* kiểm tra reconciliation ngay sau approval
+* kiểm tra `Command Center` total chỉ theo partner file dataset
 
-Plan:
+Kế hoạch:
 
-1. Clean MOMO collections for the target day.
-2. Seed only Wave 1 internal rows: `MOMO_TXN_9000` to `MOMO_TXN_9019`.
-3. Generate partner file with the same Wave 1 keys.
-4. Run automation once so the missing config creates a pending review packet.
-5. Approve config with runtime validation.
-6. Let the system re-ingest and reconcile immediately.
-7. Verify `reconciliation_result.total == 20`.
+1. Làm sạch MOMO collection cho target day.
+2. Chỉ seed Wave 1 internal row: `MOMO_TXN_9000` đến `MOMO_TXN_9019`.
+3. Tạo partner file với cùng Wave 1 key.
+4. Chạy automation một lần để missing config tạo pending review packet.
+5. Approve config với runtime validation.
+6. Để hệ thống re-ingest và reconcile ngay lập tức.
+7. Kiểm tra `reconciliation_result.total == 20`.
 
-Expected:
+Kỳ vọng:
 
-* no accidental `MISSING_PARTNER` from future-wave rows
+* không có `MISSING_PARTNER` ngoài ý muốn từ future-wave row
 
 ### Scenario 2: Incremental Second Wave
 
-Goal:
+Mục tiêu:
 
-* validate approved config is reused without review
+* kiểm tra approved config được dùng lại mà không qua review
 
-Plan:
+Kế hoạch:
 
-1. Complete Scenario 1 first.
-2. Add only Wave 2 internal rows: `MOMO_TXN_9100` to `MOMO_TXN_9119`.
-3. Replace the partner file with Wave 2 keys.
-4. Run automation again.
-5. Verify the second run completes without review packet creation.
-6. Verify reconciliation matches the intended Wave 2 slice.
+1. Hoàn tất Scenario 1 trước.
+2. Chỉ thêm Wave 2 internal row: `MOMO_TXN_9100` đến `MOMO_TXN_9119`.
+3. Thay partner file bằng Wave 2 key.
+4. Chạy automation lần nữa.
+5. Kiểm tra run thứ hai hoàn tất mà không tạo review packet.
+6. Kiểm tra reconciliation khớp Wave 2 slice dự kiến.
 
-Recommended verification:
+Kiểm tra khuyến nghị:
 
-* check key overlap explicitly, not just counts
+* kiểm tra key overlap một cách rõ ràng, không chỉ kiểm tra count
 
-### Scenario 2b: New delivery with the same layout
+### Scenario 2b: Delivery mới có cùng layout
 
-Goal:
+Mục tiêu:
 
-* verify that a new source delivery is not hidden just because its mapping
-  structure matches an older approved packet
+* kiểm tra source delivery mới không bị ẩn chỉ vì mapping structure giống packet đã approve trước đó
 
-Plan:
+Kế hoạch:
 
-1. Complete Scenario 1 first.
+1. Hoàn tất Scenario 1 trước.
 2. Run `make momo-e2e-phase2`.
 3. Trigger `make momo-e2e-run`.
-4. Verify the runtime is `WAITING_REVIEW` and Review Queue contains a new
-   pending packet for the `*_phase2.xlsx` delivery.
+4. Kiểm tra runtime là `WAITING_REVIEW` và Review Queue có pending packet mới
+   cho delivery `*_phase2.xlsx`.
 
-This is intentionally different from the safe-duplicate path. A packet is
-collapsed only when its source scope matches (`rawStageKey`, `backfillRunId`
-or file identity); matching spreadsheet structure alone is not the source
-identity.
+Điều này khác có chủ đích với safe-duplicate path. Packet chỉ được collapse khi
+source scope khớp (`rawStageKey`, `backfillRunId` hoặc file identity); chỉ giống
+spreadsheet structure không đủ để xác định source identity.
 
 ### Scenario 3: Intentional Missing Partner
 
-Goal:
+Mục tiêu:
 
-* validate discrepancy behavior
+* kiểm tra discrepancy behavior
 
-Plan:
+Kế hoạch:
 
-1. Seed the matched base set.
-2. Add a small number of extra finalized internal rows.
-3. Keep them out of the partner file.
-4. Reconcile.
+1. Seed matched base set.
+2. Thêm một số ít finalized internal row.
+3. Giữ chúng ngoài partner file.
+4. Chạy reconcile.
 
-Expected:
+Kỳ vọng:
 
-* `MISSING_PARTNER` appears by design
-* `Command Center` and `Reconciliation` should both reflect those rows
+* `MISSING_PARTNER` xuất hiện theo thiết kế
+* `Command Center` và `Reconciliation` cùng phản ánh các row đó
 
 ---
 
-## 7. Verification Checklist
+## 7. Verification checklist
 
-Before concluding a run, verify all three layers:
+Trước khi kết luận một run, kiểm tra cả ba layer:
 
 ### Partner-side ingestion
 
-Check:
+Kiểm tra:
 
 * `reconciliation_file.processingStatus == COMPLETED`
-* `data_container` row count for `partner + date`
-* the actual `partnerData.trace` values ingested
+* `data_container` row count cho `partner + date`
+* giá trị `partnerData.trace` thực tế đã ingest
 
 ### Internal-side eligibility
 
-Check:
+Kiểm tra:
 
-* `internal_transaction` count for `partner + date`
-* status breakdown of those rows
-* whether any extra finalized keys exist outside the intended partner file range
+* `internal_transaction` count cho `partner + date`
+* status breakdown của các row đó
+* có finalized key dư ngoài partner file range dự kiến hay không
 
 ### Reconciliation output
 
-Check:
+Kiểm tra:
 
-* `reconciliation_result` total count
+* tổng count của `reconciliation_result`
 * status breakdown
-* exact key set for `MISSING_PARTNER`
+* exact key set của `MISSING_PARTNER`
 
-If the dashboard shows more records than expected, the first thing to check is not the UI. It is whether `reconciliation_result` already contains extra finalized internal-only keys for that day.
+Nếu dashboard hiển thị nhiều record hơn kỳ vọng, việc đầu tiên cần kiểm tra
+không phải UI mà là `reconciliation_result` đã có thêm finalized internal-only
+key cho ngày đó hay chưa.
 
 ---
 
-## 8. Operator Commands
+## 8. Operator command
 
-### Shortcut targets
+### Shortcut target
 
 ```bash
-make momo-e2e-help                # list all MOMO E2E targets (Quick Start at the top)
-make momo-e2e-reset               # clean Phase 1 (20 internal rows 9000-9019 + partner file)
-make momo-e2e-phase2              # partial-duplicate/review demo (20 old + 10 new rows, new delivery)
-make momo-e2e-phase2-full         # standard Wave 2 happy path (20 new rows, approved mapping reused)
-make momo-e2e-missing-partner-demo  # inject MOMO_TXN_90_MISSING_PARTNER for engine demo
+make momo-e2e-help                # liệt kê MOMO E2E target (Quick Start ở đầu tài liệu)
+make momo-e2e-reset               # làm sạch Phase 1 (20 internal row 9000-9019 + partner file)
+make momo-e2e-phase2              # partial-duplicate/review demo (20 row cũ + 10 row mới, delivery mới)
+make momo-e2e-phase2-full         # Wave 2 happy path chuẩn (20 row mới, dùng lại approved mapping)
+make momo-e2e-missing-partner-demo  # thêm MOMO_TXN_90_MISSING_PARTNER cho engine demo
 make momo-e2e-run                 # trigger MOMO automation run
-make momo-e2e-job                 # inspect MOMO automation job
-make momo-e2e-phase2-file         # write Wave 2 partner file (9100-9119) only
-make momo-e2e-rebuild             # rebuild api + Airflow containers
+make momo-e2e-job                 # kiểm tra MOMO automation job
+make momo-e2e-phase2-file         # ghi riêng Wave 2 partner file (9100-9119)
+make momo-e2e-rebuild             # rebuild API + Airflow container
 ```
 
 ### Trigger automation run
@@ -439,13 +437,13 @@ make momo-e2e-rebuild             # rebuild api + Airflow containers
 curl -s -X POST http://localhost:8000/api/v1/automation/jobs/MOMO/run | jq .
 ```
 
-### Inspect MOMO automation job
+### Kiểm tra MOMO automation job
 
 ```bash
 curl -s http://localhost:8000/api/v1/automation/jobs | jq '.jobs[] | select(.partner == "MOMO")'
 ```
 
-### Rebuild backend containers after logic changes
+### Rebuild backend container sau khi đổi logic
 
 ```bash
 docker compose up -d --build api scheduler
@@ -453,14 +451,14 @@ docker compose up -d --build api scheduler
 
 ---
 
-## 9. Final Recommendation
+## 9. Khuyến nghị cuối
 
-For MOMO E2E, treat "green baseline" and "missing partner demo" as two different fixtures.
+Với MOMO E2E, coi "green baseline" và "missing partner demo" là hai fixture khác nhau.
 
-Do not use one shared seed that:
+Không dùng một shared seed vừa:
 
 * preloads future-wave finalized rows
 * writes only a partial partner file
 * but still expects a clean `Command Center`
 
-That fixture is internally inconsistent with the reconciliation engine and will keep producing confusing totals.
+Fixture đó không nhất quán với reconciliation engine và sẽ tiếp tục tạo total khó hiểu.

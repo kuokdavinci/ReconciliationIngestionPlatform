@@ -1,62 +1,61 @@
-# Performance Tracing Report: Ingestion & Reconciliation Pipeline
+# Báo cáo performance tracing: Ingestion & Reconciliation Pipeline
 
 > Đây là báo cáo lịch sử của giai đoạn migration. Runtime hiện tại đã chọn
 > PostgreSQL làm source of truth cho transaction và reconciliation result;
 > MongoDB không còn là backend thay thế cho reconciliation.
 
-This document captures the performance tracing implementation, baseline measurements, diagnosed bottlenecks, optimizations applied, and results for the 100k records benchmark.
+Tài liệu này ghi lại implementation của performance tracing, baseline measurement,
+bottleneck đã chẩn đoán, optimization đã áp dụng và kết quả benchmark 100k record.
 
-## 1. Baseline Performance & Bottlenecks
+## 1. Baseline performance và bottleneck
 
-### Baseline Timing (Before Optimizations)
-Before adding performance tracing and applying optimizations, the pipeline exhibited the following characteristics:
+### Baseline timing (trước optimization)
+Trước khi thêm performance tracing và áp dụng optimization, pipeline có các đặc điểm sau:
 * **Ingestion (100k ZALOPAY rows):** ~30.0 seconds (3,331 records/sec)
 * **Reconciliation (100k matched rows):** ~20.5 seconds (4,870 records/sec)
 
-### Diagnosed Bottlenecks
-Through the newly introduced structured tracing logs (`PERF_INGEST` and `PERF_RECON`), we traced the exact bottlenecks:
+### Bottleneck đã chẩn đoán
+Structured tracing log mới (`PERF_INGEST` và `PERF_RECON`) cho thấy các bottleneck sau:
 
-1. **Excel Parsing XML / String Match Overhead (Ingestion):**
-   * *Evidence:* `read_file_ms` (workbook load) took ~15.5 seconds, and `parse_rows_ms` took ~4.5 seconds.
-   * *Cause:* Openpyxl's pure-Python read-only parser was CPU-bound and slow. Additionally, it was checking every cell across 40 columns for footer/summary keywords.
+1. **Overhead khi parse XML và match string của Excel (Ingestion):**
+   * *Evidence:* `read_file_ms` (workbook load) mất khoảng 15.5 giây, còn `parse_rows_ms` mất khoảng 4.5 giây.
+   * *Nguyên nhân:* Read-only parser pure-Python của Openpyxl bị giới hạn bởi CPU và chậm; parser còn kiểm tra mọi cell trên 40 column để tìm footer/summary keyword.
    
-2. **Pydantic Serialization/Deserialization Overhead (Reconciliation):**
-   * *Evidence:* `unmatched_detection_ms` took ~6.5 seconds and `result_bulk_write_ms` took ~10.7 seconds.
-   * *Cause:* Generating and serializing 100,000 `ReconciliationResult` Pydantic models via `.model_dump()` and recursive type conversion (`_convert_special_types`) inside the repository helper generated massive CPU overhead during database writes.
+2. **Overhead serialization/deserialization của Pydantic (Reconciliation):**
+   * *Evidence:* `unmatched_detection_ms` mất khoảng 6.5 giây và `result_bulk_write_ms` mất khoảng 10.7 giây.
+   * *Nguyên nhân:* Tạo và serialize 100,000 `ReconciliationResult` Pydantic model qua `.model_dump()` cùng recursive type conversion (`_convert_special_types`) tạo CPU overhead lớn khi write database.
 
-3. **Wrong/Mismatched Lookup Key (Reconciliation):**
-   * *Evidence:* `matched_count` was initially 0, treating all 100k rows as missing partner/internal records.
-   * *Cause:* Mapped key config deviation. ZALOPAY Excel mapping associated column 11 (`zpMaHDon`) with `trace` while internal transactions used `zpTransId` as their matching key. This caused the engine lookup to fail, triggering large CPU loops building unmatched arrays.
-
----
-
-## 2. Optimizations Applied
-
-### A. Summary Pattern Search Optimization in Excel Reader
-* Restrained summary/footer check to only the first 3 columns of each row (`row[:3]`), as summary markers like "Total" or "Footer" never reside in the 40th column.
-* Pre-compiled all skip patterns into lowercase during reader initialization to avoid repeating `.lower()` inside nested cell-level loops.
-* **Impact:** Reduced overall CPU comparison operations by over 90% in the parse stage.
-
-### B. MongoDB Bulk Write bypass of Pydantic Validation (Fast Mode)
-* Added a `fast_mode` toggle to the `ReconciliationEngine`.
-* When `fast_mode` is enabled (activated in production API triggers, scheduler jobs, and approve reprocessing flows):
-  * The engine collects raw Python dictionaries representing the results instead of instantiating `ReconciliationResult` Pydantic objects.
-  * Writes to MongoDB bypass `BaseRepository.insert_many` model dump loops and go directly to `collection.insert_many()` after converting Decimal values.
-* **Impact:** Reduced CPU serialization and bulk write time by ~50%.
-
-### C. Matching Key Alignment for ZALOPAY Config
-* Modified the seeded ZALOPAY mapping config to map `zpMaHDon` to `extra.zpMaHDon` instead of `trace`.
-* This left the `trace` field empty (`None`), prompting `_resolve_partner_txn_id` to fall back on `pd.id` (`zpTransId`), aligning it perfectly with internal transactions.
-* **Impact:** Successfully matched all 99,989 transactions and eliminated unmatched Pydantic generation paths.
-
-### D. Migration to Rust-Backed Calamine Excel Parser
-* Replaced the pure-Python `openpyxl` library with `python-calamine` (an extremely fast Excel parser written in Rust).
-* Re-implemented `ExcelStreamReader` methods to support Calamine's worksheets, ensuring a helper cleans cells (`''` mapped to `None`, and whole floats to `int` for monetary and ID values).
-* **Impact:** Reduced Excel load time (`read_file_ms`) from ~15.5 seconds to just ~1.07 seconds (14.5x faster).
+3. **Lookup key sai/không khớp (Reconciliation):**
+   * *Evidence:* `matched_count` ban đầu bằng 0, khiến toàn bộ 100k row bị coi là thiếu partner/internal record.
+   * *Nguyên nhân:* Mapped key config bị lệch. ZALOPAY Excel mapping gắn column 11 (`zpMaHDon`) với `trace`, trong khi internal transaction dùng `zpTransId` làm matching key.
 
 ---
 
-## 3. Performance Comparison Table
+## 2. Optimization đã áp dụng
+
+### A. Tối ưu summary pattern search trong Excel reader
+* Giới hạn summary/footer check ở ba column đầu (`row[:3]`) vì marker như "Total" hoặc "Footer" không nằm ở column 40.
+* Pre-compile skip pattern thành lowercase khi khởi tạo reader để tránh lặp `.lower()` trong nested cell loop.
+* **Tác động:** Giảm hơn 90% CPU comparison operation ở parse stage.
+
+### B. Bypass Pydantic validation khi MongoDB bulk write (Fast Mode)
+* Thêm toggle `fast_mode` cho `ReconciliationEngine`.
+* Khi bật `fast_mode`, engine thu raw Python dictionary thay cho `ReconciliationResult` Pydantic object; write gọi trực tiếp `collection.insert_many()` sau khi convert Decimal value.
+* **Tác động:** Giảm khoảng 50% CPU serialization và bulk write time.
+
+### C. Căn chỉnh matching key cho ZALOPAY config
+* Sửa seeded ZALOPAY mapping config để map `zpMaHDon` tới `extra.zpMaHDon` thay vì `trace`.
+* `trace` rỗng (`None`) khiến `_resolve_partner_txn_id` fallback về `pd.id` (`zpTransId`) và khớp internal transaction.
+* **Tác động:** Match thành công 99,989 transaction và loại bỏ path tạo unmatched Pydantic.
+
+### D. Migration sang Calamine Excel parser chạy trên Rust
+* Thay `openpyxl` bằng `python-calamine`, Excel parser nhanh viết bằng Rust.
+* Viết lại method của `ExcelStreamReader` để hỗ trợ Calamine worksheet và làm sạch cell (`''` thành `None`, whole float thành `int` cho monetary/ID value).
+* **Tác động:** Giảm Excel load time (`read_file_ms`) từ khoảng 15.5 giây xuống 1.07 giây (nhanh hơn 14.5 lần).
+
+---
+
+## 3. Bảng so sánh performance
 
 | Stage | Records | Before (Baseline) | After (Optimized) | Current Run (Latest) | Records/sec Before | Records/sec After | Records/sec Current |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -65,39 +64,36 @@ Through the newly introduced structured tracing logs (`PERF_INGEST` and `PERF_RE
 
 ---
 
-## 4. Remaining Risks & Future Work
-* **Network & Database Write Limitations:** DB write operations (`db_insert_ms`) now represent the largest portion of ingestion time (~5.75 seconds). This is bounded by local MongoDB disk/write speed.
-* **High Column Width Overhead:** Files with more than 50 columns will still experience parsing overhead. Keeping spreadsheet structures clean is recommended.
+## 4. Risk còn lại và future work
+* **Giới hạn network và database write:** DB write operation (`db_insert_ms`) chiếm phần lớn ingestion time (khoảng 5.75 giây), bị giới hạn bởi tốc độ disk/write của MongoDB local.
+* **Overhead khi có nhiều column:** File trên 50 column vẫn có parsing overhead; nên giữ cấu trúc spreadsheet gọn.
 
-### 5. Architectural Upgrade Options: MongoDB Cluster vs PostgreSQL
-Following deep performance tracing, two main pathways present themselves for scaling past the local MongoDB bottleneck:
+### 5. Architectural upgrade option: MongoDB Cluster và PostgreSQL
+Sau performance tracing chuyên sâu, có hai hướng chính để scale vượt bottleneck MongoDB local:
 
 #### A. MongoDB Cluster / Sharding
-- **Description**: Distributing writes across a sharded MongoDB cluster or using managed MongoDB Atlas.
-- **Pros**: Retains the schema-less document architecture of `DataContainer` models, allowing easy adjustment of mapping configurations.
-- **Cons**: Write network/cluster roundtrip overhead still applies. Still CPU-bound in Python memory during Reconciliation.
+- **Mô tả:** Phân phối write trên sharded MongoDB cluster hoặc MongoDB Atlas managed service.
+- **Ưu điểm:** Giữ schema-less document architecture của `DataContainer` model và dễ điều chỉnh mapping config.
+- **Nhược điểm:** Vẫn có write network/cluster roundtrip overhead; Reconciliation vẫn bị giới hạn bởi Python memory/CPU.
 
 #### B. PostgreSQL (Recommended)
-- **Description**: Migrating the core transactional data (DataContainer, InternalTransaction, ReconciliationResult) to PostgreSQL.
-- **Pros**:
-  - **Ultra-fast Ingestion**: By utilizing PostgreSQL's native `COPY` command (via `asyncpg`'s `copy_records_to_table`), bulk writes bypass SQL parsing and map directly to disk binary format, capable of inserting 100k rows in **~1 second**.
-  - **In-Database Reconciliation**: Replaces the Python-in-memory matching dictionary loop and subsequent 100k bulk writes with a single SQL `LEFT JOIN` statement. This shifts the reconciliation execution entirely to the database engine, reducing matching and writing time from **12.17s to < 1.0s**.
-- **Cons**: Requires defined schema mapping and migrations.
+- **Mô tả:** Migration core transactional data (`DataContainer`, `InternalTransaction`, `ReconciliationResult`) sang PostgreSQL.
+- **Ưu điểm:** PostgreSQL native `COPY` (qua `asyncpg` `copy_records_to_table`) bỏ qua SQL parsing khi bulk write; SQL `LEFT JOIN` chuyển matching vào database engine và giảm matching/write time từ **12.17s xuống dưới 1.0s**.
+- **Nhược điểm:** Cần schema mapping và migration rõ ràng.
 
 ---
 
-## 6. PostgreSQL In-Database Reconciliation Results (Latest)
+## 6. Kết quả PostgreSQL in-database reconciliation (mới nhất)
 
-Following the migration to PostgreSQL, we executed the 100k reproducible benchmark and subsequently applied `UNLOGGED` table optimizations for staging/transaction data. The results are as follows:
+Sau migration sang PostgreSQL, nhóm đã chạy reproducible benchmark 100k và áp
+dụng `UNLOGGED` table optimization cho staging/transaction data. Kết quả như sau:
 
 | Stage | Records | MongoDB Optimized | PostgreSQL (Initial) | PostgreSQL (UNLOGGED Opt) | Total Optimization % (vs MongoDB Optimized) | Records/sec (PostgreSQL UNLOGGED) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Ingestion Pipeline** | 99,997 | 14.359s | 14.136s | **12.555s** | **+12.6%** | 7,964.7 rec/s |
 | **Reconciliation Engine** | 99,997 | 13.436s | 4.577s | **4.577s** | **+65.9%** (3x faster) | 22,160.8 rec/s |
 
-### Key Improvements:
-1. **UNLOGGED Table Performance (Ingestion)**: By changing `partner_transaction` and `internal_transaction` to `UNLOGGED` tables, we bypassed heavy WAL write-ahead log operations. This reduced database write overhead (`db_insert_ms`) by **19.0%**, bringing total ingestion time down from **14.136s** to **12.555s**.
-2. **Reconciliation Engine Execution**: By migrating the matching logic from Python memory loops and MongoDB bulk inserts to PostgreSQL's native SQL join, the matching and result writing stage time was reduced from **13.436s** to **4.577s** (a **65.9% time saving** or **3x speedup**).
-3. **Primary Key Safety**: Switched the reconciliation results table primary key to use native UUID generation (`gen_random_uuid()`) to prevent constraints violation during duplicate matching scenarios.
-
-
+### Cải tiến chính
+1. **UNLOGGED table performance (Ingestion):** Đổi transaction table thành `UNLOGGED` để bỏ qua WAL write-ahead log nặng. Database write overhead (`db_insert_ms`) giảm **19.0%**, tổng ingestion time từ **14.136s** xuống **12.555s**.
+2. **Reconciliation Engine execution:** Chuyển matching logic sang PostgreSQL native SQL join, giảm stage matching/result writing từ **13.436s** xuống **4.577s** (tiết kiệm **65.9%** hoặc nhanh hơn **3 lần**).
+3. **Primary key safety:** Dùng native UUID generation (`gen_random_uuid()`) cho reconciliation result table để tránh constraint violation khi duplicate matching scenario.

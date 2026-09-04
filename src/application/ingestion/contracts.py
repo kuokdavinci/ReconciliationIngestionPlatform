@@ -78,6 +78,8 @@ class ProcessFileCommand:
     backfill_run_id: str | None = None
     fetch_unit_metadata: dict[str, Any] | None = None
     enable_config_health_check: bool = False
+    run_id: str | None = None
+    attempt: int = 1
 
 
 @dataclass
@@ -89,6 +91,7 @@ class IngestionResult:
     errors: list[dict[str, Any]] = field(default_factory=list)
     outcome: Literal[
         "INGESTED",
+        "PARTIAL",
         "FILE_DUPLICATE",
         "FETCH_UNIT_REPLAY",
         "WAITING_REVIEW",
@@ -100,11 +103,12 @@ class IngestionResult:
     quality_decision: QualityDecision = QualityDecision.PASS
     quality_summary: QualitySummary = field(default_factory=QualitySummary)
     orchestration_action: OrchestrationAction = OrchestrationAction.CONTINUE
+    error_fields: set[str] = field(default_factory=set)
 
     def bounded_source_unit_result(self) -> dict[str, Any]:
         """Return the bounded, machine-readable Airflow-facing result."""
 
-        return {
+        payload = {
             "success": self.outcome != "FAILED",
             "outcome": self.outcome,
             "qualityDecision": self.quality_decision.value,
@@ -112,6 +116,9 @@ class IngestionResult:
             "qualityCounters": dict(self.quality_counters),
             "topRuleCodes": list(self.quality_summary.top_rule_codes[:10]),
         }
+        if self.file_record is not None:
+            payload["stageSummary"] = self.file_record.stage_summary
+        return payload
 
 
 def is_missing_ingestion_key_failure(

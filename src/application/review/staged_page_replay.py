@@ -25,8 +25,10 @@ from src.infrastructure.mapping.composition import build_config_loader
 from src.infrastructure.partner_transaction.repository import DataContainerRepository
 from src.infrastructure.postgres.reconciliation_result_repository import ReconciliationResultRepository
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
+from src.pipeline.run_state import IngestionRunState
 from src.application.review.post_approval_reconciliation import (
     _batch_fatal_quality_summary,
+    _update_runtime_observation,
     _persist_packet_quality_gate,
     _quarantine_quality_gate,
     rebind_replacement_transactions as _rebind_replacement_transactions,
@@ -85,6 +87,15 @@ async def _finalize_scheduled_checkpoint_after_replay(
                     "contentHash": getattr(final_page, "content_hash", None),
                     "hasMore": getattr(final_page, "has_more", None),
                 },
+                completed_units=[
+                    {
+                        "unitKey": page.source_unit_key,
+                        "page": page.page,
+                        "cursorBefore": page.cursor_before,
+                        "cursorAfter": page.cursor_after,
+                    }
+                    for page in pages
+                ],
             )
         )
     except (AttributeError, TypeError):
@@ -158,6 +169,11 @@ async def replay_staged_pages(
         await file_repo.collection.delete_many(
             {"fetchUnitMetadata.rawStageKey": raw_stage_key}
         )
+    runtime_state = IngestionRunState(
+        run_id=runtime_run_id,
+        partner=config.partner,
+        attempt=1,
+    )
 
     await updater(
         db,
@@ -167,11 +183,14 @@ async def replay_staged_pages(
         message=f"Replaying {len(pages)} staged raw API pages with the approved mapping.",
         started_at=datetime.now(timezone.utc),
     )
-    await runtime_updater(
+    await _update_runtime_observation(
+        runtime_updater,
         db,
         runtime_run_id,
+        partner=config.partner,
         status=PartnerRuntimeRunStatus.INGESTING,
         message=f"Replaying {len(pages)} staged raw API pages with the approved mapping.",
+        stage_summary=runtime_state.stage_summary,
         started_at=datetime.now(timezone.utc),
     )
 
@@ -183,6 +202,8 @@ async def replay_staged_pages(
         fast_mode=True,
     )
     total_rows = success_rows = duplicate_rows = failed_rows = 0
+    rejected_rows = persistence_failed_rows = quarantined_rows = 0
+    partial_seen = False
     logical_source_file_id: str | None = None
     processed_page_ids: list[str] = []
     source_unit_keys: list[str] = []
@@ -201,7 +222,6 @@ async def replay_staged_pages(
     )
     errors: list[Any] = []
     temp_dir = Path(settings.upload_tmp_dir) / f"raw-stage-{run_id}"
-
     for page in pages:
         source_unit_keys.append(page.source_unit_key)
         destination = temp_dir / Path(
@@ -221,12 +241,16 @@ async def replay_staged_pages(
                 "rawStageKey": raw_stage_key,
                 "reviewPacketId": str(packet.id),
                 "postApprovalRunId": run_id,
+                "sourceFileId": logical_source_file_id,
                 "cursor": page.cursor_before,
+                "page": page.page,
                 "windowStart": page.reconciliation_date.isoformat(),
                 "windowEnd": page.reconciliation_date.isoformat(),
                 "sampleRows": page.sample_rows,
             },
             enable_config_health_check=False,
+            run_id=runtime_run_id,
+            attempt=1,
         )
         orchestration_action = getattr(
             getattr(ingestion_result, "orchestration_action", None),
@@ -239,14 +263,39 @@ async def replay_staged_pages(
             "value",
             getattr(file_record, "processing_status", ProcessingStatus.FAILED),
         )
+        if file_record is not None:
+            page_stage_summary = getattr(file_record, "stage_summary", None) or {}
+            runtime_state.merge_stage_summary(page_stage_summary)
+            runtime_state.set_source_context(
+                source_file_id=str(file_record.id),
+                source_unit_key=page.source_unit_key,
+                page=page.page,
+            )
         stats = ingestion_result.stats
         total_rows += getattr(stats, "total_rows", 0)
         success_rows += getattr(stats, "success_rows", 0)
         duplicate_rows += getattr(stats, "duplicate_rows", 0)
         failed_rows += getattr(stats, "failed_rows", 0)
+        quality_counters = getattr(ingestion_result, "quality_counters", {}) or {}
+        rejected_rows += int(quality_counters.get("rejectedRows", 0) or 0)
+        persistence_failed_rows += int(
+            quality_counters.get("persistenceFailedRows", 0) or 0
+        )
+        quarantined_rows += int(quality_counters.get("quarantinedRows", 0) or 0)
+        partial_seen = partial_seen or status == ProcessingStatus.PARTIAL.value
+        runtime_state.total_rows = total_rows
+        runtime_state.success_rows = success_rows
+        runtime_state.failed_rows = failed_rows
+        runtime_state.duplicate_rows = duplicate_rows
+        runtime_state.rejected_rows = rejected_rows
+        runtime_state.persistence_failed_rows = persistence_failed_rows
+        runtime_state.quarantined_rows = quarantined_rows
         errors.extend(ingestion_result.errors or [])
         ingestion_keys.extend(getattr(ingestion_result, "ingestion_keys", None) or [])
-        if status != ProcessingStatus.COMPLETED.value:
+        if status not in {
+            ProcessingStatus.COMPLETED.value,
+            ProcessingStatus.PARTIAL.value,
+        }:
             message = "Staged raw page ingestion failed after approval."
             batch_fatal_summary = _batch_fatal_quality_summary(ingestion_result)
             ingestion_error = {
@@ -305,11 +354,16 @@ async def replay_staged_pages(
                 error=message,
                 error_code="staged_page_ingestion_failed",
             )
-            await runtime_updater(
+            runtime_state.finish_run()
+            await _update_runtime_observation(
+                runtime_updater,
                 db,
                 runtime_run_id,
+                partner=config.partner,
                 status=PartnerRuntimeRunStatus.FAILED,
                 message=message,
+                error_code="staged_page_ingestion_failed",
+                stage_summary=runtime_state.stage_summary,
                 source_file_id=logical_source_file_id,
                 stats=failure_stats,
                 finished_at=datetime.now(timezone.utc),
@@ -421,11 +475,16 @@ async def replay_staged_pages(
                 "Staged raw page replay is waiting for quarantine review "
                 f"at source unit {page.source_unit_key}."
             )
-            await runtime_updater(
+            runtime_state.finish_run()
+            await _update_runtime_observation(
+                runtime_updater,
                 db,
                 runtime_run_id,
+                partner=config.partner,
                 status=PartnerRuntimeRunStatus.WAITING_REVIEW,
                 message=message,
+                error_code="conflicting_duplicate_review",
+                stage_summary=runtime_state.stage_summary,
                 source_file_id=logical_source_file_id,
                 stats=review_stats,
                 finished_at=datetime.now(timezone.utc),
@@ -513,11 +572,16 @@ async def replay_staged_pages(
             "Staged raw page replay incomplete: "
             f"expected {expected_row_count} rows, ingested {total_rows}."
         )
-        await runtime_updater(
+        runtime_state.finish_run()
+        await _update_runtime_observation(
+            runtime_updater,
             db,
             runtime_run_id,
+            partner=config.partner,
             status=PartnerRuntimeRunStatus.FAILED,
             message=message,
+            error_code="staged_replay_incomplete",
+            stage_summary=runtime_state.stage_summary,
             source_file_id=logical_source_file_id,
             stats=failure_stats,
             finished_at=datetime.now(timezone.utc),
@@ -614,11 +678,14 @@ async def replay_staged_pages(
             quality_gate_status=quality_gate_status,
             quality_gate_summary=quality_gate_summary,
         )
-        await runtime_updater(
+        await _update_runtime_observation(
+            runtime_updater,
             db,
             runtime_run_id,
+            partner=config.partner,
             status=PartnerRuntimeRunStatus.WAITING_REVIEW,
             message=message,
+            stage_summary=runtime_state.stage_summary,
             source_file_id=logical_source_file_id,
             stats=stats_payload,
         )
@@ -648,11 +715,14 @@ async def replay_staged_pages(
         quality_gate_status=quality_gate_status,
         quality_gate_summary=quality_gate_summary,
     )
-    await runtime_updater(
+    await _update_runtime_observation(
+        runtime_updater,
         db,
         runtime_run_id,
+        partner=config.partner,
         status=PartnerRuntimeRunStatus.RECONCILING,
         message="Reconciling the complete logical reconciliation file.",
+        stage_summary=runtime_state.stage_summary,
         source_file_id=logical_source_file_id,
         stats=stats_payload,
     )
@@ -697,6 +767,7 @@ async def replay_staged_pages(
             "reason": error_message,
         }
         errors = [*errors, reconciliation_error]
+        runtime_state.finish_run()
         await updater(
             db,
             run_id,
@@ -708,11 +779,15 @@ async def replay_staged_pages(
             stats=failure_stats,
             errors=errors,
         )
-        await runtime_updater(
+        await _update_runtime_observation(
+            runtime_updater,
             db,
             runtime_run_id,
+            partner=config.partner,
             status=PartnerRuntimeRunStatus.FAILED,
             message=f"Reconciliation failed after batch ingestion: {error_message}",
+            error_code="reconciliation_failed",
+            stage_summary=runtime_state.stage_summary,
             source_file_id=logical_source_file_id,
             stats=failure_stats,
             finished_at=datetime.now(timezone.utc),
@@ -757,6 +832,7 @@ async def replay_staged_pages(
             "checkpointFinalized": False,
         }
         message = "Staged replay could not finalize its source checkpoint."
+        runtime_state.finish_run()
         await updater(
             db,
             run_id,
@@ -769,11 +845,15 @@ async def replay_staged_pages(
             stats=failure_stats,
             errors=[*errors, checkpoint_error],
         )
-        await runtime_updater(
+        await _update_runtime_observation(
+            runtime_updater,
             db,
             runtime_run_id,
+            partner=config.partner,
             status=PartnerRuntimeRunStatus.FAILED,
             message=message,
+            error_code="checkpoint_finalize_failed",
+            stage_summary=runtime_state.stage_summary,
             source_file_id=logical_source_file_id,
             stats=failure_stats,
             reconciliation_count=reconciliation_count,
@@ -790,12 +870,26 @@ async def replay_staged_pages(
             "errors": [*errors, checkpoint_error],
         }
 
+    partial = partial_seen or any(
+        count > 0
+        for count in (rejected_rows, persistence_failed_rows, quarantined_rows)
+    )
+    runtime_state.finish_run()
+    final_stage_summary = runtime_state.stage_summary
     await file_repo.update_one(
         {"_id": logical_source_file_id},
-        {"processingStatus": ProcessingStatus.COMPLETED.value},
+        {
+            "processingStatus": (
+                ProcessingStatus.PARTIAL.value
+                if partial
+                else ProcessingStatus.COMPLETED.value
+            ),
+            "stageSummary": final_stage_summary,
+        },
     )
     stats_payload = {
         **stats_payload,
+        "outcome": "PARTIAL" if partial else "INGESTED",
         "resultCount": reconciliation_count,
     }
     await updater(
@@ -810,11 +904,23 @@ async def replay_staged_pages(
         stats=stats_payload,
         errors=errors,
     )
-    await runtime_updater(
+    final_runtime_status = (
+        PartnerRuntimeRunStatus.PARTIAL
+        if partial
+        else PartnerRuntimeRunStatus.COMPLETED
+    )
+    await _update_runtime_observation(
+        runtime_updater,
         db,
         runtime_run_id,
-        status=PartnerRuntimeRunStatus.COMPLETED,
-        message="All staged raw API pages were grouped and reconciled successfully.",
+        partner=config.partner,
+        status=final_runtime_status,
+        message=(
+            "All staged raw API pages were grouped and reconciled with rejected records."
+            if partial
+            else "All staged raw API pages were grouped and reconciled successfully."
+        ),
+        stage_summary=final_stage_summary,
         source_file_id=logical_source_file_id,
         stats=stats_payload,
         reconciliation_count=reconciliation_count,
@@ -823,11 +929,15 @@ async def replay_staged_pages(
     return {
         "ok": True,
         "stage": "reconciliation",
+        "outcome": "PARTIAL" if partial else "INGESTED",
         "partner": config.partner,
         "date": business_date(packet.reconciliation_date).isoformat(),
-        "processingStatus": ProcessingStatus.COMPLETED.value,
+        "processingStatus": (
+            ProcessingStatus.PARTIAL.value if partial else ProcessingStatus.COMPLETED.value
+        ),
         "fileId": logical_source_file_id,
         "stats": stats_payload,
         "reconciliationCount": reconciliation_count,
         "errors": errors,
+        "stageSummary": final_stage_summary,
     }

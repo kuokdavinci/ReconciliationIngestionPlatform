@@ -3,7 +3,7 @@
 Tests cover:
 1. Happy path — 10 valid rows, all persisted, stats correct
 2. Mixed valid/invalid — 7 valid, 3 invalid rows, stats correct, errors collected
-3. All invalid rows — 0 success, all failed, status COMPLETED
+3. All invalid rows — 0 success, all failed, status PARTIAL
 4. Empty file (header only) — total=0, status COMPLETED
 5. Duplicate file hash — early return with error, no processing
 6. Batch insertion — 250 rows, verify insert_many called 3 times (100 + 100 + 50)
@@ -143,7 +143,7 @@ class TestStandardFile:
         assert result.stats.failed_rows == 2
         assert len(result.errors) >= 2
         assert result.file_record is not None
-        assert result.file_record.processing_status == ProcessingStatus.COMPLETED
+        assert result.file_record.processing_status == ProcessingStatus.PARTIAL
 
         # Verify insert_many was called
         assert mock_data_container_repo.insert_many.call_count >= 1
@@ -209,7 +209,7 @@ class TestCSVFile:
             assert result.stats.success_rows == 2
             assert result.stats.failed_rows == 1
             assert result.file_record is not None
-            assert result.file_record.processing_status == ProcessingStatus.COMPLETED
+            assert result.file_record.processing_status == ProcessingStatus.PARTIAL
 
             mock_data_container_repo.insert_many.assert_called_once()
             batch = mock_data_container_repo.insert_many.call_args[0][0]
@@ -285,10 +285,10 @@ class TestMixedRows:
 
 
 class TestAllInvalidRows:
-    """Test 3: All invalid rows — processing succeeded, just no valid rows."""
+    """Test 3: All invalid rows — processing completed with rejects."""
 
     @pytest.mark.asyncio
-    async def test_all_invalid_rows_status_completed(
+    async def test_all_invalid_rows_status_partial(
         self,
         mock_db: MagicMock,
         mock_reconciliation_file_repo: MagicMock,
@@ -297,7 +297,7 @@ class TestAllInvalidRows:
         sample_mapping_config: MappingConfig,
         all_invalid_excel_file: str,
     ):
-        """0 success, all failed, status COMPLETED (processing succeeded, no valid rows)."""
+        """0 success, all failed, status PARTIAL (processing completed with rejects)."""
         field_mappings = [
             FieldMapping(path="id", column="A", type=FieldMappingType.STRING, required=True),
             FieldMapping(path="trace", column="B", type=FieldMappingType.STRING),
@@ -338,9 +338,9 @@ class TestAllInvalidRows:
         assert result.stats.total_rows == 3
         assert result.stats.success_rows == 0
         assert result.stats.failed_rows == 3
-        # Status is COMPLETED because processing itself succeeded
+        # Safe completion with rejected rows is PARTIAL.
         assert result.file_record is not None
-        assert result.file_record.processing_status == ProcessingStatus.COMPLETED
+        assert result.file_record.processing_status == ProcessingStatus.PARTIAL
         # No data was inserted
         mock_data_container_repo.insert_many.assert_not_called()
 

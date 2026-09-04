@@ -165,6 +165,7 @@ def _normalize_result(raw_result: dict[str, Any]) -> ExecuteStreamResult:
             for key, value in (raw_result.get("stats") or {}).items()
             if isinstance(value, int) and not isinstance(value, bool)
         },
+        stageSummary=raw_result.get("stageSummary") or runtime.get("stageSummary") or {},
     )
 
 
@@ -176,6 +177,8 @@ def _map_outcome(
     raw_outcome = raw_result.get("outcome")
     if runtime_status == "WAITING_REVIEW" or raw_outcome == "WAITING_REVIEW":
         return ExecuteStreamOutcome.WAITING_REVIEW
+    if runtime_status == "PARTIAL" or raw_outcome == "PARTIAL":
+        return ExecuteStreamOutcome.PARTIAL
     if raw_outcome == "BLOCKED":
         return ExecuteStreamOutcome.BLOCKED
     if not raw_result.get("success"):

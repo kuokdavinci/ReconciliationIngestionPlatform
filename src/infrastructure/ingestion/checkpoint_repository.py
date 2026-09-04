@@ -239,15 +239,42 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
                 raise
             return existing, False
 
-    async def claim_unit(self, *, partner: str, fetch_config_id: str, source_type: str, stream_key: str, unit_key: str, mode: IngestionMode = IngestionMode.SCHEDULED, cursor_before: Optional[str] = None, expected_previous_unit_key: Optional[str] = None, max_attempts: Optional[int] = None, config_version: Optional[str] = None, source_endpoint: Optional[str] = None, stream_metadata: Optional[dict[str, Any]] = None, claim_timeout_seconds: int = 900) -> tuple[IngestionCheckpoint, bool]:
+    async def update_source_context(
+        self,
+        checkpoint: IngestionCheckpoint,
+        *,
+        source_file_id: str | None = None,
+        runtime_run_id: str | None = None,
+    ) -> bool:
+        """Attach the file identity after a source unit has been ingested."""
+        fields: dict[str, Any] = {
+            key: value
+            for key, value in (
+                ("sourceFileId", source_file_id),
+                ("runtimeRunId", runtime_run_id),
+            )
+            if value is not None
+        }
+        if not fields:
+            return False
+        fields["updatedAt"] = datetime.now(UTC)
+        result = await self.collection.update_one({"_id": str(checkpoint.id)}, {"$set": fields})
+        return result.modified_count == 1
+
+    async def claim_unit(self, *, partner: str, fetch_config_id: str, source_type: str, stream_key: str, unit_key: str, mode: IngestionMode = IngestionMode.SCHEDULED, cursor_before: Optional[str] = None, expected_previous_unit_key: Optional[str] = None, max_attempts: Optional[int] = None, config_version: Optional[str] = None, source_endpoint: Optional[str] = None, stream_metadata: Optional[dict[str, Any]] = None, runtime_run_id: Optional[str] = None, source_file_id: Optional[str] = None, attempt: Optional[int] = None, claim_timeout_seconds: int = 900) -> tuple[IngestionCheckpoint, bool]:
         identity = self._stream_filter(partner=partner, fetch_config_id=fetch_config_id, source_type=source_type, stream_key=stream_key, mode=mode)
+        stream_metadata = dict(stream_metadata or {})
+        if attempt is not None:
+            stream_metadata.setdefault("attempt", max(1, int(attempt)))
         checkpoint, _ = await self.create_or_get(
             IngestionCheckpoint.model_validate(
                 {
                     **identity,
                     "configVersion": config_version,
                     "sourceEndpoint": source_endpoint,
-                    "streamMetadata": stream_metadata or {},
+                    "runtimeRunId": runtime_run_id,
+                    "sourceFileId": source_file_id,
+                    "streamMetadata": stream_metadata,
                 }
             )
         )
@@ -303,7 +330,9 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
                 "updatedAt": now,
                 "configVersion": config_version,
                 "sourceEndpoint": source_endpoint,
-                "streamMetadata": stream_metadata or {},
+                "runtimeRunId": runtime_run_id,
+                "sourceFileId": source_file_id,
+                "streamMetadata": stream_metadata,
                 "unitTimeline": self._unit_timeline_update(
                     checkpoint,
                     unit_key,
@@ -578,6 +607,7 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
         unit_key: str,
         cursor_after: Optional[str] = None,
         high_water_mark: Optional[dict[str, Any]] = None,
+        completed_units: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
         """Close a staged stream after its scope review has been reconciled."""
 
@@ -593,6 +623,32 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
             "streamEnded": {"$ne": True},
         }
         now = datetime.now(UTC)
+        timeline = {item.unit_key: item for item in checkpoint.unit_timeline}
+        for payload in completed_units or [
+            {"unitKey": unit_key, "cursorAfter": cursor_after}
+        ]:
+            completed_key = payload.get("unitKey") or payload.get("unit_key")
+            if not isinstance(completed_key, str) or not completed_key:
+                continue
+            current = timeline.get(completed_key, SourceUnitSummary(unitKey=completed_key))
+            updates: dict[str, Any] = {
+                "status": SourceUnitStatus.COMPLETED,
+                "last_error": None,
+                "error_code": None,
+                "retryable": None,
+                "next_retry_at": None,
+                "completed_at": now,
+                "updated_at": now,
+            }
+            for payload_key, model_key in (
+                ("page", "page"),
+                ("label", "label"),
+                ("cursorBefore", "cursor_before"),
+                ("cursorAfter", "cursor_after"),
+            ):
+                if payload.get(payload_key) is not None:
+                    updates[model_key] = payload[payload_key]
+            timeline[completed_key] = current.model_copy(update=updates)
         update = {
             "$set": {
                 "status": CheckpointStatus.DISCOVERED.value,
@@ -609,14 +665,9 @@ class IngestionCheckpointRepository(BaseRepository[IngestionCheckpoint], Checkpo
                 "completedAt": now,
                 "updatedAt": now,
                 "lastErrorMetadata": {},
-                "unitTimeline": self._unit_timeline_update(
-                    checkpoint,
-                    unit_key,
-                    status=SourceUnitStatus.COMPLETED,
-                    cursor_after=cursor_after,
-                    clear_error=True,
-                    completed_at=now,
-                ),
+                "unitTimeline": [
+                    item.model_dump(by_alias=True) for item in timeline.values()
+                ],
             },
             "$push": {
                 "recoveryEvents": self._recovery_event_update(

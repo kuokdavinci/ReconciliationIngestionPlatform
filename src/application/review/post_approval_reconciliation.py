@@ -5,13 +5,15 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 import inspect
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from src.analysis.insights import invalidate_insight_cache
+from src.application.automation.stream_runtime import runtime_attempt_event
 from src.application.review.raw_stream import resolve_review_source_file
 from src.application.runtime.service import create_runtime_run, update_runtime_run
 from src.config.settings import settings
-from src.core.utils import business_date, summarize_runtime_error
+from src.core.utils import business_date, sanitize_runtime_error, summarize_runtime_error
 from src.core.enums import ProcessingStatus, ReconciliationScopeType
 from src.domain.ingestion.quarantine import QuarantineQuery
 from src.domain.review.models import (
@@ -21,6 +23,7 @@ from src.domain.review.models import (
     PostApprovalRunStatus,
 )
 from src.domain.runtime.models import PartnerRuntimeRunStatus, PartnerRuntimeTriggerType
+from src.infrastructure.ingestion.checkpoint_repository import IngestionCheckpointRepository
 from src.infrastructure.ingestion.composition import build_ingestion_pipeline
 from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
 from src.infrastructure.ingestion.quarantine_repository import IngestionQuarantineRepository
@@ -36,10 +39,105 @@ from src.infrastructure.review.repository import (
     ReviewPacketRepository,
 )
 from src.infrastructure.runtime.repository import PartnerRuntimeRunRepository
+from src.logging import get_structured_logger
 from pymongo import ReturnDocument
 
 
 ScheduleBackground = Callable[[Awaitable[None]], None]
+
+
+async def _update_runtime_observation(
+    runtime_updater: Callable[..., Awaitable[None]],
+    db: Any,
+    runtime_run_id: str,
+    *,
+    partner: str | None = None,
+    status: PartnerRuntimeRunStatus,
+    message: str,
+    stage_summary: dict[str, Any] | None = None,
+    result: dict[str, Any] | None = None,
+    error_code: str | None = None,
+    **kwargs: Any,
+) -> None:
+    """Persist a lifecycle update together with one bounded attempt event."""
+    summary = dict(stage_summary or {})
+    status_value = getattr(status, "value", status)
+    safe_message = sanitize_runtime_error(message)
+    safe_error_code = (
+        sanitize_runtime_error(error_code, max_length=96)
+        if error_code is not None
+        else None
+    )
+    safe_kwargs = dict(kwargs)
+    if isinstance(safe_kwargs.get("stats"), dict):
+        safe_kwargs["stats"] = {
+            **safe_kwargs["stats"],
+            **(
+                {
+                    "error": sanitize_runtime_error(safe_kwargs["stats"]["error"]),
+                }
+                if safe_kwargs["stats"].get("error") is not None
+                else {}
+            ),
+            **(
+                {
+                    "errorCode": sanitize_runtime_error(
+                        safe_kwargs["stats"]["errorCode"], max_length=96
+                    ),
+                }
+                if safe_kwargs["stats"].get("errorCode") is not None
+                else {}
+            ),
+        }
+    stage = summary.get("currentStage") or {
+        PartnerRuntimeRunStatus.WAITING_REVIEW.value: "QUARANTINING",
+        PartnerRuntimeRunStatus.INGESTING.value: "READING",
+    }.get(str(status_value), "FINALIZING")
+    event_result = {
+        **(result or {}),
+        "stageSummary": summary,
+        "stats": safe_kwargs.get("stats") or {},
+    }
+    if safe_error_code is not None:
+        event_result["errorCode"] = safe_error_code
+    try:
+        await runtime_updater(
+            db,
+            runtime_run_id,
+            status=status,
+            message=safe_message,
+            stage_summary=summary,
+            attempt_event=runtime_attempt_event(
+                SimpleNamespace(id=runtime_run_id),
+                str(status_value),
+                result=event_result,
+                message=safe_message,
+                stage=stage,
+                source_unit_key=summary.get("currentUnitKey"),
+                page=summary.get("currentPage"),
+                duration_ms=summary.get("durationMs"),
+                attempt=1,
+            ),
+            **safe_kwargs,
+        )
+    except Exception:
+        get_structured_logger().emit_ingestion_observability_write_failed(
+            run_id=runtime_run_id,
+            source_file_id=(
+                kwargs.get("source_file_id")
+                or (result or {}).get("sourceFileId")
+                or summary.get("sourceFileId")
+                or "-"
+            ),
+            partner=(
+                partner
+                or (result or {}).get("partner")
+                or summary.get("partner")
+                or "-"
+            ),
+            stage=stage,
+            error_code="runtime_stage_summary_persist_failed",
+        )
 
 
 def _batch_fatal_quality_summary(ingestion_result: Any) -> dict[str, Any] | None:
@@ -282,14 +380,18 @@ async def _mark_latest_post_approval_runtime_failed(
     status = getattr(runtime_run.status, "value", runtime_run.status)
     if status in {
         PartnerRuntimeRunStatus.COMPLETED.value,
+        PartnerRuntimeRunStatus.PARTIAL.value,
         PartnerRuntimeRunStatus.FAILED.value,
     }:
         return
-    await runtime_updater(
+    await _update_runtime_observation(
+        runtime_updater,
         db,
         str(runtime_run.id),
+        partner=partner,
         status=PartnerRuntimeRunStatus.FAILED,
         message=f"Post-approval processing failed: {message}",
+        error_code="POST_APPROVAL_PROCESSING_FAILED",
         stats={
             "errorCode": "POST_APPROVAL_PROCESSING_FAILED",
             "error": message,
@@ -461,6 +563,54 @@ async def continue_waiting_post_approval_run(
             mapping_version=getattr(config, "config_version", None) or str(config.id),
         )
         result_count = len(results)
+        source_metadata = getattr(source_file, "fetch_unit_metadata", None) or {}
+        checkpoint_source_file_ids = {
+            str(candidate)
+            for candidate in (
+                source_file_id,
+                run.source_file_id,
+                source_metadata.get("sourceFileId"),
+            )
+            if candidate
+        }
+        checkpoint_filters = [
+            {"sourceFileId": candidate} for candidate in checkpoint_source_file_ids
+        ]
+        if runtime_id:
+            checkpoint_filters.append({"runtimeRunId": runtime_id})
+        checkpoint_repo = IngestionCheckpointRepository(db)
+        checkpoint = await checkpoint_repo.find_one({"$or": checkpoint_filters})
+        if checkpoint is not None:
+            source_unit_keys = source_metadata.get("sourceUnitKeys") or []
+            if not isinstance(source_unit_keys, list):
+                source_unit_keys = []
+            completed_units: list[dict[str, Any]] = [
+                {"unitKey": key, "page": index}
+                for index, key in enumerate(source_unit_keys, start=1)
+                if isinstance(key, str) and key
+            ]
+            if not completed_units:
+                completed_units = [
+                    {
+                        "unitKey": unit.unit_key,
+                        "page": unit.page,
+                        "cursorBefore": unit.cursor_before,
+                        "cursorAfter": unit.cursor_after,
+                    }
+                    for unit in checkpoint.unit_timeline
+                ]
+            completion_key = (
+                completed_units[-1].get("unitKey")
+                if completed_units
+                else checkpoint.current_unit_key
+                or checkpoint.last_completed_unit_key
+            )
+            if isinstance(completion_key, str) and completion_key:
+                await checkpoint_repo.mark_stream_completed_after_review(
+                    checkpoint,
+                    unit_key=completion_key,
+                    completed_units=completed_units or [{"unitKey": completion_key}],
+                )
         await update_post_approval_run(
             db,
             run_id,
@@ -480,14 +630,40 @@ async def continue_waiting_post_approval_run(
             quality_gate_summary=quality_gate_summary,
         )
         if runtime_id:
-            await update_runtime_run(
+            continuation_status = (
+                PartnerRuntimeRunStatus.PARTIAL
+                if getattr(
+                    getattr(source_file, "processing_status", None),
+                    "value",
+                    getattr(source_file, "processing_status", None),
+                )
+                == ProcessingStatus.PARTIAL.value
+                else PartnerRuntimeRunStatus.COMPLETED
+            )
+            await _update_runtime_observation(
+                update_runtime_run,
                 db,
                 runtime_id,
-                status=PartnerRuntimeRunStatus.COMPLETED,
+                partner=config.partner,
+                status=continuation_status,
                 message="Reconciliation completed after quarantine review.",
+                stage_summary=getattr(source_file, "stage_summary", None) or {},
                 source_file_id=source_file_id,
                 reconciliation_count=result_count,
-                stats={"resultCount": result_count, "qualityGate": quality_gate_summary},
+                stats={
+                    "outcome": (
+                        "PARTIAL"
+                        if getattr(
+                            getattr(source_file, "processing_status", None),
+                            "value",
+                            getattr(source_file, "processing_status", None),
+                        )
+                        == ProcessingStatus.PARTIAL.value
+                        else "INGESTED"
+                    ),
+                    "resultCount": result_count,
+                    "qualityGate": quality_gate_summary,
+                },
                 finished_at=datetime.now(timezone.utc),
             )
         await cache_invalidator(config.partner, date_value.strftime("%Y-%m-%d"))
@@ -568,11 +744,14 @@ async def reconcile_approved_packet(
         if staged_result is not None:
             return staged_result
     if not source_file_path or not source_file_id:
-        await runtime_updater(
+        await _update_runtime_observation(
+            runtime_updater,
             db,
             runtime_run_id,
+            partner=config.partner,
             status=PartnerRuntimeRunStatus.FAILED,
             message="Review packet has no source file attached for post-approval processing.",
+            error_code="source_file_missing",
             finished_at=datetime.now(timezone.utc),
         )
         await updater(
@@ -589,11 +768,14 @@ async def reconcile_approved_packet(
         resolved_source_path = source_resolver(packet)
     except (FileNotFoundError, ValueError):
         message = f"Source file is no longer available at {source_file_path}."
-        await runtime_updater(
+        await _update_runtime_observation(
+            runtime_updater,
             db,
             runtime_run_id,
+            partner=config.partner,
             status=PartnerRuntimeRunStatus.FAILED,
             message=message,
+            error_code="source_file_unavailable",
             finished_at=datetime.now(timezone.utc),
         )
         await updater(
@@ -610,11 +792,14 @@ async def reconcile_approved_packet(
     source_file = await file_repo.find_one({"_id": source_file_id})
     if source_file is None:
         message = f"Source file record {source_file_id} was not found."
-        await runtime_updater(
+        await _update_runtime_observation(
+            runtime_updater,
             db,
             runtime_run_id,
+            partner=config.partner,
             status=PartnerRuntimeRunStatus.FAILED,
             message=message,
+            error_code="source_file_not_found",
             finished_at=datetime.now(timezone.utc),
         )
         await updater(
@@ -641,9 +826,11 @@ async def reconcile_approved_packet(
         message="Ingesting partner file with the approved mapping.",
         started_at=datetime.now(timezone.utc),
     )
-    await runtime_updater(
+    await _update_runtime_observation(
+        runtime_updater,
         db,
         runtime_run_id,
+        partner=config.partner,
         status=PartnerRuntimeRunStatus.INGESTING,
         message="Ingesting partner file with the approved mapping.",
         started_at=datetime.now(timezone.utc),
@@ -665,20 +852,29 @@ async def reconcile_approved_packet(
         config_version=config.config_version,
         fetch_unit_metadata={
             "sourceEndpoint": f"review://{source_file_id}",
+            "sourceFileId": source_file_id,
             "cursor": f"post-approval:{run_id}",
             "reviewPacketId": str(packet.id),
             "postApprovalRunId": run_id,
             "sourceUnitKey": getattr(source_file, "fetch_unit_key", None),
+            "page": 1,
             "windowStart": source_file.reconciliation_date.isoformat(),
             "windowEnd": source_file.reconciliation_date.isoformat(),
         },
         enable_config_health_check=False,
+        run_id=runtime_run_id,
+        attempt=1,
     )
     file_record = ingestion_result.file_record
     if file_record is None:
         raise RuntimeError("Ingestion did not return a source file record.")
+    ingestion_stage_summary = dict(getattr(file_record, "stage_summary", None) or {})
     processing_status = getattr(file_record.processing_status, "value", file_record.processing_status)
-    if processing_status == ProcessingStatus.COMPLETED.value:
+    safe_processing_statuses = {
+        ProcessingStatus.COMPLETED.value,
+        ProcessingStatus.PARTIAL.value,
+    }
+    if processing_status in safe_processing_statuses:
         await replacement_rebinder(
             db=db,
             packet=packet,
@@ -686,8 +882,13 @@ async def reconcile_approved_packet(
             ingestion_result=ingestion_result,
             source_file_id=str(file_record.id),
         )
+    runtime_outcome = {
+        ProcessingStatus.COMPLETED.value: "INGESTED",
+        ProcessingStatus.PARTIAL.value: "PARTIAL",
+    }.get(processing_status, "FAILED")
     result = {
-        "ok": processing_status == ProcessingStatus.COMPLETED.value,
+        "ok": processing_status in safe_processing_statuses,
+        "outcome": runtime_outcome,
         "stage": "ingestion",
         "partner": config.partner,
         "date": business_date(source_file.reconciliation_date).isoformat(),
@@ -698,12 +899,13 @@ async def reconcile_approved_packet(
             "successRows": ingestion_result.stats.success_rows,
             "duplicateRows": ingestion_result.stats.duplicate_rows,
             "failedRows": ingestion_result.stats.failed_rows,
+            "outcome": runtime_outcome,
             "qualityCounters": dict(getattr(ingestion_result, "quality_counters", {}) or {}),
         },
         "errors": ingestion_result.errors,
     }
     batch_fatal_summary = _batch_fatal_quality_summary(ingestion_result)
-    if processing_status != ProcessingStatus.COMPLETED.value:
+    if processing_status not in safe_processing_statuses:
         if batch_fatal_summary is not None:
             quality_gate_status = PostApprovalQualityGateStatus.FAIL
             result["qualityGateStatus"] = quality_gate_status.value
@@ -712,11 +914,15 @@ async def reconcile_approved_packet(
                 db, packet, run_id, quality_gate_status, batch_fatal_summary
             )
             failure_stats = {**result["stats"], "qualityGate": batch_fatal_summary}
-            await runtime_updater(
+            await _update_runtime_observation(
+                runtime_updater,
                 db,
                 runtime_run_id,
+                partner=config.partner,
                 status=PartnerRuntimeRunStatus.FAILED,
                 message="Post-approval quality gate failed before reconciliation.",
+                error_code="quality_batch_fatal",
+                stage_summary=ingestion_stage_summary,
                 source_file_id=str(file_record.id),
                 stats=failure_stats,
                 finished_at=datetime.now(timezone.utc),
@@ -735,11 +941,15 @@ async def reconcile_approved_packet(
                 quality_gate_summary=batch_fatal_summary,
             )
             return result
-        await runtime_updater(
+        await _update_runtime_observation(
+            runtime_updater,
             db,
             runtime_run_id,
+            partner=config.partner,
             status=PartnerRuntimeRunStatus.FAILED,
             message="Ingestion failed after approval.",
+            error_code="source_persist_error",
+            stage_summary=ingestion_stage_summary,
             source_file_id=str(file_record.id),
             stats=result["stats"],
             finished_at=datetime.now(timezone.utc),
@@ -763,11 +973,15 @@ async def reconcile_approved_packet(
         await _persist_packet_quality_gate(
             db, packet, run_id, quality_gate_status, quality_gate_summary
         )
-        await runtime_updater(
+        await _update_runtime_observation(
+            runtime_updater,
             db,
             runtime_run_id,
+            partner=config.partner,
             status=PartnerRuntimeRunStatus.FAILED,
             message="Post-approval quality gate failed before reconciliation.",
+            error_code="quality_batch_fatal",
+            stage_summary=ingestion_stage_summary,
             source_file_id=str(file_record.id),
             stats={**result["stats"], "qualityGate": quality_gate_summary},
             finished_at=datetime.now(timezone.utc),
@@ -819,11 +1033,14 @@ async def reconcile_approved_packet(
             quality_gate_status=quality_gate_status,
             quality_gate_summary=quality_gate_summary,
         )
-        await runtime_updater(
-            db,
-            runtime_run_id,
-            status=PartnerRuntimeRunStatus.WAITING_REVIEW,
+        await _update_runtime_observation(
+        runtime_updater,
+        db,
+        runtime_run_id,
+        partner=config.partner,
+        status=PartnerRuntimeRunStatus.WAITING_REVIEW,
             message=message,
+            stage_summary=ingestion_stage_summary,
             source_file_id=str(file_record.id),
             stats=result["stats"],
         )
@@ -844,11 +1061,14 @@ async def reconcile_approved_packet(
         quality_gate_status=quality_gate_status,
         quality_gate_summary=quality_gate_summary,
     )
-    await runtime_updater(
+    await _update_runtime_observation(
+        runtime_updater,
         db,
         runtime_run_id,
+        partner=config.partner,
         status=PartnerRuntimeRunStatus.RECONCILING,
         message="Reconciling ingested partner rows against internal transactions.",
+        stage_summary=ingestion_stage_summary,
         source_file_id=str(file_record.id),
         stats=result["stats"],
     )
@@ -895,11 +1115,25 @@ async def reconcile_approved_packet(
         quality_gate_status=quality_gate_status,
         quality_gate_summary=quality_gate_summary,
     )
-    await runtime_updater(
+    terminal_runtime_status = (
+        PartnerRuntimeRunStatus.PARTIAL
+        if processing_status == ProcessingStatus.PARTIAL.value
+        else PartnerRuntimeRunStatus.COMPLETED
+    )
+    terminal_runtime_message = (
+        "Reconciliation completed with rejected records."
+        if terminal_runtime_status is PartnerRuntimeRunStatus.PARTIAL
+        else "Reconciliation completed successfully."
+    )
+    result["stageSummary"] = ingestion_stage_summary
+    await _update_runtime_observation(
+        runtime_updater,
         db,
         runtime_run_id,
-        status=PartnerRuntimeRunStatus.COMPLETED,
-        message="Reconciliation completed successfully.",
+        partner=config.partner,
+        status=terminal_runtime_status,
+        message=terminal_runtime_message,
+        stage_summary=ingestion_stage_summary,
         source_file_id=str(file_record.id),
         stats={"resultCount": result_count, **result["stats"]},
         reconciliation_count=result_count,

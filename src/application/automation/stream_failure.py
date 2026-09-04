@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Any
 
-from src.core.utils import summarize_runtime_error
+from src.core.utils import sanitize_runtime_error, summarize_runtime_error
 
 
 def fetch_error_code(error: str | None, metadata: dict[str, Any] | None = None) -> str:
@@ -42,8 +42,8 @@ def paginated_fetch_failure_result(
         result["stoppedAt"] = stopped_at
     result.update(
         {
-            "error": error,
-            "errorCode": error_code,
+            "error": sanitize_runtime_error(error),
+            "errorCode": sanitize_runtime_error(error_code, max_length=96),
             "retryable": retryable,
         }
     )
@@ -57,7 +57,8 @@ def file_fetch_failure_result(error: str | None) -> dict[str, Any]:
         "success": False,
         "processed": 0,
         "failed": 1,
-        "error": error,
+        "error": sanitize_runtime_error(error),
+        "errorCode": "file_fetch_error",
     }
 
 
@@ -70,7 +71,7 @@ def unexpected_failure_result(
         "success": False,
         "processed": 0,
         "failed": 1,
-        "error": summarize_error(exc),
+        "error": sanitize_runtime_error(summarize_error(exc)),
     }
 
 

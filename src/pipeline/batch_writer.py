@@ -1,6 +1,7 @@
 """Batch persistence coordination for ingestion."""
 
 import asyncio
+import time
 from typing import Any
 
 from src.domain.ingestion.quality import QualityRuleCode
@@ -28,9 +29,10 @@ class BatchWriteCoordinator:
                 "Batch row context accounting mismatch: "
                 f"contexts={len(row_contexts)}, submitted={len(batch)}"
             )
-        result = await self._repository.insert_many(
-            batch,
-            ordered=self._ordered,
+        started = time.perf_counter()
+        result = await self._repository.insert_many(batch, ordered=self._ordered)
+        result.timings_ms.setdefault(
+            "batch_wall_ms", (time.perf_counter() - started) * 1000
         )
         if result.attempted != len(batch):
             raise ValueError(

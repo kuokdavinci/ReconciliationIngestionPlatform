@@ -43,6 +43,7 @@ async def create_runtime_run(
     mapping_version: Optional[str] = None,
     validation_state: Optional[str] = None,
     orchestration: RuntimeOrchestrationContext | dict[str, Any] | None = None,
+    stage_summary: Optional[dict[str, Any]] = None,
 ) -> PartnerRuntimeRun:
     repo = PartnerRuntimeRunRepository(db)
     orchestration_context = (
@@ -62,6 +63,7 @@ async def create_runtime_run(
         mappingVersion=mapping_version,
         validationState=validation_state,
         orchestration=orchestration_context,
+        stageSummary=stage_summary or {},
     )
     await repo.create(run)
     return run
@@ -84,6 +86,7 @@ async def update_runtime_run(
     finished_at: Optional[datetime] = None,
     clear_finished_at: bool = False,
     attempt_event: Optional[dict[str, Any]] = None,
+    stage_summary: Optional[dict[str, Any]] = None,
 ) -> None:
     update: dict[str, Any] = {"updatedAt": datetime.now(timezone.utc)}
     if status is not None:
@@ -103,6 +106,8 @@ async def update_runtime_run(
         update["orchestration"] = context.model_dump(by_alias=True, mode="json")
     if stats is not None:
         update["stats"] = stats
+    if stage_summary is not None:
+        update["stageSummary"] = stage_summary
     if reconciliation_count is not None:
         update["reconciliationCount"] = reconciliation_count
     if started_at is not None:

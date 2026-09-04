@@ -11,6 +11,7 @@ SUCCESS_OUTCOMES = {
     ExecuteStreamOutcome.NO_DATA,
     ExecuteStreamOutcome.ALREADY_PROCESSED,
     ExecuteStreamOutcome.SAFE_DUPLICATE,
+    ExecuteStreamOutcome.PARTIAL,
 }
 
 

@@ -14,6 +14,7 @@ class ExecuteStreamOutcome(StrEnum):
     NO_DATA = "NO_DATA"
     ALREADY_PROCESSED = "ALREADY_PROCESSED"
     SAFE_DUPLICATE = "SAFE_DUPLICATE"
+    PARTIAL = "PARTIAL"
     WAITING_REVIEW = "WAITING_REVIEW"
     BLOCKED = "BLOCKED"
     FAILED = "FAILED"
@@ -74,3 +75,4 @@ class ExecuteStreamResult(BaseModel):
     message: str | None = None
     checkpoint: dict[str, Any] | None = None
     counters: dict[str, int] = Field(default_factory=dict)
+    stage_summary: dict[str, Any] = Field(default_factory=dict, alias="stageSummary")

@@ -142,6 +142,8 @@ async def resume_quarantined_source_unit(
         structured_logger=None,
         mapping_config_version=mapping_version,
         config_health_check_enabled=False,
+        reconciliation_run_id=checkpoint.runtime_run_id,
+        attempt=max(1, checkpoint.attempt_count + 1),
     )
 
     async def resume_ingest(resume_unit: SourceUnitMetadata) -> Any:
@@ -150,7 +152,10 @@ async def resume_quarantined_source_unit(
         # conflicting row and immediately creating the same hold again.
         if source_file is not None and _status_value(
             getattr(source_file, "processing_status", None)
-        ) == ProcessingStatus.COMPLETED.value:
+        ) in {
+            ProcessingStatus.COMPLETED.value,
+            ProcessingStatus.PARTIAL.value,
+        }:
             reconciliation_results = await build_reconciliation_service(db).reconcile(
                 checkpoint.partner,
                 reconciliation_date,
@@ -169,18 +174,26 @@ async def resume_quarantined_source_unit(
             await raw_page_repo.mark_consumed(resume_unit.source_unit_key or "")
         await cleanup_source_unit(fetch_config, resume_unit)
 
+    stream_identity: dict[str, Any] = {
+        "partner": checkpoint.partner,
+        "fetchConfigId": checkpoint.fetch_config_id,
+        "sourceType": checkpoint.source_type,
+        "streamKey": checkpoint.stream_key,
+        "configVersion": checkpoint.config_version,
+        "sourceEndpoint": checkpoint.source_endpoint,
+    }
+    if checkpoint.runtime_run_id is not None:
+        stream_identity["runtimeRunId"] = checkpoint.runtime_run_id
+    if checkpoint.source_file_id is not None:
+        stream_identity["sourceFileId"] = checkpoint.source_file_id
+    if checkpoint.attempt_count:
+        stream_identity["attempt"] = checkpoint.attempt_count + 1
+
     result = await resume_held_source_unit(
         checkpoint_repo,
         quarantine_repo,
         source_unit_key=source_unit_key,
-        stream_identity={
-            "partner": checkpoint.partner,
-            "fetchConfigId": checkpoint.fetch_config_id,
-            "sourceType": checkpoint.source_type,
-            "streamKey": checkpoint.stream_key,
-            "configVersion": checkpoint.config_version,
-            "sourceEndpoint": checkpoint.source_endpoint,
-        },
+        stream_identity=stream_identity,
         unit=unit,
         ingest_unit=resume_ingest,
         mode=checkpoint.mode,

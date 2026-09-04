@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import time
 from typing import Any, Literal, Optional
+from uuid import uuid4
 
 from src.application.ingestion.contracts import (
     IngestionResult,
@@ -17,6 +18,7 @@ from src.config.config_health import (
 )
 from src.config.loader import ConfigLoader, ConfigLoadError
 from src.core.enums import ProcessingStatus
+from src.core.utils import sanitize_runtime_error
 from src.domain.ingestion.quality import (
     QualityEvaluation,
     QualityOutcome,
@@ -72,7 +74,10 @@ def _is_missing_ingestion_key_failure(state: IngestionRunState) -> bool:
         total_rows=state.total_rows,
         success_rows=state.success_rows,
         failed_rows=state.failed_rows,
-        errors=state.errors,
+        errors=[
+            *state.errors,
+            *({"field": field} for field in state.error_fields),
+        ],
     )
 
 
@@ -172,6 +177,32 @@ class IngestionPipeline:
             raise RuntimeError("IngestionPipeline requires an injected mapping repository")
         return self._mapping_repo
 
+    async def _persist_stage_summary(
+        self,
+        file_record: ReconciliationFile | None,
+        state: IngestionRunState,
+    ) -> None:
+        """Persist observability best-effort; it must not break ingestion."""
+        if file_record is None:
+            return
+        file_record.stage_summary = state.stage_summary
+        if self._recon_repo is None:
+            return
+        try:
+            await self._recon_repo.update_stage_summary(file_record.id, state.stage_summary)
+        except Exception:
+            emitter = getattr(self._logger, "emit_ingestion_observability_write_failed", None)
+            if emitter is not None:
+                try:
+                    emitter(
+                        run_id=state.run_id,
+                        source_file_id=str(file_record.id),
+                        partner=state.partner,
+                        stage=state.current_stage,
+                    )
+                except Exception:
+                    pass
+
     def _emit_stage(
         self,
         stage: IngestionStage,
@@ -182,10 +213,36 @@ class IngestionPipeline:
         state: IngestionRunState | None = None,
     ) -> None:
         if state is not None:
+            state.set_source_context(
+                run_id=run_id,
+                source_file_id=source_file_id,
+            )
+            if error_code is not None:
+                state.last_error_code = sanitize_runtime_error(error_code, max_length=96)
             state.begin_stage(stage.value)
         emitter = getattr(self._logger, "emit_ingestion_stage", None)
         if emitter is not None:
-            emitter(stage.value, run_id, source_file_id, error_code)
+            try:
+                emitter(
+                    stage.value,
+                    run_id,
+                    source_file_id,
+                    error_code,
+                    partner=state.partner if state is not None else None,
+                    source_unit_key=(state.current_unit_key if state is not None else None),
+                    page=state.current_page if state is not None else None,
+                    attempt=state.attempt if state is not None else 1,
+                    checkpoint_before=(
+                        state.checkpoint_before if state is not None else None
+                    ),
+                    checkpoint_after=(
+                        state.checkpoint_after if state is not None else None
+                    ),
+                    error=state.last_error if state is not None else None,
+                )
+            except TypeError:
+                # Keep lightweight legacy logger adapters source-compatible.
+                emitter(stage.value, run_id, source_file_id, error_code)
 
     async def _compute_file_hash(self, file_path: str) -> str:
         """Compatibility seam for file hash tests and legacy callers."""
@@ -223,6 +280,7 @@ class IngestionPipeline:
         *,
         outcome: Literal[
             "INGESTED",
+            "PARTIAL",
             "FILE_DUPLICATE",
             "FETCH_UNIT_REPLAY",
             "WAITING_REVIEW",
@@ -230,6 +288,8 @@ class IngestionPipeline:
         ] = "INGESTED",
         duplicate_code: str | None = None,
     ) -> IngestionResult:
+        if outcome == "INGESTED" and state.is_partial:
+            outcome = "PARTIAL"
         return IngestionResult(
             file_record=file_record,
             stats=state.stats,
@@ -241,6 +301,7 @@ class IngestionPipeline:
             quality_decision=state.quality_decision,
             quality_summary=state.quality_summary,
             orchestration_action=state.orchestration_action,
+            error_fields=set(state.error_fields),
         )
 
     def _evaluate_file_quality_gate(
@@ -305,6 +366,8 @@ class IngestionPipeline:
             backfill_run_id=command.backfill_run_id,
             fetch_unit_metadata=command.fetch_unit_metadata,
             enable_config_health_check=command.enable_config_health_check,
+            run_id=command.run_id,
+            attempt=command.attempt,
         )
 
     async def process_file(
@@ -318,6 +381,8 @@ class IngestionPipeline:
         backfill_run_id: str | None = None,
         fetch_unit_metadata: Optional[dict[str, Any]] = None,
         enable_config_health_check: bool = False,
+        run_id: str | None = None,
+        attempt: int = 1,
     ) -> IngestionResult:
         """Compatibility wrapper for callers using the legacy argument list."""
         return await self.execute(
@@ -331,6 +396,8 @@ class IngestionPipeline:
                 backfill_run_id=backfill_run_id,
                 fetch_unit_metadata=fetch_unit_metadata,
                 enable_config_health_check=enable_config_health_check,
+                run_id=run_id,
+                attempt=attempt,
             )
         )
 
@@ -339,7 +406,11 @@ class IngestionPipeline:
         command: ProcessFileCommand,
         state: IngestionRunState,
     ) -> _ClaimedFile:
-        self._emit_stage(IngestionStage.CLAIMING, run_id="pending", state=state)
+        self._emit_stage(
+            IngestionStage.CLAIMING,
+            run_id=state.run_id or "pending",
+            state=state,
+        )
         file_hash = await self._compute_file_hash(command.file_path)
         fetch_unit_key = self._derive_fetch_unit_key(
             partner=command.partner,
@@ -363,11 +434,14 @@ class IngestionPipeline:
             repository=self._require_file_repository(),
         )
         file_record = claim.file_record
-        run_id = str(file_record.id)
+        run_id = state.run_id
+        if not run_id or run_id == "pending":
+            run_id = str(file_record.id)
+        state.set_source_context(run_id=run_id, source_file_id=str(file_record.id))
         self._emit_stage(
             IngestionStage.CLAIMING,
             run_id=run_id,
-            source_file_id=run_id,
+            source_file_id=str(file_record.id),
             state=state,
         )
         return _ClaimedFile(
@@ -377,7 +451,7 @@ class IngestionPipeline:
             file_hash=file_hash,
             fetch_unit_key=fetch_unit_key,
             run_id=run_id,
-            source_file_id=run_id,
+            source_file_id=str(file_record.id),
         )
 
     def _duplicate_result_if_any(
@@ -551,6 +625,7 @@ class IngestionPipeline:
         started_at: float,
     ) -> None:
         post_start = time.perf_counter()
+        state.record_batch_metrics(row_result.row_metrics.as_dict())
         self._emit_stage(
             IngestionStage.FINALIZING,
             run_id=claimed.run_id,
@@ -586,6 +661,13 @@ class IngestionPipeline:
             db_write_operation_count=row_result.row_metrics.db_write_count + 2,
             error_count=len(state.errors),
             slowest_batch_ms=row_result.row_metrics.slowest_batch_ms,
+            wall_clock_ms=state.duration_ms or 0.0,
+            total_batch_wall_ms=row_result.row_metrics.total_batch_wall_ms,
+            persistence_window_ms=row_result.row_metrics.persistence_window_ms,
+            mapping_ms=row_result.row_metrics.mapping_ms,
+            copy_ms=row_result.row_metrics.copy_ms,
+            insert_classify_ms=row_result.row_metrics.insert_classify_ms,
+            transaction_overhead_ms=row_result.row_metrics.transaction_overhead_ms,
         )
         self._log_performance(performance)
 
@@ -600,6 +682,8 @@ class IngestionPipeline:
         backfill_run_id: str | None = None,
         fetch_unit_metadata: Optional[dict[str, Any]] = None,
         enable_config_health_check: bool = False,
+        run_id: str | None = None,
+        attempt: int = 1,
     ) -> IngestionResult:
         """Process an entire reconciliation file end-to-end.
 
@@ -634,9 +718,22 @@ class IngestionPipeline:
             backfill_run_id=backfill_run_id,
             fetch_unit_metadata=fetch_unit_metadata,
             enable_config_health_check=enable_config_health_check,
+            run_id=run_id,
+            attempt=attempt,
         )
         self._require_repository_ports(require_mapping=command.enable_config_health_check)
-        state = IngestionRunState()
+        state = IngestionRunState(
+            run_id=command.run_id or str(uuid4()),
+            partner=command.partner,
+            attempt=max(1, command.attempt),
+        )
+        metadata = command.fetch_unit_metadata or {}
+        state.set_source_context(
+            source_unit_key=metadata.get("sourceUnitKey") or metadata.get("source_unit_key"),
+            page=metadata.get("page"),
+            checkpoint_before=metadata.get("checkpointBefore"),
+            checkpoint_after=metadata.get("checkpointAfter"),
+        )
         file_record: ReconciliationFile | None = None
 
         try:
@@ -651,9 +748,16 @@ class IngestionPipeline:
             if duplicate_result is not None:
                 return duplicate_result
 
-            self._logger.emit_file_started(claimed.run_id, claimed.file_name, command.partner)
+            await self._persist_stage_summary(file_record, state)
+            self._logger.emit_file_started(
+                claimed.source_file_id,
+                claimed.file_name,
+                command.partner,
+            )
             config = await self._prepare_mapping(command, claimed, state)
             if config is None:
+                state.finish_run()
+                await self._persist_stage_summary(file_record, state)
                 return self._build_result(file_record, state, outcome="WAITING_REVIEW")
             file_quality = self._evaluate_file_quality_gate(
                 file_path=command.file_path,

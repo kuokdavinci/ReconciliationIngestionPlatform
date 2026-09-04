@@ -68,6 +68,7 @@ class StreamRunContext:
     run: Any
     cleanup_unit: Callable[..., Awaitable[None]]
     dependencies: StreamRunnerDependencies
+    on_unit_observed: Any = None
 
 
 class StreamLifecycle:
@@ -90,6 +91,10 @@ class StreamLifecycle:
         self.orchestration = orchestration
         self.dependencies = dependencies
         self.run: Any = None
+        self.runtime_state: Any = None
+
+    def attach_runtime_state(self, state: Any) -> None:
+        self.runtime_state = state
 
     async def start(self) -> Any:
         if self.runtime_run_id is None:
@@ -118,35 +123,52 @@ class StreamLifecycle:
             self.run.orchestration = RuntimeOrchestrationContext.model_validate(
                 self.orchestration
             )
-        await self.dependencies.update_runtime_run(
-            self.db,
-            str(self.run.id),
-            status=PartnerRuntimeRunStatus.FETCHING,
-            message="Fetching source units sequentially.",
-            orchestration=self.orchestration,
-            attempt_event=self.dependencies.runtime_attempt_event(
-                self.run,
-                "STARTED",
+        try:
+            await self.dependencies.update_runtime_run(
+                self.db,
+                str(self.run.id),
+                status=PartnerRuntimeRunStatus.FETCHING,
                 message="Fetching source units sequentially.",
-            ),
-        )
+                orchestration=self.orchestration,
+                attempt_event=self.dependencies.runtime_attempt_event(
+                    self.run,
+                    "STARTED",
+                    stage="CLAIMING",
+                    message="Fetching source units sequentially.",
+                ),
+            )
+        except Exception:
+            pass
         return self.run
 
     async def mark_ingesting(self) -> None:
-        await self.dependencies.update_runtime_run(
-            self.db,
-            str(self.run.id),
-            status=PartnerRuntimeRunStatus.INGESTING,
-            message="Processing source units sequentially.",
-        )
+        try:
+            await self.dependencies.update_runtime_run(
+                self.db,
+                str(self.run.id),
+                status=PartnerRuntimeRunStatus.INGESTING,
+                message="Processing source units sequentially.",
+            )
+        except Exception:
+            pass
 
     async def finish(self, result: dict[str, Any], stats: dict[str, int]) -> dict[str, Any]:
+        stage_summary = None
+        if self.runtime_state is not None:
+            if result.get("error"):
+                self.runtime_state.record_error(
+                    result["error"],
+                    result.get("errorCode"),
+                )
+            self.runtime_state.finish_run()
+            stage_summary = self.runtime_state.stage_summary
         return await self.dependencies.finish_source_stream_run(
             db=self.db,
             run=self.run,
             partner=self.config.partner,
             result=result,
             stats=stats,
+            stage_summary=stage_summary,
         )
 
 

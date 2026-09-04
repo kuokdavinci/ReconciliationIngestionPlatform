@@ -19,6 +19,13 @@ class IngestionPerformance:
     db_write_operation_count: int
     error_count: int
     slowest_batch_ms: float
+    wall_clock_ms: float = 0.0
+    total_batch_wall_ms: float = 0.0
+    persistence_window_ms: float = 0.0
+    mapping_ms: float = 0.0
+    copy_ms: float = 0.0
+    insert_classify_ms: float = 0.0
+    transaction_overhead_ms: float = 0.0
 
     def to_log_line(self) -> str:
         return (
@@ -36,4 +43,11 @@ class IngestionPerformance:
             f"db_write_operation_count={self.db_write_operation_count} "
             f"error_count={self.error_count} "
             f"slowest_batch_ms={self.slowest_batch_ms:.2f}"
+            f" wall_clock_ms={self.wall_clock_ms:.2f}"
+            f" total_batch_wall_ms={self.total_batch_wall_ms:.2f}"
+            f" persistence_window_ms={self.persistence_window_ms:.2f}"
+            f" mapping_ms={self.mapping_ms:.2f}"
+            f" copy_ms={self.copy_ms:.2f}"
+            f" insert_classify_ms={self.insert_classify_ms:.2f}"
+            f" transaction_overhead_ms={self.transaction_overhead_ms:.2f}"
         )

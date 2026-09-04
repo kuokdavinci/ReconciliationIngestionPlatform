@@ -9,6 +9,7 @@ Provides:
 
 import json
 import logging
+import re
 import sys
 import threading
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ class LogEventType(StrEnum):
     ROW_SUCCESS = "ROW_SUCCESS"
     ROW_FAILED = "ROW_FAILED"
     INGESTION_STAGE = "INGESTION_STAGE"
+    INGESTION_OBSERVABILITY_WRITE_FAILED = "INGESTION_OBSERVABILITY_WRITE_FAILED"
 
 
 # Internal logging fields to exclude from JSON output
@@ -41,14 +43,31 @@ _INTERNAL_FIELDS = frozenset({
 _MAX_FIELD_LENGTH = 256
 
 
-def _sanitize(value: Any) -> Any:
-    """Truncate string values to max length for safe logging; pass through other types."""
+_SENSITIVE_KEY = re.compile(
+    r"(?i)(password|passwd|token|secret|api[_-]?key|authorization|credential|fingerprint)"
+)
+_SENSITIVE_VALUE = re.compile(
+    r"(?i)\b(password|passwd|token|secret|api[_-]?key|authorization|credential|fingerprint)\b"
+    r"\s*[:=]\s*(?:bearer\s+)?[^\s,;]+"
+)
+_CREDENTIAL_URL = re.compile(r"(?i)(https?://)[^/\s:@]+:[^/\s@]+@")
+
+
+def _sanitize(value: Any, *, key: str | None = None) -> Any:
+    """Bound and redact structured values before they reach a log handler."""
+    if key and _SENSITIVE_KEY.search(str(key)):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {str(k): _sanitize(v, key=str(k)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize(item) for item in value]
     if isinstance(value, (int, float, bool, type(None))):
         return value
-    s = str(value)
-    if len(s) > _MAX_FIELD_LENGTH:
-        return s[:_MAX_FIELD_LENGTH] + "..."
-    return s
+    text = _CREDENTIAL_URL.sub(r"\1[REDACTED]@", str(value))
+    text = _SENSITIVE_VALUE.sub(r"\1=[REDACTED]", text)
+    if len(text) > _MAX_FIELD_LENGTH:
+        return text[:_MAX_FIELD_LENGTH] + "..."
+    return text
 
 
 def _default_serializer(obj: Any) -> Any:
@@ -71,13 +90,13 @@ class JSONFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "event": getattr(record, "event", record.msg),
-            "message": record.getMessage(),
+            "message": _sanitize(record.getMessage(), key="message"),
         }
 
         # Add extra fields (excluding internal logging fields)
         for key, value in record.__dict__.items():
             if key not in _INTERNAL_FIELDS and key not in log_data:
-                log_data[key] = _sanitize(value)
+                log_data[key] = _sanitize(value, key=key)
 
         return json.dumps(log_data, default=_default_serializer)
 
@@ -91,12 +110,15 @@ class TextFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as a human-readable string."""
         event = getattr(record, "event", record.msg)
-        parts = [f"[{record.levelname}] {event}: {record.getMessage()}"]
+        parts = [
+            f"[{record.levelname}] {event}: "
+            f"{_sanitize(record.getMessage(), key='message')}"
+        ]
 
         # Add extra fields as key=value pairs
         for key, value in sorted(record.__dict__.items()):
             if key not in _INTERNAL_FIELDS and key not in ("event",):
-                parts.append(f"{key}={_sanitize(value)}")
+                parts.append(f"{key}={_sanitize(value, key=key)}")
 
         return " ".join(parts)
 
@@ -174,16 +196,59 @@ class StructuredLogger:
         run_id: str,
         source_file_id: str | None = None,
         error_code: str | None = None,
+        *,
+        partner: str | None = None,
+        source_unit_key: str | None = None,
+        page: int | None = None,
+        attempt: int = 1,
+        checkpoint_before: dict[str, Any] | None = None,
+        checkpoint_after: dict[str, Any] | None = None,
+        error: str | None = None,
     ) -> None:
         """Log a stage transition with traceable ingestion context."""
         extra: dict[str, Any] = {
             "stage": _sanitize(stage),
             "run_id": _sanitize(run_id),
+            "partner": _sanitize(partner),
             "source_file_id": _sanitize(source_file_id),
+            "source_unit_key": _sanitize(source_unit_key),
+            "page": page,
+            "attempt": max(1, int(attempt)),
+            "checkpoint_before": _sanitize(checkpoint_before),
+            "checkpoint_after": _sanitize(checkpoint_after),
         }
         if error_code is not None:
             extra["error_code"] = _sanitize(error_code)
+        if error is not None:
+            extra["error"] = _sanitize(error, key="error")
         self._log_event(LogEventType.INGESTION_STAGE, extra)
+
+    def emit_ingestion_observability_write_failed(
+        self,
+        *,
+        run_id: str | None,
+        source_file_id: str | None,
+        partner: str | None,
+        stage: str | None,
+        error_code: str = "stage_summary_persist_failed",
+    ) -> None:
+        """Warn about a telemetry write failure without logging raw failures."""
+        try:
+            self._logger.warning(
+                LogEventType.INGESTION_OBSERVABILITY_WRITE_FAILED.value,
+                extra={
+                    "event": LogEventType.INGESTION_OBSERVABILITY_WRITE_FAILED.value,
+                    "run_id": _sanitize(run_id),
+                    "source_file_id": _sanitize(source_file_id),
+                    "partner": _sanitize(partner),
+                    "stage": _sanitize(stage),
+                    "error_code": _sanitize(error_code),
+                },
+            )
+        except Exception:
+            # A logging handler must never turn best-effort telemetry into an
+            # ingestion failure.
+            return
 
     def emit_row_success(self, file_id: str, row_number: int, trace: str) -> None:
         """Log ROW_SUCCESS event with row context."""

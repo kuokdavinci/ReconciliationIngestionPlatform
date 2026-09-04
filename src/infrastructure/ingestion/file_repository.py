@@ -1,6 +1,6 @@
 """MongoDB adapter for ingestion file claims."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID
@@ -46,6 +46,7 @@ class ReconciliationFileRepository(BaseRepository[ReconciliationFile]):
                     "successRows": 0,
                     "failedRows": 0,
                     "duplicateRows": 0,
+                    "stageSummary": {},
                 }
             },
             return_document=ReturnDocument.AFTER,
@@ -147,5 +148,5 @@ class ReconciliationFileRepository(BaseRepository[ReconciliationFile]):
     ) -> bool:
         return await self.update_one(
             {"_id": str(file_id)},
-            {"stageSummary": summary},
+            {"stageSummary": summary, "updatedAt": datetime.now(UTC)},
         )

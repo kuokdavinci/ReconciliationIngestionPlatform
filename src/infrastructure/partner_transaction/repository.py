@@ -71,6 +71,75 @@ _CONFLICT_KEY_TABLE = "partner_transaction_conflict_keys"
 _CONFLICT_KEY_COLUMNS = ("identify", "ingestion_key")
 
 
+def build_partner_transaction_stage_sql(
+    stage_table: str = "partner_transaction_stage",
+) -> str:
+    """Build the staging DDL shared by runtime writes and SQL profiling."""
+    return (
+        f"CREATE TEMP TABLE {stage_table} "
+        "(incoming_ordinal bigint NOT NULL, "
+        "LIKE partner_transaction INCLUDING DEFAULTS) ON COMMIT DROP"
+    )
+
+
+def build_partner_transaction_classify_sql(
+    stage_table: str = "partner_transaction_stage",
+) -> str:
+    """Build the conflict-safe insert/classification statement."""
+    return f"""
+        WITH incoming_counts AS (
+            SELECT identify, ingestion_key, COUNT(*)::bigint AS incoming_count
+            FROM {stage_table}
+            GROUP BY identify, ingestion_key
+        ),
+        inserted AS (
+            INSERT INTO partner_transaction ({_PARTNER_TRANSACTION_COLUMN_SQL})
+            SELECT {_PARTNER_TRANSACTION_COLUMN_SQL}
+            FROM {stage_table}
+            ORDER BY incoming_ordinal
+            ON CONFLICT (identify, ingestion_key) DO NOTHING
+            RETURNING identify, ingestion_key
+        ),
+        classified AS (
+            SELECT
+                incoming.identify,
+                incoming.ingestion_key,
+                CASE WHEN inserted.ingestion_key IS NULL THEN 0 ELSE 1 END
+                    AS inserted_for_key,
+                incoming.incoming_count
+                    - CASE WHEN inserted.ingestion_key IS NULL THEN 0 ELSE 1 END
+                    AS duplicate_count
+            FROM incoming_counts AS incoming
+            LEFT JOIN inserted
+              ON inserted.identify = incoming.identify
+             AND inserted.ingestion_key = incoming.ingestion_key
+        ),
+        summary AS (
+            SELECT COUNT(*)::bigint AS inserted_count FROM inserted
+        )
+        SELECT
+            classified.identify,
+            classified.ingestion_key,
+            classified.inserted_for_key,
+            classified.duplicate_count,
+            summary.inserted_count
+        FROM classified
+        CROSS JOIN summary
+        WHERE classified.duplicate_count > 0
+        UNION ALL
+        SELECT
+            NULL::text AS identify,
+            NULL::text AS ingestion_key,
+            0::bigint AS inserted_for_key,
+            0::bigint AS duplicate_count,
+            summary.inserted_count
+        FROM summary
+        WHERE NOT EXISTS (
+            SELECT 1 FROM classified WHERE classified.duplicate_count > 0
+        )
+    """
+
+
 def _row_to_copy_tuple(row: dict, incoming_ordinal: int) -> tuple:
     return (
         incoming_ordinal,
@@ -110,67 +179,18 @@ class DataContainerRepository:
         timings_ms: dict[str, float] | None = None,
     ) -> tuple[int, dict[tuple[str, str], int]]:
         """Atomically insert rows and return inserted-count per conflict key."""
-        tuples = [
-            _row_to_copy_tuple(row, incoming_ordinal) for incoming_ordinal, row in enumerate(rows)
-        ]
         stage_table = "partner_transaction_stage"
-        create_stage_sql = (
-            f"CREATE TEMP TABLE {stage_table} "
-            "(incoming_ordinal bigint NOT NULL, "
-            "LIKE partner_transaction INCLUDING DEFAULTS) ON COMMIT DROP"
-        )
-        classify_sql = f"""
-            WITH incoming_counts AS (
-                SELECT identify, ingestion_key, COUNT(*)::bigint AS incoming_count
-                FROM {stage_table}
-                GROUP BY identify, ingestion_key
-            ),
-            inserted AS (
-                INSERT INTO partner_transaction ({_PARTNER_TRANSACTION_COLUMN_SQL})
-                SELECT {_PARTNER_TRANSACTION_COLUMN_SQL}
-                FROM {stage_table}
-                ORDER BY incoming_ordinal
-                ON CONFLICT (identify, ingestion_key) DO NOTHING
-                RETURNING identify, ingestion_key
-            ),
-            classified AS (
-                SELECT
-                    incoming.identify,
-                    incoming.ingestion_key,
-                    CASE WHEN inserted.ingestion_key IS NULL THEN 0 ELSE 1 END
-                        AS inserted_for_key,
-                    incoming.incoming_count
-                        - CASE WHEN inserted.ingestion_key IS NULL THEN 0 ELSE 1 END
-                        AS duplicate_count
-                FROM incoming_counts AS incoming
-                LEFT JOIN inserted
-                  ON inserted.identify = incoming.identify
-                 AND inserted.ingestion_key = incoming.ingestion_key
-            ),
-            summary AS (
-                SELECT COUNT(*)::bigint AS inserted_count FROM inserted
-            )
-            SELECT
-                classified.identify,
-                classified.ingestion_key,
-                classified.inserted_for_key,
-                classified.duplicate_count,
-                summary.inserted_count
-            FROM classified
-            CROSS JOIN summary
-            WHERE classified.duplicate_count > 0
-            UNION ALL
-            SELECT
-                NULL::text AS identify,
-                NULL::text AS ingestion_key,
-                0::bigint AS inserted_for_key,
-                0::bigint AS duplicate_count,
-                summary.inserted_count
-            FROM summary
-            WHERE NOT EXISTS (
-                SELECT 1 FROM classified WHERE classified.duplicate_count > 0
-            )
-        """
+        create_stage_sql = build_partner_transaction_stage_sql(stage_table)
+        classify_sql = build_partner_transaction_classify_sql(stage_table)
+        tuple_started = time.perf_counter()
+        tuples = [
+            _row_to_copy_tuple(row, incoming_ordinal)
+            for incoming_ordinal, row in enumerate(rows)
+        ]
+        if timings_ms is not None:
+            timings_ms["tuple_materialization_ms"] = (
+                time.perf_counter() - tuple_started
+            ) * 1000
 
         stage_started = time.perf_counter()
         async with self.engine.begin() as conn:
@@ -210,6 +230,8 @@ class DataContainerRepository:
     async def _find_existing_for_keys(
         self,
         keys: set[tuple[str, str]],
+        *,
+        timings_ms: dict[str, float] | None = None,
     ) -> dict[tuple[str, str], dict[str, Any]]:
         """Fetch all conflict payloads through a bounded set-based join.
 
@@ -244,16 +266,31 @@ class DataContainerRepository:
         """
 
         async with self.engine.begin() as conn:
+            setup_started = time.perf_counter()
             await conn.execute(text(create_key_table_sql))
+            if timings_ms is not None:
+                timings_ms["conflict_stage_setup_ms"] = (
+                    time.perf_counter() - setup_started
+                ) * 1000
             raw_conn = await conn.get_raw_connection()
             asyncpg_conn = raw_conn.driver_connection
+            copy_started = time.perf_counter()
             await asyncpg_conn.copy_records_to_table(
                 _CONFLICT_KEY_TABLE,
                 columns=_CONFLICT_KEY_COLUMNS,
                 records=sorted(keys),
             )
+            if timings_ms is not None:
+                timings_ms["conflict_copy_ms"] = (
+                    time.perf_counter() - copy_started
+                ) * 1000
+            select_started = time.perf_counter()
             result = await conn.execute(text(lookup_sql))
             records = result.mappings().all()
+            if timings_ms is not None:
+                timings_ms["conflict_select_ms"] = (
+                    time.perf_counter() - select_started
+                ) * 1000
         return {
             (str(record["identify"]), str(record["ingestion_key"])): dict(record)
             for record in records
@@ -277,6 +314,7 @@ class DataContainerRepository:
         timings_ms: dict[str, float] = {
             "row_mapping_ms": (time.perf_counter() - mapping_started) * 1000,
         }
+        timings_ms["mapping_ms"] = timings_ms["row_mapping_ms"]
         inserted, conflict_insert_counts = await self._insert_rows_conflict_safe(
             rows,
             timings_ms=timings_ms,
@@ -293,7 +331,7 @@ class DataContainerRepository:
                 timings_ms=timings_ms,
                 started=started,
             )
-            return BatchWriteResult(inserted=inserted)
+            return BatchWriteResult(inserted=inserted, timings_ms=dict(timings_ms))
 
         incoming_by_key: dict[
             tuple[str, str],
@@ -305,6 +343,8 @@ class DataContainerRepository:
                 incoming_by_key.setdefault(key, []).append((incoming_index, row))
 
         lookup_started = time.perf_counter()
+        # Keep the repository method's legacy call shape; conflict lookup is
+        # already covered by its surrounding timing window.
         existing = await self._find_existing_for_keys(conflict_keys)
         timings_ms["conflict_lookup_ms"] = (time.perf_counter() - lookup_started) * 1000
 
@@ -364,6 +404,7 @@ class DataContainerRepository:
             equivalent_duplicates=equivalent,
             conflicting_duplicates=conflicting,
             duplicate_details=duplicate_details,
+            timings_ms=dict(timings_ms),
         )
 
     @staticmethod
@@ -382,16 +423,35 @@ class DataContainerRepository:
         timings_ms.setdefault("stage_setup_ms", 0.0)
         timings_ms.setdefault("copy_ms", 0.0)
         timings_ms.setdefault("insert_ms", 0.0)
+        timings_ms.setdefault("mapping_ms", timings_ms.get("row_mapping_ms", 0.0))
         timings_ms.setdefault("conflict_lookup_ms", 0.0)
         timings_ms.setdefault("fingerprint_ms", 0.0)
+        timings_ms.setdefault("tuple_materialization_ms", 0.0)
+        timings_ms.setdefault("conflict_stage_setup_ms", 0.0)
+        timings_ms.setdefault("conflict_copy_ms", 0.0)
+        timings_ms.setdefault("conflict_select_ms", 0.0)
         total_ms = (time.perf_counter() - started) * 1000
+        timings_ms["insert_classify_ms"] = timings_ms["insert_ms"]
+        timings_ms["total_ms"] = total_ms
+        timings_ms["transaction_overhead_ms"] = max(
+            0.0,
+            total_ms
+            - timings_ms["mapping_ms"]
+            - timings_ms["tuple_materialization_ms"]
+            - timings_ms["copy_ms"]
+            - timings_ms["insert_classify_ms"]
+            - timings_ms["conflict_lookup_ms"]
+            - timings_ms["fingerprint_ms"],
+        )
         logger.info(
             "PERF_PARTNER_TRANSACTION_BATCH: "
             "input_rows=%d inserted_rows=%d duplicate_rows=%d "
             "equivalent_duplicate_rows=%d conflicting_duplicate_rows=%d "
             "conflict_keys=%d row_mapping_ms=%.2f stage_setup_ms=%.2f "
-            "copy_ms=%.2f insert_ms=%.2f conflict_lookup_ms=%.2f "
-            "fingerprint_ms=%.2f total_ms=%.2f",
+            "mapping_ms=%.2f copy_ms=%.2f insert_ms=%.2f "
+            "insert_classify_ms=%.2f conflict_lookup_ms=%.2f "
+            "fingerprint_ms=%.2f tuple_materialization_ms=%.2f "
+            "transaction_overhead_ms=%.2f total_ms=%.2f",
             input_rows,
             inserted,
             duplicates,
@@ -400,10 +460,14 @@ class DataContainerRepository:
             conflict_keys,
             timings_ms["row_mapping_ms"],
             timings_ms["stage_setup_ms"],
+            timings_ms["mapping_ms"],
             timings_ms["copy_ms"],
             timings_ms["insert_ms"],
+            timings_ms["insert_classify_ms"],
             timings_ms["conflict_lookup_ms"],
             timings_ms["fingerprint_ms"],
+            timings_ms["tuple_materialization_ms"],
+            timings_ms["transaction_overhead_ms"],
             total_ms,
         )
 

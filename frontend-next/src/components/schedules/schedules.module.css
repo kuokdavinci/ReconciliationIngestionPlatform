@@ -602,6 +602,83 @@
   line-height: 1.5;
 }
 
+.observabilitySection {
+  margin-bottom: 24px;
+  padding: 14px;
+  border: 1px solid rgba(240, 185, 11, 0.2);
+  border-radius: 10px;
+  background: rgba(240, 185, 11, 0.035);
+}
+
+.observabilityHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.observabilityHeader .recoverySectionTitle {
+  margin-bottom: 0;
+}
+
+.observabilityNote {
+  color: var(--text-muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+.observabilitySubsection {
+  margin-top: 18px;
+}
+
+.observabilitySubheading {
+  margin: 0 0 8px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.observabilityMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.observabilityMetricGrid > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.observabilityMetricGrid dt,
+.observabilityMetricGrid dd {
+  overflow-wrap: anywhere;
+}
+
+.observabilityMetricGrid dt {
+  margin-bottom: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.observabilityMetricGrid dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.observabilityWideItem {
+  grid-column: 1 / -1;
+}
+
 .recoveryStreamKey {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -640,6 +717,10 @@
   font-family: var(--font-mono);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.observabilitySection .recoveryMetaGrid {
+  margin-bottom: 0;
 }
 
 .recoverySectionTitle {
@@ -688,7 +769,8 @@
 
 .eventCOMPLETED .recoveryEventMarker,
 .eventREPLAYED .recoveryEventMarker,
-.eventSKIPPED .recoveryEventMarker {
+.eventSKIPPED .recoveryEventMarker,
+.eventRESOLVED .recoveryEventMarker {
   color: var(--status-matched, #0ecb81);
   border-color: rgba(14, 203, 129, 0.42);
 }
@@ -715,6 +797,10 @@
 .eventPENDING,
 .eventWAITING_REVIEW {
   border-left-color: rgba(240, 185, 11, 0.42);
+}
+
+.eventRESOLVED {
+  border-left-color: rgba(14, 203, 129, 0.42);
 }
 
 .recoveryEventCopy {
@@ -868,6 +954,21 @@
   border: 1px solid rgba(180, 67, 67, 0.28);
   border-radius: 8px;
   background: rgba(180, 67, 67, 0.08);
+}
+
+.recoveryReviewPanel {
+  margin-bottom: 24px;
+  padding: 14px;
+  border: 1px solid rgba(240, 185, 11, 0.28);
+  border-radius: 8px;
+  background: rgba(240, 185, 11, 0.08);
+}
+
+.recoveryReviewPanel p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .recoveryErrorPanel code {

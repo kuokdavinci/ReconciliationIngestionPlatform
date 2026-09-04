@@ -838,6 +838,7 @@ class TestProcessFileMixedRows:
             assert result.stats.success_rows == 2
             assert result.stats.failed_rows == 1
             assert len(result.errors) >= 1
+            assert result.file_record.processing_status == ProcessingStatus.PARTIAL
         finally:
             Path(temp_path).unlink(missing_ok=True)
 
@@ -1321,7 +1322,7 @@ class TestPipelineAllInvalidRows:
 
     @pytest.mark.asyncio
     async def test_process_file_all_rows_invalid(self):
-        """All rows invalid — COMPLETED with 0 success_rows."""
+        """All rows invalid — PARTIAL with 0 success_rows."""
         from src.pipeline import IngestionPipeline
         from src.infrastructure.ingestion.file_repository import ReconciliationFileRepository
         from src.infrastructure.partner_transaction.repository import DataContainerRepository
@@ -1395,8 +1396,8 @@ class TestPipelineAllInvalidRows:
             assert result.stats.total_rows == 3
             assert result.stats.success_rows == 0
             assert result.stats.failed_rows == 3
-            # Pipeline handles per-row errors gracefully — status is COMPLETED
-            assert result.file_record.processing_status == ProcessingStatus.COMPLETED
+            # Pipeline handles per-row errors gracefully — status is PARTIAL.
+            assert result.file_record.processing_status == ProcessingStatus.PARTIAL
             assert len(result.errors) >= 3
         finally:
             from pathlib import Path

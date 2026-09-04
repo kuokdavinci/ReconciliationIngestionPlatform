@@ -16,6 +16,7 @@ from src.infrastructure.ingestion.composition import build_ingestion_pipeline
 from src.infrastructure.reconciliation.composition import build_reconciliation_service
 from src.application.ingestion.contracts import is_missing_ingestion_key_failure
 from src.application.ingestion.source_unit_orchestrator import resume_held_source_unit
+from src.core.utils import sanitize_runtime_error
 from src.logging import StructuredLogger
 
 logger = logging.getLogger("reconciliation.automation.stream_ingestion")
@@ -35,6 +36,7 @@ def bounded_source_unit_result(result: Any) -> dict[str, Any]:
     orchestration_action = getattr(orchestration_action, "value", orchestration_action)
     quality_summary = getattr(result, "quality_summary", None)
     top_rule_codes = list(getattr(quality_summary, "top_rule_codes", []) or [])
+    file_record = getattr(result, "file_record", None)
     return {
         "success": getattr(result, "outcome", "INGESTED") != "FAILED",
         "outcome": getattr(result, "outcome", "INGESTED"),
@@ -42,6 +44,7 @@ def bounded_source_unit_result(result: Any) -> dict[str, Any]:
         "orchestrationAction": orchestration_action,
         "qualityCounters": dict(getattr(result, "quality_counters", {}) or {}),
         "topRuleCodes": top_rule_codes[:10],
+        "stageSummary": getattr(file_record, "stage_summary", None) or {},
     }
 
 
@@ -69,8 +72,8 @@ def ingestion_error_result(
 ) -> dict[str, Any]:
     return {
         "success": False,
-        "error": message,
-        "errorCode": error_code,
+        "error": sanitize_runtime_error(message),
+        "errorCode": sanitize_runtime_error(error_code, max_length=96),
         "retryable": (
             error_code in {"source_persist_error", "checkpoint_advance_error"}
             if retryable is None
@@ -83,11 +86,15 @@ def failed_ingestion_result(result: Any) -> dict[str, Any]:
     """Translate a failed file result into a precise source-unit error."""
     stats = getattr(result, "stats", None)
     errors = getattr(result, "errors", None) or []
+    error_fields = [
+        *errors,
+        *({"field": field} for field in (getattr(result, "error_fields", None) or set())),
+    ]
     if stats is not None and is_missing_ingestion_key_failure(
         total_rows=getattr(stats, "total_rows", 0),
         success_rows=getattr(stats, "success_rows", 0),
         failed_rows=getattr(stats, "failed_rows", 0),
-        errors=errors,
+        errors=error_fields,
     ):
         return ingestion_error_result(
             "Unable to derive ingestion_key: both id and trace are missing from the source rows.",
@@ -142,12 +149,16 @@ def build_source_unit_ingestor(
     mapping_config_version: str | None = None,
     backfill_run_id: str | None = None,
     config_health_check_enabled: bool = True,
+    attempt: int = 1,
 ) -> tuple[Callable[[SourceUnitMetadata], Awaitable[dict[str, Any]]], dict[str, int]]:
     stats = {
         "totalRows": 0,
         "successRows": 0,
         "duplicateRows": 0,
         "failedRows": 0,
+        "rejectedRows": 0,
+        "persistenceFailedRows": 0,
+        "quarantinedRows": 0,
         "unitsProcessed": 0,
         "reconciliationCount": 0,
     }
@@ -190,6 +201,8 @@ def build_source_unit_ingestor(
                 config_health_check_enabled and (not config_health_checked or not is_paginated_api)
             ),
             validate_rows=config.validate_rows,
+            run_id=reconciliation_run_id,
+            attempt=attempt,
         )
         if not result:
             return ingestion_error_result(
@@ -208,12 +221,24 @@ def build_source_unit_ingestor(
         stats["successRows"] += result.stats.success_rows
         stats["duplicateRows"] += result.stats.duplicate_rows
         stats["failedRows"] += result.stats.failed_rows
+        quality_counters = getattr(result, "quality_counters", {}) or {}
+        for key in ("rejectedRows", "persistenceFailedRows", "quarantinedRows"):
+            stats[key] += int(quality_counters.get(key, 0) or 0)
+
+        stage_summary = getattr(file_record, "stage_summary", None) or {}
+        source_context = {
+            "stageSummary": stage_summary,
+            "sourceFileId": str(file_record.id),
+            "sourceUnitKey": unit.source_unit_key,
+            "page": unit.page,
+        }
 
         outcome = getattr(result, "outcome", "INGESTED")
         if outcome in {"FILE_DUPLICATE", "FETCH_UNIT_REPLAY"}:
             bounded = bounded_source_unit_result(result)
             return {
                 **bounded,
+                **source_context,
                 "success": True,
                 "outcome": outcome,
                 "duplicateCode": getattr(result, "duplicate_code", None),
@@ -240,9 +265,13 @@ def build_source_unit_ingestor(
                 for err in (result.errors or [])
             )
         )
-        if processing_status != ProcessingStatus.COMPLETED.value:
+        if processing_status not in {
+            ProcessingStatus.COMPLETED.value,
+            ProcessingStatus.PARTIAL.value,
+        }:
             if waiting_for_review:
                 return {
+                    **source_context,
                     "success": False,
                     "outcome": "WAITING_REVIEW",
                     "waitingForReview": True,
@@ -255,17 +284,19 @@ def build_source_unit_ingestor(
                 return {
                     **failure,
                     **bounded_source_unit_result(result),
+                    **source_context,
                     "success": False,
                     "outcome": "FAILED",
                 }
-            return failure
+            return {**failure, **source_context}
 
         bounded = bounded_source_unit_result(result)
         if orchestration_action == "HOLD_FOR_REVIEW":
             return {
                 **bounded,
+                **source_context,
                 "success": True,
-                "outcome": "INGESTED",
+                "outcome": "PARTIAL",
                 "reconciliationSkipped": True,
             }
 
@@ -279,8 +310,9 @@ def build_source_unit_ingestor(
         stats["reconciliationCount"] += len(reconciliation_results)
         return {
             **bounded,
+            **source_context,
             "success": True,
-            "outcome": "INGESTED",
+            "outcome": "PARTIAL" if processing_status == ProcessingStatus.PARTIAL.value else "INGESTED",
             "reconciliationCount": len(reconciliation_results),
         }
 
@@ -300,6 +332,8 @@ async def run_ingestion(
     backfill_run_id: Optional[str] = None,
     enable_config_health_check: bool = True,
     validate_rows: bool = False,
+    run_id: str | None = None,
+    attempt: int = 1,
 ) -> IngestionResult | None:
     """Run the ingestion pipeline for a fetched file.
 
@@ -335,6 +369,8 @@ async def run_ingestion(
                 backfill_run_id=backfill_run_id,
                 fetch_unit_metadata=fetch_unit_metadata,
                 enable_config_health_check=enable_config_health_check,
+                run_id=run_id,
+                attempt=attempt,
             )
         )
         file_record = result.file_record
@@ -367,7 +403,6 @@ async def run_ingestion(
         logger.error(
             "Ingestion failed for %s: %s",
             partner,
-            exc,
-            exc_info=True,
+            sanitize_runtime_error(exc),
         )
         return None
